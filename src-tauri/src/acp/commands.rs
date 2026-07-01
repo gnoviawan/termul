@@ -84,13 +84,16 @@ pub async fn acp_close_session(
     manager.close_session(&agent_id, session_id).await
 }
 
-/// List sessions on an agent.
+/// List sessions on an agent (requires `sessionCapabilities.list`).
+/// Pass `cwd` to filter by working directory; `cursor` for pagination.
 #[tauri::command]
 pub async fn acp_list_sessions(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
+    cwd: Option<String>,
+    cursor: Option<String>,
 ) -> Result<ListSessionsResponse, String> {
-    manager.list_sessions(&agent_id).await
+    manager.list_sessions(&agent_id, cwd, cursor).await
 }
 
 /// Send a prompt turn. Accepts either structured ACP content blocks or, for

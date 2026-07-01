@@ -45,6 +45,8 @@ pub const EVENT_AGENT_ERROR: &str = "acp:agent_error";
 pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 /// Event name: the agent process disconnected/exited.
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
+/// Event name: the agent updated session metadata (e.g. title).
+pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -196,6 +198,20 @@ pub struct SessionClosedEvent {
     pub session_id: SessionId,
 }
 
+/// `acp:session_info_update`
+///
+/// Emitted when the agent updates session metadata (e.g. an auto-generated
+/// title) via the ACP `session_info_update` notification. `title` is `None`
+/// when the agent explicitly cleared it (serialized as `"title": null` on the
+/// wire), and `Some(String)` when set.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfoUpdateEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub title: Option<String>,
+}
+
 /// Emit a payload to the renderer, logging (but not propagating) any error.
 ///
 /// Emission failures are non-fatal: they only mean no renderer is listening, so
@@ -278,5 +294,30 @@ mod tests {
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["stopReason"], "end_turn");
+    }
+
+    #[test]
+    fn session_info_update_serializes_camel_case() {
+        // With a title → serialized as `"title": "T"`
+        let event = SessionInfoUpdateEvent {
+            agent_id: AgentId("a".to_string()),
+            session_id: SessionId::new("s"),
+            title: Some("T".to_string()),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["agentId"], "a");
+        assert_eq!(value["sessionId"], "s");
+        assert_eq!(value["title"], "T");
+
+        // Without a title → serialized as `"title": null` (agent explicitly cleared)
+        let event_no_title = SessionInfoUpdateEvent {
+            agent_id: AgentId("a".to_string()),
+            session_id: SessionId::new("s"),
+            title: None,
+        };
+        let value = serde_json::to_value(&event_no_title).unwrap();
+        assert_eq!(value["agentId"], "a");
+        assert_eq!(value["sessionId"], "s");
+        assert_eq!(value["title"], serde_json::Value::Null);
     }
 }

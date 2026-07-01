@@ -41,8 +41,8 @@ describe('deriveTitle', () => {
     const long = 'x'.repeat(60)
     expect(deriveTitle([msg('user', long)], 'a1')).toBe(`${'x'.repeat(40)}…`)
   })
-  it('falls back to the agent id when no user message', () => {
-    expect(deriveTitle([msg('agent', 'hello')], 'agent-12345678')).toBe('Agent agent-12')
+  it('falls back to the provided title when no user message', () => {
+    expect(deriveTitle([msg('agent', 'hello')], 'Untitled Chat 1')).toBe('Untitled Chat 1')
   })
 })
 

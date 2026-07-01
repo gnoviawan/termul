@@ -42,8 +42,8 @@ export interface SessionPayload {
   messages: ChatMessage[]
 }
 
-/** Derive a chat title from the first user message; fallback to the agent id. */
-export function deriveTitle(messages: ChatMessage[], agentId: string): string {
+/** Derive a chat title from the first user message; fallback to the provided title. */
+export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): string {
   const firstUser = messages.find((m) => m.role === 'user')
   if (firstUser) {
     const text = firstUser.blocks
@@ -52,22 +52,22 @@ export function deriveTitle(messages: ChatMessage[], agentId: string): string {
       .trim()
     if (text.length > 0) return text.length > 40 ? `${text.slice(0, 40)}…` : text
   }
-  return `Agent ${agentId.slice(0, 8)}`
+  return fallbackTitle
 }
 
 export type RecencyGroup = 'Today' | 'Yesterday' | 'Earlier'
 
 /** Bucket sessions by lastActivityAt relative to `now`. Sorted newest-first within groups. */
-export function groupSessionsByRecency(
-  entries: SessionIndexEntry[],
+export function groupSessionsByRecency<T extends { lastActivityAt: number }>(
+  entries: T[],
   now: number
-): { group: RecencyGroup; entries: SessionIndexEntry[] }[] {
+): { group: RecencyGroup; entries: T[] }[] {
   const startOfToday = new Date(now)
   startOfToday.setHours(0, 0, 0, 0)
   const todayMs = startOfToday.getTime()
   const yesterdayMs = todayMs - 24 * 60 * 60 * 1000
 
-  const buckets: Record<RecencyGroup, SessionIndexEntry[]> = {
+  const buckets: Record<RecencyGroup, T[]> = {
     Today: [],
     Yesterday: [],
     Earlier: []

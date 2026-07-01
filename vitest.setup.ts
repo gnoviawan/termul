@@ -24,6 +24,17 @@ class ResizeObserverMock {
 
 window.ResizeObserver = ResizeObserverMock
 
+class IntersectionObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return []
+  }
+}
+
+window.IntersectionObserver = IntersectionObserverMock as unknown as typeof IntersectionObserver
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))

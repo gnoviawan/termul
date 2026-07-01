@@ -39,6 +39,7 @@ import {
   agentReuseKey,
   collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
+  discoveryKey,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -55,6 +56,8 @@ const FRESH = {
   preparingChatKeys: {},
   prepareChatErrors: {},
   sessionIndex: [],
+  discoveredSessions: {},
+  discoveringKeys: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -467,6 +470,53 @@ describe('acp-store', () => {
     })
     store._onAgentDisconnected({ agentId: 'agent-1' })
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
+  })
+
+  it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: 'Implement auth'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Implement auth')
+  })
+
+  it('_onSessionInfoUpdate reverts title to null when agent clears it', () => {
+    seedSession('s1', 'agent-1')
+    // Set a title first
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Old title' } }
+    }))
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: null
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBeNull()
+  })
+
+  it('_onSessionInfoUpdate is a no-op for unknown sessions', () => {
+    useAcpStore.setState(FRESH)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 'unknown',
+      title: 'Whatever'
+    })
+    expect(useAcpStore.getState().sessions['unknown']).toBeUndefined()
+  })
+
+  it('_onSessionInfoUpdate leaves the title untouched when the field is omitted', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Keep me' } }
+    }))
+    // title field absent => undefined => no change (must not clear to null)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Keep me')
   })
 
   it('respondPermission is re-entrancy safe (W3): second call is a no-op', async () => {
@@ -1543,5 +1593,241 @@ describe('acp-store multi-project isolation', () => {
       connected: false,
       warming: false
     })
+  })
+})
+
+describe('session discovery (gh-407)', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+    useAcpStore.setState({
+      ...FRESH,
+      agents: {},
+      agentStatus: {},
+      discoveredSessions: {},
+      discoveringKeys: {}
+    })
+  })
+
+  it('discoverSessions skips agents without sessionCapabilities.list', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    // invoke should not have been called for acp_list_sessions
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    // No discovered sessions stored.
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('discoverSessions skips agents that are not connected (stale after disconnect)', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      // _onAgentDisconnected leaves the agent present but flips status to 'error'.
+      agentStatus: { 'agent-1': 'error' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('discoverSessions treats an empty-string cursor as a valid page token', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        // Opaque empty-string cursor must NOT end pagination.
+        return { sessions: [{ sessionId: 'sess-1', cwd: '/work' }], nextCursor: '' }
+      }
+      return { sessions: [{ sessionId: 'sess-2', cwd: '/work' }], nextCursor: null }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(2)
+    expect(listCalls[1]![1]).toMatchObject({ cursor: '' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    expect(discovered).toHaveLength(2)
+  })
+
+  it('discoverSessions calls acp_list_sessions when list capability is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue({
+      sessions: [{ sessionId: 'sess-1', cwd: '/work', title: 'Test Session' }],
+      nextCursor: null
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(1)
+    expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    expect(discovered).toHaveLength(1)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+  })
+
+  it('discoverSessions paginates, forwards the cursor, and de-dupes by sessionId', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          sessions: [{ sessionId: 'sess-1', cwd: '/work' }],
+          nextCursor: 'cursor-1'
+        }
+      }
+      return {
+        // sess-1 repeated across pages must be de-duped; sess-2 is new.
+        sessions: [
+          { sessionId: 'sess-1', cwd: '/work' },
+          { sessionId: 'sess-2', cwd: '/work' }
+        ],
+        nextCursor: null
+      }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(2)
+    // First request carries no cursor; second forwards the first response's nextCursor.
+    expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
+    expect(listCalls[0]![1]).not.toHaveProperty('cursor', 'cursor-1')
+    expect(listCalls[1]![1]).toMatchObject({ cursor: 'cursor-1' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    // De-duped: sess-1 (twice) + sess-2 → 2 entries, order preserved.
+    expect(discovered).toHaveLength(2)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+    expect(discovered![1]!.sessionId).toBe('sess-2')
+  })
+
+  it('discoverSessions clears discovered entries on failure', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      discoveredSessions: {
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'old', cwd: '/work' }]
+      }
+    })
+    vi.mocked(invoke).mockRejectedValue(new Error('agent error'))
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('_onAgentDisconnected clears discovered sessions for that agent', () => {
+    useAcpStore.setState({
+      discoveredSessions: {
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'sess-1', cwd: '/work' }],
+        [discoveryKey('agent-2', '/work')]: [{ sessionId: 'sess-2', cwd: '/work' }]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-2', '/work')]
+    ).toBeDefined()
+  })
+
+  it('openDiscoveredSession throws when agent has neither load nor resume', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    ).rejects.toThrow(/does not support loading or resuming/)
+  })
+
+  it('openDiscoveredSession calls acp_load_session with the exact args when loadSession is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    const loadCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')
+    expect(loadCalls).toHaveLength(1)
+    // Forwarded payload: agentId, sessionId, cwd (no resume call on this path).
+    expect(loadCalls[0]![1]).toMatchObject({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      cwd: '/work'
+    })
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    ).toHaveLength(0)
+  })
+
+  it('openDiscoveredSession uses the resume branch when only resume is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-2', '/work', 'p1')
+    const resumeCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    expect(resumeCalls).toHaveLength(1)
+    expect(resumeCalls[0]![1]).toMatchObject({
+      agentId: 'agent-1',
+      sessionId: 'sess-2',
+      cwd: '/work'
+    })
+    // load must NOT be called when loadSession is absent.
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')).toHaveLength(
+      0
+    )
   })
 })
