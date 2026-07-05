@@ -109,8 +109,8 @@ export function ChatMessageList({
   return (
     <div className="relative min-h-0 flex-1">
       {/* Edge fades: content dissolves into the header/composer instead of hard-cutting. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-background to-transparent" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-background to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-terminal-bg to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-terminal-bg to-transparent" />
       <MessageScrollerProvider autoScroll>
         <ItemCountReporter count={items.length} />
         <MessageScroller>

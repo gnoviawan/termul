@@ -170,7 +170,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     session.lastError && session.lastError !== dismissedError ? session.lastError : null
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-terminal-bg">
       <ChatErrorNotice
         message={activeError}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}

@@ -342,7 +342,7 @@ export function ChatInputBar({
     (value.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
 
   return (
-    <div className="px-5 pb-3.5 pt-3">
+    <div className="px-5 pb-2 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
         {slashOpen && (
           <SlashCommandMenu
