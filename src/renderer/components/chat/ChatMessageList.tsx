@@ -167,7 +167,7 @@ function TypingIndicator(): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <GradientSpin gradient="sunrise" pattern="snake" label="Planning next move" />
+      <GradientSpin gradient="bay" pattern="diagonal" label="Planning next move" />
     </motion.div>
   )
 }

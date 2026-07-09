@@ -1,3 +1,4 @@
+import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowUp, Paperclip, Square } from 'lucide-react'
 import {
@@ -461,25 +462,36 @@ export function ChatInputBar({
                   <Paperclip size={16} />
                 </button>
               )}
-              <div className="relative h-[34px] w-[34px]">
+              <div className="relative h-[34px] w-[34px] overflow-visible">
                 <AnimatePresence mode="popLayout" initial={false}>
                   {busy ? (
-                    <motion.button
+                    <motion.div
                       key="cancel"
-                      type="button"
-                      data-press-feedback="off"
-                      onClick={onCancel}
-                      title="Cancel turn"
-                      aria-label="Cancel turn"
+                      className="absolute inset-0"
                       initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
                       animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
                       exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
                       transition={CHAT_SPRING}
-                      whileTap={reduced ? undefined : { scale: 0.9 }}
-                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-muted text-foreground hover:bg-muted/80"
                     >
-                      <Square size={14} />
-                    </motion.button>
+                      <BorderBeam
+                        size="sm"
+                        colorVariant="colorful"
+                        theme="dark"
+                        borderRadius={8}
+                        className="h-full w-full"
+                      >
+                        <button
+                          type="button"
+                          data-press-feedback="off"
+                          onClick={onCancel}
+                          title="Cancel turn"
+                          aria-label="Cancel turn"
+                          className="flex size-[34px] items-center justify-center rounded-lg border border-border/60 bg-muted text-foreground hover:bg-muted/80 active:scale-[0.96]"
+                        >
+                          <Square size={14} />
+                        </button>
+                      </BorderBeam>
+                    </motion.div>
                   ) : (
                     <motion.button
                       key="send"
