@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 import type { ChatMessage } from '@/stores/acp-store'
-import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import {
+  buildTimeline,
+  consolidateThoughtGroups,
+  shouldShowTurnRunningIndicator
+} from './chat-timeline'
 
 function msg(id: string, role: ChatMessage['role'], timestamp: number, seq?: number): ChatMessage {
   return { id, role, blocks: [{ type: 'text', text: id }], streaming: false, timestamp, seq }
@@ -101,5 +105,54 @@ describe('consolidateThoughtGroups', () => {
   it('passes non-thought items through unchanged', () => {
     const items = buildTimeline([msg('user', 'user', 100, 1), msg('a1', 'agent', 110, 2)], [])
     expect(consolidateThoughtGroups(items)).toEqual(items)
+  })
+})
+
+describe('shouldShowTurnRunningIndicator', () => {
+  it('is hidden when the turn is not active', () => {
+    expect(shouldShowTurnRunningIndicator(false, [])).toBe(false)
+  })
+
+  it('shows on an empty active turn', () => {
+    expect(shouldShowTurnRunningIndicator(true, [])).toBe(true)
+  })
+
+  it('shows while tools are the live tail', () => {
+    const items = consolidateThoughtGroups(
+      buildTimeline([msg('user', 'user', 100, 1)], [tool('t1', 110, 2)])
+    )
+    expect(shouldShowTurnRunningIndicator(true, items)).toBe(true)
+  })
+
+  it('hides while a thought group is streaming at the live tail', () => {
+    const thought = msg('t1', 'thought', 110, 2)
+    thought.streaming = true
+    const items = consolidateThoughtGroups(
+      buildTimeline([msg('user', 'user', 100, 1), thought], [])
+    )
+    expect(shouldShowTurnRunningIndicator(true, items)).toBe(false)
+  })
+
+  it('shows again after thoughts finish and a tool follows', () => {
+    const thought = msg('t1', 'thought', 110, 2)
+    thought.streaming = false
+    const items = consolidateThoughtGroups(
+      buildTimeline([msg('user', 'user', 100, 1), thought], [tool('t1', 120, 3)])
+    )
+    expect(shouldShowTurnRunningIndicator(true, items)).toBe(true)
+  })
+
+  it('hides while an agent reply is streaming at the live tail', () => {
+    const agent = msg('a1', 'agent', 110, 2)
+    agent.streaming = true
+    const items = consolidateThoughtGroups(buildTimeline([msg('user', 'user', 100, 1), agent], []))
+    expect(shouldShowTurnRunningIndicator(true, items)).toBe(false)
+  })
+
+  it('shows when a finished agent reply is still mid-turn (activeTurn)', () => {
+    const agent = msg('a1', 'agent', 110, 2)
+    agent.streaming = false
+    const items = consolidateThoughtGroups(buildTimeline([msg('user', 'user', 100, 1), agent], []))
+    expect(shouldShowTurnRunningIndicator(true, items)).toBe(true)
   })
 })

@@ -27,6 +27,7 @@ import { useComposerAttachments } from '@/components/chat/use-composer-attachmen
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
+import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -569,12 +570,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       className={cn('absolute inset-0 flex flex-col items-center justify-center p-8', className)}
     >
       <div className="mb-8 flex flex-col items-center gap-4 text-center">
-        <EntryGlyph
-          config={selectedConfig}
-          templateId={selectedEntry?.agent.id}
-          name={selectedEntry?.agent.name}
-          size="lg"
-        />
+        <TermulMark size={48} className="text-foreground" />
         <h1 className="text-3xl font-medium tracking-tight text-foreground md:text-4xl">
           {`What should we do in ${projectLabel}?`}
         </h1>
@@ -1163,13 +1159,11 @@ function AcpModelPicker({
 const EntryGlyph = memo(function EntryGlyph({
   config,
   templateId,
-  name,
-  size = 'sm'
+  name
 }: {
   config: StoredAgentConfig | null
   templateId?: string
   name?: string
-  size?: 'sm' | 'lg'
 }): React.JSX.Element {
   const normalized = useMemo(() => {
     const key = config?.templateId ?? templateId
@@ -1177,8 +1171,7 @@ const EntryGlyph = memo(function EntryGlyph({
     const icon = findBundledIconByKey(`acp:${key}`)?.svg
     return icon ? sanitizeInlineAgentSvg(icon) : null
   }, [config?.templateId, templateId])
-  const className =
-    size === 'lg' ? 'h-12 w-12 rounded-2xl text-base' : 'h-4 w-4 rounded-sm text-4xs'
+  const className = 'h-4 w-4 rounded-sm text-4xs'
 
   if (normalized) {
     return (

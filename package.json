@@ -130,6 +130,7 @@
     "dompurify": "^3.4.2",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.25.0",
+    "gradient-spin": "^0.1.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.462.0",
     "material-icon-theme": "^5.35.0",

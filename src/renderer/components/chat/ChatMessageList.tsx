@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { GradientSpin } from 'gradient-spin'
 import { useEffect, useMemo, useRef } from 'react'
-import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -32,7 +32,7 @@ interface ChatMessageListProps {
   sessionId: SessionId
   /** Agent behind this session (drives the agent name/icon on replies). */
   agentId: AgentId
-  /** True while a turn is in flight but no agent text has streamed yet. */
+  /** True while a turn is in flight and the live tail is not already streaming. */
   showTyping: boolean
   /** Seed the composer with a user message's text (edit affordance). */
   onEditMessage?: (text: string) => void
@@ -156,7 +156,7 @@ export function ChatMessageList({
   )
 }
 
-/** "Agent is typing" status shown before the first text chunk streams. */
+/** Turn-still-running cue — gradient matrix spin (no text label). */
 function TypingIndicator(): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   return (
@@ -167,23 +167,7 @@ function TypingIndicator(): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <Marker role="status">
-        <MarkerIcon className="gap-1">
-          <TypingDots />
-        </MarkerIcon>
-        <MarkerContent className="shimmer">Thinking…</MarkerContent>
-      </Marker>
+      <GradientSpin gradient="sunrise" pattern="snake" label="Planning next move" />
     </motion.div>
-  )
-}
-
-/** Three staggered hopping dots — the classic "is typing" cue. */
-function TypingDots(): React.JSX.Element {
-  return (
-    <span className="flex items-center gap-1" aria-hidden="true">
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground motion-reduce:animate-none" />
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground [animation-delay:150ms] motion-reduce:animate-none" />
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground [animation-delay:300ms] motion-reduce:animate-none" />
-    </span>
   )
 }

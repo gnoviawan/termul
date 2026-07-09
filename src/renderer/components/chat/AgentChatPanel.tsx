@@ -6,7 +6,11 @@ import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
-import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import {
+  buildTimeline,
+  consolidateThoughtGroups,
+  shouldShowTurnRunningIndicator
+} from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
 
@@ -161,10 +165,9 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
     [messages, toolCalls]
   )
-  // Typing dots only before any thought or agent text arrives in the turn.
-  const lastMessage = messages[messages.length - 1]
-  const hasTurnOutput = lastMessage?.role === 'agent' || lastMessage?.role === 'thought'
-  const showTyping = Boolean(session?.activeTurn) && !hasTurnOutput
+  // Bottom running cue for the whole turn, except when live-tail thought/agent
+  // text is already streaming (those surfaces own the in-progress signal).
+  const showTyping = shouldShowTurnRunningIndicator(Boolean(session?.activeTurn), timeline)
 
   if (!session) {
     return (
