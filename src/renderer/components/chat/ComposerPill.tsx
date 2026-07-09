@@ -1,9 +1,13 @@
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ChevronDown } from 'lucide-react'
 import * as React from 'react'
 
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
+
+import { iconPop } from './chat-motion'
 
 /**
  * Canonical chrome for flat composer controls: mode/model/config selector triggers
@@ -40,6 +44,56 @@ export interface ComposerPillProps
   disabled?: boolean
   /** Append the standardized trailing chevron used by popover-trigger controls. */
   chevron?: boolean
+  /**
+   * When true with `chevron`, swap the trailing chevron for a spinner while an
+   * async selection is in flight (model / reasoning / Fast / mode switches).
+   */
+  pending?: boolean
+}
+
+function TrailingAffordance({
+  chevron,
+  pending
+}: {
+  chevron?: boolean
+  pending?: boolean
+}): React.JSX.Element | null {
+  const reduced = useReducedMotion() ?? false
+  if (!chevron) return null
+
+  const pop = iconPop(reduced)
+  return (
+    <span className="relative inline-flex size-3 shrink-0 items-center justify-center">
+      <AnimatePresence initial={false} mode="popLayout">
+        {pending ? (
+          <motion.span
+            key="spinner"
+            className="inline-flex"
+            initial={pop.initial}
+            animate={pop.animate}
+            exit={pop.initial}
+            transition={pop.transition}
+          >
+            <Spinner
+              decorative
+              className="size-3 text-muted-foreground motion-reduce:animate-none"
+            />
+          </motion.span>
+        ) : (
+          <motion.span
+            key="chevron"
+            className="inline-flex"
+            initial={pop.initial}
+            animate={pop.animate}
+            exit={pop.initial}
+            transition={pop.transition}
+          >
+            <ChevronDown size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </span>
+  )
 }
 
 export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProps>(
@@ -52,12 +106,14 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
       type,
       disabled,
       chevron,
+      pending,
       children,
       ...props
     },
     ref
   ) => {
     const classes = cn(composerPillVariants({ interactive }), className)
+    const trailing = <TrailingAffordance chevron={chevron} pending={pending} />
 
     if (asChild) {
       return (
@@ -70,7 +126,7 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
     const content = (
       <>
         {children}
-        {chevron && <ChevronDown size={12} className="shrink-0 text-muted-foreground" />}
+        {trailing}
       </>
     )
 
@@ -83,7 +139,14 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
     }
 
     return (
-      <button ref={ref} type={type ?? 'button'} disabled={disabled} className={classes} {...props}>
+      <button
+        ref={ref}
+        type={type ?? 'button'}
+        disabled={disabled}
+        aria-busy={pending || undefined}
+        className={classes}
+        {...props}
+      >
         {content}
       </button>
     )

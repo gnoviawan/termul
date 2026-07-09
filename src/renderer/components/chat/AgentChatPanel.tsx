@@ -87,28 +87,37 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   }, [cancelPrompt, sessionId])
 
   const handleSetConfig = useCallback(
-    (configId: string, valueId: string) => {
-      void setConfigOption(sessionId, configId, valueId).catch((err) => {
+    async (configId: string, valueId: string) => {
+      try {
+        await setConfigOption(sessionId, configId, valueId)
+      } catch (err) {
         toast.error(`Failed to set option: ${String(err)}`)
-      })
+        throw err
+      }
     },
     [setConfigOption, sessionId]
   )
 
   const handleSetMode = useCallback(
-    (modeId: string) => {
-      void setMode(sessionId, modeId).catch((err) => {
+    async (modeId: string) => {
+      try {
+        await setMode(sessionId, modeId)
+      } catch (err) {
         toast.error(`Failed to set mode: ${String(err)}`)
-      })
+        throw err
+      }
     },
     [setMode, sessionId]
   )
 
   const handleSetModel = useCallback(
-    (modelId: string) => {
-      void setModel(sessionId, modelId).catch((err) => {
+    async (modelId: string) => {
+      try {
+        await setModel(sessionId, modelId)
+      } catch (err) {
         toast.error(`Failed to set model: ${String(err)}`)
-      })
+        throw err
+      }
     },
     [setModel, sessionId]
   )

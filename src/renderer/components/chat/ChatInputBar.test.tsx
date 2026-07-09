@@ -1,8 +1,13 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
+
+function clickMenuOption(name: string | RegExp): void {
+  const dialog = screen.getByRole('dialog')
+  fireEvent.pointerDown(within(dialog).getByText(name))
+}
 
 const { mockSetConfig, mockSetMode, mockSetModel } = vi.hoisted(() => ({
   mockSetConfig: vi.fn(),
@@ -98,13 +103,13 @@ describe('ChatInputBar config controls', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'composer-2.5' }))
-    fireEvent.click(await screen.findByText('sonnet-4.5'))
+    clickMenuOption('sonnet-4.5')
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'sonnet')
 
     mockSetConfig.mockClear()
     expect(screen.getAllByRole('button', { name: /^Agent$/ })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
-    fireEvent.click(await screen.findByText('Plan'))
+    clickMenuOption('Plan')
     expect(mockSetMode).toHaveBeenCalledWith('plan')
     expect(mockSetConfig).not.toHaveBeenCalled()
   })
@@ -153,7 +158,7 @@ describe('ChatInputBar config controls', () => {
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('xAI/Grok 4.3'))
+    clickMenuOption('xAI/Grok 4.3')
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'grok-43')
   })
 
@@ -185,7 +190,7 @@ describe('ChatInputBar config controls', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'kiro/Claude Opus 4.8' }))
-    fireEvent.click(await screen.findByText('OpenRouter/GPT-5.5'))
+    clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('openrouter/gpt-5.5')
     expect(mockSetConfig).not.toHaveBeenCalled()

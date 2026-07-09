@@ -70,12 +70,12 @@ interface ChatInputBarProps {
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
-  /** Apply a config option value immediately. */
-  onSetConfig: (configId: string, valueId: string) => void
-  /** Apply a legacy mode immediately. */
-  onSetMode: (modeId: string) => void
-  /** Apply a native ACP model selection immediately. */
-  onSetModel: (modelId: string) => void
+  /** Apply a config option value immediately. May return a Promise for chip pending UI. */
+  onSetConfig: (configId: string, valueId: string) => void | Promise<void>
+  /** Apply a legacy mode immediately. May return a Promise for chip pending UI. */
+  onSetMode: (modeId: string) => void | Promise<void>
+  /** Apply a native ACP model selection immediately. May return a Promise for chip pending UI. */
+  onSetModel: (modelId: string) => void | Promise<void>
   /** External text to load into the composer (edit a message / pick a suggestion). */
   seedText?: string
   /** Bump to re-apply `seedText` even if the text is unchanged. */
@@ -419,13 +419,11 @@ export function ChatInputBar({
                   disabled={disabled}
                   searchable
                   maxVisibleOptions={5}
-                  onSelect={(valueId) => {
-                    if (modelSource === 'models') {
-                      onSetModel(valueId)
-                    } else {
-                      onSetConfig(modelOption.id, valueId)
-                    }
-                  }}
+                  onSelect={(valueId) =>
+                    modelSource === 'models'
+                      ? onSetModel(valueId)
+                      : onSetConfig(modelOption.id, valueId)
+                  }
                 />
               )}
               {hasConfigOptions ? (

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -10,6 +10,11 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
+
+function clickMenuOption(name: string | RegExp): void {
+  const dialog = screen.getByRole('dialog')
+  fireEvent.pointerDown(within(dialog).getByText(name))
+}
 
 function defaultReadyAgent(): SupportedAcpAgentEntry {
   const entries = buildSupportedAcpAgents([], 'windows-x86_64')
@@ -364,15 +369,50 @@ describe('AgentLauncher ACP new thread', () => {
     expect(agentPicker).toHaveTextContent('Claude Agent')
     expect(agentPicker).not.toHaveTextContent('ACP:')
     fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
-    fireEvent.click(await screen.findByText('Model Two'))
+    clickMenuOption('Model Two')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
     mockSetConfigOption.mockClear()
     expect(screen.getAllByRole('button', { name: /^Agent$/ })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
-    fireEvent.click(await screen.findByText('Plan'))
+    clickMenuOption('Plan')
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
+  }, 10000)
+
+  it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    let resolveConfig!: () => void
+    mockSetConfigOption.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfig = resolve
+        })
+    )
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    clickMenuOption('Model Two')
+
+    const pendingChip = await screen.findByRole('button', { name: 'Select model: Model Two' })
+    expect(pendingChip).toHaveAttribute('aria-busy', 'true')
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+
+    await act(async () => {
+      resolveConfig()
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Select model: Model Two' })).not.toHaveAttribute(
+        'aria-busy'
+      )
+    })
   }, 10000)
 
   it('uses native ACP session models when configOptions has no model option', async () => {
@@ -401,7 +441,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Select model: kiro/Claude Opus 4.8' })
     )
-    fireEvent.click(await screen.findByText('OpenRouter/GPT-5.5'))
+    clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
@@ -439,7 +479,7 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('xAI/Grok 4.3'))
+    clickMenuOption('xAI/Grok 4.3')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'grok-43')
   })
 
