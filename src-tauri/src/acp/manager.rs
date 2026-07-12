@@ -100,6 +100,39 @@ fn session_reopen_timeout() -> Duration {
         .unwrap_or(SESSION_REOPEN_TIMEOUT)
 }
 
+/// Timed `session/load` / `session/resume`: map agent errors and timeouts to
+/// `Result<(), String>`, and record the session root on success.
+async fn run_session_reopen<Fut, T, E>(
+    op: &str,
+    session_id: &str,
+    cwd: &str,
+    req_state: &Mutex<DriverState>,
+    request: Fut,
+) -> Result<(), String>
+where
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: ToString,
+{
+    let timeout = session_reopen_timeout();
+    let outcome = tokio::time::timeout(timeout, request).await;
+    let result = match outcome {
+        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+        Err(_) => {
+            log::warn!(
+                "[acp] session {session_id} {op} timed out after {timeout:?}; \
+                 check agent stderr in RUST_LOG=debug"
+            );
+            Err(format!("{op} timed out after {timeout:?}"))
+        }
+    };
+    if result.is_ok() {
+        req_state
+            .lock()
+            .set_session_root(session_id.to_string(), PathBuf::from(cwd));
+    }
+    result
+}
+
 /// Outcome of creating a new session, returned to the command caller.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1241,32 +1274,18 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = LoadSessionRequest::new(&session_id, cwd.clone());
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let timeout = session_reopen_timeout();
-                    let outcome = tokio::time::timeout(
-                        timeout,
+                    let request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    let result = run_session_reopen(
+                        "session/load",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
-                    let result = match outcome {
-                        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
-                        Err(_) => {
-                            log::warn!(
-                                "[acp] session {} session/load timed out after {timeout:?}; \
-                                 check agent stderr in RUST_LOG=debug",
-                                session_id.0
-                            );
-                            Err(format!("session/load timed out after {timeout:?}"))
-                        }
-                    };
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -1282,28 +1301,14 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
-                    let timeout = session_reopen_timeout();
-                    let outcome = tokio::time::timeout(
-                        timeout,
+                    let result = run_session_reopen(
+                        "session/resume",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
-                    let result = match outcome {
-                        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
-                        Err(_) => {
-                            log::warn!(
-                                "[acp] session {} session/resume timed out after {timeout:?}; \
-                                 check agent stderr in RUST_LOG=debug",
-                                session_id.0
-                            );
-                            Err(format!("session/resume timed out after {timeout:?}"))
-                        }
-                    };
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
                     send_reply(&task_slot, result);
                 });
             }

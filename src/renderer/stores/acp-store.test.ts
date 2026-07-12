@@ -1420,6 +1420,126 @@ describe('acp-store', () => {
     vi.mocked(invoke).mockReset()
   })
 
+  it('openHistorySession does not activate a chat deleted during load', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-del-ok',
+          agentId: 'agent-1',
+          title: 'Doomed',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-del-ok',
+        agentId: 'agent-1',
+        title: 'Doomed',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command: ${cmd}`)
+      }
+      await useAcpStore.getState().deleteHistorySession('s-del-ok')
+    })
+    await useAcpStore.getState().openHistorySession('s-del-ok')
+    const session = useAcpStore.getState().sessions['s-del-ok']
+    expect(session.status).toBe('closed')
+    expect(session.replaying).toBeNull()
+    expect(session.lastError).toBeNull()
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === 's-del-ok')).toBe(false)
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession does not restore or error a chat deleted during a failed load', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-del-fail',
+          agentId: 'agent-1',
+          title: 'Doomed',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-del-fail',
+        agentId: 'agent-1',
+        title: 'Doomed',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-del-fail',
+        role: 'user',
+        content: { type: 'text', text: 'partial replay' }
+      })
+      await useAcpStore.getState().deleteHistorySession('s-del-fail')
+      throw new Error('load boom')
+    })
+    // Must resolve (not reject) so callers do not toast after an intentional delete.
+    await expect(useAcpStore.getState().openHistorySession('s-del-fail')).resolves.toBeUndefined()
+    const session = useAcpStore.getState().sessions['s-del-fail']
+    expect(session.status).toBe('closed')
+    expect(session.lastError).toBeNull()
+    expect(session.replaying).toBeNull()
+    // Partial replay must not be overwritten by the failure restore path.
+    const messages = useAcpStore.getState().messages['s-del-fail']
+    expect(
+      messages.some((m) => m.blocks.some((b) => b.type === 'text' && b.text === 'partial replay'))
+    ).toBe(true)
+    vi.mocked(invoke).mockReset()
+  })
+
   it('openHistorySession reuses the current live agent when the persisted agentId is stale after restart', async () => {
     // After an app restart the persisted `agentId` is a dead per-process UUID,
     // but `agentConfigId`+cwd maps to a freshly spawned (prewarmed) live agent.

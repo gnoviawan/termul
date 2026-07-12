@@ -835,6 +835,18 @@ async function openHistorySessionInner(
   set: TurnEndSetter,
   id: string
 ): Promise<void> {
+  // Snapshot before any await so a delete during cold-spawn / capability wait
+  // is still detected as a mid-open transition (not "never indexed").
+  const wasIndexed = get().sessionIndex.some((e) => e.id === id)
+  const deletedMidOpen = (): boolean => wasIndexed && !get().sessionIndex.some((e) => e.id === id)
+  const clearReplayIfPresent = (): void => {
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session?.replaying) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, replaying: null } } }
+    })
+  }
+
   const payload = await loadSessionPayload(id)
   if (!payload) throw new Error(`no persisted history for ${id}`)
   const meta = payload.metadata
@@ -910,6 +922,9 @@ async function openHistorySessionInner(
     })
   }
 
+  // Deleted during spawn/capability wait — leave the closed record alone.
+  if (deletedMidOpen()) return
+
   const connected = get().agentStatus[liveAgentId] === 'connected'
   const capabilities = get().agents[liveAgentId]?.capabilities ?? null
   const strategy = decideResume({ connected, capabilities })
@@ -933,22 +948,11 @@ async function openHistorySessionInner(
     }
   })
 
-  // A chat deleted while the reconnect was in flight must stay deleted: skip
-  // activation (the record was already marked closed by the delete). Detected
-  // as a transition — indexed when the open started, gone afterwards — so a
-  // session that was never indexed is not mistaken for a deleted one.
-  const wasIndexed = get().sessionIndex.some((e) => e.id === id)
-  const deletedMidOpen = (): boolean => wasIndexed && !get().sessionIndex.some((e) => e.id === id)
-
   if (strategy === 'load') {
     try {
       await acpApi.loadSession(liveAgentId, id, meta.cwd)
       if (deletedMidOpen()) {
-        set((s) => {
-          const session = s.sessions[id]
-          if (!session) return {}
-          return { sessions: { ...s.sessions, [id]: { ...session, replaying: null } } }
-        })
+        clearReplayIfPresent()
         return
       }
       set((s) => {
@@ -971,6 +975,12 @@ async function openHistorySessionInner(
       })
       scheduleReplayEnd(set, id)
     } catch (err) {
+      // Deleted mid-load: do not restore transcript or surface a resume error
+      // (delete already closed the session; a toast would be misleading).
+      if (deletedMidOpen()) {
+        clearReplayIfPresent()
+        return
+      }
       // Load failed — restore the local transcript so the user still sees
       // history (a partial replay may have replaced it).
       set((s) => ({
@@ -985,6 +995,7 @@ async function openHistorySessionInner(
       if (deletedMidOpen()) return
       set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
     } catch (err) {
+      if (deletedMidOpen()) return
       set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
       throw err
     }
