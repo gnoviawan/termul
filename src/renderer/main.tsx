@@ -40,6 +40,9 @@ import { preloadCommonLanguages } from './hooks/use-codemirror'
 import { installGlobalErrorForwarding } from './lib/log-api'
 import TauriApp from './TauriApp'
 import './index.css'
+// Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
+// used by AgentProse's `animated` word-by-word reveal.
+import 'streamdown/styles.css'
 
 /**
  * Detect if running in Tauri context

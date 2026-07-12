@@ -128,6 +128,11 @@ const STREAMDOWN_CONTROLS = {
   mermaid: { copy: true, download: true, fullscreen: true, panZoom: true }
 } as const
 
+// Word-by-word reveal so replies feel like they stream even when an agent
+// sends its text as one big chunk. `animated` uses the styles.css keyframes
+// imported in main.tsx; already-visible words get duration 0 (no re-animation).
+const STREAMDOWN_ANIMATED = { animation: 'blurIn', sep: 'word', duration: 350, stagger: 8 } as const
+
 // Route link clicks to the OS browser rather than navigating inside the Tauri
 // webview. Returning false aborts Streamdown's own navigation after we hand off.
 const LINK_SAFETY = {
@@ -141,10 +146,12 @@ const LINK_SAFETY = {
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
 function AgentProse({
   blocks,
-  streaming
+  streaming,
+  reduced
 }: {
   blocks: ContentBlock[]
   streaming: boolean
+  reduced: boolean
 }): React.JSX.Element {
   const text = useMemo(() => stripEmptyFences(blocksToText(blocks), streaming), [blocks, streaming])
   return (
@@ -152,6 +159,7 @@ function AgentProse({
       <Streamdown
         mode="streaming"
         isAnimating={streaming}
+        animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
         plugins={STREAMDOWN_PLUGINS}
         controls={STREAMDOWN_CONTROLS}
@@ -307,7 +315,11 @@ function ChatMessageComponent({
                   animateEnter={animateEnter}
                 >
                   {text.length > 0 && (
-                    <AgentProse blocks={message.blocks} streaming={message.streaming && isLast} />
+                    <AgentProse
+                      blocks={message.blocks}
+                      streaming={message.streaming && isLast}
+                      reduced={reduced}
+                    />
                   )}
                   {message.streaming && isLast && text.length === 0 && (
                     <span
