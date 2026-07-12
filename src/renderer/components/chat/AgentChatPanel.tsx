@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
+import { Button } from '@/components/ui/button'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
@@ -24,13 +26,22 @@ const EMPTY_PLAN: PlanEntry[] = []
 
 interface AgentChatPanelProps {
   sessionId: SessionId
+  /**
+   * Whether this panel's tab is the pane's active tab. Gates the restored-tab
+   * rehydrate so only visible chats trigger `openHistorySession` (a hidden
+   * restored tab must not cold-spawn an agent in the background).
+   */
+  isVisible?: boolean
 }
 
 /**
  * Top-level agent-chat pane body. Renders the header, message thread, and input
  * for a single session. Mounted by PaneContent for `agent-chat` tabs.
  */
-export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.Element {
+export function AgentChatPanel({
+  sessionId,
+  isVisible = true
+}: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
   const imageCapable = useAcpStore((s) =>
@@ -56,6 +67,25 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
+
+  // Restored-tab rehydration: a persisted `agent-chat` tab can outlive its
+  // in-memory session (app restart). When this panel is visible, its session
+  // record is missing, and history exists for the id, reopen it from history
+  // (deduped store-side against a concurrent sidebar open).
+  const openHistorySession = useAcpStore((s) => s.openHistorySession)
+  const hasHistoryEntry = useAcpStore((s) => s.sessionIndex.some((e) => e.id === sessionId))
+  const isOpeningHistory = useAcpStore((s) => Boolean(s.openingHistoryIds[sessionId]))
+  const [rehydrateError, setRehydrateError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isVisible || session || !hasHistoryEntry || rehydrateError) return
+    let cancelled = false
+    void openHistorySession(sessionId).catch((err) => {
+      if (!cancelled) setRehydrateError(String(err))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isVisible, session, hasHistoryEntry, rehydrateError, openHistorySession, sessionId])
 
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
@@ -158,6 +188,24 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
   const showTyping = Boolean(session?.activeTurn) && !hasTurnOutput
 
   if (!session) {
+    if (rehydrateError) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <div className="max-w-md px-6 text-center">Failed to restore chat: {rehydrateError}</div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setRehydrateError(null)}>
+            Retry
+          </Button>
+        </div>
+      )
+    }
+    if (isOpeningHistory || hasHistoryEntry) {
+      return (
+        <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 size={14} className="animate-spin" />
+          Restoring chat…
+        </div>
+      )
+    }
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         No active chat for this pane.
@@ -171,6 +219,28 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
 
   return (
     <div className="flex h-full flex-col bg-background">
+      {isClosed && isOpeningHistory && (
+        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+          <Loader2 size={12} className="animate-spin" />
+          Reconnecting to agent…
+        </div>
+      )}
+      {isClosed && !isOpeningHistory && hasHistoryEntry && (
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+          <span>Chat disconnected.</span>
+          <button
+            type="button"
+            onClick={() => {
+              void openHistorySession(sessionId).catch((err) => {
+                toast.error(`Failed to reconnect chat: ${String(err)}`)
+              })
+            }}
+            className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
+          >
+            Reconnect
+          </button>
+        </div>
+      )}
       <ChatErrorNotice
         message={activeError}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}

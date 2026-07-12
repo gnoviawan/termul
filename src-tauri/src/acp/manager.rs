@@ -60,6 +60,12 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// former 30s budget on first launch). Overridable for diagnostics via
 /// [`session_new_timeout`].
 const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long to wait for `session/load` / `session/resume` before returning an
+/// error to the caller. Without a bound, a wedged agent parks the renderer's
+/// "reconnecting" state forever (the reopened chat can never recover). 60s
+/// matches the `session/new` budget: a load replays the full conversation and
+/// can legitimately take a while on large histories.
+const SESSION_REOPEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
@@ -79,6 +85,19 @@ fn session_new_timeout() -> Duration {
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or(SESSION_NEW_TIMEOUT)
+}
+
+/// `session/load` / `session/resume` timeout, overridable via
+/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (seconds, must be > 0). Defaults
+/// to [`SESSION_REOPEN_TIMEOUT`]. A load replays the full conversation before
+/// responding, so very large histories may need a longer budget.
+fn session_reopen_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(SESSION_REOPEN_TIMEOUT)
 }
 
 /// Outcome of creating a new session, returned to the command caller.
@@ -1223,13 +1242,32 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
+                    // Bounded like session/new: a wedged agent must not park the
+                    // renderer's reconnect forever (the reply sender would be
+                    // held indefinitely).
+                    let timeout = session_reopen_timeout();
+                    let outcome = tokio::time::timeout(
+                        timeout,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    let result = match outcome {
+                        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+                        Err(_) => {
+                            log::warn!(
+                                "[acp] session {} session/load timed out after {timeout:?}; \
+                                 check agent stderr in RUST_LOG=debug",
+                                session_id.0
+                            );
+                            Err(format!("session/load timed out after {timeout:?}"))
+                        }
+                    };
                     if result.is_ok() {
                         req_state
                             .lock()
                             .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                     }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1244,13 +1282,29 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
+                    let timeout = session_reopen_timeout();
+                    let outcome = tokio::time::timeout(
+                        timeout,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    let result = match outcome {
+                        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+                        Err(_) => {
+                            log::warn!(
+                                "[acp] session {} session/resume timed out after {timeout:?}; \
+                                 check agent stderr in RUST_LOG=debug",
+                                session_id.0
+                            );
+                            Err(format!("session/resume timed out after {timeout:?}"))
+                        }
+                    };
                     if result.is_ok() {
                         req_state
                             .lock()
                             .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                     }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1691,6 +1745,39 @@ mod tests {
             Ok(StopReason::Cancelled),
             "a stuck turn must be force-resolved as Cancelled after the grace window"
         );
+    }
+
+    /// Shape test (like `cancel_grace_forcibly_resolves_a_stuck_turn`): mirrors
+    /// the timeout-around-request pattern of the `LoadSession`/`ResumeSession`
+    /// arms against a never-resolving future, using a short local bound so the
+    /// test is fast. The arms themselves need a live connection + AppHandle and
+    /// are not driven here; this covers the match shape plus the production
+    /// timeout resolution below.
+    #[tokio::test]
+    async fn session_reopen_times_out_instead_of_hanging() {
+        const TEST_TIMEOUT: Duration = Duration::from_millis(50);
+        let request = std::future::pending::<Result<(), String>>();
+        let outcome = tokio::time::timeout(TEST_TIMEOUT, request).await;
+        let result: Result<(), String> = match outcome {
+            Ok(result) => result,
+            Err(_) => Err(format!("session/load timed out after {TEST_TIMEOUT:?}")),
+        };
+        assert!(
+            result.is_err_and(|e| e.contains("timed out")),
+            "a hung reopen must resolve to a timeout error"
+        );
+    }
+
+    /// The production reopen budget resolves to the 60s default and honors the
+    /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` diagnostic override contract
+    /// (mirrors `session_new_timeout`). Only the default path is asserted —
+    /// mutating process env in a test would race other tests.
+    #[test]
+    fn session_reopen_timeout_defaults_to_constant() {
+        if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_err() {
+            assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
+        }
+        assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).
