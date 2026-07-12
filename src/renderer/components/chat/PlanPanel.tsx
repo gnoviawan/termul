@@ -56,8 +56,8 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
           transition={reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT}
           className="shrink-0"
         >
-          <div className="mx-auto w-full max-w-3xl px-5 py-2">
-            <div className="overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50">
+          <div className="px-5 py-2">
+            <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50">
               <div className="flex items-center gap-1.5 px-3 py-2 text-2xs font-semibold text-muted-foreground">
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
                 <span className="text-balance">Plan</span>
