@@ -50,6 +50,13 @@ import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerMentions } from './use-composer-mentions'
 import { useComposerTextarea } from './use-composer-textarea'
 
+// Subtle embossed/raised look shared by the send + stop buttons: soft outer
+// drop shadow to lift the button off the composer, a top inner highlight, and a
+// bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
+// on both the white-in-dark and black-in-light button shapes.
+const EMBOSSED_BUTTON =
+  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] transition-shadow hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
+
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
   session: AcpSession
@@ -494,9 +501,12 @@ export function ChatInputBar({
                           onClick={onCancel}
                           title="Cancel turn"
                           aria-label="Cancel turn"
-                          className="flex size-[34px] items-center justify-center rounded-lg border border-border/60 bg-muted text-foreground hover:bg-muted/80 active:scale-[0.96]"
+                          className={cn(
+                            'flex size-[34px] items-center justify-center rounded-lg bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
+                            EMBOSSED_BUTTON
+                          )}
                         >
-                          <Square size={14} />
+                          <Square size={12} fill="currentColor" strokeWidth={0} />
                         </button>
                       </motion.div>
                     ) : (
@@ -516,7 +526,10 @@ export function ChatInputBar({
                         className={cn(
                           'absolute inset-0 flex items-center justify-center rounded-lg transition-colors',
                           canSend
-                            ? 'bg-foreground text-background hover:bg-foreground/90'
+                            ? cn(
+                                'bg-foreground text-background hover:bg-foreground/90',
+                                EMBOSSED_BUTTON
+                              )
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
                         )}
                       >
