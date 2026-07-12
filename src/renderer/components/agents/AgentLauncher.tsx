@@ -1105,6 +1105,7 @@ function AcpModelPicker({
                       event.preventDefault()
                       handleSelectModel(value.value)
                     }}
+                    onClick={() => handleSelectModel(value.value)}
                     className={cn(
                       'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
                       value.value === displayValue && 'bg-accent/50'

@@ -266,9 +266,11 @@ export function ChatInputBar({
         return
       }
       if (item.kind === 'config') {
-        onSetConfig(item.configId, item.valueId)
+        // AgentChatPanel's setters toast then rethrow; swallow here so the
+        // already-surfaced failure doesn't become an unhandled rejection.
+        void Promise.resolve(onSetConfig(item.configId, item.valueId)).catch(() => {})
       } else {
-        onSetMode(item.modeId)
+        void Promise.resolve(onSetMode(item.modeId)).catch(() => {})
       }
       setValue('')
       updateMentions('', 0)
