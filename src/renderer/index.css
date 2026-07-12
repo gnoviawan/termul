@@ -6,6 +6,12 @@
 @import "shadcn/tailwind.css";
 @config "../../tailwind.config.ts";
 
+/* Streamdown ships Tailwind utility classes in its dist bundles; Tailwind v4
+   must scan them to generate the matching CSS (chat markdown renderer). */
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
+
 @layer base {
   :root {
     /* Background layers - Codex dark theme */
@@ -561,5 +567,17 @@
     border: none;
     border-top: 1px solid hsl(var(--border) / 0.6);
     margin: 1em 0;
+  }
+}
+
+/* Streamdown code blocks (agent chat): looser line-height for readable code,
+   and a comfortable min-height so short snippets don't feel cramped. */
+@layer components {
+  .chat-streamdown [data-streamdown="code-block-body"] {
+    line-height: 1.65;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] pre,
+  .chat-streamdown [data-streamdown="code-block-body"] code {
+    line-height: inherit;
   }
 }

@@ -362,123 +362,129 @@ export function ChatInputBar({
             inputRef={textareaRef}
           />
         )}
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
-        <div
-          className={cn(
-            'relative rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
-            dragActive && 'border-primary/70'
-          )}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-          onDrop={handleDrop}
+        <BorderBeam
+          size="md"
+          colorVariant="colorful"
+          theme="dark"
+          borderRadius={16}
+          active={busy}
+          className="w-full"
         >
-          {dragActive && canDropPaste && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
-              <span className="flex items-center gap-2">
-                <Paperclip size={16} /> Drop files to attach
-              </span>
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+          <div
+            className={cn(
+              'relative rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+              dragActive && 'border-primary/70'
+            )}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
+            onDrop={handleDrop}
+          >
+            {dragActive && canDropPaste && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
+                <span className="flex items-center gap-2">
+                  <Paperclip size={16} /> Drop files to attach
+                </span>
+              </div>
+            )}
+            {loadedSkill && (
+              <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
+            )}
+            <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
+            <div className="px-4 pb-1.5 pt-3.5">
+              <textarea
+                ref={textareaRef}
+                value={value}
+                onChange={onInput}
+                onKeyDown={handleKeyDown}
+                onKeyUp={onKeyUp}
+                onSelect={onSelect}
+                onPaste={handlePaste}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                disabled={disabled || sending}
+                rows={1}
+                placeholder={
+                  disabled
+                    ? 'Session closed'
+                    : loadedSkill
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything… (/ for commands, @ for files)'
+                }
+                className={cn(
+                  'min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
+                  'placeholder:text-muted-foreground focus:outline-none',
+                  'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
+                )}
+              />
             </div>
-          )}
-          {loadedSkill && (
-            <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
-          )}
-          <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
-          <div className="px-4 pb-1.5 pt-3.5">
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={onInput}
-              onKeyDown={handleKeyDown}
-              onKeyUp={onKeyUp}
-              onSelect={onSelect}
-              onPaste={handlePaste}
-              onFocus={() => setFocused(true)}
-              onBlur={() => setFocused(false)}
-              disabled={disabled || sending}
-              rows={1}
-              placeholder={
-                disabled
-                  ? 'Session closed'
-                  : loadedSkill
-                    ? 'Add a message (optional)…'
-                    : 'Ask anything… (/ for commands, @ for files)'
-              }
-              className={cn(
-                'min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
-                'placeholder:text-muted-foreground focus:outline-none',
-                'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
-              )}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              {modelOption && (
-                <ConfigChip
-                  key={modelOption.id}
-                  option={modelOption}
+            <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {modelOption && (
+                  <ConfigChip
+                    key={modelOption.id}
+                    option={modelOption}
+                    disabled={disabled}
+                    searchable
+                    maxVisibleOptions={5}
+                    onSelect={(valueId) =>
+                      modelSource === 'models'
+                        ? onSetModel(valueId)
+                        : onSetConfig(modelOption.id, valueId)
+                    }
+                  />
+                )}
+                {hasConfigOptions ? (
+                  <>
+                    {thoughtLevel && (
+                      <ConfigChip
+                        key={thoughtLevel.id}
+                        option={thoughtLevel}
+                        disabled={disabled}
+                        promoted
+                        onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
+                      />
+                    )}
+                    {visibleGenericConfigOptions.map((option) => (
+                      <ConfigChip
+                        key={option.id}
+                        option={option}
+                        disabled={disabled}
+                        onSelect={(valueId) => onSetConfig(option.id, valueId)}
+                      />
+                    ))}
+                  </>
+                ) : null}
+                <ModeChip
+                  session={session}
                   disabled={disabled}
-                  searchable
-                  maxVisibleOptions={5}
-                  onSelect={(valueId) =>
-                    modelSource === 'models'
-                      ? onSetModel(valueId)
-                      : onSetConfig(modelOption.id, valueId)
-                  }
+                  onSelect={onSetMode}
+                  label="Agent"
                 />
-              )}
-              {hasConfigOptions ? (
-                <>
-                  {thoughtLevel && (
-                    <ConfigChip
-                      key={thoughtLevel.id}
-                      option={thoughtLevel}
-                      disabled={disabled}
-                      promoted
-                      onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
-                    />
-                  )}
-                  {visibleGenericConfigOptions.map((option) => (
-                    <ConfigChip
-                      key={option.id}
-                      option={option}
-                      disabled={disabled}
-                      onSelect={(valueId) => onSetConfig(option.id, valueId)}
-                    />
-                  ))}
-                </>
-              ) : null}
-              <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
-            </div>
-            <div className="flex flex-shrink-0 items-center gap-2">
-              {canPick && (
-                <button
-                  type="button"
-                  onClick={() => void pickFiles()}
-                  title="Attach files"
-                  aria-label="Attach files"
-                  className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  <Paperclip size={16} />
-                </button>
-              )}
-              <div className="relative h-[34px] w-[34px] overflow-visible">
-                <AnimatePresence mode="popLayout" initial={false}>
-                  {busy ? (
-                    <motion.div
-                      key="cancel"
-                      className="absolute inset-0"
-                      initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
-                      animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
-                      exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
-                      transition={CHAT_SPRING}
-                    >
-                      <BorderBeam
-                        size="sm"
-                        colorVariant="colorful"
-                        theme="dark"
-                        borderRadius={8}
-                        className="h-full w-full"
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-2">
+                {canPick && (
+                  <button
+                    type="button"
+                    onClick={() => void pickFiles()}
+                    title="Attach files"
+                    aria-label="Attach files"
+                    className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <Paperclip size={16} />
+                  </button>
+                )}
+                <div className="relative h-[34px] w-[34px] overflow-visible">
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    {busy ? (
+                      <motion.div
+                        key="cancel"
+                        className="absolute inset-0"
+                        initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
+                        animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
+                        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
+                        transition={CHAT_SPRING}
                       >
                         <button
                           type="button"
@@ -490,45 +496,45 @@ export function ChatInputBar({
                         >
                           <Square size={14} />
                         </button>
-                      </BorderBeam>
-                    </motion.div>
-                  ) : (
-                    <motion.button
-                      key="send"
-                      type="button"
-                      data-press-feedback="off"
-                      onClick={() => void submit()}
-                      disabled={!canSend}
-                      title="Send"
-                      aria-label="Send message"
-                      initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
-                      animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
-                      exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
-                      transition={CHAT_SPRING}
-                      whileTap={reduced || !canSend ? undefined : { scale: 0.9 }}
-                      className={cn(
-                        'absolute inset-0 flex items-center justify-center rounded-lg transition-colors',
-                        canSend
-                          ? 'bg-foreground text-background hover:bg-foreground/90'
-                          : 'cursor-not-allowed bg-muted text-muted-foreground'
-                      )}
-                    >
-                      <motion.span
-                        key={canSend ? 'ready' : 'idle'}
-                        initial={reduced ? false : { scale: 0.6 }}
-                        animate={reduced ? undefined : { scale: 1 }}
+                      </motion.div>
+                    ) : (
+                      <motion.button
+                        key="send"
+                        type="button"
+                        data-press-feedback="off"
+                        onClick={() => void submit()}
+                        disabled={!canSend}
+                        title="Send"
+                        aria-label="Send message"
+                        initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
+                        animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
+                        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
                         transition={CHAT_SPRING}
-                        className="flex items-center justify-center"
+                        whileTap={reduced || !canSend ? undefined : { scale: 0.9 }}
+                        className={cn(
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-colors',
+                          canSend
+                            ? 'bg-foreground text-background hover:bg-foreground/90'
+                            : 'cursor-not-allowed bg-muted text-muted-foreground'
+                        )}
                       >
-                        <ArrowUp size={16} strokeWidth={2.5} />
-                      </motion.span>
-                    </motion.button>
-                  )}
-                </AnimatePresence>
+                        <motion.span
+                          key={canSend ? 'ready' : 'idle'}
+                          initial={reduced ? false : { scale: 0.6 }}
+                          animate={reduced ? undefined : { scale: 1 }}
+                          transition={CHAT_SPRING}
+                          className="flex items-center justify-center"
+                        >
+                          <ArrowUp size={16} strokeWidth={2.5} />
+                        </motion.span>
+                      </motion.button>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </BorderBeam>
         <div
           className={cn(
             'flex items-center px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
