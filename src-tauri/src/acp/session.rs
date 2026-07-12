@@ -121,6 +121,13 @@ impl DriverState {
         self.session_roots.keys().cloned().collect()
     }
 
+    /// Sessions with an in-flight prompt turn. Used to route extension
+    /// notifications that don't carry a session id (e.g. Cursor's
+    /// `cursor/update_todos`) to the session currently being prompted.
+    pub(crate) fn active_turn_session_ids(&self) -> Vec<String> {
+        self.active_turns.keys().cloned().collect()
+    }
+
     /// Attempt to begin a turn for a session. Returns `Some(receiver)` (a cancel
     /// signal) when the turn may proceed, or `None` if a turn is already active
     /// for this session (concurrent turns are rejected).

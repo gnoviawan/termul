@@ -829,6 +829,17 @@ async fn drive_connection(
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
     let notif_app = app.clone();
     let notif_agent_id = agent_id.clone();
+    let todos_app = app.clone();
+    let todos_agent_id = agent_id.clone();
+    let todos_state = driver_state.clone();
+    let todos_req_app = app.clone();
+    let todos_req_agent_id = agent_id.clone();
+    let todos_req_state = driver_state.clone();
+    // Shared per-connection cache of Cursor todo lists, so `merge: true` updates
+    // combine with prior todos rather than dropping them.
+    let todos_cache: client::CursorTodosCache = std::sync::Arc::new(Mutex::new(HashMap::new()));
+    let todos_cache_notif = todos_cache.clone();
+    let todos_cache_req = todos_cache.clone();
     let perm_app = app.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -865,6 +876,67 @@ async fn drive_connection(
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            async move |msg: client::CursorUpdateTodosMessage, _cx| {
+                // Cursor reports plan/todo progress via this extension method
+                // rather than the spec Plan update. Route it to the PlanPanel.
+                match client::parse_cursor_update_todos(&msg.params) {
+                    Ok(params) => {
+                        let fallback = {
+                            let ids = todos_state.lock().active_turn_session_ids();
+                            // Only a single active turn maps unambiguously to a
+                            // session; if several are in flight we can't guess.
+                            if ids.len() == 1 { ids.into_iter().next() } else { None }
+                        };
+                        client::handle_cursor_update_todos(
+                            &todos_app,
+                            &todos_agent_id,
+                            params,
+                            fallback,
+                            &todos_cache_notif,
+                        );
+                    }
+                    Err(err) => {
+                        log::debug!(
+                            "[acp] agent {todos_agent_id} failed to parse cursor/update_todos: {err}"
+                        );
+                    }
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |request: client::CursorUpdateTodosMessage, responder, _cx| {
+                // Request form of cursor/update_todos (Cursor docs are ambiguous
+                // about notification vs request). Handle identically, then ack.
+                match client::parse_cursor_update_todos(&request.params) {
+                    Ok(params) => {
+                        let fallback = {
+                            let ids = todos_req_state.lock().active_turn_session_ids();
+                            if ids.len() == 1 { ids.into_iter().next() } else { None }
+                        };
+                        client::handle_cursor_update_todos(
+                            &todos_req_app,
+                            &todos_req_agent_id,
+                            params,
+                            fallback,
+                            &todos_cache_req,
+                        );
+                    }
+                    Err(err) => {
+                        log::debug!(
+                            "[acp] agent {todos_req_agent_id} failed to parse cursor/update_todos request: {err}"
+                        );
+                    }
+                }
+                // Ack with the outcome shape Cursor documents so it never blocks.
+                let ack = serde_json::json!({ "outcome": "accepted" });
+                let _ = responder.respond_with_result(Ok(ack));
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: agent_client_protocol::schema::RequestPermissionRequest,

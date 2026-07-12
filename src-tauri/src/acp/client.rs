@@ -346,6 +346,188 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cursor `cursor/update_todos` extension
+//
+// Cursor CLI reports plan/todo progress via its own ACP extension method
+// `cursor/update_todos` rather than the spec's `session/update` Plan variant,
+// so the standard plan fan-out above never sees it. We register dedicated
+// handlers (notification AND request form, since Cursor's docs are ambiguous)
+// that translate the todos into a `Plan` and reuse `acp:plan_update`, so the
+// existing PlanPanel updates live with no renderer changes.
+// See: https://cursor.com/docs/cli/acp (Cursor extension methods).
+// ---------------------------------------------------------------------------
+
+/// Wire method name for Cursor's todo-progress notification/request.
+pub const CURSOR_UPDATE_TODOS_METHOD: &str = "cursor/update_todos";
+
+/// A single Cursor todo item. `status` may be pending / in_progress /
+/// completed / cancelled; `cancelled` has no ACP equivalent and is dropped.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CursorTodo {
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+/// Params for `cursor/update_todos`. `session_id` is optional because Cursor's
+/// documented shape (`toolCallId`, `todos`, `merge`) omits it; when absent we
+/// route to the session with an active prompt turn. `merge` controls whether
+/// the incoming todos replace the list (false) or are merged into it (true).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorUpdateTodosParams {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub todos: Vec<CursorTodo>,
+    #[serde(default)]
+    pub merge: bool,
+}
+
+/// Merge incoming Cursor todos into an existing list. With `merge = false` the
+/// incoming list replaces everything. With `merge = true`, todos are matched by
+/// `id`: existing entries are updated in place, and new ids are appended, so
+/// prior tasks aren't lost when Cursor sends a partial update.
+pub fn merge_cursor_todos(
+    existing: &[CursorTodo],
+    incoming: Vec<CursorTodo>,
+    merge: bool,
+) -> Vec<CursorTodo> {
+    if !merge {
+        return incoming;
+    }
+    let mut result: Vec<CursorTodo> = existing.to_vec();
+    for todo in incoming {
+        if let Some(slot) = result.iter_mut().find(|t| !t.id.is_empty() && t.id == todo.id) {
+            *slot = todo;
+        } else {
+            result.push(todo);
+        }
+    }
+    result
+}
+
+/// Map Cursor's todo status string to an ACP `PlanEntryStatus`. Unknown or
+/// `cancelled` statuses return `None` so the entry is dropped from the plan.
+fn map_todo_status(status: &str) -> Option<acp::schema::PlanEntryStatus> {
+    use acp::schema::PlanEntryStatus;
+    match status {
+        "pending" => Some(PlanEntryStatus::Pending),
+        "in_progress" => Some(PlanEntryStatus::InProgress),
+        "completed" => Some(PlanEntryStatus::Completed),
+        // `cancelled` (and anything unknown) has no ACP equivalent; drop it.
+        _ => None,
+    }
+}
+
+/// Translate Cursor todos into an ACP `Plan`. Cursor todos carry no priority,
+/// so every entry is assigned `Medium`. Cancelled/unknown entries are dropped.
+pub fn cursor_todos_to_plan(todos: &[CursorTodo]) -> acp::schema::Plan {
+    use acp::schema::{PlanEntry, PlanEntryPriority};
+    let entries = todos
+        .iter()
+        .filter_map(|t| {
+            map_todo_status(&t.status)
+                .map(|status| PlanEntry::new(t.content.clone(), PlanEntryPriority::Medium, status))
+        })
+        .collect();
+    acp::schema::Plan::new(entries)
+}
+
+/// Per-session cache of the last-known Cursor todo list, used to honor
+/// `merge: true` updates that only carry changed/added todos. Keyed by session
+/// id. Held per connection (one agent process).
+pub type CursorTodosCache = std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, Vec<CursorTodo>>>>;
+
+/// Handle a decoded `cursor/update_todos` payload: resolve the target session,
+/// apply merge semantics against the cache, then emit `acp:plan_update` so the
+/// PlanPanel refreshes. `fallback_session` is used when the payload omits a
+/// session id (the active-turn session).
+pub fn handle_cursor_update_todos(
+    app: &AppHandle,
+    agent_id: &AgentId,
+    params: CursorUpdateTodosParams,
+    fallback_session: Option<String>,
+    cache: &CursorTodosCache,
+) {
+    let Some(session) = params.session_id.clone().or(fallback_session) else {
+        log::debug!(
+            "[acp] agent {agent_id} cursor/update_todos with no session id and no active turn; dropping"
+        );
+        return;
+    };
+    // Apply merge against the last-known list for this session, then cache it.
+    let merged = {
+        let mut guard = cache.lock();
+        let existing = guard.get(&session).map(Vec::as_slice).unwrap_or(&[]);
+        let merged = merge_cursor_todos(existing, params.todos, params.merge);
+        guard.insert(session.clone(), merged.clone());
+        merged
+    };
+    let plan = cursor_todos_to_plan(&merged);
+    events::emit(
+        app,
+        events::EVENT_PLAN_UPDATE,
+        PlanUpdateEvent {
+            agent_id: agent_id.clone(),
+            session_id: crate::acp::config::SessionId::new(session),
+            plan,
+        },
+    );
+}
+
+/// Parse a raw JSON-RPC params value into [`CursorUpdateTodosParams`].
+pub fn parse_cursor_update_todos(
+    params: &serde_json::Value,
+) -> Result<CursorUpdateTodosParams, serde_json::Error> {
+    serde_json::from_value(params.clone())
+}
+
+/// A `JsonRpcMessage` type that claims Cursor's `cursor/update_todos` method.
+/// Holds the raw params so the handler can decode them off the dispatch path.
+/// Registered as both a notification and a request handler because Cursor's
+/// docs are ambiguous about which wire form it uses.
+#[derive(Debug, Clone)]
+pub struct CursorUpdateTodosMessage {
+    pub params: serde_json::Value,
+}
+
+impl acp::JsonRpcMessage for CursorUpdateTodosMessage {
+    fn matches_method(method: &str) -> bool {
+        method == CURSOR_UPDATE_TODOS_METHOD
+    }
+
+    fn method(&self) -> &str {
+        CURSOR_UPDATE_TODOS_METHOD
+    }
+
+    fn to_untyped_message(&self) -> Result<acp::UntypedMessage, acp::Error> {
+        acp::UntypedMessage::new(CURSOR_UPDATE_TODOS_METHOD, &self.params)
+    }
+
+    fn parse_message(
+        method: &str,
+        params: &impl serde::Serialize,
+    ) -> Result<Self, acp::Error> {
+        if method != CURSOR_UPDATE_TODOS_METHOD {
+            return Err(acp::Error::method_not_found());
+        }
+        let value = serde_json::to_value(params).map_err(acp::Error::into_internal_error)?;
+        Ok(Self { params: value })
+    }
+}
+
+impl acp::JsonRpcNotification for CursorUpdateTodosMessage {}
+
+impl acp::JsonRpcRequest for CursorUpdateTodosMessage {
+    type Response = serde_json::Value;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,5 +681,79 @@ mod tests {
         assert_eq!(resp.content, "b\r\n");
 
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    fn todo(id: &str, content: &str, status: &str) -> CursorTodo {
+        CursorTodo {
+            id: id.to_string(),
+            content: content.to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    #[test]
+    fn cursor_todos_map_to_plan_entries_dropping_cancelled() {
+        let todos = vec![
+            todo("1", "first", "completed"),
+            todo("2", "second", "in_progress"),
+            todo("3", "third", "pending"),
+            todo("4", "gone", "cancelled"),
+            todo("5", "weird", "bogus"),
+        ];
+        let plan = cursor_todos_to_plan(&todos);
+        // cancelled + unknown are dropped; the rest map by status.
+        assert_eq!(plan.entries.len(), 3);
+        assert_eq!(plan.entries[0].content, "first");
+        assert_eq!(plan.entries[0].status, acp::schema::PlanEntryStatus::Completed);
+        assert_eq!(plan.entries[1].status, acp::schema::PlanEntryStatus::InProgress);
+        assert_eq!(plan.entries[2].status, acp::schema::PlanEntryStatus::Pending);
+        // Cursor todos carry no priority; everything defaults to Medium.
+        assert_eq!(plan.entries[0].priority, acp::schema::PlanEntryPriority::Medium);
+    }
+
+    #[test]
+    fn merge_false_replaces_the_list() {
+        let existing = vec![todo("1", "old", "completed")];
+        let incoming = vec![todo("2", "new", "pending")];
+        let out = merge_cursor_todos(&existing, incoming, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "2");
+    }
+
+    #[test]
+    fn merge_true_updates_existing_and_appends_new() {
+        let existing = vec![todo("1", "a", "pending"), todo("2", "b", "pending")];
+        let incoming = vec![todo("1", "a", "completed"), todo("3", "c", "pending")];
+        let out = merge_cursor_todos(&existing, incoming, true);
+        assert_eq!(out.len(), 3);
+        // id 1 updated in place (still first), status flipped to completed.
+        assert_eq!(out[0].id, "1");
+        assert_eq!(out[0].status, "completed");
+        // id 2 untouched, id 3 appended.
+        assert_eq!(out[1].id, "2");
+        assert_eq!(out[2].id, "3");
+    }
+
+    #[test]
+    fn parse_cursor_update_todos_reads_documented_shape() {
+        let value = serde_json::json!({
+            "toolCallId": "call_1",
+            "merge": true,
+            "todos": [
+                { "id": "1", "content": "do a thing", "status": "in_progress" }
+            ]
+        });
+        let params = parse_cursor_update_todos(&value).expect("parses");
+        assert!(params.merge);
+        assert_eq!(params.session_id, None);
+        assert_eq!(params.todos.len(), 1);
+        assert_eq!(params.todos[0].content, "do a thing");
+    }
+
+    #[test]
+    fn cursor_message_matches_only_its_method() {
+        use acp::JsonRpcMessage;
+        assert!(CursorUpdateTodosMessage::matches_method("cursor/update_todos"));
+        assert!(!CursorUpdateTodosMessage::matches_method("session/update"));
     }
 }
