@@ -37,8 +37,6 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "typecheck": "bun run typecheck:node && bun run typecheck:web && bun run typecheck:test",
-    "sync:acp-icons": "node scripts/sync-acp-icons.mjs",
-    "sync:acp-icons:check": "node scripts/sync-acp-icons.mjs && bunx biome format --write src/renderer/assets/agent-icons/acp/ && git diff --exit-code -- src/renderer/assets/agent-icons/acp/",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build --config src-tauri/tauri.conf.prod.json",
     "build:tauri:debug": "tauri build --debug --config src-tauri/tauri.conf.prod.json",
@@ -121,7 +119,6 @@
     "@xterm/addon-web-links": "^0.13.0-beta.216",
     "@xterm/addon-webgl": "^0.20.0-beta.215",
     "@xterm/xterm": "^6.1.0-beta.216",
-    "ai": "^7.0.4",
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -147,14 +144,12 @@
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "tauri-pty": "^0.1",
-    "unicode-animations": "^1.0.3",
     "vaul": "^0.9.9",
     "zod": "^3.25.76",
     "zustand": "^5.0.9"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
-    "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.16",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
@@ -168,9 +163,8 @@
     "husky": "^9.1.7",
     "jsdom": "^27.4.0",
     "postcss": "^8.5.6",
-    "shadcn": "^4.12.0",
-    "tailwindcss": "^4",
-    "typescript": "^7.0.1-rc",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^7.0.2",
     "vite": "^8.0.14",
     "vitest": "^4.1.6"
   }
