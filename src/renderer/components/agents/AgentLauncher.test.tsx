@@ -378,20 +378,18 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
     mockPrepareChat.mockClear()
-    fireEvent.click(screen.getByRole('button', { name: 'Select model: Authentication required' }))
+    // Zed-style banner is visible without opening the model picker popover.
     expect(screen.getByText('Run `cursor login` to continue')).toBeInTheDocument()
-    // A single advertised method yields a Sign-in action; no useless Retry loop.
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in with Cursor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cursor' }))
     await waitFor(() =>
       expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'cursor_login')
     )
-    // After signing in, preparation is retried to create the session.
     await waitFor(() =>
       expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
   })
 
-  it('presents a multi-method auth failure without a Sign-in button or retry loop (P6)', async () => {
+  it('presents per-method sign-in buttons for multi-method auth (Zed-style)', async () => {
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -418,13 +416,11 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() =>
       expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Select model: Multiple sign-in methods' }))
     expect(
-      screen.getByText('This agent advertises multiple sign-in methods (Cursor, API key).')
+      screen.getByText('Choose one of the following authentication options:')
     ).toBeInTheDocument()
-    // No Sign-in button (more than one method) and no Retry (would just re-fail).
-    expect(screen.queryByRole('button', { name: /^Sign in with/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+    await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {

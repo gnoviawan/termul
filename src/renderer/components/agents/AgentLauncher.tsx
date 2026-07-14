@@ -138,6 +138,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     liveAgentId ? (s.agents?.[liveAgentId]?.authMethods ?? EMPTY_AUTH_METHODS) : EMPTY_AUTH_METHODS
   )
   const signInMethod = authMethods.length === 1 ? authMethods[0] : null
+  const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
   const draftSession = useAcpSession(preparedSessionId)
   const promptCaps = useAcpStore((s) =>
     draftSession?.agentId
@@ -414,19 +415,38 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
   }, [activeConfigId, preparedKey, projectRoot, activeProjectId])
 
-  // Run the agent-advertised authenticate for the single method, then re-prepare
+  // Run the agent-advertised authenticate for a chosen method, then re-prepare
   // so the session is created now that the provider login is complete. The
   // provider owns the login UX (often opening its own browser); Termul never
-  // invents a redirect URL or stores credentials.
-  const handleSignIn = useCallback(async () => {
-    if (!liveAgentId || !signInMethod) return
-    try {
-      await useAcpStore.getState().authenticateAgent(liveAgentId, signInMethod.id)
-      handleRetryPrepare()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+  // invents a redirect URL or stores credentials. Mirrors Zed's
+  // ThreadState::Unauthenticated → authenticate → reset flow.
+  const runAuthenticate = useCallback(
+    async (methodId: string) => {
+      if (!liveAgentId) {
+        toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
+        return
+      }
+      if (signingInMethodId) return
+      setSigningInMethodId(methodId)
+      try {
+        await useAcpStore.getState().authenticateAgent(liveAgentId, methodId)
+        handleRetryPrepare()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+      } finally {
+        setSigningInMethodId(null)
+      }
+    },
+    [liveAgentId, signingInMethodId, handleRetryPrepare]
+  )
+
+  const handleSignIn = useCallback(() => {
+    if (!signInMethod) {
+      toast.error('No sign-in method is available for this agent yet.')
+      return
     }
-  }, [liveAgentId, signInMethod, handleRetryPrepare])
+    void runAuthenticate(signInMethod.id)
+  }, [signInMethod, runAuthenticate])
 
   const handleSetMode = useCallback(
     (modeId: string) => {
@@ -656,6 +676,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   'This ACP agent is not available on this platform.'}
               </div>
             )}
+            {prepareError &&
+              (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
+                <AuthRequiredBanner
+                  agentName={selectedEntry?.agent.name ?? 'Agent'}
+                  setupError={prepareError}
+                  authMethods={authMethods}
+                  signingInMethodId={signingInMethodId}
+                  onAuthenticate={(methodId) => void runAuthenticate(methodId)}
+                  onRetry={handleRetryPrepare}
+                />
+              )}
             {loadedSkill && (
               <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
             )}
@@ -781,6 +812,71 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               </div>
             </button>
           ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Zed-style auth callout: visible without opening the model picker popover. */
+function AuthRequiredBanner({
+  agentName,
+  setupError,
+  authMethods,
+  signingInMethodId,
+  onAuthenticate,
+  onRetry
+}: {
+  agentName: string
+  setupError: PrepareChatError
+  authMethods: AuthMethod[]
+  signingInMethodId: string | null
+  onAuthenticate: (methodId: string) => void
+  onRetry: () => void
+}): React.JSX.Element {
+  const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
+  const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
+
+  return (
+    <div className="border-b border-border/60 px-5 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-foreground">
+            {signingInMethod ? `Authenticating to ${agentName}…` : `Authenticate to ${agentName}`}
+          </div>
+          <p className="mt-0.5 line-clamp-4 break-words text-xs text-muted-foreground">
+            {setupError.detail}
+          </p>
+          {setupError.category === 'multi-auth' && actionableMethods.length > 1 ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Choose one of the following authentication options:
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {signingInMethod ? (
+            <Button type="button" size="sm" disabled>
+              <Loader2 size={14} className="mr-1.5 animate-spin" />
+              {`Signing in with ${signingInMethod.name}…`}
+            </Button>
+          ) : actionableMethods.length > 0 ? (
+            actionableMethods.map((method, index) => (
+              <Button
+                key={method.id}
+                type="button"
+                size="sm"
+                variant={index === actionableMethods.length - 1 ? 'default' : 'outline'}
+                title={method.description ?? undefined}
+                onClick={() => onAuthenticate(method.id)}
+              >
+                {method.name}
+              </Button>
+            ))
+          ) : (
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              Retry
+            </Button>
+          )}
         </div>
       </div>
     </div>
