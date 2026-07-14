@@ -27,6 +27,7 @@ import {
   type AgentErrorEvent,
   type AgentId,
   type AgentSpawnedEvent,
+  type AuthMethod,
   type AvailableCommand,
   acpApi,
   type CommandsUpdateEvent,
@@ -71,7 +72,11 @@ import {
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
-import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
+import {
+  AmbiguousAuthError,
+  classifySetupError,
+  type PrepareChatError
+} from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
@@ -142,7 +147,20 @@ export interface PendingPermission {
 
 interface AcpState {
   // Agent registry
-  agents: Record<AgentId, { id: AgentId; capabilities: AgentCapabilities | null }>
+  agents: Record<
+    AgentId,
+    {
+      id: AgentId
+      capabilities: AgentCapabilities | null
+      /**
+       * Authentication methods the agent advertised at `initialize`, retained so
+       * preparation can `authenticate` a single unambiguous method before
+       * `session/new` and the launcher can offer a Sign-in action. Absent/empty
+       * means the agent requires no authentication.
+       */
+      authMethods?: AuthMethod[]
+    }
+  >
   agentStatus: Record<AgentId, AgentStatus>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
@@ -160,8 +178,8 @@ interface AcpState {
   preparedSessions: Record<string, SessionId>
   /** Prepare keys with `session/new` currently in flight. */
   preparingChatKeys: Record<string, true>
-  /** Last background prepare error keyed by prepare key. */
-  prepareChatErrors: Record<string, string>
+  /** Last background prepare error keyed by prepare key (classified by cause). */
+  prepareChatErrors: Record<string, PrepareChatError>
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -194,6 +212,14 @@ interface AcpState {
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
+  /**
+   * Run the ACP `authenticate` method for an agent with an explicit method id
+   * (from the advertised metadata) — used by the launcher's Sign-in action so a
+   * subsequent prepare can create the session without re-authenticating. Marks
+   * the agent authenticated on success so `createSession` skips its own
+   * authenticate step.
+   */
+  authenticateAgent: (agentId: AgentId, methodId: string) => Promise<void>
   createSession: (
     agentId: AgentId,
     cwd: string,
@@ -630,6 +656,38 @@ function persistSession(
 const inFlightWarms = new Map<string, Promise<AgentId | null>>()
 
 /**
+ * Agents that have completed ACP `authenticate` in this process lifetime, so
+ * `createSession` does not re-authenticate a reused agent on every session. An
+ * auth-category `session/new` failure clears the agent from this set (see
+ * `createSession`) so a manual Sign-in + retry can re-authenticate. Held outside
+ * reactive state (identity set, not UI data).
+ */
+const authenticatedAgents = new Set<AgentId>()
+
+/**
+ * In-flight `authenticate` promises keyed by agentId so concurrent
+ * `createSession` calls (e.g. two panes preparing at once) share a single
+ * authenticate round-trip instead of racing duplicate `authenticate` requests.
+ */
+const inFlightAuth = new Map<AgentId, Promise<void>>()
+
+/**
+ * Cap on waiting for a freshly spawned agent's `initialize` details (advertised
+ * auth methods) to arrive via `acp:agent_spawned`. `spawnAgent` seeds
+ * `authMethods: []` and the event populates them asynchronously, so
+ * `authenticateBeforeSession` briefly waits before deciding a no-auth agent.
+ * The wait resolves early the instant the event lands; this is only the
+ * fallback for an agent that never advertises details.
+ */
+const SPAWN_DETAILS_WAIT_MS = 250
+
+/** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
+export function _resetAcpAuthForTesting(): void {
+  authenticatedAgents.clear()
+  inFlightAuth.clear()
+}
+
+/**
  * A live agent can be reused (instead of spawning a second process) when it is
  * connected. Provider CLIs own authentication, so an auth-blocked process is not
  * treated as reusable for new chat preparation.
@@ -791,6 +849,137 @@ function ensureLiveAgent(
 
   inFlightWarms.set(reuseKey, spawnPromise)
   return spawnPromise
+}
+
+/**
+ * Wait until a freshly spawned agent's `initialize` details are observable —
+ * i.e. `acp:agent_spawned` has been reduced into the store (capabilities become
+ * non-null) or advertised auth methods are present. `spawnAgent` seeds
+ * `authMethods: []` synchronously and the event arrives async, so reading
+ * `authMethods` immediately would misread a Cursor-style agent as no-auth.
+ *
+ * Mirrors `testConnection`'s capability wait: resolves the instant the event
+ * lands (via subscribe) and otherwise caps at {@link SPAWN_DETAILS_WAIT_MS}.
+ * Resolves immediately when the agent is unknown (nothing to wait for) or its
+ * details are already present.
+ */
+function waitForSpawnDetails(get: () => AcpState, agentId: AgentId): Promise<void> {
+  const hasDetails = (): boolean => {
+    const agent = get().agents[agentId]
+    // Unknown agent: nothing will arrive for it here — don't block.
+    if (!agent) return true
+    return agent.capabilities !== null || (agent.authMethods?.length ?? 0) > 0
+  }
+  if (hasDetails()) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      unsubscribe()
+      resolve()
+    }, SPAWN_DETAILS_WAIT_MS)
+    const unsubscribe = useAcpStore.subscribe(() => {
+      if (hasDetails()) {
+        clearTimeout(timeout)
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+}
+
+/**
+ * Run ACP `authenticate` before `session/new` when the agent advertises auth
+ * methods (P1). Waits for spawn details, then:
+ *   - no valid method → resolve (no-auth agent; unchanged spawn→session flow),
+ *   - exactly one valid method → `authenticate(methodId)`,
+ *   - more than one → reject with {@link AmbiguousAuthError} (never silently
+ *     choose a method).
+ *
+ * A method whose id is empty/whitespace is ignored (P5). Concurrent calls for
+ * the same agent share one in-flight authenticate (P2). On success the agent is
+ * remembered so a reused agent is not re-authenticated.
+ */
+function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promise<void> {
+  if (authenticatedAgents.has(agentId)) return Promise.resolve()
+  const existing = inFlightAuth.get(agentId)
+  if (existing) return existing
+
+  const task = (async (): Promise<void> => {
+    try {
+      await waitForSpawnDetails(get, agentId)
+      const methods = get().agents[agentId]?.authMethods ?? []
+      // P5: ignore empty/whitespace ids — an unusable method must not be sent.
+      const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
+      if (valid.length === 0) return
+      if (valid.length > 1) throw new AmbiguousAuthError(valid)
+      await acpApi.authenticate(agentId, valid[0].id.trim())
+      authenticatedAgents.add(agentId)
+    } finally {
+      inFlightAuth.delete(agentId)
+    }
+  })()
+  inFlightAuth.set(agentId, task)
+  return task
+}
+
+/**
+ * Evict a live agent after a transport/connection failure (P3/P8): a destroyed
+ * stream or refused connection means the process cannot be reused, so it is
+ * killed and dropped from reuse state before any retry (a fresh spawn follows).
+ * A failed kill is logged and swallowed — the agent is being discarded anyway.
+ */
+async function evictAgentForTransport(get: () => AcpState, agentId: AgentId): Promise<void> {
+  authenticatedAgents.delete(agentId)
+  try {
+    await get().killAgent(agentId)
+  } catch (err) {
+    // P8: surface the kill failure without letting it mask the setup error.
+    console.warn('[acp] failed to kill agent during transport eviction', agentId, err)
+  }
+}
+
+/**
+ * Register a freshly created session in the store and mirror it to disk. Merges
+ * with any record an event created during the `session/new` await window so
+ * event-set `lastError`/`activeTurn`/`modes` are not discarded.
+ */
+function finalizeCreatedSession(
+  get: () => AcpState,
+  set: TurnEndSetter,
+  agentId: AgentId,
+  cwd: string,
+  projectId: string,
+  outcome: Awaited<ReturnType<typeof acpApi.newSession>>
+): SessionId {
+  const sessionId = outcome.sessionId
+  set((s) => {
+    const existing = s.sessions[sessionId]
+    return {
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId,
+          cwd,
+          projectId,
+          status: existing?.status === 'closed' ? 'closed' : 'active',
+          title: existing?.title ?? null,
+          activeTurn: existing?.activeTurn ?? false,
+          openTurnId: existing?.openTurnId ?? null,
+          modes: outcome.modes ?? existing?.modes ?? null,
+          models: outcome.models ?? existing?.models ?? null,
+          configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
+          lastError: existing?.lastError ?? null,
+          createdAt: existing?.createdAt ?? Date.now(),
+          replaying: null
+        }
+      },
+      messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
+      activeSessionId: s.activeSessionId ?? sessionId
+    }
+  })
+  // mirror to disk (index + payload)
+  persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+  return sessionId
 }
 
 function cancelPreparedChatEntry(
@@ -1098,7 +1287,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         delete agentStatus[tempKey]
         agentStatus[agentId] = 'connected'
         return {
-          agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
+          // authMethods seeded empty; populated by `acp:agent_spawned`. See
+          // `authenticateBeforeSession` for why the event is awaited.
+          agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null, authMethods: [] } },
           agentStatus
         }
       })
@@ -1145,41 +1336,29 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
+  authenticateAgent: async (agentId, methodId) => {
+    await acpApi.authenticate(agentId, methodId)
+    // Remember success so the next `createSession` skips its own authenticate.
+    authenticatedAgents.add(agentId)
+  },
+
   createSession: async (agentId, cwd, mcpServers, projectId) => {
-    const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
-    const sessionId = outcome.sessionId
-    set((s) => {
-      // Merge with any record an event may have created during the await window,
-      // so we don't discard event-set lastError/activeTurn/modes.
-      const existing = s.sessions[sessionId]
-      return {
-        sessions: {
-          ...s.sessions,
-          [sessionId]: {
-            id: sessionId,
-            agentId,
-            cwd,
-            projectId,
-            status: existing?.status === 'closed' ? 'closed' : 'active',
-            title: existing?.title ?? null,
-            activeTurn: existing?.activeTurn ?? false,
-            openTurnId: existing?.openTurnId ?? null,
-            modes: outcome.modes ?? existing?.modes ?? null,
-            models: outcome.models ?? existing?.models ?? null,
-            configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
-            lastError: existing?.lastError ?? null,
-            createdAt: existing?.createdAt ?? Date.now(),
-            replaying: null
-          }
-        },
-        messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
-        activeSessionId: s.activeSessionId ?? sessionId
+    try {
+      // Authenticate (single unambiguous method) BEFORE session/new (P1).
+      await authenticateBeforeSession(get, agentId)
+      const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
+      return finalizeCreatedSession(get, set, agentId, cwd, projectId, outcome)
+    } catch (err) {
+      const { category } = classifySetupError(err)
+      if (category === 'transport') {
+        // Broken stream/connection: discard the process so retry spawns fresh.
+        await evictAgentForTransport(get, agentId)
+      } else if (category === 'auth') {
+        // Allow a manual Sign-in + retry to re-authenticate (P3).
+        authenticatedAgents.delete(agentId)
       }
-    })
-    // mirror to disk (index + payload)
-    const st = get()
-    persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
-    return sessionId
+      throw err
+    }
   },
 
   closeSession: async (sessionId) => {
@@ -1353,11 +1532,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         console.warn('[acp] prepareChat failed', configId, err)
         if (inFlightPrepared.has(key)) {
           const config = get().agentConfigs.find((c) => c.id === configId)
-          const message = formatAcpSpawnError(err, config)
+          // Classify from the RAW error (P4) so the launcher can render a
+          // category-specific label/action; `detail` carries the friendly text.
+          const classified = classifySetupError(err, config)
           set((s) => ({
-            prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
+            prepareChatErrors: { ...s.prepareChatErrors, [key]: classified }
           }))
-          toast.error(message)
+          // A spawn (missing binary) failure is the only one worth a toast; the
+          // rest are surfaced inline on the model picker (auth needs Sign-in, a
+          // multi-method agent has no useful retry, etc.).
+          if (classified.category === 'spawn') toast.error(classified.detail)
         }
         return null
       } finally {
@@ -1789,7 +1973,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onAgentSpawned: (e) =>
     set((s) => ({
-      agents: { ...s.agents, [e.agentId]: { id: e.agentId, capabilities: e.capabilities } },
+      agents: {
+        ...s.agents,
+        [e.agentId]: {
+          id: e.agentId,
+          capabilities: e.capabilities,
+          // Retain advertised auth methods so `authenticateBeforeSession` can
+          // authenticate a single unambiguous method before `session/new`.
+          authMethods: e.authMethods ?? []
+        }
+      },
       agentStatus: {
         ...s.agentStatus,
         [e.agentId]: 'connected'

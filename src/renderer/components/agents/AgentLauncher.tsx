@@ -38,9 +38,9 @@ import {
 } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import { acpApi, type ContentBlock } from '@/lib/acp-api'
+import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
-import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
+import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
@@ -56,7 +56,7 @@ import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
+import { agentReuseKey, prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -66,6 +66,7 @@ interface AgentLauncherProps {
 }
 
 const EMPTY_COMMANDS: [] = []
+const EMPTY_AUTH_METHODS: AuthMethod[] = []
 
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
@@ -126,10 +127,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const prepareError = useAcpStore((s) =>
     preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
   )
-  const displayPrepareError = useMemo(() => {
-    if (!prepareError) return null
-    return formatAcpSpawnError(prepareError, selectedConfig ?? undefined)
-  }, [prepareError, selectedConfig])
+  // Resolve the live agent for this config+cwd so an auth failure can offer a
+  // Sign-in action driven by the agent's advertised method metadata. A Sign-in
+  // button is only meaningful when exactly one method is advertised (P6).
+  const reuseKey = activeConfigId && projectRoot ? agentReuseKey(activeConfigId, projectRoot) : null
+  const liveAgentId = useAcpStore((s) =>
+    reuseKey ? (s.configToLiveAgent?.[reuseKey] ?? null) : null
+  )
+  const authMethods = useAcpStore((s) =>
+    liveAgentId ? (s.agents?.[liveAgentId]?.authMethods ?? EMPTY_AUTH_METHODS) : EMPTY_AUTH_METHODS
+  )
+  const signInMethod = authMethods.length === 1 ? authMethods[0] : null
   const draftSession = useAcpSession(preparedSessionId)
   const promptCaps = useAcpStore((s) =>
     draftSession?.agentId
@@ -405,6 +413,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     store.cancelPreparedChat(preparedKey)
     store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
   }, [activeConfigId, preparedKey, projectRoot, activeProjectId])
+
+  // Run the agent-advertised authenticate for the single method, then re-prepare
+  // so the session is created now that the provider login is complete. The
+  // provider owns the login UX (often opening its own browser); Termul never
+  // invents a redirect URL or stores credentials.
+  const handleSignIn = useCallback(async () => {
+    if (!liveAgentId || !signInMethod) return
+    try {
+      await useAcpStore.getState().authenticateAgent(liveAgentId, signInMethod.id)
+      handleRetryPrepare()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+    }
+  }, [liveAgentId, signInMethod, handleRetryPrepare])
 
   const handleSetMode = useCallback(
     (modeId: string) => {
@@ -686,7 +708,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   selectedEntry={selectedEntry}
                   modelOption={modelOption}
                   loading={!prepareError && isPreparing && !draftSession}
-                  errorMessage={displayPrepareError}
+                  setupError={prepareError}
+                  signInMethod={signInMethod}
+                  onSignIn={() => void handleSignIn()}
                   disabled={isLaunching || Boolean(installingConfigId) || savingManualPath}
                   onRetry={handleRetryPrepare}
                   onSelectModel={handleSetModel}
@@ -1003,7 +1027,9 @@ function AcpModelPicker({
   selectedEntry,
   modelOption,
   loading,
-  errorMessage,
+  setupError,
+  signInMethod,
+  onSignIn,
   disabled,
   onRetry,
   onSelectModel
@@ -1011,17 +1037,22 @@ function AcpModelPicker({
   selectedEntry: SupportedAcpAgentEntry | null
   modelOption: ReturnType<typeof partitionConfigOptions>['model']
   loading: boolean
-  errorMessage: string | null
+  setupError: PrepareChatError | null
+  signInMethod: AuthMethod | null
+  onSignIn: () => void
   disabled: boolean
   onRetry: () => void
   onSelectModel: (valueId: string) => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
+  // Category-specific label so only a genuine empty-model state reads as a
+  // neutral "Model" pill — setup failures get an actionable label instead of a
+  // misleading "Model unavailable".
   const label = loading
     ? 'Loading model…'
-    : errorMessage
-      ? 'Model unavailable'
+    : setupError
+      ? setupError.label
       : (currentModel?.name ?? 'Model')
   const showSearch = Boolean(modelOption && modelOption.options.length > 5)
   const normalizedQuery = query.trim().toLowerCase()
@@ -1103,21 +1134,32 @@ function AcpModelPicker({
               )}
             </div>
           </>
-        ) : errorMessage ? (
+        ) : setupError ? (
           <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
             <div>
-              <div className="font-medium text-foreground/85">Could not load model options.</div>
-              <div className="mt-1 line-clamp-3 break-words">{errorMessage}</div>
+              <div className="font-medium text-foreground/85">
+                {setupError.category === 'auth' || setupError.category === 'multi-auth'
+                  ? setupError.label
+                  : 'Could not load model options.'}
+              </div>
+              <div className="mt-1 line-clamp-3 break-words">{setupError.detail}</div>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={onRetry}
-            >
-              Retry
-            </Button>
+            {setupError.category === 'multi-auth' ? null : setupError.category === 'auth' &&
+              signInMethod ? (
+              <Button type="button" size="sm" className="h-7 text-xs" onClick={onSignIn}>
+                {`Sign in with ${signInMethod.name}`}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={onRetry}
+              >
+                Retry
+              </Button>
+            )}
           </div>
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">

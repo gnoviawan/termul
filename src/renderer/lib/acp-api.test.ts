@@ -10,6 +10,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
+  acpAuthenticate,
   acpCancelPrompt,
   acpNewSession,
   acpRespondPermission,
@@ -72,6 +73,20 @@ describe('acp-api command wrappers', () => {
       requestId: 'req-1',
       optionId: 'allow'
     })
+  })
+
+  it('acpAuthenticate forwards agentId and methodId to acp_authenticate', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    await acpAuthenticate('agent-1', 'cursor_login')
+    expect(invoke).toHaveBeenCalledWith('acp_authenticate', {
+      agentId: 'agent-1',
+      methodId: 'cursor_login'
+    })
+  })
+
+  it('acpAuthenticate propagates a rejected authenticate (provider login required)', async () => {
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue('login required')
+    await expect(acpAuthenticate('agent-1', 'cursor_login')).rejects.toBe('login required')
   })
 
   it('propagates a rejected command (acp commands throw on Err)', async () => {

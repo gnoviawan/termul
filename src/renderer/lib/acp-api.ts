@@ -247,9 +247,26 @@ export interface ListSessionsResponse {
 
 export type ChunkRole = 'user' | 'agent' | 'thought'
 
+/**
+ * An authentication method advertised by an agent at `initialize`, propagated
+ * verbatim from the backend as an opaque descriptor. `id` is the method id
+ * passed to `authenticate`; `name` is the human-readable label used for the
+ * Sign-in action; `description` is the protocol's optional guidance surface.
+ */
+export interface AuthMethod {
+  id: string
+  name: string
+  description?: string | null
+}
+
 export interface AgentSpawnedEvent {
   agentId: AgentId
   capabilities: AgentCapabilities
+  /**
+   * Every authentication method the agent advertised at `initialize`. Empty
+   * (or absent, treated as empty) means the agent requires no authentication.
+   */
+  authMethods?: AuthMethod[]
 }
 export interface SessionCreatedEvent {
   agentId: AgentId

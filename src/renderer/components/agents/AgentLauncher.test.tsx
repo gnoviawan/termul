@@ -29,6 +29,7 @@ const {
   mockSetConfigOption,
   mockSetMode,
   mockSetModel,
+  mockAuthenticateAgent,
   mockInstallRegistryBinary,
   mockAddAgentChatTab,
   mockHideAgentLauncher,
@@ -45,6 +46,7 @@ const {
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
+  mockAuthenticateAgent: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
@@ -56,9 +58,11 @@ const {
       agentConfigs: [] as StoredAgentConfig[],
       preparedSessions: {} as Record<string, string>,
       preparingChatKeys: {} as Record<string, true>,
-      prepareChatErrors: {} as Record<string, string>,
+      prepareChatErrors: {} as Record<string, unknown>,
       sessions: {} as Record<string, AcpSession>,
-      commands: {}
+      commands: {},
+      configToLiveAgent: {} as Record<string, string>,
+      agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>
     }
   }
 }))
@@ -134,7 +138,8 @@ vi.mock('@/stores/acp-store', () => {
     saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
-    setModel: mockSetModel
+    setModel: mockSetModel,
+    authenticateAgent: mockAuthenticateAgent
   })
   type MockAcpState = typeof acpStateRef.current & { saveAgentConfig: typeof mockSaveAgentConfig }
   const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
@@ -143,7 +148,8 @@ vi.mock('@/stores/acp-store', () => {
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
-  return { useAcpStore, useAcpSession, prepareChatKey }
+  const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
+  return { useAcpStore, useAcpSession, prepareChatKey, agentReuseKey }
 })
 
 const ACP_CONFIG: StoredAgentConfig = {
@@ -244,8 +250,11 @@ beforeEach(() => {
     preparingChatKeys: {},
     prepareChatErrors: {},
     sessions: {},
-    commands: {}
+    commands: {},
+    configToLiveAgent: {},
+    agents: {}
   }
+  mockAuthenticateAgent.mockResolvedValue(undefined)
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
@@ -290,11 +299,15 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockStartChat).not.toHaveBeenCalled()
   })
 
-  it('surfaces prepare errors in the model picker and retries preparation', async () => {
+  it('surfaces a timeout prepare error with a distinct label and retries preparation', async () => {
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
-      [key]: 'session/new timed out after 30s'
+      [key]: {
+        category: 'timeout',
+        label: 'Session setup timed out',
+        detail: 'session/new timed out after 30s'
+      }
     }
     renderLauncher()
 
@@ -302,7 +315,11 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )
     mockPrepareChat.mockClear()
-    fireEvent.click(screen.getByRole('button', { name: 'Select model: Model unavailable' }))
+    // A timeout reads as "Session setup timed out", never a misleading "Model unavailable".
+    expect(
+      screen.queryByRole('button', { name: 'Select model: Model unavailable' })
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Select model: Session setup timed out' }))
 
     expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
     expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
@@ -310,6 +327,104 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+  })
+
+  it('shows an agent-connection-lost label and retries after a transport failure', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'transport',
+        label: 'Agent connection lost',
+        detail: 'the stream was destroyed'
+      }
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+    mockPrepareChat.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Select model: Agent connection lost' }))
+    expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
+    // Retry re-prepares, which (after backend eviction) spawns a fresh process.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+  })
+
+  it('offers Sign-in from the advertised method metadata on an auth failure', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Run `cursor login` to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [{ id: 'cursor_login', name: 'Cursor' }]
+      }
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+    mockPrepareChat.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Select model: Authentication required' }))
+    expect(screen.getByText('Run `cursor login` to continue')).toBeInTheDocument()
+    // A single advertised method yields a Sign-in action; no useless Retry loop.
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with Cursor' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'cursor_login')
+    )
+    // After signing in, preparation is retried to create the session.
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('presents a multi-method auth failure without a Sign-in button or retry loop (P6)', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods (Cursor, API key).'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'cursor_login', name: 'Cursor' },
+          { id: 'api_key', name: 'API key' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select model: Multiple sign-in methods' }))
+    expect(
+      screen.getByText('This agent advertises multiple sign-in methods (Cursor, API key).')
+    ).toBeInTheDocument()
+    // No Sign-in button (more than one method) and no Retry (would just re-fail).
+    expect(screen.queryByRole('button', { name: /^Sign in with/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
   })
 
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {

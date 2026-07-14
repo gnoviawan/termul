@@ -30,8 +30,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest, ContentBlock,
-    InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, ModelId,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
+    ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, ModelId,
     NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
     RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome,
     SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
@@ -45,8 +45,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, ConfigOptionsUpdateEvent,
-    PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
+    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, AuthMethodInfo,
+    ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
 };
 use crate::acp::session::DriverState;
 
@@ -216,9 +216,13 @@ enum AcpCommand {
 }
 
 /// Result of a successful `initialize` handshake, carried back to the spawning
-/// task. Provider CLIs own authentication, so only negotiated capabilities travel back.
+/// task: the negotiated capabilities plus every advertised authentication
+/// method (opaque `id`/`name`/optional `description`). The renderer needs the
+/// full method metadata to present a Sign-in action and call
+/// `authenticate(methodId)` before `session/new`.
 struct InitOutcome {
     capabilities: AgentCapabilities,
+    auth_methods: Vec<AuthMethodInfo>,
 }
 
 /// Registry entry for a live agent.
@@ -295,8 +299,8 @@ impl AcpManager {
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
 
         // Wait for the handshake to complete (or fail) on the driver thread.
-        let capabilities = match init_rx.await {
-            Ok(Ok(outcome)) => outcome.capabilities,
+        let (capabilities, auth_methods) = match init_rx.await {
+            Ok(Ok(outcome)) => (outcome.capabilities, outcome.auth_methods),
             Ok(Err(e)) => {
                 // Initialize failed; the driver thread is exiting. Join it off
                 // the async runtime so we never block a Tauri worker.
@@ -346,6 +350,7 @@ impl AcpManager {
             AgentSpawnedEvent {
                 agent_id: agent_id.clone(),
                 capabilities,
+                auth_methods,
             },
         );
 
@@ -632,6 +637,23 @@ impl AcpManager {
         });
         let _ = tokio::time::timeout(JOIN_TIMEOUT, join_all).await;
     }
+}
+
+/// Map the agent's advertised `initialize` auth methods to the renderer-facing
+/// [`AuthMethodInfo`] contract. Every method is forwarded as an opaque
+/// `id`/`name`/optional `description` descriptor — no agent-type filtering, so
+/// the renderer decides how to present them (single Sign-in vs. actionable
+/// multi-method failure). Extracted so the mapping can be unit-tested without a
+/// live connection.
+fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
+    methods
+        .iter()
+        .map(|m| AuthMethodInfo {
+            id: m.id().to_string(),
+            name: m.name().to_string(),
+            description: m.description().map(str::to_string),
+        })
+        .collect()
 }
 
 /// Capability gate for `session/load`: requires the agent's `loadSession`
@@ -1153,8 +1175,13 @@ async fn run_command_loop(
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
     match init_outcome {
         Ok(Ok(response)) => {
-            let auth_method_ids: Vec<String> =
-                response.auth_methods.iter().map(|m| m.id().to_string()).collect();
+            // Propagate the FULL advertised auth methods (opaque
+            // id/name/optional description) so the renderer can offer a Sign-in
+            // action and call `authenticate(methodId)` before `session/new`.
+            // Every advertised method is forwarded; no agent-type filtering.
+            let auth_methods = to_auth_method_infos(&response.auth_methods);
+            let auth_method_ids: Vec<&str> =
+                auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
@@ -1170,6 +1197,7 @@ async fn run_command_loop(
             spawned.store(true, Ordering::Release);
             let _ = init_tx.send(Ok(InitOutcome {
                 capabilities: response.agent_capabilities,
+                auth_methods,
             }));
         }
         Ok(Err(e)) => {
@@ -1806,5 +1834,39 @@ mod tests {
         // A second send is a no-op and must not panic.
         send_reply(&slot, Err("late".to_string()));
         assert_eq!(rx.await.unwrap(), Ok(()));
+    }
+
+    /// The initialize→spawn-event mapping forwards the FULL advertised auth
+    /// method metadata (id, name, optional description) so the renderer can
+    /// present Sign-in and call `authenticate(methodId)`. Optional description
+    /// is preserved when present and `None` when absent.
+    #[test]
+    fn to_auth_method_infos_maps_full_metadata() {
+        use agent_client_protocol::schema::AuthMethodAgent;
+        let methods = vec![
+            AuthMethod::Agent(
+                AuthMethodAgent::new("cursor_login", "Sign in with Cursor")
+                    .description("Opens the Cursor login flow"),
+            ),
+            AuthMethod::Agent(AuthMethodAgent::new("api_key", "API key")),
+        ];
+        let infos = to_auth_method_infos(&methods);
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[0].id, "cursor_login");
+        assert_eq!(infos[0].name, "Sign in with Cursor");
+        assert_eq!(
+            infos[0].description.as_deref(),
+            Some("Opens the Cursor login flow")
+        );
+        assert_eq!(infos[1].id, "api_key");
+        assert_eq!(infos[1].name, "API key");
+        assert_eq!(infos[1].description, None);
+    }
+
+    /// An agent that advertises no auth methods maps to an empty vec (the
+    /// renderer treats this as a no-auth agent).
+    #[test]
+    fn to_auth_method_infos_empty_for_no_methods() {
+        assert!(to_auth_method_infos(&[]).is_empty());
     }
 }

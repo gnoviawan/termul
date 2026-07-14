@@ -60,12 +60,34 @@ pub enum ChunkRole {
     Thought,
 }
 
+/// An authentication method advertised by the agent in its `initialize`
+/// response, propagated verbatim (opaque `id`/`name`/optional `description`) so
+/// the renderer can present a Sign-in action and call `authenticate(methodId)`
+/// before `session/new`.
+///
+/// The protocol advertises richer variants for extended auth types
+/// (`env_var`, `terminal`); those remain out of scope, so only the stable
+/// `id`/`name`/`description` surface is carried here. No agent-type filtering is
+/// applied — every advertised method is forwarded as an opaque descriptor.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthMethodInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// `acp:agent_spawned`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSpawnedEvent {
     pub agent_id: AgentId,
     pub capabilities: AgentCapabilities,
+    /// Every authentication method the agent advertised at `initialize` (empty
+    /// when the agent requires no authentication). Always serialized (as `[]`
+    /// when empty) so the renderer sees a stable field.
+    pub auth_methods: Vec<AuthMethodInfo>,
 }
 
 /// `acp:session_created`
@@ -231,11 +253,45 @@ mod tests {
         let event = AgentSpawnedEvent {
             agent_id: AgentId("agent-1".to_string()),
             capabilities: AgentCapabilities::default(),
+            auth_methods: Vec::new(),
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["agentId"], "agent-1");
         // AgentCapabilities serializes load_session as camelCase `loadSession`.
         assert_eq!(value["capabilities"]["loadSession"], false);
+        // An agent with no advertised methods still carries an empty array so
+        // the renderer sees a stable `authMethods` field.
+        assert_eq!(value["authMethods"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn agent_spawned_serializes_full_auth_methods() {
+        let event = AgentSpawnedEvent {
+            agent_id: AgentId("agent-1".to_string()),
+            capabilities: AgentCapabilities::default(),
+            auth_methods: vec![
+                AuthMethodInfo {
+                    id: "cursor_login".to_string(),
+                    name: "Sign in with Cursor".to_string(),
+                    description: Some("Opens the Cursor login flow".to_string()),
+                },
+                AuthMethodInfo {
+                    id: "api_key".to_string(),
+                    name: "API key".to_string(),
+                    description: None,
+                },
+            ],
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        let methods = value["authMethods"].as_array().unwrap();
+        assert_eq!(methods.len(), 2);
+        assert_eq!(methods[0]["id"], "cursor_login");
+        assert_eq!(methods[0]["name"], "Sign in with Cursor");
+        assert_eq!(methods[0]["description"], "Opens the Cursor login flow");
+        assert_eq!(methods[1]["id"], "api_key");
+        assert_eq!(methods[1]["name"], "API key");
+        // Absent description is omitted from the wire (not `null`).
+        assert!(methods[1].get("description").is_none());
     }
 
     #[test]

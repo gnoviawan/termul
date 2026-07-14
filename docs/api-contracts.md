@@ -197,6 +197,55 @@ Renderer browser adapters subscribe to:
 ### Updater/Menu Event Flow
 The app also emits menu/updater-related events such as the updater check trigger from the native menu.
 
+### ACP Agent Setup & Authentication Flow
+
+ACP provider setup follows the stable ACP handshake ordering. The renderer facade
+(`src/renderer/lib/acp-api.ts`) → Tauri command → ACP manager
+(`src-tauri/src/acp/manager.rs`) boundary is preserved end to end.
+
+**1. Initialize → auth-method propagation.** When an agent completes `initialize`,
+the manager forwards **every** advertised authentication method to the renderer on
+the `acp:agent_spawned` event as an opaque descriptor:
+
+- `authMethods: { id: string; name: string; description?: string }[]`
+
+Methods are propagated verbatim — there is no agent-type filtering. An agent that
+advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
+types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
+the stable `id`/`name`/optional `description` surface is carried.
+
+**2. Authenticate before `session/new`.** The store retains the advertised methods
+and, before creating a session (`acp_new_session`), runs `acp_authenticate`
+(`authenticate(methodId)`) when the agent advertises auth:
+
+- exactly one method → authenticate that method, then create the session;
+- more than one method → **do not choose one**; surface an actionable
+  "multiple sign-in methods" failure that lists the method names (there is no
+  automatic "unambiguous default" pick);
+- no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
+
+For the default `agent` auth type the provider owns the login UX (it may open its
+own browser); Termul never invents a client-side login-URL redirect and never
+stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**3. Recoverable setup failures.** Setup failures are classified deterministically
+(`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with
+distinct, actionable launcher labels — order: `multi-auth` → `spawn` → `transport`
+→ `auth` → `timeout` → `unknown`:
+
+- `transport` (destroyed stream / refused / reset connection, incl. "connection
+  timed out"): the live process is **killed and evicted** from reuse before a
+  retry, so exactly one fresh spawn follows;
+- `auth`: the launcher shows "Authentication required" plus the diagnostic and a
+  Sign-in action (only when exactly one method is advertised); a failed
+  session/new that is auth-classified clears the authenticated flag so a manual
+  Sign-in + retry can re-authenticate;
+- `timeout`: "Session setup timed out" (the alive-but-slow agent is not killed);
+- `spawn`: a missing/unresolvable binary (ENOENT), rewritten into actionable
+  guidance;
+- only a genuine empty-model state uses the neutral model pill / "Model
+  unavailable" text — a setup failure never masquerades as a model-list problem.
+
 ## Shared TypeScript Contracts
 
 Key shared contract areas include:
