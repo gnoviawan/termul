@@ -159,6 +159,7 @@ function AgentProse({
       <Streamdown
         mode="streaming"
         isAnimating={streaming}
+        caret="block"
         animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
         plugins={STREAMDOWN_PLUGINS}

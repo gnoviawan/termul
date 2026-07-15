@@ -32,8 +32,8 @@ interface ChatMessageListProps {
   sessionId: SessionId
   /** Agent behind this session (drives the agent name/icon on replies). */
   agentId: AgentId
-  /** True while a turn is in flight and the live tail is not already streaming. */
-  showTyping: boolean
+  /** True for the complete duration of an in-flight agent turn. */
+  showRunningIndicator: boolean
   /** Seed the composer with a user message's text (edit affordance). */
   onEditMessage?: (text: string) => void
   /** Re-run the latest user turn (regenerate affordance on agent replies). */
@@ -94,7 +94,7 @@ export function ChatMessageList({
   items,
   sessionId,
   agentId,
-  showTyping,
+  showRunningIndicator,
   onEditMessage,
   onRetry
 }: ChatMessageListProps): React.JSX.Element {
@@ -102,7 +102,7 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
   const shouldAnimateEnter = useAnimateEnter(sessionId, items)
 
-  if (items.length === 0 && !showTyping) {
+  if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
 
@@ -145,7 +145,7 @@ export function ChatMessageList({
                 </MessageScrollerItem>
               ))}
               <AnimatePresence initial={false}>
-                {showTyping && <TypingIndicator key="typing" />}
+                {showRunningIndicator && <TurnRunningIndicator key="running" />}
               </AnimatePresence>
             </MessageScrollerContent>
           </MessageScrollerViewport>
@@ -156,8 +156,8 @@ export function ChatMessageList({
   )
 }
 
-/** Turn-still-running cue — gradient matrix spin (no text label). */
-function TypingIndicator(): React.JSX.Element {
+/** Persistent turn-running cue — gradient matrix spin (no visible text label). */
+function TurnRunningIndicator(): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   return (
     <motion.div
@@ -167,7 +167,7 @@ function TypingIndicator(): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <GradientSpin gradient="bay" pattern="diagonal" label="Planning next move" />
+      <GradientSpin gradient="bay" pattern="diagonal" label="Agent is working" />
     </motion.div>
   )
 }

@@ -6,11 +6,7 @@ import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
-import {
-  buildTimeline,
-  consolidateThoughtGroups,
-  shouldShowTurnRunningIndicator
-} from './chat-timeline'
+import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
 
@@ -165,9 +161,9 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
     [messages, toolCalls]
   )
-  // Bottom running cue for the whole turn, except when live-tail thought/agent
-  // text is already streaming (those surfaces own the in-progress signal).
-  const showTyping = shouldShowTurnRunningIndicator(Boolean(session?.activeTurn), timeline)
+  // Keep the bottom cue visible for the complete turn, including while thought,
+  // tool, and agent-message surfaces stream their own local progress.
+  const showRunningIndicator = Boolean(session?.activeTurn)
 
   if (!session) {
     return (
@@ -193,7 +189,7 @@ export function AgentChatPanel({ sessionId }: AgentChatPanelProps): React.JSX.El
         items={timeline}
         sessionId={session.id}
         agentId={session.agentId}
-        showTyping={showTyping}
+        showRunningIndicator={showRunningIndicator}
         onEditMessage={seedComposer}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />

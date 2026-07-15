@@ -152,24 +152,3 @@ export function agentTurnMeta(items: TimelineItem[]): AgentTurnMeta {
 
   return { tail, text }
 }
-
-/**
- * Whether the bottom turn-running cue should show.
- *
- * Visible for the whole active turn except when the live tail is already
- * streaming a thought group or agent reply — those own their own in-progress UI.
- * Tools and quiet gaps keep the cue so the turn still reads as in flight.
- */
-export function shouldShowTurnRunningIndicator(
-  activeTurn: boolean,
-  items: TimelineItem[]
-): boolean {
-  if (!activeTurn) return false
-  const tail = items[items.length - 1]
-  if (!tail) return true
-  if (tail.kind === 'thought-group' && tail.messages.some((m) => m.streaming)) return false
-  if (tail.kind === 'message' && tail.message.role === 'agent' && tail.message.streaming) {
-    return false
-  }
-  return true
-}
