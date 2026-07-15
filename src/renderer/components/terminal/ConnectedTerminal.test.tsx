@@ -1734,6 +1734,76 @@ describe('ConnectedTerminal', () => {
     })
   })
 
+  describe('Render-liveness watchdog', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('nudges recovery after PTY output while the pane is visible (WebGL)', async () => {
+      vi.useFakeTimers()
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+      })
+      // Flush post-spawn async (ptyId assignment).
+      await vi.advanceTimersByTimeAsync(50)
+      expect(capturedDataCallback).toBeTruthy()
+
+      const refreshBefore = mockTerminalInstance.refresh.mock.calls.length
+
+      // Feed PTY output — marks the pane as "live" for the watchdog.
+      capturedDataCallback!('terminal-123', new Uint8Array([0x68, 0x69]))
+
+      // Advance past the watchdog interval. performTerminalRecovery runs
+      // synchronously (the mocked container is 800x600, well above the
+      // collapsed-dimension guard) and issues a full repaint.
+      await vi.advanceTimersByTimeAsync(20100)
+
+      expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, mockTerminalInstance.rows - 1)
+      expect(mockTerminalInstance.refresh.mock.calls.length).toBeGreaterThan(refreshBefore)
+    })
+
+    it('does nothing when no output was received since the last tick', async () => {
+      vi.useFakeTimers()
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+      })
+      await vi.advanceTimersByTimeAsync(50)
+
+      const refreshBefore = mockTerminalInstance.refresh.mock.calls.length
+
+      // No PTY output fed — the watchdog tick must bail out early, even across
+      // multiple intervals.
+      await vi.advanceTimersByTimeAsync(20100)
+      await vi.advanceTimersByTimeAsync(20100)
+
+      expect(mockTerminalInstance.refresh.mock.calls.length).toBe(refreshBefore)
+    })
+
+    it('is disabled when the renderer preference is dom', async () => {
+      vi.mocked(useTerminalRenderer).mockReturnValue('dom')
+
+      vi.useFakeTimers()
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(1)
+      })
+      await vi.advanceTimersByTimeAsync(50)
+      expect(capturedDataCallback).toBeTruthy()
+      capturedDataCallback!('terminal-123', new Uint8Array([0x68, 0x69]))
+
+      const refreshBefore = mockTerminalInstance.refresh.mock.calls.length
+      await vi.advanceTimersByTimeAsync(20100)
+
+      // No watchdog nudge for the DOM renderer (no canvas layer to stall).
+      expect(mockTerminalInstance.refresh.mock.calls.length).toBe(refreshBefore)
+    })
+  })
+
   describe('Visibility change recovery', () => {
     let originalVisibilityState: string
 
