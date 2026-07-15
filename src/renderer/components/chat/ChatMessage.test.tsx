@@ -57,4 +57,16 @@ describe('ChatMessage', () => {
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
   })
+
+  it('shows the fallback caret when a live empty terminated fence is stripped', () => {
+    const message: ChatMessageType = {
+      ...agentMessage(true),
+      blocks: [{ type: 'text', text: '```bash\n```' }]
+    }
+
+    const { container } = render(<ChatMessage message={message} isLast />)
+
+    expect(screen.queryByTestId('streamdown')).not.toBeInTheDocument()
+    expect(container.querySelector('.animate-caret-blink')).toBeInTheDocument()
+  })
 })

@@ -450,6 +450,17 @@ describe('ProjectSidebar Archived Projects', () => {
 
     expect(screen.queryByText(/Archived/)).not.toBeInTheDocument()
   })
+
+  it('does not apply extra opacity to an archived project activity spinner', () => {
+    mockUseProjectsWithActivity.mockReturnValue(['2'])
+    renderWithRouter({ projects: projectsWithArchived })
+    fireEvent.click(screen.getByText(/Archived \(1\)/))
+
+    const row = screen.getByTestId('archived-project-item-2')
+    const spinner = screen.getByRole('status', { name: 'Project activity' })
+    expect(row).toHaveClass('opacity-60')
+    expect(spinner).not.toHaveClass('opacity-60')
+  })
 })
 
 describe('ProjectSidebar Default Shell Submenu', () => {

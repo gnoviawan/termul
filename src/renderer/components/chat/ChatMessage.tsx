@@ -145,15 +145,14 @@ const LINK_SAFETY = {
 
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
 function AgentProse({
-  blocks,
+  text,
   streaming,
   reduced
 }: {
-  blocks: ContentBlock[]
+  text: string
   streaming: boolean
   reduced: boolean
 }): React.JSX.Element {
-  const text = useMemo(() => stripEmptyFences(blocksToText(blocks), streaming), [blocks, streaming])
   return (
     <div className="chat-streamdown text-sm leading-relaxed text-foreground">
       <Streamdown
@@ -294,6 +293,8 @@ function ChatMessageComponent({
     )
   }
 
+  const streaming = message.streaming && isLast
+  const proseText = stripEmptyFences(text, streaming)
   const proseDelay = nextDelay()
   const mediaDelay = hasMedia ? nextDelay() : null
   const actionsDelay = nextDelay()
@@ -306,7 +307,7 @@ function ChatMessageComponent({
               so they don't render a blank shell above the media grid. The
               streaming caret still needs a bubble to live in while the turn is
               in progress, even before any text has arrived. */}
-          {(text.length > 0 || (message.streaming && isLast)) && (
+          {(proseText.length > 0 || streaming) && (
             <Bubble variant="ghost" className="w-fit max-w-full">
               <BubbleContent>
                 <StaggerSection
@@ -315,14 +316,10 @@ function ChatMessageComponent({
                   reduced={reduced}
                   animateEnter={animateEnter}
                 >
-                  {text.length > 0 && (
-                    <AgentProse
-                      blocks={message.blocks}
-                      streaming={message.streaming && isLast}
-                      reduced={reduced}
-                    />
+                  {proseText.length > 0 && (
+                    <AgentProse text={proseText} streaming={streaming} reduced={reduced} />
                   )}
-                  {message.streaming && isLast && text.length === 0 && (
+                  {streaming && proseText.length === 0 && (
                     <span
                       aria-hidden="true"
                       className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"

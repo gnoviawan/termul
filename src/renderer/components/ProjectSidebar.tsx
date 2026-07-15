@@ -2266,7 +2266,6 @@ function ArchivedProjectItem({
             cellGap={1}
             cellRadius={0.5}
             label="Project activity"
-            className="opacity-60"
           />
         </span>
       )}

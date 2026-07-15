@@ -381,11 +381,10 @@ pub struct CursorTodo {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorUpdateTodosParams {
+    pub tool_call_id: String,
     #[serde(default)]
     pub session_id: Option<String>,
-    #[serde(default)]
     pub todos: Vec<CursorTodo>,
-    #[serde(default)]
     pub merge: bool,
 }
 
@@ -486,6 +485,15 @@ pub fn parse_cursor_update_todos(
     params: &serde_json::Value,
 ) -> Result<CursorUpdateTodosParams, serde_json::Error> {
     serde_json::from_value(params.clone())
+}
+
+/// Parse request-form params and map decoding failures to JSON-RPC invalid
+/// params so the caller can reply without acknowledging malformed input.
+pub fn parse_cursor_update_todos_request(
+    params: &serde_json::Value,
+) -> Result<CursorUpdateTodosParams, acp::Error> {
+    parse_cursor_update_todos(params)
+        .map_err(|err| acp::Error::invalid_params().data(err.to_string()))
 }
 
 /// A `JsonRpcMessage` type that claims Cursor's `cursor/update_todos` method.
@@ -744,10 +752,47 @@ mod tests {
             ]
         });
         let params = parse_cursor_update_todos(&value).expect("parses");
+        assert_eq!(params.tool_call_id, "call_1");
         assert!(params.merge);
         assert_eq!(params.session_id, None);
         assert_eq!(params.todos.len(), 1);
         assert_eq!(params.todos[0].content, "do a thing");
+    }
+
+    #[test]
+    fn parse_cursor_update_todos_requires_tool_call_id() {
+        let value = serde_json::json!({ "todos": [], "merge": false });
+        assert!(parse_cursor_update_todos(&value).is_err());
+    }
+
+    #[test]
+    fn parse_cursor_update_todos_requires_todos_and_merge() {
+        assert!(
+            parse_cursor_update_todos(&serde_json::json!({
+                "toolCallId": "call_1",
+                "merge": false
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_cursor_update_todos(&serde_json::json!({
+                "toolCallId": "call_1",
+                "todos": []
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_cursor_update_todos_request_is_invalid_params() {
+        let value = serde_json::json!({
+            "toolCallId": "call_1",
+            "todos": "not-an-array",
+            "merge": false
+        });
+        let error = parse_cursor_update_todos_request(&value).expect_err("must reject params");
+        let encoded = serde_json::to_value(error).expect("error serializes");
+        assert_eq!(encoded["code"], -32602);
     }
 
     #[test]

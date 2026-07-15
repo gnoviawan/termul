@@ -14,9 +14,9 @@
 //! handler closures require; in practice all access happens on the one driver
 //! thread, so the lock is uncontended.
 
-use agent_client_protocol::Responder;
 use agent_client_protocol::schema::RequestPermissionResponse;
-use std::collections::HashMap;
+use agent_client_protocol::Responder;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
@@ -42,6 +42,11 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// Sessions associated with each tool call id for this connection. ACP tool
+    /// call ids are session-scoped, so a set preserves collisions as ambiguous.
+    /// Bindings remain for the connection lifetime so delayed updates cannot be
+    /// reassigned to a different active turn after their original turn ends.
+    tool_call_sessions: HashMap<String, HashSet<String>>,
 }
 
 impl DriverState {
@@ -121,11 +126,35 @@ impl DriverState {
         self.session_roots.keys().cloned().collect()
     }
 
-    /// Sessions with an in-flight prompt turn. Used to route extension
-    /// notifications that don't carry a session id (e.g. Cursor's
-    /// `cursor/update_todos`) to the session currently being prompted.
-    pub(crate) fn active_turn_session_ids(&self) -> Vec<String> {
-        self.active_turns.keys().cloned().collect()
+    /// Associate a tool call with its authoritative enclosing session.
+    pub(crate) fn bind_tool_call(&mut self, tool_call_id: String, session_id: String) {
+        self.tool_call_sessions
+            .entry(tool_call_id)
+            .or_default()
+            .insert(session_id);
+    }
+
+    /// Resolve a Cursor todo update without guessing between concurrent turns.
+    /// An explicit session id wins, followed by a unique tool-call association,
+    /// then the legacy single-active-turn fallback.
+    pub(crate) fn resolve_cursor_update_session(
+        &mut self,
+        session_id: Option<&str>,
+        tool_call_id: &str,
+    ) -> Option<String> {
+        if let Some(session_id) = session_id {
+            self.bind_tool_call(tool_call_id.to_string(), session_id.to_string());
+            return Some(session_id.to_string());
+        }
+        if let Some(sessions) = self.tool_call_sessions.get(tool_call_id) {
+            return (sessions.len() == 1)
+                .then(|| sessions.iter().next().cloned())
+                .flatten();
+        }
+        if self.active_turns.len() == 1 {
+            return self.active_turns.keys().next().cloned();
+        }
+        None
     }
 
     /// Attempt to begin a turn for a session. Returns `Some(receiver)` (a cancel
@@ -226,5 +255,91 @@ mod tests {
         state.remove_session_root("sess-1");
         assert!(state.session_root("sess-1").is_none());
         assert!(state.active_session_ids().is_empty());
+    }
+
+    #[test]
+    fn tool_call_binding_routes_concurrent_turns() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+        let _b = state.try_begin_turn("sess-b").expect("turn b starts");
+        state.bind_tool_call("call-a".to_string(), "sess-a".to_string());
+        state.bind_tool_call("call-b".to_string(), "sess-b".to_string());
+
+        assert_eq!(
+            state.resolve_cursor_update_session(None, "call-a"),
+            Some("sess-a".to_string())
+        );
+        assert_eq!(
+            state.resolve_cursor_update_session(None, "call-b"),
+            Some("sess-b".to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_session_wins_and_ambiguous_tool_call_is_not_guessed() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+        let _b = state.try_begin_turn("sess-b").expect("turn b starts");
+        state.bind_tool_call("call-1".to_string(), "sess-a".to_string());
+        state.bind_tool_call("call-1".to_string(), "sess-b".to_string());
+
+        assert_eq!(state.resolve_cursor_update_session(None, "call-1"), None);
+        assert_eq!(
+            state.resolve_cursor_update_session(Some("sess-b"), "call-1"),
+            Some("sess-b".to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_session_binds_later_sessionless_updates() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+        let _b = state.try_begin_turn("sess-b").expect("turn b starts");
+
+        assert_eq!(
+            state.resolve_cursor_update_session(Some("sess-a"), "call-a"),
+            Some("sess-a".to_string())
+        );
+        assert_eq!(
+            state.resolve_cursor_update_session(None, "call-a"),
+            Some("sess-a".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_call_binding_survives_turn_completion() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+        state.bind_tool_call("call-a".to_string(), "sess-a".to_string());
+        let _ = state.finish_turn("sess-a");
+        let _b = state.try_begin_turn("sess-b").expect("turn b starts");
+
+        assert_eq!(
+            state.resolve_cursor_update_session(None, "call-a"),
+            Some("sess-a".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_call_collision_stays_ambiguous_after_turn_finishes() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+        let _b = state.try_begin_turn("sess-b").expect("turn b starts");
+        state.bind_tool_call("call-1".to_string(), "sess-a".to_string());
+        state.bind_tool_call("call-1".to_string(), "sess-b".to_string());
+        let _ = state.finish_turn("sess-a");
+
+        assert_eq!(state.resolve_cursor_update_session(None, "call-1"), None);
+    }
+
+    #[test]
+    fn unknown_tool_call_uses_single_active_turn_fallback() {
+        let mut state = DriverState::new();
+        let _a = state.try_begin_turn("sess-a").expect("turn a starts");
+
+        assert_eq!(
+            state.resolve_cursor_update_session(None, "unknown"),
+            Some("sess-a".to_string())
+        );
     }
 }

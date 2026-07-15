@@ -829,6 +829,7 @@ async fn drive_connection(
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
     let notif_app = app.clone();
     let notif_agent_id = agent_id.clone();
+    let notif_state = driver_state.clone();
     let todos_app = app.clone();
     let todos_agent_id = agent_id.clone();
     let todos_state = driver_state.clone();
@@ -872,6 +873,19 @@ async fn drive_connection(
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::SessionNotification, _cx| {
+                let session_id = notification.session_id.0.to_string();
+                let tool_call_id = match &notification.update {
+                    agent_client_protocol::schema::SessionUpdate::ToolCall(tool_call) => {
+                        Some(tool_call.tool_call_id.0.to_string())
+                    }
+                    agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update) => {
+                        Some(update.tool_call_id.0.to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(tool_call_id) = tool_call_id {
+                    notif_state.lock().bind_tool_call(tool_call_id, session_id);
+                }
                 client::emit_session_update(&notif_app, &notif_agent_id, notification);
                 Ok(())
             },
@@ -884,10 +898,10 @@ async fn drive_connection(
                 match client::parse_cursor_update_todos(&msg.params) {
                     Ok(params) => {
                         let fallback = {
-                            let ids = todos_state.lock().active_turn_session_ids();
-                            // Only a single active turn maps unambiguously to a
-                            // session; if several are in flight we can't guess.
-                            if ids.len() == 1 { ids.into_iter().next() } else { None }
+                            todos_state.lock().resolve_cursor_update_session(
+                                params.session_id.as_deref(),
+                                &params.tool_call_id,
+                            )
                         };
                         client::handle_cursor_update_todos(
                             &todos_app,
@@ -911,11 +925,16 @@ async fn drive_connection(
             async move |request: client::CursorUpdateTodosMessage, responder, _cx| {
                 // Request form of cursor/update_todos (Cursor docs are ambiguous
                 // about notification vs request). Handle identically, then ack.
-                match client::parse_cursor_update_todos(&request.params) {
-                    Ok(params) => {
+                handle_cursor_update_todos_request(
+                    &todos_req_agent_id,
+                    request,
+                    responder,
+                    |params| {
                         let fallback = {
-                            let ids = todos_req_state.lock().active_turn_session_ids();
-                            if ids.len() == 1 { ids.into_iter().next() } else { None }
+                            todos_req_state.lock().resolve_cursor_update_session(
+                                params.session_id.as_deref(),
+                                &params.tool_call_id,
+                            )
                         };
                         client::handle_cursor_update_todos(
                             &todos_req_app,
@@ -924,17 +943,8 @@ async fn drive_connection(
                             fallback,
                             &todos_cache_req,
                         );
-                    }
-                    Err(err) => {
-                        log::debug!(
-                            "[acp] agent {todos_req_agent_id} failed to parse cursor/update_todos request: {err}"
-                        );
-                    }
-                }
-                // Ack with the outcome shape Cursor documents so it never blocks.
-                let ack = serde_json::json!({ "outcome": "accepted" });
-                let _ = responder.respond_with_result(Ok(ack));
-                Ok(())
+                    },
+                )
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -951,6 +961,10 @@ async fn drive_connection(
                 let session_string = session_id.0.to_string();
                 let request_id = {
                     let mut state = perm_state.lock();
+                    state.bind_tool_call(
+                        tool_call.tool_call_id.0.to_string(),
+                        session_string.clone(),
+                    );
                     state.register_permission(session_string.clone(), responder)
                 };
                 events::emit(
@@ -1148,6 +1162,25 @@ async fn drive_connection(
         .await;
 
     connection_result.map_err(|e| e.to_string())
+}
+
+fn handle_cursor_update_todos_request(
+    agent_id: &AgentId,
+    request: client::CursorUpdateTodosMessage,
+    responder: agent_client_protocol::Responder<serde_json::Value>,
+    on_valid: impl FnOnce(client::CursorUpdateTodosParams),
+) -> Result<(), agent_client_protocol::Error> {
+    let params = match client::parse_cursor_update_todos_request(&request.params) {
+        Ok(params) => params,
+        Err(err) => {
+            log::debug!(
+                "[acp] agent {agent_id} failed to parse cursor/update_todos request: {err}"
+            );
+            return responder.respond_with_error(err);
+        }
+    };
+    on_valid(params);
+    responder.respond(serde_json::json!({ "outcome": "accepted" }))
 }
 
 /// The agent driver's main loop: complete `initialize`, then service commands
@@ -1646,6 +1679,58 @@ fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn malformed_cursor_update_todos_request_returns_invalid_params() {
+        use agent_client_protocol::jsonrpcmsg::{Id, Message, Params, Request};
+        use agent_client_protocol::Channel;
+
+        let (server, mut peer) = Channel::duplex();
+        let connection = Client
+            .builder()
+            .on_receive_request(
+                async |request: client::CursorUpdateTodosMessage, responder, _cx| {
+                    handle_cursor_update_todos_request(
+                        &AgentId("test-agent".to_string()),
+                        request,
+                        responder,
+                        |_| {},
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(server, async |_cx| {
+                std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+            });
+        tokio::pin!(connection);
+
+        let params = serde_json::json!({
+            "toolCallId": "call_1",
+            "merge": false
+        });
+        let serde_json::Value::Object(params) = params else {
+            unreachable!("fixture is an object");
+        };
+        peer.tx
+            .unbounded_send(Ok(Message::Request(Request::new(
+                client::CURSOR_UPDATE_TODOS_METHOD.to_string(),
+                Some(Params::Object(params)),
+                Some(Id::Number(7)),
+            ))))
+            .expect("request sends");
+
+        let message = tokio::select! {
+            message = peer.rx.next() => message.expect("response arrives").expect("valid response"),
+            result = &mut connection => panic!("connection ended before response: {result:?}"),
+        };
+        let Message::Response(response) = message else {
+            panic!("expected response, got {message:?}");
+        };
+        assert_eq!(response.id, Some(Id::Number(7)));
+        assert!(response.result.is_none());
+        assert_eq!(response.error.expect("error response").code, -32602);
+    }
 
     /// Capability gating exercises the *real* gate functions used by
     /// `load_session`/`resume_session`/`close_session` (F4). With default
