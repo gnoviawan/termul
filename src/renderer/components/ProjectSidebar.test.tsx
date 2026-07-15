@@ -519,6 +519,7 @@ describe('ProjectSidebar Activity Indicator', () => {
     const item = screen.getByTestId('project-item-2')
     expect(activityIndicator(item)).not.toBeNull()
     expect(activityIndicator(item)).toHaveAttribute('title', 'Activity')
+    expect(screen.getByRole('status', { name: 'Project activity' })).toBeInTheDocument()
   })
 
   it('should show activity indicator when agent chat is active', () => {
@@ -528,6 +529,7 @@ describe('ProjectSidebar Activity Indicator', () => {
 
     const item = screen.getByTestId('project-item-2')
     expect(activityIndicator(item)).not.toBeNull()
+    expect(screen.getByRole('status', { name: 'Project activity' })).toBeInTheDocument()
   })
 
   it('should show activity indicator even when project is active if hasActivity is true', () => {

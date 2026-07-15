@@ -1,5 +1,4 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { GradientSpin } from 'gradient-spin'
 import { useEffect, useMemo, useRef } from 'react'
 import {
   MessageScroller,
@@ -10,6 +9,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
+import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import type { AgentId, SessionId } from '@/lib/acp-api'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
@@ -167,7 +167,7 @@ function TurnRunningIndicator(): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <GradientSpin gradient="bay" pattern="diagonal" label="Agent is working" />
+      <MonochromeSpinner pattern="diagonal" label="Agent is working" />
     </motion.div>
   )
 }

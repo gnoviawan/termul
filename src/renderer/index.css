@@ -573,6 +573,35 @@
 /* Streamdown code blocks (agent chat): looser line-height for readable code,
    and a comfortable min-height so short snippets don't feel cramped. */
 @layer components {
+  @keyframes tool-card-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  .tool-call-card-running::before {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    z-index: 0;
+    width: 45%;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
+    animation: tool-card-shimmer 1.8s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tool-call-card-running::before {
+      width: 100%;
+      transform: none;
+      animation: none;
+    }
+  }
+
   .chat-streamdown [data-streamdown="code-block-body"] {
     line-height: 1.65;
   }

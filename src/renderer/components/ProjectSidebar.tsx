@@ -28,8 +28,8 @@ import {
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BrailleSpinner } from '@/components/ui/BrailleSpinner'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
@@ -1969,7 +1969,13 @@ const ProjectItem = memo(function ProjectItem({
             title="Activity"
             style={{ isolation: 'isolate' }}
           >
-            <BrailleSpinner className="text-xs text-primary" aria-hidden />
+            <MonochromeSpinner
+              pattern="diagonal"
+              cellSize={2}
+              cellGap={1}
+              cellRadius={0.5}
+              label="Project activity"
+            />
           </span>
         )}
       </div>
@@ -2254,7 +2260,14 @@ function ArchivedProjectItem({
       </span>
       {hasActivity && (
         <span className="flex items-center mr-2" title="Activity" style={{ isolation: 'isolate' }}>
-          <BrailleSpinner className="text-3xs text-primary opacity-60" aria-hidden />
+          <MonochromeSpinner
+            pattern="diagonal"
+            cellSize={2}
+            cellGap={1}
+            cellRadius={0.5}
+            label="Project activity"
+            className="opacity-60"
+          />
         </span>
       )}
       {hasError && (
