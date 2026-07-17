@@ -46,4 +46,25 @@ describe('stripEmptyFences', () => {
     const md = 'just some text\nwith lines'
     expect(stripEmptyFences(md, false)).toBe(md)
   })
+
+  it('preserves inline backtick sequences', () => {
+    const md = 'Use `code` and ``more code`` inline.'
+    expect(stripEmptyFences(md, false)).toBe(md)
+  })
+
+  it('preserves four-space indented literal backticks', () => {
+    const md = '    ```\n    not a fence\n    ```'
+    expect(stripEmptyFences(md, false)).toBe(md)
+  })
+
+  it('preserves triple-backtick content inside a four-backtick fence', () => {
+    const md = '````md\n```js\nconsole.log(1)\n```\n````'
+    expect(stripEmptyFences(md, false)).toBe(md)
+  })
+
+  it('does not strip a four-backtick fence that only contains an empty triple fence', () => {
+    // Outer fence body is the inner ```…``` lines — not whitespace-only, so keep it.
+    const md = '````text\n```\n```\n````'
+    expect(stripEmptyFences(md, false)).toBe(md)
+  })
 })

@@ -95,6 +95,8 @@ export function ConfigChip({
                 key={v.value}
                 type="button"
                 onPointerDown={(event) => {
+                  // Primary only; treat missing button as primary (jsdom/synthetic).
+                  if ((event.button ?? 0) !== 0) return
                   // Prefer pointerdown so the choice lands before Radix closes the
                   // controlled popover (click can lose the race and drop onSelect).
                   event.preventDefault()
@@ -162,6 +164,7 @@ export function ModeChip({
             key={m.id}
             type="button"
             onPointerDown={(event) => {
+              if ((event.button ?? 0) !== 0) return
               event.preventDefault()
               handleSelect(m.id)
             }}

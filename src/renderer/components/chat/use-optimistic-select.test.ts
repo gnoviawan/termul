@@ -101,6 +101,23 @@ describe('useOptimisticSelect', () => {
     })
   })
 
+  it('reverts optimistic value when onSelect throws synchronously', async () => {
+    const onSelect = vi.fn(() => {
+      throw new Error('sync fail')
+    })
+
+    const { result } = renderHook(() => useOptimisticSelect('a', onSelect))
+
+    act(() => {
+      result.current.select('b')
+    })
+
+    await waitFor(() => {
+      expect(result.current.displayValue).toBe('a')
+      expect(result.current.pending).toBe(false)
+    })
+  })
+
   it('no-ops when selecting the already displayed value', () => {
     const onSelect = vi.fn(async () => undefined)
     const { result } = renderHook(() => useOptimisticSelect('a', onSelect))

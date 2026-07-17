@@ -41,7 +41,21 @@ export function useOptimisticSelect(
     setOptimisticValue(valueId)
     setPending(true)
 
-    void Promise.resolve(onSelect(valueId)).then(
+    // Invoke onSelect synchronously so callers observe the call immediately,
+    // but route sync throws through the same rejection path as async failures.
+    // (`Promise.resolve(onSelect(...))` would leave the chip pending forever
+    // when onSelect throws before the promise is created.)
+    let result: void | Promise<void>
+    try {
+      result = onSelect(valueId)
+    } catch {
+      if (generationRef.current !== generation) return
+      setPending(false)
+      setOptimisticValue(null)
+      return
+    }
+
+    void Promise.resolve(result).then(
       () => {
         if (generationRef.current !== generation) return
         setPending(false)

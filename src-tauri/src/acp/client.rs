@@ -363,14 +363,15 @@ pub const CURSOR_UPDATE_TODOS_METHOD: &str = "cursor/update_todos";
 
 /// A single Cursor todo item. `status` may be pending / in_progress /
 /// completed / cancelled; `cancelled` has no ACP equivalent and is dropped.
+///
+/// `id`, `content`, and `status` are required at decode time — omitted fields
+/// fail deserialization instead of becoming empty strings that break merge
+/// matching or get silently dropped in plan conversion.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CursorTodo {
     #[allow(dead_code)]
-    #[serde(default)]
     pub id: String,
-    #[serde(default)]
     pub content: String,
-    #[serde(default)]
     pub status: String,
 }
 
@@ -763,6 +764,36 @@ mod tests {
     fn parse_cursor_update_todos_requires_tool_call_id() {
         let value = serde_json::json!({ "todos": [], "merge": false });
         assert!(parse_cursor_update_todos(&value).is_err());
+    }
+
+    #[test]
+    fn parse_cursor_update_todos_rejects_todo_missing_required_fields() {
+        // Omitted nested fields must fail decode — serde(default) would turn
+        // them into empty strings and poison merge/plan conversion.
+        assert!(
+            parse_cursor_update_todos(&serde_json::json!({
+                "toolCallId": "call_1",
+                "merge": false,
+                "todos": [{ "content": "missing id and status" }]
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_cursor_update_todos(&serde_json::json!({
+                "toolCallId": "call_1",
+                "merge": false,
+                "todos": [{ "id": "1", "status": "pending" }]
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_cursor_update_todos(&serde_json::json!({
+                "toolCallId": "call_1",
+                "merge": false,
+                "todos": [{ "id": "1", "content": "do a thing" }]
+            }))
+            .is_err()
+        );
     }
 
     #[test]

@@ -2,8 +2,18 @@ import { code as codePlugin } from '@streamdown/code'
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useEffect, useMemo, useState } from 'react'
-import { Streamdown } from 'streamdown'
+import { type LinkSafetyConfig, type LinkSafetyModalProps, Streamdown } from 'streamdown'
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
@@ -133,14 +143,51 @@ const STREAMDOWN_CONTROLS = {
 // imported in main.tsx; already-visible words get duration 0 (no re-animation).
 const STREAMDOWN_ANIMATED = { animation: 'blurIn', sep: 'word', duration: 350, stagger: 8 } as const
 
-// Route link clicks to the OS browser rather than navigating inside the Tauri
-// webview. Returning false aborts Streamdown's own navigation after we hand off.
-const LINK_SAFETY = {
+/**
+ * Confirm external links, then hand off to the OS browser.
+ *
+ * `onLinkCheck` only decides whether to show the confirm UI (never opens).
+ * Opening happens in the modal action so Streamdown's default `window.open`
+ * path is not used and the dialog actually closes after confirm.
+ */
+function StreamdownLinkSafetyModal({
+  isOpen,
+  onClose,
+  url
+}: LinkSafetyModalProps): React.JSX.Element {
+  return (
+    <AlertDialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Open external link?</AlertDialogTitle>
+          <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              void openerApi.openUrlWithSystemBrowser(url)
+              onClose()
+            }}
+          >
+            Open
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+const LINK_SAFETY: LinkSafetyConfig = {
   enabled: true,
-  onLinkCheck: (url: string): boolean => {
-    void openerApi.openUrlWithSystemBrowser(url)
-    return false
-  }
+  // Always take the confirm path; never open from the check callback.
+  onLinkCheck: () => false,
+  renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
 }
 
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */

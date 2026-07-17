@@ -1102,6 +1102,7 @@ function AcpModelPicker({
                     key={value.value}
                     type="button"
                     onPointerDown={(event) => {
+                      if ((event.button ?? 0) !== 0) return
                       event.preventDefault()
                       handleSelectModel(value.value)
                     }}

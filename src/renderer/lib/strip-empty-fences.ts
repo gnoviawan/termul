@@ -11,36 +11,131 @@
  *   streaming, an unterminated fence is left alone — the transient shell is the
  *   intended "code is coming" streaming cue.
  *
- * Fences that contain real content never match (the closing ``` must follow
- * only whitespace), so non-empty code — including ASCII art — is untouched.
+ * Matching follows CommonMark fence rules: at most three leading spaces, a run
+ * of backticks or tildes (≥3), and a closing run of the same character that is
+ * at least as long. Inline backticks, four-space indented literals, and nested
+ * shorter fences inside a longer outer fence are left alone.
  */
 
-/** ```lang\n  \n``` — an opening fence, only whitespace, then a closing fence. */
-const EMPTY_TERMINATED_FENCE = /```[^\n]*\r?\n[ \t\r\n]*```[ \t]*(\r?\n|$)/g
+interface FenceOpen {
+  /** Line index of the opening fence. */
+  index: number
+  /** Fence delimiter character (` or ~). */
+  char: '`' | '~'
+  /** Length of the opening run (closing must be ≥ this). */
+  length: number
+}
 
-/** A line whose content is a fence delimiter (```), ignoring leading space. */
-function isFenceLine(line: string): boolean {
-  return line.trimStart().startsWith('```')
+interface ParsedFence {
+  char: '`' | '~'
+  length: number
+  /** Text after the delimiter run (info string for openers; must be blank for closers). */
+  after: string
+}
+
+/** Match a CommonMark fence line; null if not a fence delimiter line. */
+function parseFenceLine(line: string): ParsedFence | null {
+  // At most three spaces of indentation (CommonMark).
+  const indentMatch = /^( {0,3})([`~])\2{2,}/.exec(line)
+  if (!indentMatch) return null
+  const char = indentMatch[2] as '`' | '~'
+  const indentLen = indentMatch[1].length
+  let length = 0
+  for (const c of line.slice(indentLen)) {
+    if (c === char) length += 1
+    else break
+  }
+  if (length < 3) return null
+  return { char, length, after: line.slice(indentLen + length) }
+}
+
+/** True when `line` can close an open fence of `char`/`length`. */
+function isClosingFence(line: string, char: '`' | '~', length: number): boolean {
+  const parsed = parseFenceLine(line)
+  if (!parsed) return false
+  if (parsed.char !== char || parsed.length < length) return false
+  // Closing fence: only spaces after the delimiter run.
+  return parsed.after.trim() === ''
+}
+
+/**
+ * Strip terminated empty fences with a line scanner that tracks open delimiter
+ * character and run length. When a fence has content (including nested shorter
+ * fences), the whole block is copied through without re-scanning the body.
+ */
+function stripTerminatedEmptyFences(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    const parsed = parseFenceLine(line)
+    if (!parsed) {
+      out.push(line)
+      i += 1
+      continue
+    }
+
+    // Find the matching close for this open delimiter/run length.
+    let j = i + 1
+    let closed = false
+    while (j < lines.length) {
+      if (isClosingFence(lines[j], parsed.char, parsed.length)) {
+        closed = true
+        break
+      }
+      j += 1
+    }
+
+    if (!closed) {
+      // Unterminated — leave for stripTrailingEmptyFence when settled.
+      out.push(line)
+      i += 1
+      continue
+    }
+
+    const body = lines.slice(i + 1, j)
+    if (body.every((l) => l.trim() === '')) {
+      // Drop the empty fence (open + body + close).
+      i = j + 1
+      continue
+    }
+
+    // Keep the entire fence block, including any nested shorter fences.
+    out.push(...lines.slice(i, j + 1))
+    i = j + 1
+  }
+  return out.join('\n')
 }
 
 /**
  * Strip a trailing *unterminated* fence whose body is empty. Only acts when the
- * fence-delimiter count is odd (the last opening fence has no close) and every
- * line after that opening fence is whitespace — a dangling ```lang the agent
- * never filled. A closed fence, or a fence with content, is never touched.
+ * last open fence has no close and every line after it is whitespace.
  */
 function stripTrailingEmptyFence(text: string): string {
   const lines = text.split('\n')
-  const fenceIdxs = lines.map((l, i) => (isFenceLine(l) ? i : -1)).filter((i) => i >= 0)
-  if (fenceIdxs.length % 2 === 0) return text // all fences are closed
-  const openIdx = fenceIdxs[fenceIdxs.length - 1]
-  const bodyAfter = lines.slice(openIdx + 1).join('\n')
-  if (bodyAfter.trim().length > 0) return text // dangling fence has real content
-  return lines.slice(0, openIdx).join('\n')
+  let open: FenceOpen | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (open) {
+      if (isClosingFence(line, open.char, open.length)) {
+        open = null
+      }
+      continue
+    }
+    const parsed = parseFenceLine(line)
+    if (parsed) {
+      open = { index: i, char: parsed.char, length: parsed.length }
+    }
+  }
+  if (!open) return text
+  const bodyAfter = lines.slice(open.index + 1).join('\n')
+  if (bodyAfter.trim().length > 0) return text
+  return lines.slice(0, open.index).join('\n')
 }
 
 export function stripEmptyFences(text: string, streaming: boolean): string {
-  const out = text.replace(EMPTY_TERMINATED_FENCE, '')
+  const out = stripTerminatedEmptyFences(text)
   if (!streaming) return stripTrailingEmptyFence(out)
   return out
 }
