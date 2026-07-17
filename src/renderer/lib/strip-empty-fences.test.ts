@@ -67,4 +67,28 @@ describe('stripEmptyFences', () => {
     const md = '````text\n```\n```\n````'
     expect(stripEmptyFences(md, false)).toBe(md)
   })
+
+  it('stops scanning after an unmatched opening fence', () => {
+    // Nested empty triple fence must stay; continuing the scan would wrongly strip it.
+    const md = 'intro\n\n````outer\n```\n```\nmore text'
+    expect(stripEmptyFences(md, true)).toBe(md)
+    expect(stripEmptyFences(md, false)).toBe(md)
+  })
+
+  it('rejects backtick fences whose info string contains a backtick', () => {
+    // CommonMark does not treat ```foo` as an opener. A following empty fence
+    // is therefore stripped on its own, while the invalid opener line remains.
+    const md = '```foo`\n\n```bash\n```\n\nafter'
+    for (const streaming of [false, true]) {
+      const out = stripEmptyFences(md, streaming)
+      expect(out).toContain('```foo`')
+      expect(out).not.toContain('```bash')
+      expect(out).toContain('after')
+    }
+  })
+
+  it('still allows backticks in tilde-fence info strings', () => {
+    const md = '~~~foo`bar\n\n~~~'
+    expect(stripEmptyFences(md, false).trim()).toBe('')
+  })
 })

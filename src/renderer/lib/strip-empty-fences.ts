@@ -46,7 +46,11 @@ function parseFenceLine(line: string): ParsedFence | null {
     else break
   }
   if (length < 3) return null
-  return { char, length, after: line.slice(indentLen + length) }
+  const after = line.slice(indentLen + length)
+  // CommonMark: info string after a backtick fence must not contain backticks.
+  // Tilde fences may include backticks in the info string.
+  if (char === '`' && after.includes('`')) return null
+  return { char, length, after }
 }
 
 /** True when `line` can close an open fence of `char`/`length`. */
@@ -88,10 +92,11 @@ function stripTerminatedEmptyFences(text: string): string {
     }
 
     if (!closed) {
-      // Unterminated — leave for stripTrailingEmptyFence when settled.
-      out.push(line)
-      i += 1
-      continue
+      // Unclosed fence extends through the rest of the document (CommonMark).
+      // Stop scanning so we do not strip nested shorter fences inside it;
+      // stripTrailingEmptyFence still handles a trailing empty opener when settled.
+      out.push(...lines.slice(i))
+      break
     }
 
     const body = lines.slice(i + 1, j)
