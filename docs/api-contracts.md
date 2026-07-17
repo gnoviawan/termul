@@ -225,6 +225,42 @@ Representative error codes include:
 - `MIGRATION_*`
 - `ROLLBACK_FAILED`
 
+## ACP Agent Chat Events
+
+ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/acp/events.rs` and `src/renderer/lib/acp-api.ts`).
+
+### `acp:plan_update`
+
+**Purpose:** Agent execution plan changed ([Agent Plan spec](https://agentclientprotocol.com/protocol/v1/agent-plan)).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  plan: {
+    entries: Array<{
+      content: string
+      priority?: 'high' | 'medium' | 'low'
+      status?: 'pending' | 'in_progress' | 'completed'
+    }>
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent sends `session/update` with `sessionUpdate: "plan"`.
+- Each event replaces the session plan entirely (full list).
+- Empty `entries` clears the plan in the renderer (`PlanPanel` hidden).
+
+See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
+
+### `acp_send_prompt` errors
+
+When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.

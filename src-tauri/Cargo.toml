@@ -56,7 +56,7 @@ async-process = "2"
 # is NOT used — it depends on acp 0.11, which would pull a second, incompatible
 # copy of the protocol crate into the tree. See Spec Change Log in
 # spec-adr-003-p0-rust-acp-core.md.
-agent-client-protocol = { version = "0.12", features = ["unstable_session_model"] }
+agent-client-protocol = { version = "0.12", features = ["unstable_session_model", "unstable_session_usage"] }
 
 # Regex and parsing
 regex = "1"

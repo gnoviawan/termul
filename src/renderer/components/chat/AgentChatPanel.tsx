@@ -4,13 +4,14 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { Button } from '@/components/ui/button'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
-import { useAcpMessages, useAcpSession, useAcpStore } from '@/stores/acp-store'
+import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
+import { PlanSupportHint } from './PlanSupportHint'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -64,6 +65,9 @@ export function AgentChatPanel({
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
   const sendPromptBlocks = useAcpStore((s) => s.sendPromptBlocks)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
+  const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
+  const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
+  const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
@@ -91,6 +95,22 @@ export function AgentChatPanel({
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
   const seedComposer = useCallback((text: string) => setSeed({ text, nonce: Date.now() }), [])
+
+  const handleRemoveQueued = useCallback(
+    (queueId: string) => {
+      removeQueuedPrompt(sessionId, queueId)
+    },
+    [removeQueuedPrompt, sessionId]
+  )
+
+  const handleSendQueuedNow = useCallback(
+    (queueId: string) => {
+      void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
+        toast.error(`Failed to send queued message: ${String(err)}`)
+      })
+    },
+    [sendQueuedPromptNow, sessionId]
+  )
 
   const handleSend = useCallback(
     (text: string) => {
@@ -254,6 +274,7 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
+      <PlanSupportHint agentId={session.agentId} planEntryCount={plan.length} />
       <PlanPanel entries={plan} />
       <ChatMessageList
         items={timeline}
@@ -272,6 +293,9 @@ export function AgentChatPanel({
         onSend={handleSend}
         onSendBlocks={handleSendBlocks}
         onCancel={handleCancel}
+        queue={promptQueue}
+        onRemoveQueued={handleRemoveQueued}
+        onSendQueuedNow={handleSendQueuedNow}
         commands={commands}
         configOptions={session.configOptions}
         modes={session.modes}

@@ -6,9 +6,8 @@
  * this store exactly once via `initAcpEventListeners()` (called at app mount).
  *
  * P1 scope: text conversations. `toolCalls`, `plans`, `commands`,
- * `pendingPermissions`, and config/mode state are tracked here so later phases
- * (P2 slash menu, P3 tool/permission UI) can render them, but P1 renders only
- * messages.
+ * `pendingPermissions`, and config/mode state are tracked here; tool, plan,
+ * permission, and slash-command UI render them when present.
  */
 
 import { toast } from 'sonner'
@@ -49,10 +48,12 @@ import {
   type SessionMode,
   type SessionModelState,
   type SessionModeState,
+  type SessionUsage,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
-  type ToolCallUpdateEvent
+  type ToolCallUpdateEvent,
+  type UsageUpdateEvent
 } from '@/lib/acp-api'
 import {
   deleteSessionPayload,
@@ -73,6 +74,17 @@ import {
 import { decideResume } from '@/lib/acp-resume-policy'
 import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import {
+  appendQueuedPrompt,
+  buildRecoverPromptToQueuePatch,
+  dropPromptQueueForSession,
+  isPromptTurnInProgressError,
+  type QueuedPrompt,
+  sessionTurnBusy,
+  waitForTurnClear
+} from './prompt-queue-orchestration'
+
+export type { QueuedPrompt } from './prompt-queue-orchestration'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -184,12 +196,20 @@ interface AcpState {
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
 
+  /** Agent-reported context window utilization keyed by session id. */
+  sessionUsage: Record<SessionId, SessionUsage>
+
   // Per-session conversation state
   messages: Record<SessionId, ChatMessage[]>
-  toolCalls: Record<SessionId, ToolCall[]> // P3 renders
-  plans: Record<SessionId, PlanEntry[]> // P3 renders
-  commands: Record<SessionId, AvailableCommand[]> // P2 renders
+  toolCalls: Record<SessionId, ToolCall[]>
+  /** ACP agent-plan entries per session (`session/update` plan, full replace). */
+  plans: Record<SessionId, PlanEntry[]>
+  commands: Record<SessionId, AvailableCommand[]>
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
+  /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
+  promptQueues: Record<SessionId, QueuedPrompt[]>
+  /** Sessions whose auto-flush is suppressed during cancel+send-now. */
+  suppressQueueFlush: Record<SessionId, true>
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
@@ -262,6 +282,9 @@ interface AcpState {
   /** Send a prompt turn carrying structured content blocks (text + image/resource). */
   sendPromptBlocks: (sessionId: SessionId, blocks: ContentBlock[]) => Promise<void>
   cancelPrompt: (sessionId: SessionId) => Promise<void>
+  removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
+  /** Cancel the active turn if needed, then send a queued prompt immediately. */
+  sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
 
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
@@ -282,6 +305,7 @@ interface AcpState {
   _onModeUpdate: (e: ModeUpdateEvent) => void
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
   _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
+  _onUsageUpdate: (e: UsageUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
@@ -499,6 +523,17 @@ function dropPermissionsForSession(
   return next
 }
 
+/** Remove cached plan entries for a session (close or new prompt turn). */
+function dropPlanForSession(
+  plans: Record<SessionId, PlanEntry[]>,
+  sessionId: SessionId
+): Record<SessionId, PlanEntry[]> {
+  if (!(sessionId in plans)) return plans
+  const next = { ...plans }
+  delete next[sessionId]
+  return next
+}
+
 /** Remove all pending permissions belonging to an agent. */
 function dropPermissionsForAgent(
   pending: Record<string, PendingPermission>,
@@ -516,17 +551,104 @@ type TurnEndSetter = (
   replace?: false
 ) => void
 
+function nextQueueId(): string {
+  return newId('queue')
+}
+
+function dropRecordKey<T>(
+  record: Record<SessionId, T>,
+  sessionId: SessionId
+): Record<SessionId, T> {
+  if (!(sessionId in record)) return record
+  const next = { ...record }
+  delete next[sessionId]
+  return next
+}
+
+/** Move a failed optimistic send into the queue when the backend is still busy. */
+function recoverPromptToQueue(
+  set: TurnEndSetter,
+  sessionId: SessionId,
+  userMessage: ChatMessage,
+  blocks: ContentBlock[],
+  previousOpenTurnId: string | null,
+  attemptedTurnId: string
+): void {
+  set((s) => {
+    const patch = buildRecoverPromptToQueuePatch(s, {
+      sessionId,
+      userMessage,
+      blocks,
+      previousOpenTurnId,
+      attemptedTurnId,
+      createQueueId: nextQueueId
+    })
+    return {
+      messages: patch.messages as AcpState['messages'],
+      promptQueues: patch.promptQueues,
+      sessions: patch.sessions as AcpState['sessions']
+    }
+  })
+}
+
+/** Send the next queued prompt after the current turn closes. */
+function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
+  const state = useAcpStore.getState()
+  if (state.suppressQueueFlush[sessionId]) return
+  const session = state.sessions[sessionId]
+  if (!session || session.status === 'closed' || sessionTurnBusy(session)) return
+
+  const queue = state.promptQueues[sessionId] ?? []
+  if (queue.length === 0) return
+
+  const [next, ...rest] = queue
+  set((s) => ({
+    promptQueues: { ...s.promptQueues, [sessionId]: rest }
+  }))
+
+  void runPromptTurn(
+    set,
+    () => useAcpStore.getState(),
+    sessionId,
+    next.blocks,
+    (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks)
+  ).catch((err) => {
+    if (isPromptTurnInProgressError(err)) {
+      set((s) => ({
+        promptQueues: {
+          ...s.promptQueues,
+          [sessionId]: [next, ...(s.promptQueues[sessionId] ?? [])]
+        }
+      }))
+      return
+    }
+    toast.error(`Failed to send queued message: ${String(err)}`)
+  })
+}
+
 /**
  * End the current turn after the macrotask queue drains so streamed
  * `acp:message_chunk` events delivered after `acp_send_prompt` / `acp:prompt_complete`
  * are still accepted. Idempotent when the turn is already closed.
+ *
+ * `expectedTurnId` guards against duplicate end signals (dispatch resolve +
+ * `acp:prompt_complete` both schedule end) clearing a newer turn — e.g. a
+ * queued prompt flushed immediately after the previous turn closed.
  */
-function scheduleTurnEnd(set: TurnEndSetter, sessionId: SessionId, stopReason?: StopReason): void {
+function scheduleTurnEnd(
+  set: TurnEndSetter,
+  sessionId: SessionId,
+  stopReason?: StopReason,
+  expectedTurnId?: string | null
+): void {
+  const turnId = expectedTurnId ?? useAcpStore.getState().sessions[sessionId]?.openTurnId ?? null
+  if (!turnId) return
+
   setTimeout(() => {
     let closedTurn = false
     set((s) => {
       const current = s.sessions[sessionId]
-      if (!current?.openTurnId) return {}
+      if (!current?.openTurnId || current.openTurnId !== turnId) return {}
       closedTurn = true
       const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
       return {
@@ -551,6 +673,7 @@ function scheduleTurnEnd(set: TurnEndSetter, sessionId: SessionId, stopReason?: 
       if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
         persistSession(state, sessionId, (entries) => set({ sessionIndex: entries }))
       }
+      flushNextQueuedPrompt(set, sessionId)
     }
   }, 0)
 }
@@ -1020,33 +1143,64 @@ async function runPromptTurn(
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
   if (session.status === 'closed') throw new Error('session is closed')
-  if (session.openTurnId) throw new Error('a prompt turn is already in progress')
   if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
-  const openTurnId = newId('turn')
-  // optimistic user message + mark turn active
-  const userMessage: ChatMessage = {
-    id: newId('msg'),
-    role: 'user',
-    blocks: userBlocks,
-    streaming: false,
-    timestamp: Date.now(),
-    seq: nextSeq()
-  }
-  set((s) => ({
-    messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
-    sessions: {
-      ...s.sessions,
-      [sessionId]: { ...s.sessions[sessionId], activeTurn: true, openTurnId, lastError: null }
+
+  let enqueued = false
+  let userMessage: ChatMessage | null = null
+  let openTurnId = ''
+  const previousOpenTurnId = session.openTurnId
+
+  // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
+  set((s) => {
+    const current = s.sessions[sessionId]
+    if (!current || current.status === 'closed') return {}
+
+    if (sessionTurnBusy(current)) {
+      enqueued = true
+      return {
+        promptQueues: appendQueuedPrompt(s.promptQueues, sessionId, userBlocks, nextQueueId)
+      }
     }
-  }))
+
+    openTurnId = newId('turn')
+    userMessage = {
+      id: newId('msg'),
+      role: 'user',
+      blocks: userBlocks,
+      streaming: false,
+      timestamp: Date.now(),
+      seq: nextSeq()
+    }
+    return {
+      messages: {
+        ...s.messages,
+        [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+      },
+      plans: dropPlanForSession(s.plans, sessionId),
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+      }
+    }
+  })
+
+  if (enqueued) return
+  if (!userMessage || !openTurnId) throw new Error(`unknown session ${sessionId}`)
+
   persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
   try {
     // Command reply vs streamed chunks have no ordering guarantee; defer turn
     // end to a macrotask so chunk listeners run first. Idempotent with
     // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
-    const stopReason = await dispatch(session)
-    scheduleTurnEnd(set, sessionId, stopReason)
+    const liveSession = get().sessions[sessionId]
+    if (!liveSession) throw new Error(`unknown session ${sessionId}`)
+    const stopReason = await dispatch(liveSession)
+    scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
+    if (isPromptTurnInProgressError(err)) {
+      recoverPromptToQueue(set, sessionId, userMessage, userBlocks, previousOpenTurnId, openTurnId)
+      return
+    }
     set((s) => ({
       messages: finalizeStreaming(s.messages, sessionId),
       sessions: {
@@ -1080,11 +1234,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
+  sessionUsage: {},
   messages: {},
   toolCalls: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
+  promptQueues: {},
+  suppressQueueFlush: {},
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -1207,7 +1364,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         sessions,
-        pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId)
+        plans: dropPlanForSession(s.plans, sessionId),
+        pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
+        promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
+        suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
     })
   },
@@ -1719,6 +1879,55 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // turn cleared by _onPromptComplete (cancelled) or by sendPrompt's resolution
   },
 
+  removeQueuedPrompt: (sessionId, queueId) => {
+    set((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        [sessionId]: (s.promptQueues[sessionId] ?? []).filter((item) => item.id !== queueId)
+      }
+    }))
+  },
+
+  sendQueuedPromptNow: async (sessionId, queueId) => {
+    const queue = get().promptQueues[sessionId] ?? []
+    const item = queue.find((q) => q.id === queueId)
+    if (!item) throw new Error('queued prompt not found')
+
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    if (session.status === 'closed') throw new Error('session is closed')
+
+    set((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        [sessionId]: (s.promptQueues[sessionId] ?? []).filter((q) => q.id !== queueId)
+      },
+      suppressQueueFlush: { ...s.suppressQueueFlush, [sessionId]: true }
+    }))
+
+    try {
+      if (session.openTurnId) {
+        await acpApi.cancelPrompt(session.agentId, sessionId)
+        await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
+      }
+      await runPromptTurn(set, get, sessionId, item.blocks, (s) =>
+        acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks)
+      )
+    } catch (err) {
+      set((s) => ({
+        promptQueues: {
+          ...s.promptQueues,
+          [sessionId]: [item, ...(s.promptQueues[sessionId] ?? [])]
+        }
+      }))
+      throw err
+    } finally {
+      set((s) => ({
+        suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
+      }))
+    }
+  },
+
   setConfigOption: async (sessionId, configId, valueId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
@@ -1935,7 +2144,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onPlanUpdate: (e) =>
-    set((s) => ({ plans: { ...s.plans, [e.sessionId]: e.plan.entries ?? [] } })),
+    set((s) => {
+      const entries = e.plan.entries ?? []
+      if (entries.length === 0) {
+        return { plans: dropPlanForSession(s.plans, e.sessionId) }
+      }
+      return { plans: { ...s.plans, [e.sessionId]: entries } }
+    }),
 
   _onCommandsUpdate: (e) =>
     set((s) => ({ commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } })),
@@ -1984,6 +2199,30 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (get().sessions[e.sessionId]) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
+  },
+
+  _onUsageUpdate: (e) => {
+    if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
+      return
+    }
+    set((s) => {
+      if (!s.sessions[e.sessionId]) return {}
+      const prev = s.sessionUsage[e.sessionId]
+      const baselineUsed = prev?.baselineUsed ?? e.used
+      const next: SessionUsage = {
+        used: e.used,
+        size: e.size,
+        baselineUsed,
+        updatedAt: Date.now(),
+        source: 'reported'
+      }
+      if (e.cost && Number.isFinite(e.cost.amount) && e.cost.amount > 0 && e.cost.currency) {
+        next.cost = { amount: e.cost.amount, currency: e.cost.currency }
+      }
+      return {
+        sessionUsage: { ...s.sessionUsage, [e.sessionId]: next }
+      }
+    })
   },
 
   _onPermissionRequest: (e) =>
@@ -2035,7 +2274,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     ) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
-    scheduleTurnEnd(set, e.sessionId, e.stopReason)
+    scheduleTurnEnd(set, e.sessionId, e.stopReason, get().sessions[e.sessionId]?.openTurnId ?? null)
   },
 
   _onAgentError: (e) => {
@@ -2127,9 +2366,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-      if (!session) return { pendingPermissions }
+      if (!session) return { pendingPermissions, plans: dropPlanForSession(s.plans, e.sessionId) }
       return {
         pendingPermissions,
+        plans: dropPlanForSession(s.plans, e.sessionId),
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
@@ -2196,6 +2436,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<SessionInfoUpdateEvent>(ACP_EVENTS.sessionInfoUpdate, (e) =>
       useAcpStore.getState()._onSessionInfoUpdate(e)
     ),
+    acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
+      useAcpStore.getState()._onUsageUpdate(e)
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)
     ),
@@ -2229,6 +2472,16 @@ export const useAcpSession = (sessionId: SessionId | null): AcpSession | null =>
 
 export const useAcpMessages = (sessionId: SessionId | null): ChatMessage[] =>
   useAcpStore((s) => (sessionId ? (s.messages[sessionId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES))
+
+const EMPTY_PROMPT_QUEUE: QueuedPrompt[] = []
+
+export const usePromptQueue = (sessionId: SessionId | null): QueuedPrompt[] =>
+  useAcpStore((s) =>
+    sessionId ? (s.promptQueues[sessionId] ?? EMPTY_PROMPT_QUEUE) : EMPTY_PROMPT_QUEUE
+  )
+
+export const useSessionUsage = (sessionId: SessionId | null): SessionUsage | null =>
+  useAcpStore((s) => (sessionId ? (s.sessionUsage[sessionId] ?? null) : null))
 
 const EMPTY_MESSAGES: ChatMessage[] = []
 

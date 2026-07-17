@@ -710,4 +710,44 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
+
+  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  .chat-streamdown [data-streamdown="table-toolbar"] .relative {
+    display: contents;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  .chat-streamdown [data-streamdown="table"] th {
+    background: hsl(var(--muted) / 0.5);
+    font-weight: 600;
+  }
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+  }
 }

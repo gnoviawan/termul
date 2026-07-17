@@ -34,6 +34,7 @@ import {
   uint8ToBase64
 } from './chat-attachments'
 import { ChatMarkdownCode } from './chat-markdown-code'
+import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
 
@@ -137,11 +138,13 @@ const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
 const STREAMDOWN_CONTROLS = {
   // Fenced code copy/download come from ChatMarkdownCode (IconActionButton).
   code: false,
+  table: { copy: true, download: true, fullscreen: true },
   mermaid: { copy: true, download: true, fullscreen: true, panZoom: true }
 } as const
 
 const STREAMDOWN_COMPONENTS = {
-  code: ChatMarkdownCode
+  code: ChatMarkdownCode,
+  table: ChatMarkdownTable
 } as const
 
 // Word-by-word reveal so replies feel like they stream even when an agent

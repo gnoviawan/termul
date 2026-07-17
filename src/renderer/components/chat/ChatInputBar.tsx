@@ -25,19 +25,22 @@ import type {
 } from '@/lib/acp-api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
-import type { AcpSession } from '@/stores/acp-store'
+import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
+import { useAcpMessages, useSessionUsage } from '@/stores/acp-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import { CHAT_SPRING } from './chat-motion'
+import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
 import { LoadedSkillChip } from './LoadedSkillChip'
+import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
@@ -89,6 +92,10 @@ interface ChatInputBarProps {
   seedText?: string
   /** Bump to re-apply `seedText` even if the text is unchanged. */
   seedNonce?: number
+  /** Pending prompts shown above the composer. */
+  queue?: QueuedPrompt[]
+  onRemoveQueued?: (queueId: string) => void
+  onSendQueuedNow?: (queueId: string) => void
 }
 
 export function ChatInputBar({
@@ -108,7 +115,10 @@ export function ChatInputBar({
   onSetMode,
   onSetModel,
   seedText,
-  seedNonce
+  seedNonce,
+  queue = [],
+  onRemoveQueued,
+  onSendQueuedNow
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
@@ -120,6 +130,8 @@ export function ChatInputBar({
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
+  const sessionUsage = useSessionUsage(session.id)
+  const messages = useAcpMessages(session.id)
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [sending, setSending] = useState(false)
@@ -201,10 +213,17 @@ export function ChatInputBar({
     [slashOpen, commands, configOptions, modes, skills, filter]
   )
 
+  const canSend =
+    !disabled &&
+    !sending &&
+    (value.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
+  const showStop = busy && !canSend
+  const iconMotion = iconPop(reduced)
+
   const submit = useCallback(async () => {
     const userText = value.trim()
     const hasAttachments = attachments.length > 0
-    if ((!userText && !loadedSkill && !hasAttachments) || busy || disabled || sending) return
+    if ((!userText && !loadedSkill && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
@@ -242,7 +261,6 @@ export function ChatInputBar({
     value,
     attachments,
     loadedSkill,
-    busy,
     disabled,
     sending,
     clearAttachments,
@@ -314,6 +332,7 @@ export function ChatInputBar({
       }
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault()
+        if (showStop) return
         void submit()
       }
     },
@@ -323,6 +342,7 @@ export function ChatInputBar({
       handleMentionKeyDown,
       updateMentions,
       busy,
+      showStop,
       onCancel,
       submit,
       resetHeight
@@ -347,14 +367,12 @@ export function ChatInputBar({
     })
   }, [seedNonce, updateMentions, clampHeight])
 
-  const canSend =
-    !disabled &&
-    !sending &&
-    (value.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
-
   return (
     <div className="px-5 pb-3.5 pt-3">
       <div className="relative mx-auto w-full max-w-3xl">
+        {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
+          <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />
+        )}
         {slashOpen && (
           <SlashCommandMenu
             ref={slashMenuRef}
@@ -474,32 +492,29 @@ export function ChatInputBar({
                 />
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
-                <div className="relative h-[34px] w-[34px] overflow-visible">
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    {busy ? (
-                      <motion.div
-                        key="cancel"
-                        className="absolute inset-0"
-                        initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
-                        animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
-                        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
-                        transition={CHAT_SPRING}
+                <div className="relative size-[34px] shrink-0 overflow-visible">
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {showStop ? (
+                      <motion.button
+                        key="stop"
+                        type="button"
+                        data-press-feedback="off"
+                        onClick={onCancel}
+                        title="Cancel turn"
+                        aria-label="Cancel turn"
+                        initial={iconMotion.initial}
+                        animate={iconMotion.animate}
+                        exit={iconMotion.initial}
+                        transition={iconMotion.transition}
+                        className={cn(
+                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.96]',
+                          EMBOSSED_BUTTON
+                        )}
                       >
-                        <button
-                          type="button"
-                          data-press-feedback="off"
-                          onClick={onCancel}
-                          title="Cancel turn"
-                          aria-label="Cancel turn"
-                          className={cn(
-                            'flex size-[34px] items-center justify-center rounded-lg bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
-                            EMBOSSED_BUTTON
-                          )}
-                        >
-                          <Square size={12} fill="currentColor" strokeWidth={0} />
-                        </button>
-                      </motion.div>
+                        <Square size={12} fill="currentColor" strokeWidth={0} />
+                      </motion.button>
                     ) : (
                       <motion.button
                         key="send"
@@ -507,32 +522,23 @@ export function ChatInputBar({
                         data-press-feedback="off"
                         onClick={() => void submit()}
                         disabled={!canSend}
-                        title="Send"
-                        aria-label="Send message"
-                        initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 20 }}
-                        animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
-                        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -20 }}
-                        transition={CHAT_SPRING}
-                        whileTap={reduced || !canSend ? undefined : { scale: 0.9 }}
+                        title={busy ? 'Queue message' : 'Send'}
+                        aria-label={busy ? 'Queue message' : 'Send message'}
+                        initial={iconMotion.initial}
+                        animate={iconMotion.animate}
+                        exit={iconMotion.initial}
+                        transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-colors',
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
                           canSend
                             ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90',
+                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
                                 EMBOSSED_BUTTON
                               )
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
                         )}
                       >
-                        <motion.span
-                          key={canSend ? 'ready' : 'idle'}
-                          initial={reduced ? false : { scale: 0.6 }}
-                          animate={reduced ? undefined : { scale: 1 }}
-                          transition={CHAT_SPRING}
-                          className="flex items-center justify-center"
-                        >
-                          <ArrowUp size={16} strokeWidth={2.5} />
-                        </motion.span>
+                        <ArrowUp size={16} strokeWidth={2.5} />
                       </motion.button>
                     )}
                   </AnimatePresence>
@@ -547,13 +553,15 @@ export function ChatInputBar({
             focused ? 'opacity-100' : 'opacity-0'
           )}
         >
-          <KbdHint k="Enter" /> to send
-          <span className="mx-1.5 text-border">·</span>
-          <KbdHint k="Shift+Enter" /> newline
-          {busy && (
+          {showStop ? (
             <>
-              <span className="mx-1.5 text-border">·</span>
               <KbdHint k="Esc" /> to stop
+            </>
+          ) : (
+            <>
+              <KbdHint k="Enter" /> {busy ? 'to queue' : 'to send'}
+              <span className="mx-1.5 text-border">·</span>
+              <KbdHint k="Shift+Enter" /> newline
             </>
           )}
         </div>

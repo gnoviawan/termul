@@ -882,17 +882,6 @@ async fn drive_connection(
     let notif_app = app.clone();
     let notif_agent_id = agent_id.clone();
     let notif_state = driver_state.clone();
-    let todos_app = app.clone();
-    let todos_agent_id = agent_id.clone();
-    let todos_state = driver_state.clone();
-    let todos_req_app = app.clone();
-    let todos_req_agent_id = agent_id.clone();
-    let todos_req_state = driver_state.clone();
-    // Shared per-connection cache of Cursor todo lists, so `merge: true` updates
-    // combine with prior todos rather than dropping them.
-    let todos_cache: client::CursorTodosCache = std::sync::Arc::new(Mutex::new(HashMap::new()));
-    let todos_cache_notif = todos_cache.clone();
-    let todos_cache_req = todos_cache.clone();
     let perm_app = app.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -942,63 +931,6 @@ async fn drive_connection(
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_notification(
-            async move |msg: client::CursorUpdateTodosMessage, _cx| {
-                // Cursor reports plan/todo progress via this extension method
-                // rather than the spec Plan update. Route it to the PlanPanel.
-                match client::parse_cursor_update_todos(&msg.params) {
-                    Ok(params) => {
-                        let fallback = {
-                            todos_state.lock().resolve_cursor_update_session(
-                                params.session_id.as_deref(),
-                                &params.tool_call_id,
-                            )
-                        };
-                        client::handle_cursor_update_todos(
-                            &todos_app,
-                            &todos_agent_id,
-                            params,
-                            fallback,
-                            &todos_cache_notif,
-                        );
-                    }
-                    Err(err) => {
-                        log::debug!(
-                            "[acp] agent {todos_agent_id} failed to parse cursor/update_todos: {err}"
-                        );
-                    }
-                }
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_request(
-            async move |request: client::CursorUpdateTodosMessage, responder, _cx| {
-                // Request form of cursor/update_todos (Cursor docs are ambiguous
-                // about notification vs request). Handle identically, then ack.
-                handle_cursor_update_todos_request(
-                    &todos_req_agent_id,
-                    request,
-                    responder,
-                    |params| {
-                        let fallback = {
-                            todos_req_state.lock().resolve_cursor_update_session(
-                                params.session_id.as_deref(),
-                                &params.tool_call_id,
-                            )
-                        };
-                        client::handle_cursor_update_todos(
-                            &todos_req_app,
-                            &todos_req_agent_id,
-                            params,
-                            fallback,
-                            &todos_cache_req,
-                        );
-                    },
-                )
-            },
-            agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: agent_client_protocol::schema::RequestPermissionRequest,
@@ -1214,25 +1146,6 @@ async fn drive_connection(
         .await;
 
     connection_result.map_err(|e| e.to_string())
-}
-
-fn handle_cursor_update_todos_request(
-    agent_id: &AgentId,
-    request: client::CursorUpdateTodosMessage,
-    responder: agent_client_protocol::Responder<serde_json::Value>,
-    on_valid: impl FnOnce(client::CursorUpdateTodosParams),
-) -> Result<(), agent_client_protocol::Error> {
-    let params = match client::parse_cursor_update_todos_request(&request.params) {
-        Ok(params) => params,
-        Err(err) => {
-            log::debug!(
-                "[acp] agent {agent_id} failed to parse cursor/update_todos request: {err}"
-            );
-            return responder.respond_with_error(err);
-        }
-    };
-    on_valid(params);
-    responder.respond(serde_json::json!({ "outcome": "accepted" }))
 }
 
 /// The agent driver's main loop: complete `initialize`, then service commands
@@ -1477,8 +1390,9 @@ async fn run_command_loop(
                 // receiver when the turn may proceed.
                 let cancel_rx = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(cancel_rx) = cancel_rx else {
+                    // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
                     let _ = reply.send(Err(format!(
-                        "a prompt turn is already in progress for session {}",
+                        "ACP_TURN_IN_PROGRESS: session {}",
                         session_id.0
                     )));
                     continue;
@@ -1738,58 +1652,6 @@ fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
-
-    #[tokio::test]
-    async fn malformed_cursor_update_todos_request_returns_invalid_params() {
-        use agent_client_protocol::jsonrpcmsg::{Id, Message, Params, Request};
-        use agent_client_protocol::Channel;
-
-        let (server, mut peer) = Channel::duplex();
-        let connection = Client
-            .builder()
-            .on_receive_request(
-                async |request: client::CursorUpdateTodosMessage, responder, _cx| {
-                    handle_cursor_update_todos_request(
-                        &AgentId("test-agent".to_string()),
-                        request,
-                        responder,
-                        |_| {},
-                    )
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .connect_with(server, async |_cx| {
-                std::future::pending::<Result<(), agent_client_protocol::Error>>().await
-            });
-        tokio::pin!(connection);
-
-        let params = serde_json::json!({
-            "toolCallId": "call_1",
-            "merge": false
-        });
-        let serde_json::Value::Object(params) = params else {
-            unreachable!("fixture is an object");
-        };
-        peer.tx
-            .unbounded_send(Ok(Message::Request(Request::new(
-                client::CURSOR_UPDATE_TODOS_METHOD.to_string(),
-                Some(Params::Object(params)),
-                Some(Id::Number(7)),
-            ))))
-            .expect("request sends");
-
-        let message = tokio::select! {
-            message = peer.rx.next() => message.expect("response arrives").expect("valid response"),
-            result = &mut connection => panic!("connection ended before response: {result:?}"),
-        };
-        let Message::Response(response) = message else {
-            panic!("expected response, got {message:?}");
-        };
-        assert_eq!(response.id, Some(Id::Number(7)));
-        assert!(response.result.is_none());
-        assert_eq!(response.error.expect("error response").code, -32602);
-    }
 
     /// Capability gating exercises the *real* gate functions used by
     /// `load_session`/`resume_session`/`close_session` (F4). With default
