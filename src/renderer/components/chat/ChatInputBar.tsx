@@ -27,6 +27,7 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -473,17 +474,7 @@ export function ChatInputBar({
                 />
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {canPick && (
-                  <button
-                    type="button"
-                    onClick={() => void pickFiles()}
-                    title="Attach files"
-                    aria-label="Attach files"
-                    className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <Paperclip size={16} />
-                  </button>
-                )}
+                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
                 <div className="relative h-[34px] w-[34px] overflow-visible">
                   <AnimatePresence mode="popLayout" initial={false}>
                     {busy ? (

@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
+import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
-import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
 import { CHAT_SPRING } from './chat-motion'
 
@@ -62,8 +62,8 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
           <MarkerIcon>
             <Brain />
           </MarkerIcon>
-          <MarkerContent className={cn('min-w-0 flex-1', isStreaming && 'shimmer')}>
-            {isStreaming ? 'Thinking…' : 'Thought'}
+          <MarkerContent className="min-w-0 flex-1">
+            {isStreaming ? <ShimmerText text="Thinking…" /> : 'Thought'}
             {lines > 0 ? (
               <>
                 {' · '}

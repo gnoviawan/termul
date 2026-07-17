@@ -33,6 +33,7 @@ import {
   isLocalFileUri,
   uint8ToBase64
 } from './chat-attachments'
+import { ChatMarkdownCode } from './chat-markdown-code'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
 
@@ -134,8 +135,13 @@ const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
 // Copy on code blocks, plus download (save an agent-generated file); no line
 // numbers (chat snippets are short). Mermaid keeps its interactive controls.
 const STREAMDOWN_CONTROLS = {
-  code: { copy: true, download: true },
+  // Fenced code copy/download come from ChatMarkdownCode (IconActionButton).
+  code: false,
   mermaid: { copy: true, download: true, fullscreen: true, panZoom: true }
+} as const
+
+const STREAMDOWN_COMPONENTS = {
+  code: ChatMarkdownCode
 } as const
 
 // Word-by-word reveal so replies feel like they stream even when an agent
@@ -210,6 +216,7 @@ function AgentProse({
         parseIncompleteMarkdown
         plugins={STREAMDOWN_PLUGINS}
         controls={STREAMDOWN_CONTROLS}
+        components={STREAMDOWN_COMPONENTS}
         lineNumbers={false}
         linkSafety={LINK_SAFETY}
         shikiTheme={['github-light', 'github-dark']}

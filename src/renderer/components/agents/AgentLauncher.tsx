@@ -1,10 +1,11 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { platform as osPlatform } from '@tauri-apps/plugin-os'
-import { ArrowUp, Check, Download, FolderOpen, Loader2, Paperclip } from 'lucide-react'
+import { ArrowUp, Check, Download, FolderOpen, Loader2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
+import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
@@ -675,16 +676,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <button
-                type="button"
-                onClick={() => void pickFiles()}
-                disabled={!canPick}
-                className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title="Attach files"
-                aria-label="Attach files"
-              >
-                <Paperclip size={16} />
-              </button>
+              <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
                 <AcpAgentPicker
                   agents={supportedAgents}
