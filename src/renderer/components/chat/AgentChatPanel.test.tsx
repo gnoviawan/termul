@@ -19,12 +19,16 @@ vi.mock('@/stores/acp-store', () => {
     toolCalls: {},
     plans: {},
     pendingPermissions: {},
+    sessions: {},
+    configToLiveAgent: {},
     sessionIndex: indexRef.current,
     openingHistoryIds: openingRef.current,
     openHistorySession: mockOpen,
     sendPrompt: vi.fn(),
     sendPromptBlocks: vi.fn(),
     cancelPrompt: vi.fn(),
+    removeQueuedPrompt: vi.fn(),
+    sendQueuedPromptNow: vi.fn(),
     setConfigOption: vi.fn(),
     setMode: vi.fn(),
     setModel: vi.fn()
@@ -32,9 +36,13 @@ vi.mock('@/stores/acp-store', () => {
   return {
     useAcpStore: (sel: (s: unknown) => unknown) => sel(state()),
     useAcpSession: () => sessionRef.current,
-    useAcpMessages: () => []
+    useAcpMessages: () => [],
+    usePromptQueue: () => [],
+    configIdFromReuseKey: (key: string) => key
   }
 })
+
+vi.mock('./PlanSupportHint', () => ({ PlanSupportHint: () => null }))
 
 // Child components pull in heavy chat rendering; the states under test render
 // before any of them mount.

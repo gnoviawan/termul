@@ -66,20 +66,53 @@ describe('prompt-queue-orchestration', () => {
     })
   })
 
+  it('restores queuedOrigin at the front with the same id', () => {
+    const origin = {
+      id: 'q-a',
+      blocks: [{ type: 'text' as const, text: 'A' }],
+      createdAt: 1
+    }
+    const patch = buildRecoverPromptToQueuePatch(
+      {
+        sessions: {
+          s1: { openTurnId: 'attempt', activeTurn: true, lastError: null }
+        },
+        messages: {
+          s1: [{ id: 'msg-1' }]
+        },
+        promptQueues: {
+          s1: [{ id: 'q-b', blocks: [{ type: 'text', text: 'B' }], createdAt: 2 }]
+        }
+      },
+      {
+        sessionId: 's1',
+        userMessage: { id: 'msg-1' },
+        blocks: origin.blocks,
+        previousOpenTurnId: null,
+        attemptedTurnId: 'attempt',
+        createQueueId: () => 'q-new',
+        queuedOrigin: origin
+      }
+    )
+
+    expect(patch.promptQueues.s1?.map((q) => q.id)).toEqual(['q-a', 'q-b'])
+    expect(patch.promptQueues.s1?.[0]).toBe(origin)
+  })
+
   it('waitForTurnClear resolves when openTurnId clears', async () => {
     let openTurnId: string | null = 't1'
     const listeners = new Set<
       (
-        state: { sessions: Record<string, { openTurnId: string | null }> },
-        prev: { sessions: Record<string, { openTurnId: string | null }> }
+        state: { sessions: Record<string, { openTurnId: string | null; activeTurn?: boolean }> },
+        prev: { sessions: Record<string, { openTurnId: string | null; activeTurn?: boolean }> }
       ) => void
     >()
 
-    const get = () => ({ sessions: { s1: { openTurnId } } })
+    const get = () => ({ sessions: { s1: { openTurnId, activeTurn: Boolean(openTurnId) } } })
     const subscribe = (
       listener: (
-        state: { sessions: Record<string, { openTurnId: string | null }> },
-        prev: { sessions: Record<string, { openTurnId: string | null }> }
+        state: { sessions: Record<string, { openTurnId: string | null; activeTurn?: boolean }> },
+        prev: { sessions: Record<string, { openTurnId: string | null; activeTurn?: boolean }> }
       ) => void
     ) => {
       listeners.add(listener)
@@ -96,10 +129,43 @@ describe('prompt-queue-orchestration', () => {
     await expect(pending).resolves.toBeUndefined()
   })
 
+  it('waitForTurnClear resolves when activeTurn-only clears', async () => {
+    let session: { openTurnId: string | null; activeTurn: boolean } = {
+      openTurnId: null,
+      activeTurn: true
+    }
+    const listeners = new Set<
+      (
+        state: { sessions: Record<string, typeof session> },
+        prev: { sessions: Record<string, typeof session> }
+      ) => void
+    >()
+
+    const get = () => ({ sessions: { s1: session } })
+    const subscribe = (
+      listener: (
+        state: { sessions: Record<string, typeof session> },
+        prev: { sessions: Record<string, typeof session> }
+      ) => void
+    ) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    }
+
+    const pending = waitForTurnClear('s1', get, subscribe, 1000)
+    const prev = get()
+    session = { openTurnId: null, activeTurn: false }
+    for (const listener of listeners) listener(get(), prev)
+
+    await expect(pending).resolves.toBeUndefined()
+  })
+
   it('waitForTurnClear rejects on timeout', async () => {
     vi.useFakeTimers()
     try {
-      const get = () => ({ sessions: { s1: { openTurnId: 't1' } } })
+      const get = () => ({ sessions: { s1: { openTurnId: 't1', activeTurn: true } } })
       const subscribe = () => () => {}
       const pending = waitForTurnClear('s1', get, subscribe, 50)
       const assertion = expect(pending).rejects.toThrow('timed out waiting for turn to clear')

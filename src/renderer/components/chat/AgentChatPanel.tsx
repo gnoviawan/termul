@@ -4,7 +4,13 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { Button } from '@/components/ui/button'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
-import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
+import {
+  configIdFromReuseKey,
+  useAcpMessages,
+  useAcpSession,
+  useAcpStore,
+  usePromptQueue
+} from '@/stores/acp-store'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -56,6 +62,17 @@ export function AgentChatPanel({
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
+  // Registry/config id for plan compliance — live agentId is a spawn UUID.
+  const planAgentId = useAcpStore((s) => {
+    const liveSession = s.sessions?.[sessionId]
+    if (!liveSession) return ''
+    const reuseKey = Object.keys(s.configToLiveAgent ?? {}).find(
+      (k) => s.configToLiveAgent[k] === liveSession.agentId
+    )
+    if (reuseKey) return configIdFromReuseKey(reuseKey)
+    const fromIndex = s.sessionIndex?.find((e) => e.id === sessionId)?.agentConfigId
+    return fromIndex ?? liveSession.agentId
+  })
   // The oldest pending permission for THIS session (resolve one to reveal the next).
   const pendingPermission = useAcpStore(
     useShallow(
@@ -274,7 +291,7 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
-      <PlanSupportHint agentId={session.agentId} planEntryCount={plan.length} />
+      <PlanSupportHint agentId={planAgentId} planEntryCount={plan.length} />
       <PlanPanel entries={plan} />
       <ChatMessageList
         items={timeline}

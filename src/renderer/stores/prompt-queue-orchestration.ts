@@ -75,6 +75,8 @@ export interface RecoverPromptArgs {
   previousOpenTurnId: string | null
   attemptedTurnId: string
   createQueueId: () => string
+  /** When set, restore this exact queue item at the front (FIFO) instead of appending a new id. */
+  queuedOrigin?: QueuedPrompt
 }
 
 export interface RecoverPromptState {
@@ -92,19 +94,33 @@ export function buildRecoverPromptToQueuePatch(
   promptQueues: PromptQueueMap
   sessions: RecoverPromptState['sessions']
 } {
-  const { sessionId, userMessage, blocks, previousOpenTurnId, attemptedTurnId, createQueueId } =
-    args
+  const {
+    sessionId,
+    userMessage,
+    blocks,
+    previousOpenTurnId,
+    attemptedTurnId,
+    createQueueId,
+    queuedOrigin
+  } = args
   const session = state.sessions[sessionId]
   const list = state.messages[sessionId] ?? []
   const restoredOpenTurnId =
     session?.openTurnId === attemptedTurnId ? previousOpenTurnId : (session?.openTurnId ?? null)
+
+  const promptQueues = queuedOrigin
+    ? {
+        ...state.promptQueues,
+        [sessionId]: [queuedOrigin, ...(state.promptQueues[sessionId] ?? [])]
+      }
+    : appendQueuedPrompt(state.promptQueues, sessionId, blocks, createQueueId)
 
   return {
     messages: {
       ...state.messages,
       [sessionId]: list.filter((m) => m.id !== userMessage.id)
     },
-    promptQueues: appendQueuedPrompt(state.promptQueues, sessionId, blocks, createQueueId),
+    promptQueues,
     sessions: session
       ? {
           ...state.sessions,
@@ -120,19 +136,20 @@ export function buildRecoverPromptToQueuePatch(
 }
 
 type TurnClearGet = () => {
-  sessions: Record<SessionId, { openTurnId?: string | null } | undefined>
+  sessions: Record<SessionId, TurnBusySession | undefined>
 }
 
 type TurnClearSubscribe = (
   listener: (
-    state: { sessions: Record<SessionId, { openTurnId?: string | null } | undefined> },
-    prevState: { sessions: Record<SessionId, { openTurnId?: string | null } | undefined> }
+    state: { sessions: Record<SessionId, TurnBusySession | undefined> },
+    prevState: { sessions: Record<SessionId, TurnBusySession | undefined> }
   ) => void
 ) => () => void
 
 /**
- * Resolve when `openTurnId` clears for `sessionId`, or reject on timeout.
- * Uses store subscription instead of a busy-poll loop.
+ * Resolve when the session is no longer turn-busy (`openTurnId` and `activeTurn`
+ * both clear), or reject on timeout. Uses store subscription instead of a
+ * busy-poll loop.
  */
 export function waitForTurnClear(
   sessionId: SessionId,
@@ -140,7 +157,7 @@ export function waitForTurnClear(
   subscribe: TurnClearSubscribe,
   timeoutMs = TURN_CLEAR_TIMEOUT_MS
 ): Promise<void> {
-  if (!get().sessions[sessionId]?.openTurnId) return Promise.resolve()
+  if (!sessionTurnBusy(get().sessions[sessionId])) return Promise.resolve()
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -149,9 +166,9 @@ export function waitForTurnClear(
     }, timeoutMs)
 
     const unsub = subscribe((state, prev) => {
-      const wasOpen = Boolean(prev.sessions[sessionId]?.openTurnId)
-      const isOpen = Boolean(state.sessions[sessionId]?.openTurnId)
-      if (wasOpen && !isOpen) {
+      const wasBusy = sessionTurnBusy(prev.sessions[sessionId])
+      const isBusy = sessionTurnBusy(state.sessions[sessionId])
+      if (wasBusy && !isBusy) {
         clearTimeout(timer)
         unsub()
         resolve()
@@ -159,7 +176,7 @@ export function waitForTurnClear(
     })
 
     // Cover the race where the turn cleared between the initial check and subscribe.
-    if (!get().sessions[sessionId]?.openTurnId) {
+    if (!sessionTurnBusy(get().sessions[sessionId])) {
       clearTimeout(timer)
       unsub()
       resolve()

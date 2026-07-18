@@ -345,6 +345,34 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
   })
 
+  it('preserves FIFO order when a flushed prompt hits ACP_TURN_IN_PROGRESS', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued A')
+    await useAcpStore.getState().sendPrompt('s1', 'queued B')
+    const before = useAcpStore.getState().promptQueues['s1']
+    expect(before).toHaveLength(2)
+    const idA = before[0].id
+    const idB = before[1].id
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('ACP_TURN_IN_PROGRESS: session s1')
+    )
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    // Allow the flush's runPromptTurn rejection path to settle.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const after = useAcpStore.getState().promptQueues['s1']
+    expect(after.map((q) => q.id)).toEqual([idA, idB])
+    expect(after[0].blocks).toEqual([{ type: 'text', text: 'queued A' }])
+    expect(after[1].blocks).toEqual([{ type: 'text', text: 'queued B' }])
+  })
+
   it('ignores duplicate turn-end signals so a flushed queued turn keeps running', async () => {
     seedSession('s1', 'agent-1', true)
     await useAcpStore.getState().sendPrompt('s1', 'queued next')
@@ -403,6 +431,85 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
     expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
       { type: 'text', text: 'queued now' }
+    ])
+  })
+
+  it('sendQueuedPromptNow cancels when activeTurn is set without openTurnId', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: null }
+      },
+      promptQueues: {
+        s1: [
+          {
+            id: 'q-now',
+            blocks: [{ type: 'text', text: 'send now activeTurn-only' }],
+            createdAt: Date.now()
+          }
+        ]
+      }
+    }))
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_cancel_prompt') {
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 's1',
+          stopReason: 'cancelled'
+        })
+        return undefined
+      }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    await useAcpStore.getState().sendQueuedPromptNow('s1', 'q-now')
+    await flushTurnEnd()
+
+    expect(invoke).toHaveBeenCalledWith('acp_cancel_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'send now activeTurn-only' }
+    ])
+  })
+
+  it('prompt_complete clears activeTurn-only sessions and flushes the queue', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: null }
+      },
+      promptQueues: {
+        s1: [
+          {
+            id: 'q-flush',
+            blocks: [{ type: 'text', text: 'after activeTurn-only' }],
+            createdAt: Date.now()
+          }
+        ]
+      }
+    }))
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    expect(useAcpStore.getState().sessions['s1'].openTurnId).not.toBeNull()
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'after activeTurn-only' }
     ])
   })
 

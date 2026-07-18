@@ -572,7 +572,8 @@ function recoverPromptToQueue(
   userMessage: ChatMessage,
   blocks: ContentBlock[],
   previousOpenTurnId: string | null,
-  attemptedTurnId: string
+  attemptedTurnId: string,
+  queuedOrigin?: QueuedPrompt
 ): void {
   set((s) => {
     const patch = buildRecoverPromptToQueuePatch(s, {
@@ -581,7 +582,8 @@ function recoverPromptToQueue(
       blocks,
       previousOpenTurnId,
       attemptedTurnId,
-      createQueueId: nextQueueId
+      createQueueId: nextQueueId,
+      queuedOrigin
     })
     return {
       messages: patch.messages as AcpState['messages'],
@@ -611,17 +613,11 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
     () => useAcpStore.getState(),
     sessionId,
     next.blocks,
-    (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks)
+    (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks),
+    next
   ).catch((err) => {
-    if (isPromptTurnInProgressError(err)) {
-      set((s) => ({
-        promptQueues: {
-          ...s.promptQueues,
-          [sessionId]: [next, ...(s.promptQueues[sessionId] ?? [])]
-        }
-      }))
-      return
-    }
+    // Busy recovery is handled inside runPromptTurn (FIFO restore via queuedOrigin).
+    if (isPromptTurnInProgressError(err)) return
     toast.error(`Failed to send queued message: ${String(err)}`)
   })
 }
@@ -634,6 +630,10 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
  * `expectedTurnId` guards against duplicate end signals (dispatch resolve +
  * `acp:prompt_complete` both schedule end) clearing a newer turn — e.g. a
  * queued prompt flushed immediately after the previous turn closed.
+ *
+ * When there is no turn id but `activeTurn` is still set (defensive activeTurn-only
+ * state), clear the busy flags and flush the queue so send-now / completion can
+ * make progress.
  */
 function scheduleTurnEnd(
   set: TurnEndSetter,
@@ -641,8 +641,41 @@ function scheduleTurnEnd(
   stopReason?: StopReason,
   expectedTurnId?: string | null
 ): void {
-  const turnId = expectedTurnId ?? useAcpStore.getState().sessions[sessionId]?.openTurnId ?? null
-  if (!turnId) return
+  const session = useAcpStore.getState().sessions[sessionId]
+  const turnId = expectedTurnId ?? session?.openTurnId ?? null
+  if (!turnId) {
+    if (!session?.activeTurn) return
+    setTimeout(() => {
+      let closedTurn = false
+      set((s) => {
+        const current = s.sessions[sessionId]
+        // Only clear activeTurn-only sessions; if an openTurnId appeared, leave it.
+        if (!current?.activeTurn || current.openTurnId) return {}
+        closedTurn = true
+        const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
+        return {
+          messages: finalizeStreaming(s.messages, sessionId),
+          sessions: {
+            ...s.sessions,
+            [sessionId]: {
+              ...current,
+              openTurnId: null,
+              activeTurn: false,
+              lastError: note ?? current.lastError
+            }
+          }
+        }
+      })
+      if (closedTurn) {
+        const state = useAcpStore.getState()
+        if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
+          persistSession(state, sessionId, (entries) => set({ sessionIndex: entries }))
+        }
+        flushNextQueuedPrompt(set, sessionId)
+      }
+    }, 0)
+    return
+  }
 
   setTimeout(() => {
     let closedTurn = false
@@ -1132,13 +1165,18 @@ async function openHistorySessionInner(
  * schedule turn-end. On failure, finalize any streaming markers and record the
  * error. `sendPrompt` and `sendPromptBlocks` differ only in the blocks they
  * stage and which IPC they invoke — captured by `userBlocks` and `dispatch`.
+ *
+ * `queuedOrigin` marks a dequeue/send-now path: on `ACP_TURN_IN_PROGRESS` (or
+ * if the session is still busy at stage time), the original queue item is
+ * restored at the front with its existing id so FIFO order is preserved.
  */
 async function runPromptTurn(
   set: TurnEndSetter,
   get: () => AcpState,
   sessionId: SessionId,
   userBlocks: ContentBlock[],
-  dispatch: (session: AcpSession) => Promise<StopReason>
+  dispatch: (session: AcpSession) => Promise<StopReason>,
+  queuedOrigin?: QueuedPrompt
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
@@ -1157,6 +1195,14 @@ async function runPromptTurn(
 
     if (sessionTurnBusy(current)) {
       enqueued = true
+      if (queuedOrigin) {
+        return {
+          promptQueues: {
+            ...s.promptQueues,
+            [sessionId]: [queuedOrigin, ...(s.promptQueues[sessionId] ?? [])]
+          }
+        }
+      }
       return {
         promptQueues: appendQueuedPrompt(s.promptQueues, sessionId, userBlocks, nextQueueId)
       }
@@ -1198,7 +1244,15 @@ async function runPromptTurn(
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
-      recoverPromptToQueue(set, sessionId, userMessage, userBlocks, previousOpenTurnId, openTurnId)
+      recoverPromptToQueue(
+        set,
+        sessionId,
+        userMessage,
+        userBlocks,
+        previousOpenTurnId,
+        openTurnId,
+        queuedOrigin
+      )
       return
     }
     set((s) => ({
@@ -1906,12 +1960,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }))
 
     try {
-      if (session.openTurnId) {
+      if (sessionTurnBusy(session)) {
         await acpApi.cancelPrompt(session.agentId, sessionId)
         await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
       }
-      await runPromptTurn(set, get, sessionId, item.blocks, (s) =>
-        acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks)
+      await runPromptTurn(
+        set,
+        get,
+        sessionId,
+        item.blocks,
+        (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks),
+        item
       )
     } catch (err) {
       set((s) => ({
