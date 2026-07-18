@@ -41,6 +41,8 @@ const {
   mockPersistRead,
   mockPersistWrite,
   mockNavigate,
+  mockRetargetWarmPool,
+  mockSetSelectedAgentConfigId,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
@@ -57,6 +59,8 @@ const {
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockNavigate: vi.fn(),
+  mockRetargetWarmPool: vi.fn(),
+  mockSetSelectedAgentConfigId: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -140,11 +144,24 @@ vi.mock('@/stores/acp-store', () => {
     saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
-    setModel: mockSetModel
+    setModel: mockSetModel,
+    retargetWarmPool: mockRetargetWarmPool,
+    setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
-  type MockAcpState = typeof acpStateRef.current & { saveAgentConfig: typeof mockSaveAgentConfig }
+  type MockAcpState = typeof acpStateRef.current & {
+    saveAgentConfig: typeof mockSaveAgentConfig
+    retargetWarmPool: typeof mockRetargetWarmPool
+    setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
+  }
   const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
-    sel ? sel({ ...acpStateRef.current, saveAgentConfig: mockSaveAgentConfig }) : getState()
+    sel
+      ? sel({
+          ...acpStateRef.current,
+          saveAgentConfig: mockSaveAgentConfig,
+          retargetWarmPool: mockRetargetWarmPool,
+          setSelectedAgentConfigId: mockSetSelectedAgentConfigId
+        })
+      : getState()
   useAcpStore.getState = getState
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
@@ -293,7 +310,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     expect(mockStartChat).not.toHaveBeenCalled()
   })
@@ -307,7 +324,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     mockPrepareChat.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Model unavailable' }))
@@ -320,7 +337,7 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
 
-  it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
+  it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {
     const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
       <TooltipProvider>
@@ -331,11 +348,14 @@ describe('AgentLauncher ACP new thread', () => {
     )
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     unmount()
 
-    expect(mockCancelPreparedChat).toHaveBeenCalledWith(`${defaultAgent.configId}\0/work\0`)
+    // The app-level warm pool owns the session lifecycle, so unmounting the
+    // launcher must NOT cancel the warm session (it stays ready for the next
+    // chat / a project switch-back).
+    expect(mockCancelPreparedChat).not.toHaveBeenCalled()
   })
 
   it('restores a persisted ACP selection', async () => {
@@ -347,12 +367,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(
-        'acp-registry:opencode',
-        '/work',
-        undefined,
-        'p1'
-      )
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
     )
   })
 

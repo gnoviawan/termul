@@ -137,22 +137,24 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   const warmState = useConfigWarmState(entry.configId)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
 
-  const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.connected
-    ? { label: 'Ready', tone: 'ready' }
-    : warmState.warming
-      ? { label: 'Warming…', tone: 'muted' }
-      : entry.status === 'ready'
-        ? { label: 'Available', tone: 'ready' }
-        : entry.status === 'install-required'
-          ? { label: 'Install from Agent Chat', tone: 'warn' }
-          : entry.status === 'needs-runtime'
-            ? {
-                label: entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node.js',
-                tone: 'warn'
-              }
-            : entry.status === 'manual-install'
-              ? { label: 'Manual install', tone: 'warn' }
-              : { label: 'Unavailable', tone: 'muted' }
+  const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
+    ? { label: 'Session ready', tone: 'ready' }
+    : warmState.connected
+      ? { label: 'Warm', tone: 'ready' }
+      : warmState.warming || warmState.warmingSession
+        ? { label: 'Warming…', tone: 'muted' }
+        : entry.status === 'ready'
+          ? { label: 'Available', tone: 'ready' }
+          : entry.status === 'install-required'
+            ? { label: 'Install from Agent Chat', tone: 'warn' }
+            : entry.status === 'needs-runtime'
+              ? {
+                  label: entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node.js',
+                  tone: 'warn'
+                }
+              : entry.status === 'manual-install'
+                ? { label: 'Manual install', tone: 'warn' }
+                : { label: 'Unavailable', tone: 'muted' }
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
