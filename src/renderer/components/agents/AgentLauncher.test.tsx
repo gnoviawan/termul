@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import * as supportedAcpAgents from '@/lib/agents/supported-acp-agents'
 import {
@@ -233,9 +234,11 @@ function preparedSession(
 
 function renderLauncher(): void {
   render(
-    <MemoryRouter>
-      <AgentLauncher paneId="pane1" />
-    </MemoryRouter>
+    <TooltipProvider>
+      <MemoryRouter>
+        <AgentLauncher paneId="pane1" />
+      </MemoryRouter>
+    </TooltipProvider>
   )
 }
 
@@ -320,9 +323,11 @@ describe('AgentLauncher ACP new thread', () => {
   it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
     const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
-      <MemoryRouter>
-        <AgentLauncher paneId="pane1" />
-      </MemoryRouter>
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
     )
 
     await waitFor(() =>

@@ -115,6 +115,11 @@
     "file": "grok-build.svg"
   },
   {
+    "id": "harn",
+    "name": "Harn",
+    "file": "harn.svg"
+  },
+  {
     "id": "junie",
     "name": "Junie",
     "file": "junie.svg"
