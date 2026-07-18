@@ -132,10 +132,12 @@ function getShortcutTargetContext(target: EventTarget | null): {
 }
 
 /**
- * Left padding clearing macOS native traffic lights (tauri.conf.json
- * trafficLightPosition x=14; three ~12px lights ~8px apart end near x=66).
+ * Width of the draggable spacer that clears the macOS native traffic lights
+ * (tauri.conf.json trafficLightPosition x=14; three ~12px lights ~8px apart
+ * end near x=66). The spacer is its own drag handle so the clearance area
+ * stays a window-drag zone; the toggle sits in a separate no-drag container.
  */
-const macOsTrafficLightClearance = 'pl-[80px]'
+const macOsTrafficLightClearance = 'w-[80px] shrink-0'
 
 function MacOsTitlebarStrip(): React.JSX.Element | null {
   const activeProject = useActiveProject()
@@ -148,12 +150,12 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
       data-tauri-drag-region
       data-testid="macos-titlebar-strip"
     >
-      {/* Left-sidebar toggle — placed right of the native traffic lights
-          (see macOsTrafficLightClearance). */}
-      <div
-        className={`flex items-center h-full ${macOsTrafficLightClearance}`}
-        style={titlebarNoDragStyle}
-      >
+      {/* Draggable spacer clearing the native traffic lights so the area
+          left of the sidebar toggle stays a window-drag handle. */}
+      <div className={`h-full ${macOsTrafficLightClearance}`} data-tauri-drag-region />
+
+      {/* Left-sidebar toggle — no-drag, sits right of the traffic lights. */}
+      <div className="flex items-center h-full" style={titlebarNoDragStyle}>
         <SidebarToggleButton />
       </div>
 
