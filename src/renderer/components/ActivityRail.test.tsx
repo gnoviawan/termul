@@ -2,8 +2,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { ActivityRail } from './ActivityRail'
 
@@ -43,8 +41,6 @@ describe('ActivityRail', () => {
     vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(
       mockUpdatePanelVisibility
     )
-    useSidebarStore.setState({ isVisible: true })
-    useFileExplorerStore.setState({ isVisible: true })
     useSSHPanelStore.setState({ isVisible: true })
   })
 
@@ -56,48 +52,11 @@ describe('ActivityRail', () => {
     )
   }
 
-  it('toggles sidebar via persistence-aware updater on click', async () => {
+  it('does not render sidebar or file-explorer toggles (moved to titlebar)', () => {
     renderRail()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
-    })
-  })
-
-  it('toggles file explorer via persistence-aware updater on click', async () => {
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
-
-    await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
-    })
-  })
-
-  it('shows error toast when sidebar persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
-
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
-    })
-  })
-
-  it('shows error toast when file explorer persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
-
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
-    })
+    expect(screen.queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /file explorer/i })).not.toBeInTheDocument()
   })
 
   it('navigates to preferences on click', () => {

@@ -20,6 +20,11 @@ import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
 import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
 import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
+import {
+  FileExplorerToggleButton,
+  SidebarToggleButton,
+  titlebarNoDragStyle
+} from '@/components/TitlebarPanelToggles'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import {
   useUpdateAppSetting,
@@ -126,18 +131,44 @@ function getShortcutTargetContext(target: EventTarget | null): {
   return { isInEditor, isInTerminal, isInInput }
 }
 
+/**
+ * Left padding clearing macOS native traffic lights (tauri.conf.json
+ * trafficLightPosition x=14; three ~12px lights ~8px apart end near x=66).
+ */
+const macOsTrafficLightClearance = 'pl-[80px]'
+
 function MacOsTitlebarStrip(): React.JSX.Element | null {
   const activeProject = useActiveProject()
 
   if (!isMac) return null
 
   return (
-    <div className={macOsTitlebarStripClass} data-tauri-drag-region aria-hidden={!activeProject}>
+    <div
+      className={macOsTitlebarStripClass}
+      data-tauri-drag-region
+      data-testid="macos-titlebar-strip"
+    >
+      {/* Left-sidebar toggle — placed right of the native traffic lights
+          (see macOsTrafficLightClearance). */}
+      <div
+        className={`flex items-center h-full ${macOsTrafficLightClearance}`}
+        style={titlebarNoDragStyle}
+      >
+        <SidebarToggleButton />
+      </div>
+
       {activeProject && (
-        <span className="text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
+        <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
           {activeProject.name}
         </span>
       )}
+
+      <div className="flex-1 h-full" data-tauri-drag-region />
+
+      {/* Right-sidebar (file explorer) toggle — top-right. */}
+      <div className="flex items-center h-full" style={titlebarNoDragStyle}>
+        <FileExplorerToggleButton />
+      </div>
     </div>
   )
 }
