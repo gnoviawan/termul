@@ -34,6 +34,7 @@ import {
   ACP_EVENTS,
   type AgentCapabilities,
   type AgentConfig,
+  type AgentCrashedEvent,
   type AgentDisconnectedEvent,
   type AgentErrorEvent,
   type AgentId,
@@ -321,6 +322,8 @@ interface AcpState {
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
+  /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
+  _onAgentCrashed: (e: AgentCrashedEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
 }
@@ -2351,7 +2354,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onAgentError: (e) => {
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
-      if (e.sessionId && s.sessions[e.sessionId]) {
+      if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,
           // Finalize streaming markers: the turn is over (errored), and the
@@ -2361,6 +2364,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             ...s.sessions,
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
+              // Story 1.9 NFR7: a turn-scoped error (incl. the bounded turn
+              // timeout) sets `status: 'error'` so the UI shows the Error state
+              // (the agent may be wedged — the user should see an error, not
+              // a perpetually-active turn). The `_onAgentDisconnected` reducer
+              // now preserves the 'error' status (it skips 'error' sessions).
+              status: 'error' as SessionStatus,
               lastError: e.message,
               activeTurn: false,
               openTurnId: null
@@ -2393,13 +2402,71 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  // Story 1.9 FR26: the agent subprocess crashed mid-turn. Mirrors
+  // `_onAgentError` (sets `agentStatus[agentId]='error'`, finalizes streaming,
+  // sets `lastError`, persists) but is the typed crash event emitted BEFORE
+  // `agent_error` + `agent_disconnected`. The UI shows a manual-restart action
+  // (no silent respawn, honoring ADR-003).
+  _onAgentCrashed: (e) => {
+    set((s) => {
+      const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // Story 1.9 review: don't resurrect a closed session to 'error' (a late
+      // crash event for an already-closed session should not overwrite its
+      // terminal status).
+      if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
+        return {
+          agentStatus,
+          messages: finalizeStreaming(s.messages, e.sessionId),
+          sessions: {
+            ...s.sessions,
+            [e.sessionId]: {
+              ...s.sessions[e.sessionId],
+              status: 'error' as SessionStatus,
+              lastError: e.message,
+              activeTurn: false,
+              openTurnId: null
+            }
+          }
+        }
+      }
+      const sessions = { ...s.sessions }
+      for (const id of Object.keys(sessions)) {
+        if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
+          sessions[id] = {
+            ...sessions[id],
+            status: 'error' as SessionStatus,
+            lastError: e.message,
+            activeTurn: false,
+            openTurnId: null
+          }
+        }
+      }
+      return { agentStatus, sessions }
+    })
+    if (
+      e.sessionId &&
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
+
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
-        if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
+        // Story 1.9 review: a session already in 'error' status (set by the
+        // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
+        // — the crash's distinguishing Error state must survive the always-
+        // following disconnect event so the UI can show a manual-restart action.
+        if (
+          sessions[id].agentId === e.agentId &&
+          sessions[id].status !== 'closed' &&
+          sessions[id].status !== 'error'
+        ) {
           sessions[id] = {
             ...sessions[id],
             status: 'closed',
@@ -2516,6 +2583,10 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e) =>
       useAcpStore.getState()._onPromptComplete(e)
     ),
+    acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
+      useAcpStore.getState()._onAgentCrashed(e)
+      toast.error(e.message || 'Agent crashed')
+    }),
     acpApi.onEvent<AgentErrorEvent>(ACP_EVENTS.agentError, (e) => {
       useAcpStore.getState()._onAgentError(e)
       toast.error(e.message || 'Agent error')

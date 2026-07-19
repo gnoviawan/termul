@@ -2468,6 +2468,124 @@ describe('acp-store multi-project isolation', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  // Story 1.9 FR26: the typed AgentCrashed event → status: 'error' + lastError.
+  it('agent_crashed with session_id sets status error + lastError on that session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'child exited: signal 11'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited: signal 11')
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('agent_crashed with session_id None sets status error on all sessions for that agent', () => {
+    seedSession('s1', 'agent-1')
+    seedSession('s2', 'agent-1')
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s2: {
+          id: 's2',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    })
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'process crashed'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('process crashed')
+    expect(useAcpStore.getState().sessions['s2'].status).toBe('error')
+  })
+
+  // Story 1.9 review (HIGH fix): the triple-event crash sequence (crashed →
+  // error → disconnected) must leave status='error', NOT 'closed' — the
+  // always-following agent_disconnected must NOT overwrite the crash's 'error'.
+  it('agent_crashed then agent_disconnected preserves status error (the triple-event sequence)', () => {
+    seedSession('s1', 'agent-1')
+    // 1. Crash event → status: 'error'
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'child exited'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    // 2. Error event (same message) — doesn't change status
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'child exited'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    // 3. Disconnect event — must NOT overwrite 'error' to 'closed'
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited')
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+  })
+
+  // Story 1.9 review: a turn-scoped agent_error (e.g. the bounded turn
+  // timeout) sets status='error' (NFR7 — the wedged turn → Error state).
+  it('agent_error with session_id sets status error (turn-timeout path)', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn timeout: session s1 exceeded 600s'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe(
+      'turn timeout: session s1 exceeded 600s'
+    )
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  // Story 1.9 review (EC #8): a crash event for an already-closed session
+  // must NOT resurrect it to 'error'.
+  it('agent_crashed does not resurrect a closed session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'late crash'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
   it('agent_error with session_id None sets lastError on all sessions for that agent', () => {
     seedSession('s1', 'agent-1')
     seedSession('s2', 'agent-1')

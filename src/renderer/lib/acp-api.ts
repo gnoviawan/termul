@@ -317,6 +317,14 @@ export interface AgentErrorEvent {
   sessionId?: SessionId | null
   message: string
 }
+/** Story 1.9 FR26: the agent subprocess crashed mid-turn (a typed event
+ * distinct from `agent_error` (non-fatal) + `agent_disconnected` (always)).
+ * `acp-store` sets `status: 'error'` + the UI shows a manual-restart action. */
+export interface AgentCrashedEvent {
+  agentId: AgentId
+  sessionId?: SessionId | null
+  message: string
+}
 export interface AgentDisconnectedEvent {
   agentId: AgentId
 }
@@ -368,6 +376,7 @@ export const ACP_EVENTS = {
   permissionRequest: 'acp:permission_request',
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
+  agentCrashed: 'acp:agent_crashed',
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
   sessionInfoUpdate: 'acp:session_info_update',

@@ -45,8 +45,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, ConfigOptionsUpdateEvent,
-    PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
+    self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
+    ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
 };
 use crate::acp::session::DriverState;
 use crate::web::EventSink;
@@ -73,6 +73,14 @@ const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Story 1.9 NFR7: the bounded per-turn timeout. A wedged agent that neither
+/// replies nor crashes parks `send_prompt`'s oneshot forever without this.
+/// 10 min accommodates long agent turns (coding agents can run minutes) while
+/// still bounding the wait so a truly wedged turn fails → Error state.
+/// Distinct from 1.7's 60s permission sub-timeout (`permissions.rs:47`) — this
+/// bounds the WHOLE turn (`send_prompt` → `prompt_complete`), not the
+/// permission-rendezvous window. Overridable via `TERMUL_ACP_TURN_TIMEOUT_SECS`.
+const TURN_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// `session/new` timeout, overridable for diagnostics via
 /// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
@@ -99,6 +107,19 @@ fn session_reopen_timeout() -> Duration {
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or(SESSION_REOPEN_TIMEOUT)
+}
+
+/// Story 1.9 NFR7: per-turn timeout, overridable via
+/// `TERMUL_ACP_TURN_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
+/// [`TURN_TIMEOUT`]. Bounds a wedged agent turn so `send_prompt`'s oneshot
+/// fails with a typed timeout error → Error state (not parked forever).
+fn turn_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(TURN_TIMEOUT)
 }
 
 /// Timed `session/load` / `session/resume`: map agent errors and timeouts to
@@ -840,6 +861,17 @@ fn run_agent(
         }
 
         if let Err(message) = result {
+            // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
+            // `agent_error` (back-compat) + `agent_disconnected`. The renderer
+            // distinguishes "crash" (→ `status: 'error'` + manual restart) from
+            // a clean disconnect. Outstanding turn oneshots fail with this.
+            let crashed = AgentCrashedEvent {
+                agent_id: agent_id.clone(),
+                session_id: None,
+                message: message.clone(),
+            };
+            events::fan_out(&sinks, None, events::EVENT_AGENT_CRASHED, &crashed);
+
             let event = AgentErrorEvent {
                 agent_id: agent_id.clone(),
                 session_id: None,
@@ -1445,10 +1477,15 @@ async fn run_command_loop(
                     let prompt = turn_cx.send_request(request).block_task();
                     tokio::pin!(prompt);
 
-                    // Race the turn against a cancel signal bounded by
-                    // CANCEL_GRACE: a misbehaving agent that ignores
-                    // `session/cancel` must not park `acp_send_prompt`
-                    // forever holding the reply sender (M5).
+                    // Story 1.9 NFR7: race the turn against (a) completion,
+                    // (b) a cancel signal bounded by CANCEL_GRACE (M5), AND
+                    // (c) a bounded turn timeout (a wedged agent that neither
+                    // replies nor crashes must not park `send_prompt`'s
+                    // oneshot forever). On timeout, signal cancel + await the
+                    // CANCEL_GRACE race, then fail with a typed timeout error
+                    // → the `send_prompt` reply surfaces it; `acp-store` sets
+                    // `status: 'error'`.
+                    let turn_deadline = turn_timeout();
                     let outcome: Result<StopReason, String> = tokio::select! {
                         result = &mut prompt => {
                             result.map(|r| r.stop_reason).map_err(|e| e.to_string())
@@ -1459,6 +1496,21 @@ async fn run_command_loop(
                                     result.map(|r| r.stop_reason).map_err(|e| e.to_string())
                                 }
                                 Err(_) => Ok(StopReason::Cancelled),
+                            }
+                        }
+                        _ = tokio::time::sleep(turn_deadline) => {
+                            // Turn timed out — signal cancel (so the agent's
+                            // in-flight session/prompt is cancelled too) + give
+                            // it CANCEL_GRACE to wind down, then fail.
+                            turn_state.lock().signal_cancel(&session_id.0);
+                            match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                                Ok(result) => {
+                                    result.map(|r| r.stop_reason).map_err(|e| e.to_string())
+                                }
+                                Err(_) => Err(format!(
+                                    "turn timeout: session {} exceeded {:?}",
+                                    session_id.0, turn_deadline
+                                )),
                             }
                         }
                     };
