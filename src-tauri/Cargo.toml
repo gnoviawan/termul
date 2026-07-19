@@ -4,11 +4,26 @@ version = "0.4.8"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
-rust-version = "1.77"
+# ACP 0.12.1 (vendored) is edition 2024 and requires Rust ≥ 1.85; bump MSRV to match.
+rust-version = "1.85"
 
 [lib]
 name = "termul_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
+# build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
+# discovers — see tauri#15325). Build with:
+#   cargo build --bin termul-server --features standalone-server
+[[bin]]
+name = "termul-server"
+path = "src/bin/termul_server.rs"
+required-features = ["standalone-server"]
+
+[features]
+default = []
+# Enables the termul-server binary + rust-embed (full embedding lands in Story 1.11).
+standalone-server = ["dep:rust-embed"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -93,6 +108,10 @@ getrandom = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
+
+# Embed web static bundle into termul-server (Story 1.11 owns full wiring;
+# Story 1.2 only adds the dep behind the standalone-server feature).
+rust-embed = { version = "8.12", optional = true }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }

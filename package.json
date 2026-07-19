@@ -49,6 +49,8 @@
     "tauri": "tauri",
     "prepare": "husky",
     "build:frontend:tauri": "vite build --config vite.config.tauri.ts",
+    "build:web": "vite build --config vite.config.web.ts",
+    "dev:web": "vite --config vite.config.web.ts",
     "landing:dev": "bun run --cwd landing dev",
     "landing:build": "bun run --cwd landing build",
     "landing:lint": "bun run --cwd landing lint",

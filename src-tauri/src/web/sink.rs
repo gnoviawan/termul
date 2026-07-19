@@ -97,16 +97,12 @@ impl EventSink for TauriEventSink {
 /// the standalone `termul-server` binary (Story 1.2) can pass `[WsRelaySink]`
 /// (or a live variant of it) to `AcpManager::new`.
 ///
-/// `dead_code` is allowed because no production code path constructs this yet
-/// — it is only exercised by `web::sink::tests` in this story. Story 1.4 wires
-/// it into a live WS relay (and into `AcpManager`'s sink list for the headless
-/// binary), at which point the `allow` can be removed.
-#[allow(dead_code)]
+/// Constructed by the standalone `termul-server` binary (Story 1.2). Story 1.4
+/// replaces the in-memory recorder with a live WS relay.
 pub struct WsRelaySink {
     recorded: Mutex<Vec<AcpEvent>>,
 }
 
-#[allow(dead_code)]
 impl WsRelaySink {
     /// Create an empty recorder.
     #[must_use]

@@ -9,6 +9,7 @@ node_modules/
 dist/
 dist-ssr/
 dist-tauri/
+dist-web/
 out/
 *.tsbuildinfo
 

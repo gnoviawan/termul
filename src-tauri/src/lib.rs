@@ -15,7 +15,7 @@ mod shell_paths;
 mod skills;
 mod ssh;
 mod trackers;
-mod web;
+pub mod web;
 mod worktree;
 
 #[cfg(target_os = "windows")]
