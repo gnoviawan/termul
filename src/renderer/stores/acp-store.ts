@@ -8,6 +8,18 @@
  * P1 scope: text conversations. `toolCalls`, `plans`, `commands`,
  * `pendingPermissions`, and config/mode state are tracked here; tool, plan,
  * permission, and slash-command UI render them when present.
+ *
+ * ## Architecture D6 reconciliation (Story 1.5)
+ *
+ * Architecture asked for "`acp-store`: single-session per tab" **without** a
+ * store refactor. This store remains intentionally **global multi-session**
+ * (`sessions: Record<SessionId, …>` + `activeSessionId`). D6's "one focused
+ * session per browser tab" is honored by the external tab↔session mapping in
+ * `@/lib/web-tab-session` (sessionStorage per tab), not by reshaping Zustand
+ * to a single-session store.
+ *
+ * `activeSessionId` is an in-process UI convenience (especially desktop /
+ * prepared-chat reaping) and is **not** a cross-tab isolation boundary.
  */
 
 import { toast } from 'sonner'

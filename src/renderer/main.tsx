@@ -4,77 +4,67 @@
  *
  * This is the generic renderer entry point for Termul Manager.
  * The desktop runtime is Tauri-first, while this file remains useful for
- * browser-based development, preview, and test harnesses.
+ * browser-based development, preview, the web client (`build:web`), and tests.
  *
  * Bootstrap Strategy:
  * ------------------
- * 1. Tauri Runtime (Primary): Uses TauriApp component with Tauri-specific hooks
- *    - Entry via: tauri-index.html -> tauri-main.tsx -> TauriApp
- *    - Includes: Window state management, Tauri IPC APIs
+ * 1. Tauri Runtime (Primary): Dynamic-imports TauriApp only when
+ *    `isTauriContext()` is true, so the web entry path never evaluates the
+ *    TauriApp module (and its `@tauri-apps/api/window` edge).
+ *    - Desktop production entry remains: tauri-index.html -> tauri-main.tsx
+ *      (static TauriApp import — unchanged).
  *
- * 2. Browser/Development Runtime: Uses App component with browser-compatible hooks
- *    - Entry via: index.html -> main.tsx -> App
- *    - Includes: Alt-key prevention and non-native fallbacks needed for local preview
+ * 2. Browser / web client: Renders App synchronously when not in Tauri.
+ *    Real `@tauri-apps/*` packages are aliased to stubs in `vite.config.web.ts`
+ *    so the App import graph does not ship native IPC code in `dist-web/`.
  *
  * Context Detection:
  * -----------------
- * The `isTauriContext()` guard checks for window.__TAURI_INTERNALS__ which
- * Tauri injects before any page script runs. This is the definitive signal
- * that we're in a Tauri WebView context.
+ * Uses canonical `isTauriContext()` from `@/lib/tauri-runtime` (detects
+ * `window.__TAURI_INTERNALS__`). Do not duplicate the detector here.
  *
  * NO SILENT FALLBACKS:
  * -------------------
  * - Tauri APIs are protected by explicit isTauriContext() guards
  * - Each runtime path is deliberately chosen, not accidentally discovered
- *
- * Current State:
- * --------------
- * - TauriApp is the canonical desktop implementation
- * - App is the browser/dev fallback used outside the Tauri runtime
- * - New desktop-native behavior should be added to TauriApp first
  */
 
 import { createRoot } from 'react-dom/client'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import App from './App'
 import { preloadCommonLanguages } from './hooks/use-codemirror'
 import { installGlobalErrorForwarding } from './lib/log-api'
-import TauriApp from './TauriApp'
 import './index.css'
 // Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
 // used by AgentProse's `animated` word-by-word reveal.
 import 'streamdown/styles.css'
 
 /**
- * Detect if running in Tauri context
- * Tauri injects __TAURI_INTERNALS__ before any page script runs
- */
-function isTauriContext(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
-  )
-}
-
-/**
  * Bootstrap the appropriate app component based on runtime context
  *
- * - Tauri context: Use TauriApp with window state management
- * - Browser/dev context: Use App with browser-safe hooks
+ * - Tauri context: dynamic-import TauriApp (desktop shell + window APIs)
+ * - Browser/web context: render App without ever loading TauriApp
  */
-const isTauri = isTauriContext()
-
-// Forward uncaught renderer errors + unhandled rejections to the backend log
-// file so production crashes are diagnosable (issue #244). Tauri-only: the
-// browser/dev fallback has no backend command to call.
-if (isTauri) {
-  installGlobalErrorForwarding()
-}
+const root = createRoot(document.getElementById('root')!)
 
 // Prime CodeMirror language caches (js/ts/json) so the first open of these
 // common file types doesn't pay the dynamic-import latency. Fire-and-forget;
-// runs in parallel with React bootstrap (issue #378).
+// runs in parallel with React bootstrap (issue #378). Does not pull Tauri.
 preloadCommonLanguages()
 
-const AppComponent = isTauri ? TauriApp : App
-
-createRoot(document.getElementById('root')!).render(<AppComponent />)
+if (isTauriContext()) {
+  // Forward uncaught renderer errors + unhandled rejections to the backend log
+  // file so production crashes are diagnosable (issue #244). Tauri-only: the
+  // browser/web path has no backend command to call.
+  installGlobalErrorForwarding()
+  void import('./TauriApp')
+    .then(({ default: TauriApp }) => {
+      root.render(<TauriApp />)
+    })
+    .catch((err) => {
+      console.error('Failed to load TauriApp; falling back to App', err)
+      root.render(<App />)
+    })
+} else {
+  root.render(<App />)
+}
