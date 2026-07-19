@@ -231,7 +231,7 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 }
                 other => format!("{other:?}"),
             };
-            log::info!(
+            log::debug!(
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
                 session_id.0
             );

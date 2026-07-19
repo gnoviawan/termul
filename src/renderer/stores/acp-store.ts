@@ -574,6 +574,28 @@ function dropRecordKey<T>(
   return next
 }
 
+/**
+ * Free per-session transcript maps held in the WebView heap.
+ * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
+ * Call only after any needed `persistSession` so the last mirror is flushed.
+ */
+function dropSessionTranscriptState(
+  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'>,
+  sessionId: SessionId
+): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'> {
+  return {
+    messages: dropRecordKey(state.messages, sessionId),
+    toolCalls: dropRecordKey(state.toolCalls, sessionId),
+    commands: dropRecordKey(state.commands, sessionId),
+    sessionUsage: dropRecordKey(state.sessionUsage, sessionId)
+  }
+}
+
+/** True when live (or mid-replay) session updates may mutate transcript maps. */
+function acceptsSessionTranscriptEvents(session: AcpSession | undefined): session is AcpSession {
+  return Boolean(session && (session.status !== 'closed' || session.replaying))
+}
+
 /** Move a failed optimistic send into the queue when the backend is still busy. */
 function recoverPromptToQueue(
   set: TurnEndSetter,
@@ -742,6 +764,9 @@ function persistSession(
   // title update streamed as part of the replay) would truncate the on-disk
   // history if the app quits before the next full persist.
   if (session.replaying) return
+  // After WebView transcript eviction the map key is absent. Never rewrite
+  // disk with `[]` from a second close / late prompt-complete / title event.
+  if (!(sessionId in state.messages)) return
   // `streaming` is transient UI state; persisting it would restore a message
   // stuck in its shimmer state after a restart.
   const messages = (state.messages[sessionId] ?? []).map((m) =>
@@ -1492,6 +1517,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
     })
+    // Flush closed status + last transcript to disk while maps still hold it,
+    // then drop in-memory maps so WebView2 can reclaim heap. Ephemeral (warm
+    // pool) sessions are never mirrored.
+    if (!ephemeralSessionIds.has(sessionId) && get().sessions[sessionId]) {
+      persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    set((s) => dropSessionTranscriptState(s, sessionId))
   },
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
@@ -1823,7 +1855,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           replaying: null
         }
       }
-      return { sessionIndex: next, sessions }
+      return {
+        sessionIndex: next,
+        sessions,
+        ...dropSessionTranscriptState(s, id)
+      }
     })
     // Reclaim any app-owned temp files staged for this session.
     void deleteSessionTempFiles(id)
@@ -2288,6 +2324,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCall: (e) =>
     set((s) => {
+      // Same guard as message chunks: never grow maps for unknown/closed sessions.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
       const stamped: ToolCall = {
@@ -2305,6 +2343,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCallUpdate: (e) =>
     set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
@@ -2320,11 +2359,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (entries.length === 0) {
         return { plans: dropPlanForSession(s.plans, e.sessionId) }
       }
+      // Do not re-grow plan cache for closed/unknown sessions after eviction.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       return { plans: { ...s.plans, [e.sessionId]: entries } }
     }),
 
   _onCommandsUpdate: (e) =>
-    set((s) => ({ commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } })),
+    set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      return { commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } }
+    }),
 
   _onModeUpdate: (e) =>
     set((s) => {
@@ -2383,7 +2427,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return
     }
     set((s) => {
-      if (!s.sessions[e.sessionId]) return {}
+      // Closed shells remain in `sessions` after eviction — still reject usage.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const prev = s.sessionUsage[e.sessionId]
       const baselineUsed = prev?.baselineUsed ?? e.used
       const next: SessionUsage = {
@@ -2501,6 +2546,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
+    const dropTranscriptIds: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       const sessions = { ...s.sessions }
@@ -2512,6 +2558,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             // Chat" survives in the history index on agent disconnect.
             delete sessions[id]
             ephemeralSessionIds.delete(id)
+            dropTranscriptIds.push(id)
           } else {
             sessions[id] = {
               ...sessions[id],
@@ -2521,6 +2568,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               replaying: null
             }
             affected.push(id)
+            dropTranscriptIds.push(id)
           }
         }
       }
@@ -2547,10 +2595,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         preparedSessions
       }
     })
-    // Persist the closed status for each session the disconnect affected, so the
-    // history index reflects it across restarts (mirrors _onSessionClosed).
+    // Persist closed status + transcript while maps still hold content, then
+    // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
       persistSession(get(), id, (entries) => set({ sessionIndex: entries }))
+    }
+    if (dropTranscriptIds.length > 0) {
+      set((s) => {
+        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'> = s
+        for (const id of dropTranscriptIds) {
+          next = dropSessionTranscriptState(next, id)
+        }
+        return next
+      })
     }
   },
 
@@ -2575,7 +2632,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           sessions,
           preparedSessions,
           pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
-          plans: dropPlanForSession(s.plans, e.sessionId)
+          plans: dropPlanForSession(s.plans, e.sessionId),
+          ...dropSessionTranscriptState(s, e.sessionId)
         }
       })
       return
@@ -2583,7 +2641,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-      if (!session) return { pendingPermissions, plans: dropPlanForSession(s.plans, e.sessionId) }
+      if (!session) {
+        return {
+          pendingPermissions,
+          plans: dropPlanForSession(s.plans, e.sessionId),
+          ...dropSessionTranscriptState(s, e.sessionId)
+        }
+      }
       return {
         pendingPermissions,
         plans: dropPlanForSession(s.plans, e.sessionId),
@@ -2599,9 +2663,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    // Persist while transcript maps still hold content, then free WebView heap.
     if (get().sessions[e.sessionId]) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
+    set((s) => dropSessionTranscriptState(s, e.sessionId))
   }
 }))
 

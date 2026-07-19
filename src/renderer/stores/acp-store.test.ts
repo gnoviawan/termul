@@ -1803,11 +1803,9 @@ describe('acp-store', () => {
     expect(session.status).toBe('closed')
     expect(session.lastError).toBeNull()
     expect(session.replaying).toBeNull()
-    // Partial replay must not be overwritten by the failure restore path.
-    const messages = useAcpStore.getState().messages['s-del-fail']
-    expect(
-      messages.some((m) => m.blocks.some((b) => b.type === 'text' && b.text === 'partial replay'))
-    ).toBe(true)
+    // Delete frees transcript maps; the failure path must not resurrect them
+    // or leave a partial mid-load replay resident in the WebView heap.
+    expect(useAcpStore.getState().messages['s-del-fail']).toBeUndefined()
     vi.mocked(invoke).mockReset()
   })
 
@@ -2807,6 +2805,7 @@ describe('ACP agent plan store', () => {
   })
 
   it('_onPlanUpdate replaces entries and empty update clears plan', () => {
+    seedSession('sess-1', 'agent-1', false)
     useAcpStore.getState()._onPlanUpdate({
       agentId: 'agent-1',
       sessionId: 'sess-1',
@@ -2845,6 +2844,171 @@ describe('ACP agent plan store', () => {
     })
     useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-1' })
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+})
+
+describe('acp-store transcript eviction (WebView memory)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAcpStore.setState(FRESH)
+  })
+
+  function seedTranscript(sessionId: string): void {
+    seedSession(sessionId, 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        [sessionId]: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello' }],
+            streaming: false,
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        [sessionId]: [{ toolCallId: 'tc-1', title: 'read', status: 'completed', seq: 1 }]
+      },
+      commands: { [sessionId]: [{ name: 'help', description: 'help' }] },
+      sessionUsage: {
+        [sessionId]: {
+          used: 10,
+          size: 100,
+          baselineUsed: 0,
+          updatedAt: 1,
+          source: 'reported'
+        }
+      }
+    })
+  }
+
+  it('closeSession drops messages/toolCalls/commands/sessionUsage', async () => {
+    seedTranscript('sess-mem')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-mem')
+    const st = useAcpStore.getState()
+    expect(st.sessions['sess-mem']?.status).toBe('closed')
+    expect(st.messages['sess-mem']).toBeUndefined()
+    expect(st.toolCalls['sess-mem']).toBeUndefined()
+    expect(st.commands['sess-mem']).toBeUndefined()
+    expect(st.sessionUsage['sess-mem']).toBeUndefined()
+  })
+
+  it('deleteHistorySession drops in-memory transcript maps', async () => {
+    seedTranscript('sess-del')
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 'sess-del',
+          agentId: 'agent-1',
+          title: 'T',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+    await useAcpStore.getState().deleteHistorySession('sess-del')
+    const st = useAcpStore.getState()
+    expect(st.messages['sess-del']).toBeUndefined()
+    expect(st.toolCalls['sess-del']).toBeUndefined()
+    expect(st.commands['sess-del']).toBeUndefined()
+    expect(st.sessionUsage['sess-del']).toBeUndefined()
+  })
+
+  it('_onSessionClosed drops transcript maps after persist', () => {
+    seedTranscript('sess-closed')
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-closed' })
+    const st = useAcpStore.getState()
+    expect(st.sessions['sess-closed']?.status).toBe('closed')
+    expect(st.messages['sess-closed']).toBeUndefined()
+    expect(st.toolCalls['sess-closed']).toBeUndefined()
+  })
+
+  it('late _onToolCall for closed session does not recreate toolCalls', async () => {
+    seedTranscript('sess-late')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-late')
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: 'sess-late',
+      toolCall: { toolCallId: 'late-1', title: 'write', status: 'pending' }
+    })
+    expect(useAcpStore.getState().toolCalls['sess-late']).toBeUndefined()
+  })
+
+  it('late commands/usage/plan updates do not recreate maps after close', async () => {
+    seedTranscript('sess-late-maps')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-late-maps')
+    useAcpStore.getState()._onCommandsUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      availableCommands: [{ name: 'x' }]
+    })
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      used: 50,
+      size: 100
+    })
+    useAcpStore.getState()._onPlanUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      plan: { entries: [{ content: 'step', status: 'pending' }] }
+    })
+    const st = useAcpStore.getState()
+    expect(st.commands['sess-late-maps']).toBeUndefined()
+    expect(st.sessionUsage['sess-late-maps']).toBeUndefined()
+    expect(st.plans['sess-late-maps']).toBeUndefined()
+  })
+
+  it('second close after eviction does not persist empty messages', async () => {
+    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    seedTranscript('sess-twice')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-twice')
+    vi.mocked(saveSessionPayload).mockClear()
+    await useAcpStore.getState().closeSession('sess-twice')
+    expect(saveSessionPayload).not.toHaveBeenCalled()
+  })
+
+  it('openHistorySession reloads messages after prior close eviction', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    seedTranscript('sess-reopen')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-reopen')
+    expect(useAcpStore.getState().messages['sess-reopen']).toBeUndefined()
+
+    vi.mocked(loadSessionPayload).mockResolvedValueOnce({
+      metadata: {
+        id: 'sess-reopen',
+        agentId: 'agent-1',
+        title: 'Reopen',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-disk',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'from disk' }],
+          streaming: false,
+          timestamp: 1
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('sess-reopen')
+    expect(useAcpStore.getState().messages['sess-reopen']?.[0]?.id).toBe('m-disk')
   })
 })
 
