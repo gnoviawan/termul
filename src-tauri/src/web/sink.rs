@@ -36,6 +36,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
@@ -138,6 +139,17 @@ pub struct WsRelaySink {
     event_log_capacity: usize,
     /// Per-client lossy ring capacity (drop-oldest threshold, AC5).
     lossy_capacity: usize,
+    /// Server-side permission rendezvous (Story 1.7). `None` on the desktop
+    /// path (the browser-less flow uses the `acp_respond_permission` Tauri
+    /// command directly). When set, `emit` snapshots `acp:permission_request`
+    /// events into a relay-side ticket table that enforces the rendezvous
+    /// policy (timeout, at-most-one, first-wins, disconnect-deny, TOCTOU).
+    rendezvous: Mutex<Option<Arc<crate::web::permissions::PermissionRendezvous>>>,
+    /// Server-side turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing).
+    /// Always present (cheap to construct; no external handle). 1.8's
+    /// `prompt_complete` / `send_prompt` handlers read this via
+    /// [`Self::turn_watermark`] to dedup agent turns by client turn-id.
+    turn_watermark: crate::web::permissions::TurnWatermark,
 }
 
 /// Per-session seq + append-only bounded ring (held under [`WsRelaySink::sessions`]).
@@ -211,6 +223,8 @@ impl WsRelaySink {
             session_subs: Mutex::new(HashMap::new()),
             event_log_capacity: event_log_capacity.max(1),
             lossy_capacity: lossy_capacity.max(1),
+            rendezvous: Mutex::new(None),
+            turn_watermark: crate::web::permissions::TurnWatermark::new(),
         }
     }
 
@@ -226,6 +240,43 @@ impl WsRelaySink {
     #[must_use]
     pub fn event_log_capacity(&self) -> usize {
         self.event_log_capacity
+    }
+
+    /// Attach the server-side permission rendezvous (Story 1.7). Server-only;
+    /// the desktop path leaves this unset (the browser-less flow uses the
+    /// `acp_respond_permission` Tauri command directly). Once attached, `emit`
+    /// snapshots `acp:permission_request` events into the rendezvous so the
+    /// `/ws` `respond_permission` handler + disconnect cleanup can enforce the
+    /// rendezvous policy.
+    pub fn set_rendezvous(&self, rendezvous: Arc<crate::web::permissions::PermissionRendezvous>) {
+        *self.rendezvous.lock() = Some(rendezvous);
+    }
+
+    /// The attached rendezvous, if any (server path). Used by the `/ws`
+    /// `respond_permission` handler + disconnect deny-all cleanup.
+    #[must_use]
+    pub fn rendezvous(&self) -> Option<Arc<crate::web::permissions::PermissionRendezvous>> {
+        self.rendezvous.lock().clone()
+    }
+
+    /// Number of clients currently subscribed to `session_id` (Story 1.7
+    /// disconnect-deny: a pending permission is denied only when the
+    /// disconnecting client was the LAST subscriber on its session — otherwise a
+    /// remaining client can still legitimately respond).
+    #[must_use]
+    pub fn session_subscriber_count(&self, session_id: &str) -> usize {
+        self.session_subs
+            .lock()
+            .get(session_id)
+            .map_or(0, HashSet::len)
+    }
+
+    /// The server-side turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing).
+    /// 1.8's `prompt_complete` / `send_prompt` handlers call this to dedup agent
+    /// turns by client turn-id (the wire-level `turnId` field lands in 1.8).
+    #[must_use]
+    pub fn turn_watermark(&self) -> &crate::web::permissions::TurnWatermark {
+        &self.turn_watermark
     }
 
     /// Assign seq + append under the sessions lock (atomic w.r.t. concurrent emits).
@@ -518,6 +569,49 @@ impl EventSink for WsRelaySink {
                 let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
                 for client_id in targets {
                     self.enqueue(client_id, se.clone(), tier);
+                }
+            }
+        }
+
+        // Story 1.7: snapshot `permission_request` events into the server-side
+        // rendezvous (if attached). The ticket holds the immutable args (the
+        // `options` array) for TOCTOU re-validation + arms the bounded timeout.
+        // Runs only on the server path (desktop leaves the rendezvous unset).
+        if type_ == "permission_request" {
+            if let Some(rdz) = self.rendezvous() {
+                // Extract the correlation fields from the camelCase payload.
+                // The `PermissionRequestEvent` payload is `{agentId, sessionId,
+                // requestId, toolCall, options}` (events.rs → camelCase wire).
+                let payload = &event.payload;
+                let request_id = payload
+                    .get("requestId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                // Defensive: a malformed event (no `requestId`) would collide
+                // all such tickets on the empty-string key — skip + warn instead
+                // of registering a degenerate ticket. The `PermissionRequestEvent`
+                // struct always carries a non-empty `request_id` (generated by
+                // `DriverState::register_permission` as `perm-{uuid}`), so this
+                // branch only triggers on a dispatcher bug.
+                if request_id.is_empty() {
+                    warn!(
+                        "[permissions] dropping permission_request with no requestId (dispatcher bug?)"
+                    );
+                } else {
+                    let agent_id = payload
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .map(|s| crate::acp::AgentId(s.to_string()))
+                        .unwrap_or_else(|| crate::acp::AgentId("unknown".to_string()));
+                    let session_id = payload
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let options =
+                        payload.get("options").cloned().unwrap_or(Value::Array(vec![]));
+                    rdz.register(request_id, agent_id, session_id, options);
                 }
             }
         }

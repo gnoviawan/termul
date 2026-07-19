@@ -24,6 +24,8 @@ class FakeWebSocket {
   onclose: ((ev: CloseEvent) => void) | null = null
   sent: string[] = []
   authFail = false
+  /** When set, `respond_permission` replies with this err (default: not_implemented). */
+  respondPermissionErr: { code: string; message: string } | null = null
 
   constructor(public url: string) {
     queueMicrotask(() => {
@@ -68,6 +70,13 @@ class FakeWebSocket {
     }
     if (req.type === 'send_prompt') {
       this.emitReply({ id: req.id, ok: true, payload: 'end_turn' })
+      return
+    }
+    if (req.type === 'respond_permission') {
+      // Story 1.7 T8.3: by default reject as not_implemented; tests set
+      // `respondPermissionErr` to exercise the stale/duplicate → AcpTransportError mapping.
+      const err = this.respondPermissionErr ?? { code: 'not_implemented', message: 'stub' }
+      this.emitReply({ id: req.id, ok: false, err })
       return
     }
     this.emitReply({
@@ -313,6 +322,26 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     await expect(transport.setMode('a1', 's1', 'm')).rejects.toBeInstanceOf(AcpTransportError)
     transport.dispose()
+  })
+
+  it('maps respond_permission stale/duplicate replies to AcpTransportError.code (Story 1.7 T8.3)', async () => {
+    for (const code of ['stale', 'duplicate', 'permission_denied'] as const) {
+      const transport = new WsAcpTransport({
+        url: 'ws://test/ws',
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+      })
+      await transport.connect()
+      const live = (transport as unknown as { socket: FakeWebSocket }).socket
+      live.respondPermissionErr = { code, message: `${code} from rendezvous` }
+      await expect(transport.respondPermission('a1', 'perm-1', 'allow')).rejects.toMatchObject({
+        code,
+        message: expect.any(String)
+      })
+      await expect(transport.respondPermission('a1', 'perm-1', 'allow')).rejects.toBeInstanceOf(
+        AcpTransportError
+      )
+      transport.dispose()
+    }
   })
 
   it('_setAcpTransportForTests disposes the previous singleton', () => {

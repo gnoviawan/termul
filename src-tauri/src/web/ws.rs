@@ -237,6 +237,24 @@ pub fn is_human_relayed_cap(cap: &str) -> bool {
     HUMAN_RELAYED_CAPS.iter().copied().any(|entry| entry == cap)
 }
 
+/// Map an `AcpManager` prompt error to a stable WS `err.code` (Story 1.7 T7.1).
+///
+/// `AcpManager::send_prompt` (via `DriverState::try_begin_turn`) rejects a
+/// concurrent prompt on the same session with the string
+/// `"ACP_TURN_IN_PROGRESS: session {id}"`. The renderer keys on that stable
+/// code (`ACP_TURN_IN_PROGRESS_CODE`). For the WS path (Story 1.8's
+/// `send_prompt`), this maps it to [`WsErrorCode::RateLimited`] (the closest
+/// stable `err.code` for "try again shortly" — the architecture's set has no
+/// dedicated turn-busy code). Returns `None` for any other error string.
+#[must_use]
+pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
+    if err.starts_with("ACP_TURN_IN_PROGRESS") {
+        Some(WsErrorCode::RateLimited)
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Router state (AC1 + AC7)
 // ---------------------------------------------------------------------------
@@ -363,6 +381,17 @@ async fn run_relay(socket: WebSocket, state: AppState) {
         for (sid, cid) in subscribed_clients.drain(..) {
             relay.unsubscribe(&sid, cid);
         }
+        // Story 1.7: on browser disconnect, resolve every outstanding
+        // permission whose session now has zero remaining subscribers as deny
+        // (FR14: disconnect → deny). A ticket is denied only when the
+        // disconnecting client was the LAST subscriber — otherwise a remaining
+        // client can still legitimately respond. `relay.session_subscriber_count`
+        // reports the post-unsubscribe count.
+        if let Some(rdz) = relay.rendezvous() {
+            let relay_for_count = Arc::clone(&relay);
+            rdz.deny_all_for_client(move |sid| relay_for_count.session_subscriber_count(sid))
+                .await;
+        }
     });
 
     // Drop the original sender so the write loop ends when the read task
@@ -438,6 +467,11 @@ async fn handle_request(
             WsReply::ok(id, Some(json!({})))
         }
         "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients),
+        // Story 1.7: `respond_permission` — route the browser's permission
+        // decision through the server-side rendezvous (first-response-wins,
+        // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
+        // which resolves the agent's `Responder` on the driver thread.
+        "respond_permission" => handle_respond_permission(id, &req.payload, relay, subscribed_clients).await,
         // OS caps (AC8): server-fulfilled; reject browser requests.
         t if is_os_fulfilled_cap(t) => WsReply::err(
             id,
@@ -446,12 +480,12 @@ async fn handle_request(
                 "`{t}` is an OS-fulfilled cap; the server handles it locally (not relayed to the browser)"
             ),
         ),
-        // Remaining ACP request types: stub not_implemented (1.7/1.8/Epic 4).
+        // Remaining ACP request types: stub not_implemented (1.8/Epic 4).
         _ => WsReply::err(
             id,
             WsErrorCode::NotImplemented,
             format!(
-                "`{}` is not implemented yet (ACP forwarding lands in Stories 1.7/1.8/Epic 4)",
+                "`{}` is not implemented yet (ACP forwarding lands in Stories 1.8/Epic 4)",
                 req.type_
             ),
         ),
@@ -518,6 +552,127 @@ fn handle_subscribe(
     }
 }
 
+/// CamelCase `respond_permission` payload (Story 1.7) — mirrors the client
+/// `acp-transport.ts: respondPermission(agentId, requestId, optionId?)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RespondPermissionPayload {
+    agent_id: crate::acp::AgentId,
+    request_id: String,
+    /// `None` / omitted → cancel/deny (`RequestPermissionOutcome::Cancelled`).
+    #[serde(default)]
+    option_id: Option<String>,
+}
+
+/// Wire `respond_permission` → [`crate::web::permissions::PermissionRendezvous`]
+/// (first-response-wins, TOCTOU re-validation, at-most-one) →
+/// `AcpManager::respond_permission` (resolves the agent `Responder` on the
+/// driver thread). Maps the rendezvous outcome/error to a stable `err.code`.
+///
+/// Requires a server-side rendezvous attached to the relay (`relay.rendezvous()`).
+/// On the desktop path (no rendezvous) the browser never reaches this handler
+/// — the desktop uses the `acp_respond_permission` Tauri command directly.
+async fn handle_respond_permission(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    subscribed_clients: &[(String, ClientId)],
+) -> WsReply {
+    let Some(rdz) = relay.rendezvous() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::NotImplemented,
+            "permission rendezvous is not attached (desktop path uses the Tauri command)",
+        );
+    };
+
+    let parsed: RespondPermissionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed respond_permission payload (want agentId, requestId, optionId?): {e}"),
+            );
+        }
+    };
+    if parsed.request_id.is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "requestId is required");
+    }
+
+    // Defense in depth: the payload's `agentId` must match the ticket's agent
+    // (a client cannot resolve another agent's permission).
+    let Some(ticket_agent) = rdz.agent_for_request(&parsed.request_id) else {
+        return WsReply::err(id, WsErrorCode::Stale, "no outstanding permission for this requestId");
+    };
+    if ticket_agent != parsed.agent_id {
+        return WsReply::err(
+            id,
+            WsErrorCode::PermissionDenied,
+            "agentId does not match the permission's agent",
+        );
+    }
+
+    // Resolve the calling connection's `ClientId` for this permission's session
+    // (a connection may be subscribed to several sessions; the permission belongs
+    // to one). Ownership check: the connection MUST be subscribed to the
+    // permission's session (NFR5 — no cross-session permission resolution).
+    let Some(session_id) = rdz.session_for_request(&parsed.request_id) else {
+        return WsReply::err(id, WsErrorCode::Stale, "no outstanding permission for this requestId");
+    };
+    let Some((_, client_id)) = subscribed_clients
+        .iter()
+        .find(|(sid, _)| *sid == session_id)
+    else {
+        return WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            "this connection is not subscribed to the permission's session",
+        );
+    };
+    let client_id = *client_id;
+
+    let option_id = parsed.option_id.as_deref();
+    match rdz.try_respond(client_id, &parsed.request_id, option_id).await {
+        Ok(crate::web::permissions::RespondOutcome::Resolved) => {
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(err) => {
+            // Map each rendezvous rejection to its stable `err.code` (mirrors
+            // `RespondError::wire_code`, but goes through `WsErrorCode` so the
+            // enum + TS const stay the single source of truth).
+            let (code, msg) = match err {
+                crate::web::permissions::RespondError::NotFound => {
+                    (WsErrorCode::Stale, "no outstanding permission for this requestId")
+                }
+                crate::web::permissions::RespondError::AlreadyResolved => (
+                    WsErrorCode::Stale,
+                    "this permission was already resolved by another client (first-response-wins)",
+                ),
+                crate::web::permissions::RespondError::Duplicate => {
+                    (WsErrorCode::Duplicate, "this client already responded to this permission")
+                }
+                crate::web::permissions::RespondError::InvalidOption => (
+                    WsErrorCode::PermissionDenied,
+                    "optionId is not among the original permission options (TOCTOU defense)",
+                ),
+                crate::web::permissions::RespondError::NotSubscribed => {
+                    (WsErrorCode::NotFound, "not subscribed to the permission's session")
+                }
+            };
+            WsReply::err(id, code, msg)
+        }
+        // `RespondOutcome` has only `Resolved` after the enum consolidation; the
+        // other arms are unreachable. Keep a fallthrough for future variants.
+        #[allow(unreachable_patterns)]
+        _ => WsReply::err(
+            id,
+            WsErrorCode::NotImplemented,
+            "unexpected permission rendezvous outcome",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -552,6 +707,23 @@ mod tests {
         assert_eq!(WsErrorCode::Duplicate.as_str(), "duplicate");
         assert_eq!(WsErrorCode::Unsupported.as_str(), "unsupported");
         assert_eq!(WsErrorCode::NotImplemented.as_str(), "not_implemented");
+    }
+
+    /// Story 1.7 T7.1: the `ACP_TURN_IN_PROGRESS` desktop error string maps to
+    /// `WsErrorCode::RateLimited` on the WS path (for Story 1.8's `send_prompt`).
+    #[test]
+    fn map_prompt_error_code_maps_turn_in_progress_to_rate_limited() {
+        assert_eq!(
+            map_prompt_error_code("ACP_TURN_IN_PROGRESS: session sess-1"),
+            Some(WsErrorCode::RateLimited)
+        );
+        assert_eq!(
+            map_prompt_error_code("ACP_TURN_IN_PROGRESS: session abc"),
+            Some(WsErrorCode::RateLimited)
+        );
+        // Other errors are not mapped (caller handles them generically).
+        assert_eq!(map_prompt_error_code("agent initialize failed"), None);
+        assert_eq!(map_prompt_error_code(""), None);
     }
 
     #[test]
@@ -664,10 +836,10 @@ mod tests {
     #[test]
     fn handle_request_post_auth_other_types_not_implemented() {
         let mut authed = true;
+        // `respond_permission` is now a live handler (Story 1.7) — excluded.
         for ty in [
             "send_prompt",
             "create_session",
-            "respond_permission",
             "switch_project",
             "list_sessions",
             "set_mode",
@@ -679,6 +851,196 @@ mod tests {
             assert!(!reply.ok, "{ty} should be not_implemented");
             assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
         }
+    }
+
+    /// Story 1.7: without a rendezvous attached (desktop path), the
+    /// `respond_permission` handler replies `not_implemented` (the desktop uses
+    /// the `acp_respond_permission` Tauri command directly). This guards the
+    /// `relay.rendezvous() == None` branch.
+    #[test]
+    fn handle_respond_permission_without_rendezvous_is_not_implemented() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-x"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_implemented");
+    }
+
+    /// Story 1.7: a malformed `respond_permission` payload is rejected with
+    /// `unsupported` (mirrors `handle_subscribe`'s malformed-payload reply).
+    #[test]
+    fn handle_respond_permission_malformed_payload_is_unsupported() {
+        // Attach a rendezvous so we reach the payload-parse branch.
+        let relay = Arc::new(WsRelaySink::new());
+        relay.set_rendezvous(Arc::new(crate::web::permissions::PermissionRendezvous::default()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let mut authed = true;
+        let reply = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(handle_request(
+                r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
+                &mut authed,
+                &relay,
+                &tx,
+                &mut subs,
+            ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// Helper: build a relay + rendezvous, subscribe a connection to a session
+    /// (populating `subscribed_clients`), and register a permission ticket via
+    /// `emit` (the production path). Returns the (relay, subs) ready for a
+    /// `handle_request` call.
+    fn relay_with_subscribed_permission(
+        agent_id: &str,
+        session_id: &str,
+        request_id: &str,
+        options: &[&str],
+    ) -> (Arc<WsRelaySink>, Vec<(String, ClientId)>) {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let relay = Arc::new(WsRelaySink::new());
+        relay.set_rendezvous(Arc::new(
+            crate::web::permissions::PermissionRendezvous::default(),
+        ));
+        // Subscribe a client to the session (populates subscribed_clients via
+        // the production subscribe path).
+        let (client_id, _rx, _replay) = relay.subscribe(session_id, None);
+        let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
+        // Emit a permission_request event through the sink (production path) so
+        // the rendezvous snapshots a ticket.
+        let options_value = serde_json::Value::Array(
+            options
+                .iter()
+                .map(|id| serde_json::json!({ "optionId": id, "name": id, "kind": "auto" }))
+                .collect(),
+        );
+        relay.emit(&AcpEvent {
+            sid: Some(session_id.to_string()),
+            type_: "acp:permission_request",
+            payload: serde_json::json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "requestId": request_id,
+                "toolCall": { "toolCallId": "tc-1" },
+                "options": options_value,
+            }),
+        });
+        (relay, subs)
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(future)
+    }
+
+    /// Story 1.7 (verification gap #1): a `respond_permission` frame whose
+    /// `agentId` differs from the ticket's agent is rejected `permission_denied`
+    /// (defense-in-depth — a client cannot resolve another agent's permission).
+    #[test]
+    fn handle_respond_permission_wrong_agent_is_permission_denied() {
+        let (relay, subs) = relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow"]);
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
+            &mut authed,
+            &relay,
+            &tx,
+            &mut subs.clone(),
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "permission_denied");
+    }
+
+    /// Story 1.7 (verification gap #2): a connection NOT subscribed to the
+    /// permission's session is rejected `not_found` (NFR5 ownership check — no
+    /// cross-session permission resolution; the code does not leak existence).
+    #[test]
+    fn handle_respond_permission_not_subscribed_is_not_found() {
+        // Register a permission on sess-A but subscribe the connection to sess-B.
+        use crate::web::sink::{AcpEvent, EventSink};
+        let relay = Arc::new(WsRelaySink::new());
+        relay.set_rendezvous(Arc::new(
+            crate::web::permissions::PermissionRendezvous::default(),
+        ));
+        let (_other_client, _rx, _replay) = relay.subscribe("sess-B", None);
+        let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
+        relay.emit(&AcpEvent {
+            sid: Some("sess-A".to_string()),
+            type_: "acp:permission_request",
+            payload: serde_json::json!({
+                "agentId": "a1", "sessionId": "sess-A", "requestId": "perm-A",
+                "toolCall": { "toolCallId": "tc-1" }, "options": [{ "optionId": "allow" }]
+            }),
+        });
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
+            &mut authed,
+            &relay,
+            &tx,
+            &mut subs.clone(),
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Story 1.7 (verification gap #4 + happy path): a valid `respond_permission`
+    /// from a subscribed connection resolves the ticket (ok); a second frame for
+    /// the same requestId is rejected `stale` (handler-level first-response-wins,
+    /// exercising the handler's `subscribed_clients` ClientId resolution).
+    #[test]
+    fn handle_respond_permission_resolves_then_second_is_stale() {
+        let (relay, subs) = relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow"]);
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let ok_reply = block_on(handle_request(
+            r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
+            &mut authed,
+            &relay,
+            &tx,
+            &mut subs.clone(),
+        ));
+        assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
+        // Second frame for the same requestId → stale (ticket evicted).
+        let stale_reply = block_on(handle_request(
+            r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
+            &mut authed,
+            &relay,
+            &tx,
+            &mut subs.clone(),
+        ));
+        assert!(!stale_reply.ok);
+        assert_eq!(stale_reply.err.unwrap().code, "stale");
+    }
+
+    /// Story 1.7 (verification gap: TOCTOU through the handler): an `optionId`
+    /// not in the original options is rejected `permission_denied` end-to-end.
+    #[test]
+    fn handle_respond_permission_invalid_option_is_permission_denied() {
+        let (relay, subs) =
+            relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow", "deny"]);
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
+            &mut authed,
+            &relay,
+            &tx,
+            &mut subs.clone(),
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "permission_denied");
     }
 
     #[test]

@@ -16,11 +16,13 @@
 
 pub mod assets;
 pub mod config;
+pub mod permissions;
 pub mod router;
 pub mod sink;
 pub mod ws;
 
 pub use config::ServerConfig;
+pub use permissions::PermissionRendezvous;
 pub use sink::{EventSink, TauriEventSink, WsRelaySink, fan_out};
 pub use ws::{AppState, ReliabilityTier, SequencedEvent, WsErrorCode};
 

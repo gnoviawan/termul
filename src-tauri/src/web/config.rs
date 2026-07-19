@@ -2,7 +2,7 @@
 //!
 //! Mirrors `remote::server::RemoteBindMode` so `--host` parsing stays consistent
 //! across the embedded PTY bridge and the headless ACP server. Auth/TLS land in
-//! Epic 2 — this story only owns host/port.
+//! Epic 2 — this story owns host/port + the permission-rendezvous timeout.
 
 use std::net::SocketAddr;
 
@@ -52,6 +52,9 @@ pub struct ServerConfig {
     pub port: u16,
     /// Per-session event-log capacity (bounded ring; AC4). Default 4096.
     pub event_log_capacity: usize,
+    /// Permission-rendezvous timeout in seconds (Story 1.7 / FR14). On expiry
+    /// the pending permission resolves as deny (`Cancelled`). Default 60.
+    pub permission_timeout_secs: u64,
 }
 
 impl ServerConfig {
@@ -79,6 +82,7 @@ impl ServerConfig {
         let mut host = "127.0.0.1".to_string();
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
+        let mut permission_timeout_secs: u64 = 60;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -128,6 +132,23 @@ impl ServerConfig {
                     }
                     event_log_capacity = parsed;
                 }
+                "--permission-timeout" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --permission-timeout".into())
+                    })?;
+                    let parsed = value.as_ref().parse::<u64>().map_err(|_| {
+                        ParseCliError::Message(format!(
+                            "invalid --permission-timeout '{}': expected a positive integer (seconds)",
+                            value.as_ref()
+                        ))
+                    })?;
+                    if parsed == 0 {
+                        return Err(ParseCliError::Message(
+                            "invalid --permission-timeout '0': use a positive integer (seconds)".into(),
+                        ));
+                    }
+                    permission_timeout_secs = parsed;
+                }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
                 }
@@ -143,6 +164,7 @@ impl ServerConfig {
             host,
             port,
             event_log_capacity,
+            permission_timeout_secs,
         })
     }
 }
@@ -194,6 +216,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8080,
             event_log_capacity: 4096,
+            permission_timeout_secs: 60,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -204,6 +227,7 @@ mod tests {
             host: "example.com".to_string(),
             port: 8080,
             event_log_capacity: 4096,
+            permission_timeout_secs: 60,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -214,6 +238,10 @@ mod tests {
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.event_log_capacity, 4096, "default event-log-capacity is 4096 (AC4)");
+        assert_eq!(
+            cfg.permission_timeout_secs, 60,
+            "default permission-timeout is 60s (Story 1.7 / FR14)"
+        );
     }
 
     #[test]
@@ -276,6 +304,40 @@ mod tests {
     fn from_args_missing_event_log_capacity_value() {
         assert!(matches!(
             ServerConfig::from_args(["--event-log-capacity"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_accepts_permission_timeout() {
+        let cfg = ServerConfig::from_args(["--permission-timeout", "30"]).expect("parse");
+        assert_eq!(cfg.permission_timeout_secs, 30);
+        // Other defaults stay intact.
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+        assert_eq!(cfg.event_log_capacity, 4096);
+    }
+
+    #[test]
+    fn from_args_rejects_permission_timeout_zero() {
+        assert!(matches!(
+            ServerConfig::from_args(["--permission-timeout", "0"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_non_numeric_permission_timeout() {
+        assert!(matches!(
+            ServerConfig::from_args(["--permission-timeout", "soon"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_missing_permission_timeout_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--permission-timeout"]),
             Err(ParseCliError::Message(_))
         ));
     }
