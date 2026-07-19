@@ -15,6 +15,7 @@ mod shell_paths;
 mod skills;
 mod ssh;
 mod trackers;
+mod web;
 mod worktree;
 
 #[cfg(target_os = "windows")]
@@ -118,6 +119,13 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 pub use acp::AcpManager;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+
+// Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
+// `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
+// (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
+// binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
+// `AppHandle` at all.
+use web::TauriEventSink;
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -984,8 +992,13 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
-            // Create ACP Manager — spawns/owns ACP agent subprocesses
-            let acp_manager = Arc::new(AcpManager::new(handle.clone()));
+            // Create ACP Manager — spawns/owns ACP agent subprocesses.
+            // Desktop mode registers a single `TauriEventSink` so the existing
+            // `acp:*` Tauri event flow is byte-for-byte unchanged (AC8). Story
+            // 1.10 will add a second `WsRelaySink` here for shared-live mode.
+            let acp_manager = Arc::new(AcpManager::new(vec![
+                Arc::new(TauriEventSink::new(handle.clone())),
+            ]));
             app.manage(acp_manager);
 
             // Create SSH Manager

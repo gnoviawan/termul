@@ -14,7 +14,16 @@ use agent_client_protocol::schema::{
     SessionMode, SessionModeId, SessionModelState, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+
+/// Re-export the transport-neutral fan-out helper so the `acp` dispatcher emits
+/// through `Vec<Arc<dyn EventSink>>` instead of `AppHandle::emit` directly
+/// (Story 1.1 / architecture D2). Call sites read `events::fan_out(sinks, sid,
+/// events::EVENT_*, &payload)` — the `events::` namespace is preserved, the
+/// `app` parameter is gone.
+///
+/// The ONLY place that still calls `AppHandle::emit` for `acp:*` events is
+/// `crate::web::TauriEventSink::emit` (the desktop's sink). See AC7.
+pub(crate) use crate::web::fan_out;
 
 /// Event name: an agent subprocess was spawned and `initialize` completed.
 pub const EVENT_AGENT_SPAWNED: &str = "acp:agent_spawned";
@@ -238,15 +247,11 @@ pub struct UsageUpdateEvent {
     pub cost: Option<UsageCostEvent>,
 }
 
-/// Emit a payload to the renderer, logging (but not propagating) any error.
-///
-/// Emission failures are non-fatal: they only mean no renderer is listening, so
-/// we must never let them tear down the agent driver thread.
-pub fn emit<P: Serialize + Clone>(app: &AppHandle, event: &str, payload: P) {
-    if let Err(e) = app.emit(event, payload) {
-        log::error!("[acp] failed to emit event {event}: {e}");
-    }
-}
+// Story 1.1 (AC7): the legacy `events::emit(app, event, payload)` free function
+// was REMOVED. All emission now goes through [`fan_out`] against the
+// dispatcher's `Vec<Arc<dyn EventSink>>`. The `AppHandle`-aware path lives
+// exclusively in `crate::web::TauriEventSink::emit` (the desktop's sink), so no
+// new `app.emit("acp:..")` call sites may be introduced outside that sink.
 
 #[cfg(test)]
 mod tests {

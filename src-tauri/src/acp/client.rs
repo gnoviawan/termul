@@ -9,13 +9,13 @@
 //! wiring in `manager.rs` so they can be unit-tested in isolation.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::{
     ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse,
     SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
-use tauri::AppHandle;
 
 use crate::acp::config::AgentId;
 use crate::acp::events::{
@@ -23,6 +23,7 @@ use crate::acp::events::{
     ModeUpdateEvent, PlanUpdateEvent, SessionInfoUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
     UsageCostEvent, UsageUpdateEvent,
 };
+use crate::web::EventSink;
 
 /// Cursor ACP extension: when present on `clientCapabilities._meta`, Cursor
 /// exposes Fast / thought-level as separate session `configOptions` instead of
@@ -200,24 +201,32 @@ pub async fn handle_write_text_file(
 }
 
 /// Translate an inbound `session/update` notification into the matching
-/// `acp:*` Tauri event and emit it.
+/// `acp:*` event and fan it out through the dispatcher's sinks.
 ///
 /// Unknown / unhandled update variants are ignored (the enum is
 /// `#[non_exhaustive]`, so a catch-all is required).
-pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: SessionNotification) {
+///
+/// Every event here is session-scoped, so `sid` is `Some(session_id)`. The
+/// payload struct is built first and then borrowed, so `session_id` moves into
+/// the struct once and the `sid` borrows from it — no extra clone, no borrow
+/// conflict (serialize-once-fan-out-N is preserved by [`events::fan_out`]).
+pub fn emit_session_update(
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    notification: SessionNotification,
+) {
     let session_id = crate::acp::config::SessionId::from(notification.session_id);
 
     match notification.update {
-        SessionUpdate::UserMessageChunk(chunk) => events::emit(
-            app,
-            events::EVENT_MESSAGE_CHUNK,
-            MessageChunkEvent {
+        SessionUpdate::UserMessageChunk(chunk) => {
+            let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::User,
                 content: chunk.content,
-            },
-        ),
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
+        }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let preview = match &chunk.content {
                 agent_client_protocol::schema::ContentBlock::Text(text) => {
@@ -235,109 +244,95 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
                 session_id.0
             );
-            events::emit(
-                app,
-                events::EVENT_MESSAGE_CHUNK,
-                MessageChunkEvent {
-                    agent_id: agent_id.clone(),
-                    session_id,
-                    role: ChunkRole::Agent,
-                    content: chunk.content,
-                },
-            )
+            let event = MessageChunkEvent {
+                agent_id: agent_id.clone(),
+                session_id,
+                role: ChunkRole::Agent,
+                content: chunk.content,
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
         }
-        SessionUpdate::AgentThoughtChunk(chunk) => events::emit(
-            app,
-            events::EVENT_MESSAGE_CHUNK,
-            MessageChunkEvent {
+        SessionUpdate::AgentThoughtChunk(chunk) => {
+            let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Thought,
                 content: chunk.content,
-            },
-        ),
-        SessionUpdate::ToolCall(tool_call) => events::emit(
-            app,
-            events::EVENT_TOOL_CALL,
-            ToolCallEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
+        }
+        SessionUpdate::ToolCall(tool_call) => {
+            let event = ToolCallEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 tool_call,
-            },
-        ),
-        SessionUpdate::ToolCallUpdate(update) => events::emit(
-            app,
-            events::EVENT_TOOL_CALL_UPDATE,
-            ToolCallUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL, &event);
+        }
+        SessionUpdate::ToolCallUpdate(update) => {
+            let event = ToolCallUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 update,
-            },
-        ),
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL_UPDATE, &event);
+        }
         SessionUpdate::Plan(plan) => {
             // ACP agent-plan: each update is a full replace; forward verbatim.
             // https://agentclientprotocol.com/protocol/v1/agent-plan
-            events::emit(
-                app,
-                events::EVENT_PLAN_UPDATE,
-                PlanUpdateEvent {
-                    agent_id: agent_id.clone(),
-                    session_id,
-                    plan,
-                },
-            )
+            let event = PlanUpdateEvent {
+                agent_id: agent_id.clone(),
+                session_id,
+                plan,
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_PLAN_UPDATE, &event);
         }
-        SessionUpdate::AvailableCommandsUpdate(update) => events::emit(
-            app,
-            events::EVENT_COMMANDS_UPDATE,
-            CommandsUpdateEvent {
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            let event = CommandsUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 available_commands: update.available_commands,
-            },
-        ),
-        SessionUpdate::CurrentModeUpdate(update) => events::emit(
-            app,
-            events::EVENT_MODE_UPDATE,
-            ModeUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_COMMANDS_UPDATE, &event);
+        }
+        SessionUpdate::CurrentModeUpdate(update) => {
+            let event = ModeUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 current_mode_id: update.current_mode_id,
                 available_modes: Vec::new(),
-            },
-        ),
-        SessionUpdate::ConfigOptionUpdate(update) => events::emit(
-            app,
-            events::EVENT_CONFIG_OPTIONS_UPDATE,
-            ConfigOptionsUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MODE_UPDATE, &event);
+        }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            let event = ConfigOptionsUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 config_options: update.config_options,
-            },
-        ),
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_CONFIG_OPTIONS_UPDATE, &event);
+        }
         SessionUpdate::SessionInfoUpdate(update) => {
             // `title` is `MaybeUndefined<String>`: Undefined = not sent (skip),
             // Null = explicitly cleared (emit None), Value = set (emit Some).
             match update.title.as_opt_ref() {
                 None => {} // Undefined — no title field sent, skip
-                Some(None) => events::emit(
-                    app,
-                    events::EVENT_SESSION_INFO_UPDATE,
-                    SessionInfoUpdateEvent {
+                Some(None) => {
+                    let event = SessionInfoUpdateEvent {
                         agent_id: agent_id.clone(),
                         session_id,
                         title: None,
-                    },
-                ),
-                Some(Some(t)) => events::emit(
-                    app,
-                    events::EVENT_SESSION_INFO_UPDATE,
-                    SessionInfoUpdateEvent {
+                    };
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
+                }
+                Some(Some(t)) => {
+                    let event = SessionInfoUpdateEvent {
                         agent_id: agent_id.clone(),
                         session_id,
                         title: Some(t.clone()),
-                    },
-                ),
+                    };
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
+                }
             }
         }
         SessionUpdate::UsageUpdate(update) => {
@@ -345,17 +340,14 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 amount: c.amount,
                 currency: c.currency,
             });
-            events::emit(
-                app,
-                events::EVENT_USAGE_UPDATE,
-                UsageUpdateEvent {
-                    agent_id: agent_id.clone(),
-                    session_id,
-                    used: update.used,
-                    size: update.size,
-                    cost,
-                },
-            );
+            let event = UsageUpdateEvent {
+                agent_id: agent_id.clone(),
+                session_id,
+                used: update.used,
+                size: update.size,
+                cost,
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_USAGE_UPDATE, &event);
         }
         // Any future (non_exhaustive) variants have no dedicated event;
         // ignore them — but log so a silently-dropped update can be diagnosed
