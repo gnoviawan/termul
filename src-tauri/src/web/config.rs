@@ -98,9 +98,15 @@ impl ServerConfig {
                     let value = iter
                         .next()
                         .ok_or_else(|| ParseCliError::Message("missing value for --port".into()))?;
-                    port = value.as_ref().parse::<u16>().map_err(|_| {
+                    let parsed = value.as_ref().parse::<u16>().map_err(|_| {
                         ParseCliError::Message(format!("invalid --port '{}'", value.as_ref()))
                     })?;
+                    if parsed == 0 {
+                        return Err(ParseCliError::Message(
+                            "invalid --port '0': use 1-65535 (0 is OS-ephemeral)".into(),
+                        ));
+                    }
+                    port = parsed;
                 }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
@@ -204,5 +210,29 @@ mod tests {
             ServerConfig::from_args(["--help"]),
             Err(ParseCliError::Help)
         );
+    }
+
+    #[test]
+    fn from_args_rejects_port_zero() {
+        assert!(matches!(
+            ServerConfig::from_args(["--port", "0"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_missing_host_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--host"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_unknown_option() {
+        assert!(matches!(
+            ServerConfig::from_args(["--bogus"]),
+            Err(ParseCliError::Message(_))
+        ));
     }
 }

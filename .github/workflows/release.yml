@@ -279,6 +279,9 @@ jobs:
       - name: Build web client (dist-web/)
         run: bun run build:web
 
+      - name: Assert dist-web/index.html exists
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
       - name: Build termul-server (linux-x64 release)
         working-directory: src-tauri
         run: >
@@ -286,12 +289,20 @@ jobs:
           --features standalone-server
           --target x86_64-unknown-linux-gnu
 
-      - name: Upload termul-server artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload termul-server workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: termul-server-x86_64-unknown-linux-gnu
           path: src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
           if-no-files-found: error
+
+      - name: Attach termul-server to draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release upload "${{ github.ref_name }}"
+          src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
+          --clobber
 
   publish_release:
     name: Publish Release

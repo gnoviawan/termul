@@ -4,7 +4,7 @@ baseline_commit: 96ca3f2c
 
 # Story 1.2: Standalone Server Binary & Web Build Scaffold
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -70,6 +70,16 @@ so that the server can run headless on a VPS without the Tauri webview runtime.
   - [x] 6.2 Rust unit test in `web/config.rs`: `ServerConfig`/`BindMode` parses `127.0.0.1` → Localhost, `0.0.0.0` → All, rejects bogus (mirror `remote_bind_mode_parse_and_addrs`).
   - [x] 6.3 Rust integration test for the bin: `cargo build --bin termul-server --features standalone-server` compiles (a `build.rs`-level or `tests/` smoke test that asserts the bin target exists when the feature is on).
   - [x] 6.4 Run `cargo clippy --all-targets -- -D warnings` + `cargo test` + `bun run lint/typecheck/test`. All green. Confirm `bun run build` (desktop Tauri) still succeeds.
+
+### Review Follow-ups (AI)
+- [x] [AI-Review][Patch] Move termul-server source out of `src/bin/` to `src/server_main.rs` (tauri#15325)
+- [x] [AI-Review][Patch] Drain Axum before `kill_all`; remove `expect()` from `shutdown_signal`
+- [x] [AI-Review][Patch] Feature-gate `build.rs` dist-web `rerun-if-changed`
+- [x] [AI-Review][Patch] Reject `--port 0`; add CLI edge-case tests
+- [x] [AI-Review][Patch] CI: clippy with feature, Windows bin build, release dist-web assert + pin upload-artifact + attach binary to draft release
+- [x] [AI-Review][Defer] Monolithic lib still needs WebKit on Linux CI — deferred to later decoupling
+- [x] [AI-Review][Defer] `kill -9` / hard terminate cannot run `kill_all` — OS limitation
+- [x] [AI-Review][Defer] Optional `build.rs` dist-web existence check — Story 1.11
 
 ## Dev Notes
 
@@ -296,7 +306,8 @@ Persistent facts from `docs/project-context.md` the dev MUST honor (this story t
 
 
 **Completion Notes:**
-- Standalone `termul-server` binary (`standalone-server` feature), minimal `web_server` Axum skeleton, Vite `build:web` / `vite.config.web.ts`, MSRV note, CI build steps for web + server binary.
+- Standalone `termul-server` binary (`standalone-server` feature), minimal `web_server` Axum skeleton, Vite `build:web` / `vite.config.web.ts`, MSRV `1.85`, CI jobs for web + server binary.
+- Code review patches applied: bin moved to `src/server_main.rs` (outside `src/bin/`), shutdown drains Axum then `kill_all`, no `expect()` in signal setup, feature-gated `build.rs`, CLI port-0 rejection + tests, CI/release hardening.
 - Desktop path unchanged for default builds; Story 1.4+ owns WS relay, 1.5 `main.tsx` tree-shake, 1.11 full `rust-embed` serving.
 
 **File List:**
@@ -312,11 +323,25 @@ Persistent facts from `docs/project-context.md` the dev MUST honor (this story t
 - src-tauri/Cargo.lock
 - src-tauri/build.rs
 - src-tauri/src/lib.rs
-- src-tauri/src/bin/termul_server.rs
+- src-tauri/src/server_main.rs (moved from `src/bin/termul_server.rs`)
 - src-tauri/src/web/mod.rs
 - src-tauri/src/web/sink.rs
 - src-tauri/src/web/config.rs
 - src-tauri/src/web/router.rs
+- _bmad-output/implementation-artifacts/1-2-standalone-server-binary-and-web-build-scaffold.md
+- _bmad-output/implementation-artifacts/sprint-status.yaml
+
+## Senior Developer Review (AI)
+- Outcome: Changes Requested → Patches Applied
+- Date: 2026-07-19
+- Layers: Blind Hunter + Edge Case Hunter + Acceptance Auditor
+- Findings: 0 decision-needed, 8 patch (fixed), 3 defer, ~6 dismissed
+- Notes: AC8 addressed by moving bin out of `src/bin/` per tauri#15325 mitigation.
+
+**Change Log:**
+- 2026-07-19: Implemented Story 1.2 scaffold (`e7e3bc9b`).
+- 2026-07-19: Applied code-review patches (bin path, shutdown, CI/CLI).
+
 **Deferred to later stories (do NOT implement here):**
 - WS relay / envelope / seq / cursor / tiers → Story 1.4.
 - `main.tsx` dynamic-import tree-shake → Story 1.5.

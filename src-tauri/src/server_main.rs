@@ -4,13 +4,18 @@
 //! `AppHandle`) and serves the Axum skeleton from `termul_manager_lib::web`.
 //! Live WS relay is Story 1.4; static embedding is Story 1.11.
 //!
+//! Path is intentionally **outside** `src/bin/` so Tauri's bundler stage-2
+//! disk scan (tauri#15325) does not re-add this target into the desktop
+//! app bundle. Cargo still builds it via the explicit `[[bin]]` path +
+//! `required-features = ["standalone-server"]`.
+//!
 //! This is a CONSOLE server — do NOT add `windows_subsystem = "windows"`.
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use termul_manager_lib::web::{serve, ServerConfig, WsRelaySink};
 use termul_manager_lib::web::config::ParseCliError;
+use termul_manager_lib::web::{serve, ServerConfig, WsRelaySink};
 use termul_manager_lib::AcpManager;
 use tracing_subscriber::EnvFilter;
 
@@ -46,6 +51,7 @@ fn main() -> ExitCode {
 
     runtime.block_on(async move {
         let acp = Arc::new(AcpManager::new(vec![Arc::new(WsRelaySink::new())]));
+        // `serve` always kill_all()s after Axum returns (ok or err).
         match serve(acp, cfg).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

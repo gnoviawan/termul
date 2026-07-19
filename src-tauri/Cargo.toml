@@ -13,11 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 # Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
 # build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
-# discovers — see tauri#15325). Build with:
+# discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
+# disk scan cannot re-add it. Build with:
 #   cargo build --bin termul-server --features standalone-server
 [[bin]]
 name = "termul-server"
-path = "src/bin/termul_server.rs"
+path = "src/server_main.rs"
 required-features = ["standalone-server"]
 
 [features]

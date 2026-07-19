@@ -278,11 +278,15 @@ jobs:
         working-directory: src-tauri
         run: cargo build --bin termul-server --features standalone-server
 
+      - name: Clippy termul-server (feature on)
+        working-directory: src-tauri
+        run: cargo clippy --bin termul-server --features standalone-server -- -D warnings
+
   rust-windows-check:
     name: Rust Windows Smoke Check
     if: github.event.action != 'edited'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -303,6 +307,10 @@ jobs:
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
+
+      - name: Build termul-server (Windows host)
+        working-directory: src-tauri
+        run: cargo build --bin termul-server --features standalone-server
 
   build-check:
     name: Verify Tauri Frontend Build
