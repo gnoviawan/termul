@@ -1,4 +1,4 @@
-//! WS relay protocol — frame envelopes, seq, event log, cursor, tiers (Story 1.4).
+//! WS relay protocol — frame envelopes, seq, event log, cursor, tiers (Story 1.4+1.6).
 //!
 //! One multiplexed bidirectional WebSocket per browser connection carries all
 //! sessions (AC1). The wire contract is defined here and mirrored 1:1 in
@@ -18,15 +18,12 @@
 //! ([`HUMAN_RELAYED_CAPS`]) are relayed to the browser. A browser WS request
 //! for an OS cap is rejected with `err.code: "unsupported"`.
 //!
-//! # Scope fence (1.4)
+//! # Scope fence
 //!
-//! Only `authenticate` is partially wired (placeholder — accepts any token,
-//! marks the connection authed; Epic 2 replaces with the real gate). All other
-//! request types return `err.code: "not_implemented"`. Full handler wiring
-//! lands in Stories 1.6/1.7/1.8/Epic 4. Session subscription + cursor replay
-//! is owned by [`crate::web::sink::WsRelaySink`] and exercised in unit tests;
-//! the live WS path does not auto-subscribe in this story (no `subscribe`
-//! request type yet).
+//! `authenticate` is a placeholder (accepts any token; Epic 2 replaces).
+//! `subscribe` is wired (Story 1.6): binds the connection to a session log with
+//! optional `lastSeq` cursor replay. Other ACP request types still return
+//! `err.code: "not_implemented"` until Stories 1.7/1.8/Epic 4.
 
 use std::sync::Arc;
 
@@ -40,7 +37,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::acp::AcpManager;
-use crate::web::sink::WsRelaySink;
+use crate::web::sink::{ClientId, ReplayResult, WsRelaySink};
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)
@@ -289,9 +286,12 @@ pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
 
 /// Run the per-connection relay loop: a write task draining the outbound
 /// channel + a read task routing requests. Returns when either half closes.
-async fn run_relay(socket: WebSocket, _state: AppState) {
+async fn run_relay(socket: WebSocket, state: AppState) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Outbound>();
+    let relay = Arc::clone(&state.relay);
+    // Client ids registered via `subscribe` — unregistered on disconnect.
+    let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
 
     // AC9: emit auth_required on the connection before anything else.
     if out_tx
@@ -335,8 +335,10 @@ async fn run_relay(socket: WebSocket, _state: AppState) {
             };
             match msg {
                 Message::Text(t) => {
-                    let reply = handle_request(&t, &mut authed);
-                    if write_tx.send(Outbound::Reply(reply)).is_err() {
+                    let handled =
+                        handle_request(&t, &mut authed, &relay, &write_tx, &mut subscribed_clients)
+                            .await;
+                    if write_tx.send(Outbound::Reply(handled)).is_err() {
                         break; // write half closed.
                     }
                 }
@@ -357,6 +359,10 @@ async fn run_relay(socket: WebSocket, _state: AppState) {
                 }
             }
         }
+        // Cleanup subscriptions for this connection.
+        for (sid, cid) in subscribed_clients.drain(..) {
+            relay.unsubscribe(&sid, cid);
+        }
     });
 
     // Drop the original sender so the write loop ends when the read task
@@ -375,12 +381,29 @@ async fn run_relay(socket: WebSocket, _state: AppState) {
     let _ = read_task.await;
 }
 
-/// Route a single text request frame to a reply (AC9 + AC10).
+/// CamelCase subscribe payload (Story 1.6) — envelope snake_case, payload camelCase.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscribePayload {
+    session_id: String,
+    /// Cursor: `None` / omitted → live-only (no replay). `Some(n)` → replay from `n + 1`.
+    /// Note: `Some(0)` is still a cursor and can be [`ReplayResult::Stale`] after ring eviction.
+    #[serde(default)]
+    last_seq: Option<u64>,
+}
+
+/// Route a single text request frame to a reply (AC9 + AC10 + Story 1.6 subscribe).
 ///
 /// Pre-auth: only `authenticate` is allowed; everything else → `unauthorized`.
-/// Post-auth: `authenticate` is a no-op success; OS-cap requests →
-/// `unsupported`; all other request types → `not_implemented`.
-fn handle_request(text: &str, authed: &mut bool) -> WsReply {
+/// Post-auth: `authenticate` is a no-op success; `subscribe` wires the sink;
+/// OS-cap requests → `unsupported`; all other request types → `not_implemented`.
+async fn handle_request(
+    text: &str,
+    authed: &mut bool,
+    relay: &Arc<WsRelaySink>,
+    out_tx: &mpsc::UnboundedSender<Outbound>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+) -> WsReply {
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
         Err(e) => {
@@ -414,6 +437,7 @@ fn handle_request(text: &str, authed: &mut bool) -> WsReply {
             // Idempotent re-auth — accept and succeed.
             WsReply::ok(id, Some(json!({})))
         }
+        "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients),
         // OS caps (AC8): server-fulfilled; reject browser requests.
         t if is_os_fulfilled_cap(t) => WsReply::err(
             id,
@@ -422,16 +446,75 @@ fn handle_request(text: &str, authed: &mut bool) -> WsReply {
                 "`{t}` is an OS-fulfilled cap; the server handles it locally (not relayed to the browser)"
             ),
         ),
-        // All other request types (AC10): stub not_implemented. Full wiring
-        // lands in Stories 1.6/1.7/1.8/Epic 4.
+        // Remaining ACP request types: stub not_implemented (1.7/1.8/Epic 4).
         _ => WsReply::err(
             id,
             WsErrorCode::NotImplemented,
             format!(
-                "`{}` is not implemented in Story 1.4 (full handler wiring lands in Stories 1.6/1.7/1.8/Epic 4)",
+                "`{}` is not implemented yet (ACP forwarding lands in Stories 1.7/1.8/Epic 4)",
                 req.type_
             ),
         ),
+    }
+}
+
+/// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
+fn handle_subscribe(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    out_tx: &mpsc::UnboundedSender<Outbound>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+) -> WsReply {
+    let parsed: SubscribePayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed subscribe payload (want sessionId, lastSeq): {e}"),
+            );
+        }
+    };
+    if parsed.session_id.is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
+    }
+
+    // Re-subscribe: drop any prior ClientId for this session on this connection.
+    subscribed_clients.retain(|(sid, cid)| {
+        if sid == &parsed.session_id {
+            relay.unsubscribe(sid, *cid);
+            false
+        } else {
+            true
+        }
+    });
+
+    let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq);
+    match replay {
+        ReplayResult::Stale => WsReply::err(
+            id,
+            WsErrorCode::Stale,
+            "cursor is older than the event log; re-sync live-only (omit lastSeq)",
+        ),
+        ReplayResult::Ok(replayed) => {
+            subscribed_clients.push((parsed.session_id.clone(), client_id));
+            let forward_tx = out_tx.clone();
+            tokio::spawn(async move {
+                while let Some(evt) = rx.recv().await {
+                    if forward_tx.send(Outbound::Event(evt)).is_err() {
+                        break;
+                    }
+                }
+            });
+            WsReply::ok(
+                id,
+                Some(json!({
+                    "sessionId": parsed.session_id,
+                    "replayed": replayed,
+                })),
+            )
+        }
     }
 }
 
@@ -533,10 +616,21 @@ mod tests {
         assert!(ve.get("payload").is_none(), "payload must be omitted on failure");
     }
 
+    fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(handle_request(text, authed, &relay, &tx, &mut subs))
+    }
+
     #[test]
     fn handle_request_pre_auth_rejects_non_authenticate() {
         let mut authed = false;
-        let reply = handle_request(
+        let reply = handle_sync(
             r#"{"id":"r1","type":"send_prompt","payload":{}}"#,
             &mut authed,
         );
@@ -548,7 +642,7 @@ mod tests {
     #[test]
     fn handle_request_authenticate_marks_authed() {
         let mut authed = false;
-        let reply = handle_request(
+        let reply = handle_sync(
             r#"{"id":"r1","type":"authenticate","payload":{"token":"any"}}"#,
             &mut authed,
         );
@@ -559,7 +653,7 @@ mod tests {
     #[test]
     fn handle_request_post_auth_os_cap_rejected_unsupported() {
         let mut authed = true;
-        let reply = handle_request(
+        let reply = handle_sync(
             r#"{"id":"r1","type":"fs/read_text_file","payload":{}}"#,
             &mut authed,
         );
@@ -578,7 +672,7 @@ mod tests {
             "list_sessions",
             "set_mode",
         ] {
-            let reply = handle_request(
+            let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
                 &mut authed,
             );
@@ -590,8 +684,89 @@ mod tests {
     #[test]
     fn handle_request_malformed_frame_replies_unsupported() {
         let mut authed = false;
-        let reply = handle_request("not-json", &mut authed);
+        let reply = handle_sync("not-json", &mut authed);
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    #[test]
+    fn handle_subscribe_ok_and_stale() {
+        let relay = Arc::new(WsRelaySink::with_capacity(2, 8));
+        // Fill log so last_seq=0 becomes stale after eviction… actually capacity 2
+        // means after 3 emits base advances. Use subscribe with huge last_seq gap.
+        use crate::web::sink::{AcpEvent, EventSink};
+        for i in 1..=3 {
+            relay.emit(&AcpEvent {
+                sid: Some("s1".to_string()),
+                type_: "acp:message_chunk",
+                payload: json!({"i": i}),
+            });
+        }
+        // Evicted seq 1; last_seq=0 → next wanted 1 < base → Stale
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let mut authed = true;
+        let reply = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_request(
+                r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
+                &mut authed,
+                &relay,
+                &tx,
+                &mut subs,
+            ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "stale");
+
+        // Fresh session live-only subscribe (omit lastSeq) succeeds.
+        let mut subs2 = Vec::new();
+        let reply_ok = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_request(
+                r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
+                &mut authed,
+                &relay,
+                &tx,
+                &mut subs2,
+            ));
+        assert!(reply_ok.ok, "{:?}", reply_ok.err);
+        assert_eq!(subs2.len(), 1);
+
+        // Re-subscribe same session replaces prior ClientId (no leak).
+        let reply_resub = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_request(
+                r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
+                &mut authed,
+                &relay,
+                &tx,
+                &mut subs2,
+            ));
+        assert!(reply_resub.ok, "{:?}", reply_resub.err);
+        assert_eq!(subs2.len(), 1);
+
+        // Evicted log + omit lastSeq → live-only succeeds (not stale).
+        let mut subs3 = Vec::new();
+        let reply_live = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_request(
+                r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
+                &mut authed,
+                &relay,
+                &tx,
+                &mut subs3,
+            ));
+        assert!(reply_live.ok, "{:?}", reply_live.err);
+
+        // Drain any replay/live.
+        while rx.try_recv().is_ok() {}
     }
 }

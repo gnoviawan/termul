@@ -44,7 +44,18 @@
         "noAutofocus": "warn"
       },
       "style": {
-        "noNonNullAssertion": "off"
+        "noNonNullAssertion": "off",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@tauri-apps", "@tauri-apps/**"],
+                "message": "Import Tauri APIs only via src/renderer/lib/ facades (Story 1.6)."
+              }
+            ]
+          }
+        }
       },
       "suspicious": {
         "noArrayIndexKey": "off",
@@ -80,6 +91,16 @@
   },
   "overrides": [
     {
+      "includes": ["src/renderer/lib/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/vitest.setup.ts"],
       "linter": {
         "rules": {
@@ -88,6 +109,9 @@
           },
           "suspicious": {
             "noEmptyInterface": "off"
+          },
+          "style": {
+            "noRestrictedImports": "off"
           }
         }
       }

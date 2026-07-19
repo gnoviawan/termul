@@ -48,8 +48,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('auth_required')
   })
 
-  it('exports exactly 13 request types (acp_* prefix-dropped)', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(13)
+  it('exports exactly 14 request types (13 acp_* prefix-dropped + subscribe)', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(14)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -63,7 +63,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'close_session',
       'list_sessions',
       'switch_project',
-      'authenticate'
+      'authenticate',
+      'subscribe'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

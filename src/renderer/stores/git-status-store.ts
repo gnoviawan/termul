@@ -1,8 +1,8 @@
 import type { GitCommitContext, GitStashInfo, GitStatusDetail } from '@shared/types/ipc.types'
-import { platform } from '@tauri-apps/plugin-os'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { gitApi } from '@/lib/git-api'
+import { platform } from '@/lib/tauri-os'
 
 /** Build the staged-aware diff cache key so the staged and unstaged rows of the
  * same file (porcelain `MM`) do not collide. */

@@ -6,6 +6,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()
 }))
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => true),
+  cleanupTauriListener: vi.fn()
+}))
 vi.mock('@/lib/acp-agents-persistence', async (orig) => {
   const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
   return {
@@ -35,6 +39,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import { _resetAcpTransportForTests } from '@/lib/acp-transport'
 import {
   _resetInFlightHistoryOpensForTesting,
   agentReuseKey,
@@ -173,6 +178,7 @@ describe('collectProjectsWithActiveAgentChat', () => {
 describe('acp-store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _resetAcpTransportForTests(null)
     _resetInFlightHistoryOpensForTesting()
     useAcpStore.setState(FRESH)
   })
@@ -2360,6 +2366,7 @@ describe('acp-store', () => {
 describe('acp-store multi-project isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _resetAcpTransportForTests(null)
     useAcpStore.setState(FRESH)
   })
 
