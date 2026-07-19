@@ -2885,6 +2885,9 @@ describe('acp-store transcript eviction (WebView memory)', () => {
 
   it('closeSession drops messages/toolCalls/commands/sessionUsage', async () => {
     seedTranscript('sess-mem')
+    useAcpStore.setState({
+      plans: { 'sess-mem': [{ content: 'plan', status: 'pending' }] }
+    })
     vi.mocked(invoke).mockResolvedValue(undefined)
     await useAcpStore.getState().closeSession('sess-mem')
     const st = useAcpStore.getState()
@@ -2893,6 +2896,7 @@ describe('acp-store transcript eviction (WebView memory)', () => {
     expect(st.toolCalls['sess-mem']).toBeUndefined()
     expect(st.commands['sess-mem']).toBeUndefined()
     expect(st.sessionUsage['sess-mem']).toBeUndefined()
+    expect(st.plans['sess-mem']).toBeUndefined()
   })
 
   it('deleteHistorySession drops in-memory transcript maps', async () => {

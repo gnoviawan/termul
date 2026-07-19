@@ -580,14 +580,15 @@ function dropRecordKey<T>(
  * Call only after any needed `persistSession` so the last mirror is flushed.
  */
 function dropSessionTranscriptState(
-  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'>,
+  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
   sessionId: SessionId
-): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'> {
+): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
   return {
     messages: dropRecordKey(state.messages, sessionId),
     toolCalls: dropRecordKey(state.toolCalls, sessionId),
     commands: dropRecordKey(state.commands, sessionId),
-    sessionUsage: dropRecordKey(state.sessionUsage, sessionId)
+    sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
+    plans: dropRecordKey(state.plans, sessionId)
   }
 }
 
@@ -1511,7 +1512,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         sessions,
-        plans: dropPlanForSession(s.plans, sessionId),
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
@@ -2602,7 +2602,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     if (dropTranscriptIds.length > 0) {
       set((s) => {
-        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage'> = s
+        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> =
+          s
         for (const id of dropTranscriptIds) {
           next = dropSessionTranscriptState(next, id)
         }
@@ -2632,7 +2633,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           sessions,
           preparedSessions,
           pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
-          plans: dropPlanForSession(s.plans, e.sessionId),
           ...dropSessionTranscriptState(s, e.sessionId)
         }
       })
@@ -2644,13 +2644,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (!session) {
         return {
           pendingPermissions,
-          plans: dropPlanForSession(s.plans, e.sessionId),
           ...dropSessionTranscriptState(s, e.sessionId)
         }
       }
       return {
         pendingPermissions,
-        plans: dropPlanForSession(s.plans, e.sessionId),
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
