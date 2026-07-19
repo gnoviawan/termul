@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.105",
+    "version": "0.2.106",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.105",
+        "package": "@xai-official/grok@0.2.106",
         "args": ["agent", "stdio"]
       }
     }
