@@ -398,7 +398,12 @@ export class WsAcpTransport implements AcpTransport {
 
   async sendPrompt(agentId: AgentId, sessionId: SessionId, text: string): Promise<StopReason> {
     await this.subscribeSession(sessionId) // no-op if already subscribed
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, text })
+    // Story 1.8 T3.1 (FR11): generate a client turn-id so the server echoes it
+    // back on `prompt_complete` → our `seenTurnIds` dedup fires (no duplicate
+    // completion on reconnect replay). `crypto.randomUUID()` (available in
+    // browsers + Node 19+; the web build targets modern evergreen browsers).
+    const turnId = crypto.randomUUID()
+    return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId })
   }
 
   async sendPromptBlocks(
@@ -407,7 +412,8 @@ export class WsAcpTransport implements AcpTransport {
     content: ContentBlock[]
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId)
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, content })
+    const turnId = crypto.randomUUID()
+    return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId })
   }
 
   async cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {

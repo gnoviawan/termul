@@ -26,7 +26,7 @@ import type {
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
-import { useAcpMessages, useSessionUsage } from '@/stores/acp-store'
+import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -40,6 +40,7 @@ import {
 import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
 import { LoadedSkillChip } from './LoadedSkillChip'
+import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
@@ -132,6 +133,10 @@ export function ChatInputBar({
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
+  // Story 1.8 AC1: read-only MCP badge. v1 shows the global MCP server count
+  // (per-session attach is surfaced via New Chat — the store does not yet track
+  // per-session MCP without a refactor, which D6 forbids).
+  const mcpCount = useAcpStore((s) => s.mcpServers.length)
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [sending, setSending] = useState(false)
@@ -490,6 +495,7 @@ export function ChatInputBar({
                   onSelect={onSetMode}
                   label="Agent"
                 />
+                <McpBadge count={mcpCount} />
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />

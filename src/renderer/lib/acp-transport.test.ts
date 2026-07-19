@@ -26,6 +26,9 @@ class FakeWebSocket {
   authFail = false
   /** When set, `respond_permission` replies with this err (default: not_implemented). */
   respondPermissionErr: { code: string; message: string } | null = null
+  /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
+   * events (echoing the client turnId) — used by the AC3 chat-flow test. */
+  streamOnSendPrompt = false
 
   constructor(public url: string) {
     queueMicrotask(() => {
@@ -68,8 +71,46 @@ class FakeWebSocket {
       })
       return
     }
+    if (req.type === 'create_session') {
+      // Story 1.8 AC3 chat-flow test: reply with a NewSessionOutcome + echo the
+      // client-subscribed session id. Tests assert the transport resolves the
+      // promise with the session id.
+      const payload = req.payload as { agentId: string; cwd: string }
+      const sessionId = 'sess-chatflow'
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: { sessionId, modes: null, models: null, configOptions: null }
+      })
+      void payload
+      return
+    }
     if (req.type === 'send_prompt') {
+      // Story 1.8 AC3 chat-flow test: stream message_chunk events + a
+      // prompt_complete (echoing the client turnId) so the transport's event
+      // subscribers + seenTurnIds dedup are exercised end-to-end.
+      const payload = req.payload as { sessionId: string; turnId?: string }
       this.emitReply({ id: req.id, ok: true, payload: 'end_turn' })
+      if (this.streamOnSendPrompt) {
+        this.emit({
+          sid: payload.sessionId,
+          seq: 1,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { text: 'Hello' }, i: 1 }
+        })
+        this.emit({
+          sid: payload.sessionId,
+          seq: 2,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { text: ' world' }, i: 2 }
+        })
+        this.emit({
+          sid: payload.sessionId,
+          seq: 3,
+          type: 'prompt_complete',
+          payload: { stopReason: 'end_turn', turnId: payload.turnId }
+        })
+      }
       return
     }
     if (req.type === 'respond_permission') {
@@ -311,6 +352,138 @@ describe('WsAcpTransport', () => {
     })
     expect(tools).toEqual([{ n: 3 }])
     expect(lastSeq.get('s1')).toBe(3)
+    transport.dispose()
+  })
+
+  it('sendPrompt generates + sends a client turnId (Story 1.8 T3.1)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    await transport.sendPrompt('a1', 's1', 'hello')
+    // The send_prompt frame's payload MUST include a `turnId` (a uuid) so the
+    // server echoes it on prompt_complete → our seenTurnIds dedup fires.
+    const frame = JSON.parse(sock.sent.at(-1)!) as {
+      type: string
+      payload: { agentId: string; sessionId: string; text: string; turnId?: string }
+    }
+    expect(frame.type).toBe('send_prompt')
+    expect(frame.payload.agentId).toBe('a1')
+    expect(frame.payload.sessionId).toBe('s1')
+    expect(frame.payload.text).toBe('hello')
+    expect(frame.payload.turnId).toEqual(expect.any(String))
+    expect(frame.payload.turnId!.length).toBeGreaterThan(0)
+    transport.dispose()
+  })
+
+  it('sendPromptBlocks also sends a client turnId (Story 1.8 T3.1)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    await transport.sendPromptBlocks('a1', 's1', [{ type: 'text', text: 'hi' } as never])
+    const frame = JSON.parse(sock.sent.at(-1)!) as {
+      type: string
+      payload: { content: unknown[]; turnId?: string }
+    }
+    expect(frame.type).toBe('send_prompt')
+    expect(frame.payload.turnId).toEqual(expect.any(String))
+    transport.dispose()
+  })
+
+  // Story 1.8 AC3: the full chat flow via the mocked WS seam — start a session,
+  // stream a turn (message_chunk → prompt_complete), and approve a permission.
+  it('streams a turn + dedups a replayed prompt_complete by turnId (AC3 chat flow)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.streamOnSendPrompt = true
+
+    const chunks: unknown[] = []
+    const completes: unknown[] = []
+    transport.onEvent('acp:message_chunk', (p) => chunks.push(p))
+    transport.onEvent('acp:prompt_complete', (p) => completes.push(p))
+
+    // Start a session via the WS seam.
+    const outcome = await transport.newSession('a1', '/work')
+    expect(outcome.sessionId).toBe('sess-chatflow')
+
+    // Send a prompt — the fake streams message_chunk + prompt_complete.
+    const stopReason = await transport.sendPrompt('a1', outcome.sessionId, 'hello')
+    expect(stopReason).toBe('end_turn')
+    // Both message_chunk events delivered in order.
+    expect(chunks).toHaveLength(2)
+    expect((chunks[0] as { i: number }).i).toBe(1)
+    expect((chunks[1] as { i: number }).i).toBe(2)
+    // prompt_complete delivered once.
+    expect(completes).toHaveLength(1)
+
+    // Reconnect-style replay: re-emit the same prompt_complete (same turnId) —
+    // the transport's seenTurnIds dedup drops it (no second delivery).
+    const replayed = (
+      await new Promise<{ turnId?: string }>((resolve) => {
+        const sentFrame = sock.sent.find((s) => JSON.parse(s).type === 'send_prompt')
+        const turnId = sentFrame ? (JSON.parse(sentFrame).payload.turnId as string) : undefined
+        resolve({ turnId })
+      })
+    ).turnId
+    sock.emit({
+      sid: outcome.sessionId,
+      seq: 4,
+      type: 'prompt_complete',
+      payload: { stopReason: 'end_turn', turnId: replayed }
+    })
+    expect(completes).toHaveLength(1) // deduped — no duplicate completion
+    transport.dispose()
+  })
+
+  // Story 1.8 AC3: approve a permission via the WS seam — the browser sends
+  // `respond_permission` and the transport resolves on `ok`.
+  it('approves a permission over the WS seam (AC3 permission flow)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    // A permission_request arrives from the server mid-turn.
+    const permEvents: unknown[] = []
+    transport.onEvent('acp:permission_request', (p) => permEvents.push(p))
+    sock.emit({
+      sid: 'sess-perm',
+      seq: 1,
+      type: 'permission_request',
+      payload: {
+        agentId: 'a1',
+        sessionId: 'sess-perm',
+        requestId: 'perm-1',
+        options: [{ optionId: 'allow' }]
+      }
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(permEvents).toHaveLength(1)
+    // The browser approves → `respond_permission` request with optionId.
+    // The fake defaults to `not_implemented`; override to `ok` for this test.
+    sock.respondPermissionErr = null
+    // Monkeypatch the fake's respond_permission handler inline to reply ok.
+    const origSend = sock.send.bind(sock)
+    sock.send = (data: string) => {
+      const req = JSON.parse(data) as { id: string; type: string }
+      if (req.type === 'respond_permission') {
+        sock.emitReply({ id: req.id, ok: true, payload: {} })
+        sock.send = origSend // restore
+        return
+      }
+      origSend(data)
+    }
+    await expect(transport.respondPermission('a1', 'perm-1', 'allow')).resolves.toBeUndefined()
     transport.dispose()
   })
 

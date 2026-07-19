@@ -307,6 +307,10 @@ export interface PromptCompleteEvent {
   agentId: AgentId
   sessionId: SessionId
   stopReason: StopReason
+  /** Story 1.8 T3.2 (FR11): client turn-id echoed back so `seenTurnIds` dedup
+   * fires (no duplicate completion on reconnect replay). Absent for desktop /
+   * older clients (dedup is a no-op). */
+  turnId?: string
 }
 export interface AgentErrorEvent {
   agentId: AgentId

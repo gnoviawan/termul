@@ -180,6 +180,10 @@ enum AcpCommand {
     SendPrompt {
         session_id: SessionId,
         content: Vec<ContentBlock>,
+        /// Story 1.8 T3.2: optional client turn-id (echoed back on
+        /// `prompt_complete` for the renderer's `seenTurnIds` idempotent dedup —
+        /// FR11). `None` for desktop/older clients (dedup is a no-op).
+        turn_id: Option<String>,
         reply: oneshot::Sender<Result<StopReason, String>>,
     },
     CancelPrompt {
@@ -482,11 +486,17 @@ impl AcpManager {
 
     /// Send a prompt and await the turn's stop reason. Streaming updates arrive
     /// as `acp:*` events; the turn ends with `acp:prompt_complete`.
+    ///
+    /// `turn_id` (Story 1.8 T3.2): optional client turn-id, echoed back on the
+    /// `prompt_complete` event for the renderer's `seenTurnIds` idempotent dedup
+    /// (FR11 — "no duplicate completion on reconnect replay"). `None` for the
+    /// desktop path + older clients (dedup is a no-op).
     pub async fn send_prompt(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         content: Vec<ContentBlock>,
+        turn_id: Option<String>,
     ) -> Result<StopReason, String> {
         if content.is_empty() {
             return Err("prompt content must not be empty".to_string());
@@ -495,6 +505,7 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::SendPrompt {
             session_id,
             content,
+            turn_id,
             reply,
         })
         .await
@@ -1403,6 +1414,7 @@ async fn run_command_loop(
             AcpCommand::SendPrompt {
                 session_id,
                 content,
+                turn_id,
                 reply,
             } => {
                 // Single-flight per session: reject a second prompt while a turn
@@ -1426,6 +1438,8 @@ async fn run_command_loop(
                 let turn_state = driver_state.clone();
                 let turn_session = session_id.clone();
                 let log_session = session_id.clone();
+                // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
+                let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
                     let request = PromptRequest::new(&session_id, content);
                     let prompt = turn_cx.send_request(request).block_task();
@@ -1476,6 +1490,7 @@ async fn run_command_loop(
                                 agent_id: turn_agent_id,
                                 session_id,
                                 stop_reason,
+                                turn_id: turn_turn_id.clone(),
                             };
                             events::fan_out(
                                 &turn_sinks,

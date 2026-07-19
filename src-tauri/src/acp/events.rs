@@ -179,6 +179,14 @@ pub struct PromptCompleteEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
     pub stop_reason: StopReason,
+    /// Story 1.8 T3.2 (FR11): the client turn-id echoed back so the renderer's
+    /// `seenTurnIds` dedup fires (no duplicate completion on reconnect replay).
+    /// `None` for the desktop path + older clients (dedup is a no-op). Serialized
+    /// as `turnId` (camelCase payload); absent on the wire when `None`
+    /// (`skip_serializing_if = "Option::is_none"` — byte-identical to pre-1.8
+    /// desktop payloads when unset).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// `acp:agent_error`
@@ -322,9 +330,25 @@ mod tests {
             agent_id: AgentId("a".to_string()),
             session_id: SessionId::new("s"),
             stop_reason: StopReason::EndTurn,
+            turn_id: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["stopReason"], "end_turn");
+        // Story 1.8 T3.2: `turnId` is absent when `None` (byte-identical to
+        // pre-1.8 desktop payloads — `skip_serializing_if = "Option::is_none"`).
+        assert!(value.get("turnId").is_none(), "turnId must be absent when None");
+    }
+
+    #[test]
+    fn prompt_complete_serializes_turn_id_when_set() {
+        let event = PromptCompleteEvent {
+            agent_id: AgentId("a".to_string()),
+            session_id: SessionId::new("s"),
+            stop_reason: StopReason::EndTurn,
+            turn_id: Some("turn-123".to_string()),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["turnId"], "turn-123");
     }
 
     #[test]

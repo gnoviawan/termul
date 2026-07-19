@@ -308,6 +308,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Outbound>();
     let relay = Arc::clone(&state.relay);
+    // Story 1.8: the ACP manager — the server is the ACP client-of-record; the
+    // 10 ACP command handlers (`send_prompt`, `create_session`, …) forward to it.
+    let acp = Arc::clone(&state.acp);
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
 
@@ -354,7 +357,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             match msg {
                 Message::Text(t) => {
                     let handled =
-                        handle_request(&t, &mut authed, &relay, &write_tx, &mut subscribed_clients)
+                        handle_request(&t, &mut authed, &acp, &relay, &write_tx, &mut subscribed_clients)
                             .await;
                     if write_tx.send(Outbound::Reply(handled)).is_err() {
                         break; // write half closed.
@@ -421,14 +424,19 @@ struct SubscribePayload {
     last_seq: Option<u64>,
 }
 
-/// Route a single text request frame to a reply (AC9 + AC10 + Story 1.6 subscribe).
+/// Route a single text request frame to a reply (AC9 + AC10 + Story 1.6 subscribe
+/// + Story 1.7 `respond_permission` + Story 1.8 ACP command forwarding).
 ///
 /// Pre-auth: only `authenticate` is allowed; everything else → `unauthorized`.
 /// Post-auth: `authenticate` is a no-op success; `subscribe` wires the sink;
-/// OS-cap requests → `unsupported`; all other request types → `not_implemented`.
+/// `respond_permission` routes through the Story 1.7 rendezvous; the 10 ACP
+/// command types (`send_prompt`, `create_session`, …) forward to
+/// `AcpManager` (Story 1.8); OS-cap requests → `unsupported`; `switch_project`
+/// + unknown types → `not_implemented` (Epic 4).
 async fn handle_request(
     text: &str,
     authed: &mut bool,
+    acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
@@ -472,6 +480,20 @@ async fn handle_request(
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
         // which resolves the agent's `Responder` on the driver thread.
         "respond_permission" => handle_respond_permission(id, &req.payload, relay, subscribed_clients).await,
+        // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
+        // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
+        // `config_options_update`, …) flow back automatically through the
+        // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
+        "create_session" => handle_create_session(id, &req.payload, acp).await,
+        "load_session" => handle_load_session(id, &req.payload, acp).await,
+        "resume_session" => handle_resume_session(id, &req.payload, acp).await,
+        "close_session" => handle_close_session(id, &req.payload, acp).await,
+        "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
+        "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
+        "set_mode" => handle_set_mode(id, &req.payload, acp).await,
+        "set_model" => handle_set_model(id, &req.payload, acp).await,
+        "set_config_option" => handle_set_config_option(id, &req.payload, acp).await,
         // OS caps (AC8): server-fulfilled; reject browser requests.
         t if is_os_fulfilled_cap(t) => WsReply::err(
             id,
@@ -480,15 +502,320 @@ async fn handle_request(
                 "`{t}` is an OS-fulfilled cap; the server handles it locally (not relayed to the browser)"
             ),
         ),
-        // Remaining ACP request types: stub not_implemented (1.8/Epic 4).
+        // Remaining ACP request types: stub not_implemented (Epic 4 — e.g.
+        // `switch_project` belongs to multi-project switching).
         _ => WsReply::err(
             id,
             WsErrorCode::NotImplemented,
             format!(
-                "`{}` is not implemented yet (ACP forwarding lands in Stories 1.8/Epic 4)",
+                "`{}` is not implemented yet (ACP forwarding lands in Epic 4)",
                 req.type_
             ),
         ),
+    }
+}
+
+/// Map an `AcpManager` `Err(String)` to a `WsReply` err. Story 1.8 review:
+/// map recognizable agent-manager error strings to their stable `err.code`
+/// (so the browser's error routing keys on the right category — not every
+/// runtime failure is "not_implemented"). `send_prompt`'s concurrent-turn
+/// rejection (`"ACP_TURN_IN_PROGRESS: …"`) → `RateLimited`; `"unknown agent:
+/// …"` / `"unknown permission request: …"` → `NotFound`; capability-gate
+/// failures (`"agent does not support …"`) → `Unsupported`. Unrecognized
+/// errors fall back to `NotImplemented` (preserves the human message verbatim).
+fn acp_err_to_reply(id: String, err: String) -> WsReply {
+    if let Some(code) = map_prompt_error_code(&err) {
+        return WsReply::err(id, code, err);
+    }
+    let code = if err.starts_with("unknown agent") || err.contains("unknown permission request") {
+        WsErrorCode::NotFound
+    } else if err.contains("agent does not support") || err.contains("capability") {
+        WsErrorCode::Unsupported
+    } else {
+        WsErrorCode::NotImplemented
+    };
+    WsReply::err(id, code, err)
+}
+
+/// Serialize a `Serialize` success value into a `WsReply::ok` payload, or reply
+/// `err` on serialization failure (never `null` — mirrors `fan_out` semantics).
+fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsReply {
+    match serde_json::to_value(value) {
+        Ok(v) => WsReply::ok(id, Some(v)),
+        Err(e) => WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            format!("failed to serialize reply payload: {e}"),
+        ),
+    }
+}
+
+// --- Story 1.8 ACP command handlers -----------------------------------------
+//
+// Each handler parses a camelCase payload (mirroring the renderer's
+// `acp-transport.ts` request shapes), calls the corresponding `AcpManager`
+// method, and maps `Result<T, String>` → `WsReply`. The streaming events
+// emitted by `AcpManager` (via `fan_out` → `WsRelaySink`) flow back to the
+// browser automatically — these handlers only own the request/reply half.
+
+/// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
+/// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSessionPayload {
+    agent_id: crate::acp::AgentId,
+    cwd: String,
+    #[serde(default)]
+    mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
+}
+
+async fn handle_create_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: CreateSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed create_session payload (want agentId, cwd, mcpServers?): {e}")),
+    };
+    // Story 1.8 review (EC4): reject an empty cwd (the desktop store path
+    // trims + rejects `cwd.length === 0`; the WS path must not diverge — an
+    // empty cwd would give the agent subprocess undefined cwd semantics).
+    if parsed.cwd.trim().is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "create_session requires a non-empty `cwd`");
+    }
+    match acp.new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers).await {
+        Ok(outcome) => ok_with_payload(id, &outcome),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `load_session` → `AcpManager::load_session(agent_id, session_id, cwd)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoadResumeSessionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+    cwd: String,
+}
+
+async fn handle_load_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed load_session payload (want agentId, sessionId, cwd): {e}")),
+    };
+    match acp.load_session(&parsed.agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd)`.
+async fn handle_resume_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed resume_session payload (want agentId, sessionId, cwd): {e}")),
+    };
+    match acp.resume_session(&parsed.agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `close_session` → `AcpManager::close_session(agent_id, session_id)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseSessionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+}
+
+async fn handle_close_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed close_session payload (want agentId, sessionId): {e}")),
+    };
+    match acp.close_session(&parsed.agent_id, parsed.session_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `list_sessions` → `AcpManager::list_sessions(agent_id, cwd?, cursor?)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSessionsPayload {
+    agent_id: crate::acp::AgentId,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+async fn handle_list_sessions(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: ListSessionsPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed list_sessions payload (want agentId, cwd?, cursor?): {e}")),
+    };
+    match acp.list_sessions(&parsed.agent_id, parsed.cwd, parsed.cursor).await {
+        Ok(resp) => ok_with_payload(id, &resp),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `send_prompt` → `AcpManager::send_prompt(agent_id, session_id, content)`.
+/// Story 1.7 T7.1: the concurrent-turn rejection (`ACP_TURN_IN_PROGRESS`) maps
+/// to `err.code: "rate_limited"` via `map_prompt_error_code`. Story 1.8 T3:
+/// the client `turnId` is extracted + stashed for the `prompt_complete`
+/// idempotent-by-turn-id dedup (see `TurnWatermark`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendPromptPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+    /// Text-mode prompt (mutually exclusive with `content`).
+    #[serde(default)]
+    text: Option<String>,
+    /// Blocks-mode prompt (attachments + structured content).
+    #[serde(default)]
+    content: Option<Vec<agent_client_protocol::schema::ContentBlock>>,
+    /// Story 1.8 T3: client-generated turn id for `prompt_complete` dedup.
+    /// Optional for forward-compat (older clients omit it; dedup is a no-op).
+    #[serde(default)]
+    turn_id: Option<String>,
+}
+
+async fn handle_send_prompt(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+) -> WsReply {
+    let parsed: SendPromptPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed send_prompt payload (want agentId, sessionId, text|content, turnId?): {e}")),
+    };
+    // Build the content blocks: prefer explicit `content`; fall back to a
+    // single text block from `text` (mirrors the desktop store's `sendPrompt`
+    // vs `sendPromptBlocks` split — both become `Vec<ContentBlock>` for the agent).
+    let content = match (parsed.content, parsed.text) {
+        (Some(blocks), _) if !blocks.is_empty() => blocks,
+        // Story 1.8 review (EC3): reject an empty/whitespace-only text (the
+        // desktop `commands.rs` has the same guard; an empty-text turn would
+        // leak past the `content.is_empty()` check in `AcpManager::send_prompt`
+        // and poison the turn-id watermark).
+        (_, Some(text)) if !text.trim().is_empty() => {
+            vec![agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new(text),
+            )]
+        }
+        _ => return WsReply::err(id, WsErrorCode::Unsupported, "send_prompt requires non-empty `text` or `content`"),
+    };
+
+    // Story 1.8 T3.3: reject a stale turn the client already completed
+    // (FR13 last-completed-turn watermark). Best-effort — if no turnId, skip.
+    if let Some(turn_id) = &parsed.turn_id {
+        if relay.turn_watermark().is_completed(parsed.session_id.0.as_str(), turn_id) {
+            return WsReply::err(id, WsErrorCode::Stale, "this turn already completed (stale turn-id)");
+        }
+    }
+
+    match acp.send_prompt(&parsed.agent_id, parsed.session_id.clone(), content, parsed.turn_id.clone()).await {
+        Ok(stop_reason) => {
+            // Story 1.8 T3.3: advance the watermark on completion so a stale
+            // `send_prompt` for the same turn-id is rejected on reconnect
+            // (FR13 last-completed-turn watermark; backs `is_completed` above).
+            // NOTE: the `seen` SET is NOT grown here (review EC2) — dedup of
+            // replayed `prompt_complete` events is client-side
+            // (`acp-transport.ts::seenTurnIds`); the server-side `seen` set has
+            // no reader and would grow unbounded. Only the high-water mark
+            // (`record_completed`) is advanced, which `is_completed` reads.
+            if let Some(turn_id) = &parsed.turn_id {
+                relay
+                    .turn_watermark()
+                    .record_completed(parsed.session_id.0.as_str(), turn_id);
+            }
+            ok_with_payload(id, &stop_reason)
+        }
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `cancel_prompt` → `AcpManager::cancel_prompt(agent_id, session_id)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionOnlyPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+}
+
+async fn handle_cancel_prompt(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: SessionOnlyPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed cancel_prompt payload (want agentId, sessionId): {e}")),
+    };
+    match acp.cancel_prompt(&parsed.agent_id, parsed.session_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `set_mode` → `AcpManager::set_mode(agent_id, session_id, mode_id)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetModePayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+    mode_id: String,
+}
+
+async fn handle_set_mode(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: SetModePayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_mode payload (want agentId, sessionId, modeId): {e}")),
+    };
+    match acp.set_mode(&parsed.agent_id, parsed.session_id, parsed.mode_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `set_model` → `AcpManager::set_model(agent_id, session_id, model_id)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetModelPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+    model_id: String,
+}
+
+async fn handle_set_model(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: SetModelPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_model payload (want agentId, sessionId, modelId): {e}")),
+    };
+    match acp.set_model(&parsed.agent_id, parsed.session_id, parsed.model_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `set_config_option` → `AcpManager::set_config_option(agent_id, session_id,
+/// config_id, value_id)`. Reply payload = the updated `Vec<SessionConfigOption>`
+/// (the desktop path also emits `acp:config_options_update` automatically).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetConfigOptionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+    config_id: String,
+    value_id: String,
+}
+
+async fn handle_set_config_option(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: SetConfigOptionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_config_option payload (want agentId, sessionId, configId, valueId): {e}")),
+    };
+    match acp.set_config_option(&parsed.agent_id, parsed.session_id, parsed.config_id, parsed.value_id).await {
+        Ok(options) => ok_with_payload(id, &options),
+        Err(e) => acp_err_to_reply(id, e),
     }
 }
 
@@ -790,13 +1117,17 @@ mod tests {
 
     fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
         let relay = Arc::new(WsRelaySink::new());
+        // Story 1.8: handle_request now takes `&Arc<AcpManager>`. The no-op
+        // manager (`vec![]` sinks) returns fast `Err`s for the ACP command
+        // methods (no agent spawned) which the handlers map to `WsErrorCode`.
+        let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime")
-            .block_on(handle_request(text, authed, &relay, &tx, &mut subs))
+            .block_on(handle_request(text, authed, &acp, &relay, &tx, &mut subs))
     }
 
     #[test]
@@ -836,14 +1167,12 @@ mod tests {
     #[test]
     fn handle_request_post_auth_other_types_not_implemented() {
         let mut authed = true;
-        // `respond_permission` is now a live handler (Story 1.7) — excluded.
-        for ty in [
-            "send_prompt",
-            "create_session",
-            "switch_project",
-            "list_sessions",
-            "set_mode",
-        ] {
+        // Story 1.7 wired `respond_permission`; Story 1.8 wired `send_prompt`,
+        // `create_session`, `load_session`, `resume_session`, `close_session`,
+        // `list_sessions`, `cancel_prompt`, `set_mode`, `set_model`,
+        // `set_config_option`. `switch_project` stays `not_implemented` (Epic 4 —
+        // multi-project switching). Unknown types also stay `not_implemented`.
+        for ty in ["switch_project", "totally_unknown_type"] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
                 &mut authed,
@@ -851,6 +1180,101 @@ mod tests {
             assert!(!reply.ok, "{ty} should be not_implemented");
             assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
         }
+    }
+
+    /// Story 1.8: the 10 ACP command handlers are wired. With an empty payload
+    /// they reject `unsupported` (malformed payload) — proving the match arm
+    /// routes to the handler (not the `_ => not_implemented` stub).
+    #[test]
+    fn handle_request_post_auth_acp_commands_reject_malformed_payload() {
+        let mut authed = true;
+        for ty in [
+            "send_prompt",
+            "create_session",
+            "load_session",
+            "resume_session",
+            "close_session",
+            "list_sessions",
+            "cancel_prompt",
+            "set_mode",
+            "set_model",
+            "set_config_option",
+        ] {
+            let reply = handle_sync(
+                &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
+                &mut authed,
+            );
+            assert!(!reply.ok, "{ty} should be rejected (malformed payload)");
+            assert_eq!(
+                reply.err.unwrap().code,
+                "unsupported",
+                "{ty} should route to its live handler (malformed-payload → unsupported, NOT not_implemented)"
+            );
+        }
+    }
+
+    /// Story 1.8 review (EC4): `create_session` rejects an empty/whitespace
+    /// `cwd` (mirrors the desktop store's `cwd.trim()` guard — the WS path must
+    /// not diverge).
+    #[test]
+    fn handle_create_session_rejects_empty_cwd() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"create_session","payload":{"agentId":"a1","cwd":""}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+
+        let mut authed2 = true;
+        let reply2 = handle_sync(
+            r#"{"id":"r2","type":"create_session","payload":{"agentId":"a1","cwd":"   "}}"#,
+            &mut authed2,
+        );
+        assert!(!reply2.ok);
+        assert_eq!(reply2.err.unwrap().code, "unsupported");
+    }
+
+    /// Story 1.8 review (EC3): `send_prompt` rejects an empty/whitespace
+    /// `text` (the desktop `commands.rs` has the same guard; without it an
+    /// empty-text turn leaks past the `content.is_empty()` check + poisons the
+    /// turn-id watermark).
+    #[test]
+    fn handle_send_prompt_rejects_empty_text() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"send_prompt","payload":{"agentId":"a1","sessionId":"s1","text":""}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+
+        let mut authed2 = true;
+        let reply2 = handle_sync(
+            r#"{"id":"r2","type":"send_prompt","payload":{"agentId":"a1","sessionId":"s1","text":"   "}}"#,
+            &mut authed2,
+        );
+        assert!(!reply2.ok);
+        assert_eq!(reply2.err.unwrap().code, "unsupported");
+    }
+
+    /// Story 1.8 review: `acp_err_to_reply` maps recognizable agent errors to
+    /// the right `err.code` (not_implemented is the fallback for unrecognized
+    /// errors; "unknown agent" → not_found; capability-gate → unsupported).
+    #[test]
+    fn acp_err_to_reply_maps_recognizable_errors() {
+        // ACP_TURN_IN_PROGRESS → rate_limited (via map_prompt_error_code).
+        let r = acp_err_to_reply("r1".to_string(), "ACP_TURN_IN_PROGRESS: session s1".to_string());
+        assert_eq!(r.err.unwrap().code, "rate_limited");
+        // Unknown agent → not_found.
+        let r = acp_err_to_reply("r2".to_string(), "unknown agent: a1".to_string());
+        assert_eq!(r.err.unwrap().code, "not_found");
+        // Capability gate → unsupported.
+        let r = acp_err_to_reply("r3".to_string(), "agent does not support session/load (loadSession capability)".to_string());
+        assert_eq!(r.err.unwrap().code, "unsupported");
+        // Unrecognized → not_implemented (fallback, message preserved).
+        let r = acp_err_to_reply("r4".to_string(), "agent initialize failed: boom".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
     }
 
     /// Story 1.7: without a rendezvous attached (desktop path), the
@@ -874,6 +1298,7 @@ mod tests {
     fn handle_respond_permission_malformed_payload_is_unsupported() {
         // Attach a rendezvous so we reach the payload-parse branch.
         let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
         relay.set_rendezvous(Arc::new(crate::web::permissions::PermissionRendezvous::default()));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
@@ -885,6 +1310,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
                 &mut authed,
+                &acp,
                 &relay,
                 &tx,
                 &mut subs,
@@ -948,11 +1374,13 @@ mod tests {
     #[test]
     fn handle_respond_permission_wrong_agent_is_permission_denied() {
         let (relay, subs) = relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            &acp,
             &relay,
             &tx,
             &mut subs.clone(),
@@ -969,6 +1397,7 @@ mod tests {
         // Register a permission on sess-A but subscribe the connection to sess-B.
         use crate::web::sink::{AcpEvent, EventSink};
         let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
         relay.set_rendezvous(Arc::new(
             crate::web::permissions::PermissionRendezvous::default(),
         ));
@@ -987,6 +1416,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
+            &acp,
             &relay,
             &tx,
             &mut subs.clone(),
@@ -1002,11 +1432,13 @@ mod tests {
     #[test]
     fn handle_respond_permission_resolves_then_second_is_stale() {
         let (relay, subs) = relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            &acp,
             &relay,
             &tx,
             &mut subs.clone(),
@@ -1016,6 +1448,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            &acp,
             &relay,
             &tx,
             &mut subs.clone(),
@@ -1030,11 +1463,13 @@ mod tests {
     fn handle_respond_permission_invalid_option_is_permission_denied() {
         let (relay, subs) =
             relay_with_subscribed_permission("a1", "sess-1", "perm-1", &["allow", "deny"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
+            &acp,
             &relay,
             &tx,
             &mut subs.clone(),
@@ -1054,6 +1489,7 @@ mod tests {
     #[test]
     fn handle_subscribe_ok_and_stale() {
         let relay = Arc::new(WsRelaySink::with_capacity(2, 8));
+        let acp = Arc::new(AcpManager::new(vec![]));
         // Fill log so last_seq=0 becomes stale after eviction… actually capacity 2
         // means after 3 emits base advances. Use subscribe with huge last_seq gap.
         use crate::web::sink::{AcpEvent, EventSink};
@@ -1075,6 +1511,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
                 &mut authed,
+                &acp,
                 &relay,
                 &tx,
                 &mut subs,
@@ -1091,6 +1528,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                &acp,
                 &relay,
                 &tx,
                 &mut subs2,
@@ -1106,6 +1544,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                &acp,
                 &relay,
                 &tx,
                 &mut subs2,
@@ -1122,6 +1561,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
                 &mut authed,
+                &acp,
                 &relay,
                 &tx,
                 &mut subs3,
