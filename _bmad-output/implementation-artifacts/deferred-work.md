@@ -28,3 +28,12 @@
 - **Monolithic `termul_manager_lib` still pulls Tauri/WebKit for `termul-server` Linux CI** — true headless crate split is later work; Story 1.2 scaffolds the binary against the existing lib.
 - **Abnormal process death (`kill -9` / OOM) cannot run `AcpManager::kill_all`** — OS limitation; graceful signal path covers SIGINT (and SIGTERM on Unix).
 - **Optional `build.rs` release existence check for `dist-web/`** — Story 1.11 owns full embedding enforcement; this story only feature-gates `rerun-if-changed`.
+
+## Deferred from: code review of 1-3-dev-static-serving-and-rust-embed-dependency (2026-07-19)
+
+- **SPA fallback returns `index.html` (200) for missing hashed `/assets/*` files** — AC2 mandates `ServeDir` + `ServeFile` fallback; Accept-header-aware fallback can land later.
+- **Symlink/path-escape surface on `ServeDir`** — Epic 2 auth + Story 1.11 embed path own hardening.
+- **Trailing-slash `/health/` may hit SPA fallback** — low-priority route hygiene.
+- **Vite `emptyOutDir` TOCTOU while server is live** — expected local-dev race; no atomic swap in this story.
+- **`--host 0.0.0.0` exposes static tree without auth** — Epic 2.
+- **Compile-time `CARGO_MANIFEST_DIR` path for shipped binary** — intentional for Story 1.3 ServeDir; Story 1.11 owns production embed serving.

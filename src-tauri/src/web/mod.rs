@@ -1,14 +1,17 @@
 //! Web ACP Agent runtime — headless server + browser client support.
 //!
 //! This module owns the transport-neutral seams the `acp` dispatcher emits
-//! through, plus the standalone Axum server skeleton (Story 1.2).
+//! through, plus the standalone Axum server (Stories 1.2–1.3).
 //!
 //! - Desktop registers a [`sink::TauriEventSink`] (`acp:*` Tauri events).
 //! - Standalone `termul-server` registers a [`sink::WsRelaySink`] stub
 //!   (live WS wiring is Story 1.4) and calls [`serve`].
+//! - Dev static serving of `dist-web/` is [`assets`] (Story 1.3); production
+//!   rust-embed serving is Story 1.11.
 //!
-//! Auth / sandbox / production embedding land in later stories.
+//! Auth / sandbox land in later stories.
 
+pub mod assets;
 pub mod config;
 pub mod router;
 pub mod sink;
@@ -42,6 +45,14 @@ pub async fn serve(
     let listener = TcpListener::bind(bind_addr).await?;
     let addr = listener.local_addr()?;
     info!("termul-server listening on http://{}", addr);
+
+    if !assets::dist_web_ready() {
+        warn!(
+            "dist-web/index.html not found at {:?} — run `bun run build:web` before browsing; \
+             /health still works, static routes will 404",
+            assets::dist_web_dir()
+        );
+    }
 
     let app = router::router(Arc::clone(&acp));
 

@@ -1,9 +1,10 @@
-//! Axum router for the standalone `termul-server` (Story 1.2 skeleton).
+//! Axum router for the standalone `termul-server`.
 //!
-//! This story only exposes `/health`, a WS-upgrade placeholder (501 until
-//! Story 1.4), and a static-bundle stub (503 until Story 1.3/1.11). Live WS
-//! relay, auth, and rust-embed serving land in later stories.
+//! Exposes `/health`, a WS-upgrade placeholder (501 until Story 1.4), and
+//! `ServeDir` static serving of repo-root `dist-web/` (Story 1.3). Production
+//! rust-embed serving is Story 1.11. Live WS relay and auth land later.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -15,15 +16,26 @@ use axum::{
 
 use crate::acp::AcpManager;
 
-/// Build the standalone-server Axum router.
+use super::assets;
+
+/// Build the standalone-server Axum router (serves repo `dist-web/`).
 ///
 /// `acp` is held for later WS/permission routes (Stories 1.4 / 1.7); this
-/// skeleton does not yet route through it.
+/// story does not yet route through it.
 pub fn router(acp: Arc<AcpManager>) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade_placeholder))
-        .route("/", get(static_bundle_stub))
+        .fallback_service(assets::static_service())
+        .with_state(acp)
+}
+
+/// Same as [`router`], but with an injectable static-root for unit tests.
+pub fn router_with_static(acp: Arc<AcpManager>, static_dir: &Path) -> Router {
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/ws", get(ws_upgrade_placeholder))
+        .fallback_service(assets::static_service_from(static_dir))
         .with_state(acp)
 }
 
@@ -40,29 +52,51 @@ async fn ws_upgrade_placeholder() -> impl IntoResponse {
     )
 }
 
-/// Placeholder until Story 1.3/1.11 embed and serve `dist-web/`.
-async fn static_bundle_stub() -> impl IntoResponse {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Static bundle not embedded yet (Story 1.3/1.11)",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tower::ServiceExt;
 
-    fn test_router() -> Router {
-        // Empty sink list is legal for unit tests (Story 1.1).
-        router(Arc::new(AcpManager::new(vec![])))
+    /// Temp directory removed on drop (including panic paths).
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("termul-web-assets-{label}-{nanos}"));
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn test_router_with_fixture(dir: &Path) -> Router {
+        router_with_static(Arc::new(AcpManager::new(vec![])), dir)
     }
 
     #[tokio::test]
     async fn health_returns_ok() {
-        let resp = test_router()
+        let dir = TempDir::new("health");
+        let resp = test_router_with_fixture(dir.path())
             .oneshot(
                 Request::builder()
                     .uri("/health")
@@ -80,7 +114,8 @@ mod tests {
 
     #[tokio::test]
     async fn ws_placeholder_returns_501() {
-        let resp = test_router()
+        let dir = TempDir::new("ws");
+        let resp = test_router_with_fixture(dir.path())
             .oneshot(
                 Request::builder()
                     .uri("/ws")
@@ -93,8 +128,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_stub_returns_503() {
-        let resp = test_router()
+    async fn root_serves_index_html_from_fixture() {
+        let dir = TempDir::new("root");
+        fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><html><body>termul-web-fixture</body></html>",
+        )
+        .expect("write index.html");
+        fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        fs::write(dir.path().join("assets/app.js"), "console.log('fixture');")
+            .expect("write asset");
+
+        let app = test_router_with_fixture(dir.path());
+
+        let resp = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/")
@@ -103,6 +151,110 @@ mod tests {
             )
             .await
             .expect("router response");
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            text.contains("termul-web-fixture"),
+            "expected fixture marker in body, got: {text}"
+        );
+
+        let asset = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/app.js")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("asset response");
+        assert_eq!(asset.status(), StatusCode::OK);
+
+        // SPA fallback: unmatched path still returns index.html
+        let spa = app
+            .oneshot(
+                Request::builder()
+                    .uri("/some/deep/client-route")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("spa response");
+        assert_eq!(spa.status(), StatusCode::OK);
+        let spa_body = axum::body::to_bytes(spa.into_body(), usize::MAX)
+            .await
+            .expect("read spa body");
+        assert!(String::from_utf8_lossy(&spa_body).contains("termul-web-fixture"));
+    }
+
+    #[tokio::test]
+    async fn missing_dist_web_yields_404_not_503_stub() {
+        let dir = TempDir::new("missing");
+        // Empty dir — no index.html
+        let resp = test_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            !text.contains("Static bundle not embedded yet"),
+            "must not return the old 503 stub text, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonexistent_static_root_yields_404() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let missing = std::env::temp_dir().join(format!("termul-web-assets-absent-{nanos}"));
+        assert!(!missing.exists(), "path must not exist");
+
+        let resp = test_router_with_fixture(&missing)
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_routes_keep_priority_over_static_fallback() {
+        let dir = TempDir::new("priority");
+        fs::write(dir.path().join("index.html"), "<html>fixture</html>").expect("index");
+        // Even if someone drops health.html, /health must stay the probe.
+        fs::write(dir.path().join("health"), "not-the-probe").expect("health file");
+
+        let resp = test_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        assert_eq!(&body[..], b"OK");
     }
 }
