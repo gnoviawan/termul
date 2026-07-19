@@ -147,14 +147,29 @@ impl EventSink for WsRelaySink {
 /// `payload` is serialized to a `serde_json::Value` here, then handed to each
 /// sink by reference — `TauriEventSink` re-serializes via `app.emit` (which
 /// accepts a `Value` directly) and `WsRelaySink` records the `Value` as-is.
-#[allow(clippy::missing_errors_doc)]
+///
+/// Returns early without emitting when `sinks` is empty (avoids a wasted
+/// serialization + allocation on the `vec![]` path blessed for unit tests) or
+/// when the payload fails to serialize. A serialization failure is logged and
+/// the event is dropped — preserving the old `events::emit` drop-and-log
+/// semantics (a non-JSON-serializable payload must NOT be emitted as a `null`
+/// payload on the wire).
 pub fn fan_out<P: Serialize>(
     sinks: &[Arc<dyn EventSink>],
     sid: Option<&str>,
     type_: &'static str,
     payload: &P,
 ) {
-    let payload = serde_json::to_value(payload).unwrap_or(Value::Null);
+    if sinks.is_empty() {
+        return;
+    }
+    let payload = match serde_json::to_value(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("[acp] skipping {type_} event: payload failed to serialize: {e}");
+            return;
+        }
+    };
     let event = AcpEvent {
         sid: sid.map(str::to_string),
         type_,
@@ -307,5 +322,93 @@ mod tests {
         assert_eq!(first.len(), 1);
         let second = ws.drain();
         assert!(second.is_empty(), "drain must clear the buffer");
+    }
+
+    /// A payload whose `Serialize` impl always errors — deterministically
+    /// exercises `fan_out`'s serialization-failure branch. The real-world
+    /// trigger is an `f64::NaN`/`Infinity` in a field like
+    /// `UsageCostEvent.amount`, but a custom failing serializer avoids
+    /// depending on `serde_json`'s float policy.
+    struct AlwaysFailsPayload;
+    impl Serialize for AlwaysFailsPayload {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(<S::Error as serde::ser::Error>::custom(
+                "intentional serialization failure for test",
+            ))
+        }
+    }
+
+    /// P1: a serialization failure must NOT emit a `null` payload on the wire
+    /// — the event is dropped (preserving the old `events::emit` semantics).
+    #[test]
+    fn fan_out_skips_emission_when_payload_fails_to_serialize() {
+        let ws = Arc::new(WsRelaySink::new());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+        fan_out(
+            &sinks,
+            Some("sess-nan"),
+            "acp:usage_update",
+            &AlwaysFailsPayload,
+        );
+        assert!(
+            ws.drain().is_empty(),
+            "serialization failure must not emit a null payload"
+        );
+    }
+
+    /// Mirrors the real event structs' `#[serde(skip_serializing_if = ...)]`
+    /// pattern (e.g. `SessionCreatedEvent`/`AgentErrorEvent`/`UsageUpdateEvent`)
+    /// without coupling this test to `crate::acp::events` internals.
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SkipIfPayload {
+        agent_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        optional_field: Option<String>,
+    }
+
+    /// P2: the `Value` produced by `fan_out` must match a direct
+    /// `serde_json::to_value` of the same struct, including `skip_serializing_if`
+    /// fields (a `None` optional field must be ABSENT, not emitted as `null`).
+    /// This guards against any future `Value`-intermediate regression that would
+    /// silently break byte-identity for real event structs.
+    #[test]
+    fn fan_out_preserves_skip_serializing_if_byte_identity() {
+        let ws = Arc::new(WsRelaySink::new());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+        let payload = SkipIfPayload {
+            agent_id: "a1".to_string(),
+            optional_field: None,
+        };
+        let direct = serde_json::to_value(&payload).unwrap();
+        fan_out(&sinks, Some("sess-skip"), "acp:session_created", &payload);
+        let recorded = ws.drain();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].payload, direct,
+            "fan_out's Value must match direct to_value, including skip_serializing_if"
+        );
+        assert!(
+            recorded[0].payload.get("optionalField").is_none(),
+            "skipped Option::None field must be absent from the wire payload, not null"
+        );
+        assert_eq!(recorded[0].payload["agentId"], "a1");
+    }
+
+    /// P2: compile-time proof that `EventSink` and its implementations are
+    /// `Send + Sync` (the trait requires it, so `Arc<dyn EventSink>` can cross
+    /// from the Tauri command thread into each agent's dedicated driver
+    /// thread). A future field change that breaks this would fail to compile.
+    #[test]
+    fn event_sink_trait_and_impls_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+        assert_send_sync::<AcpEvent>();
+        assert_send_sync::<WsRelaySink>();
+        assert_send_sync::<dyn EventSink>();
+        assert_send_sync::<Arc<dyn EventSink>>();
+        assert_send_sync::<Vec<Arc<dyn EventSink>>>();
     }
 }
