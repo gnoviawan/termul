@@ -1,23 +1,28 @@
 //! Web ACP Agent runtime — headless server + browser client support.
 //!
 //! This module owns the transport-neutral seams the `acp` dispatcher emits
-//! through, plus the standalone Axum server (Stories 1.2–1.3).
+//! through, plus the standalone Axum server (Stories 1.2–1.3) and the live WS
+//! relay (Story 1.4).
 //!
 //! - Desktop registers a [`sink::TauriEventSink`] (`acp:*` Tauri events).
-//! - Standalone `termul-server` registers a [`sink::WsRelaySink`] stub
-//!   (live WS wiring is Story 1.4) and calls [`serve`].
+//! - Standalone `termul-server` registers a live [`sink::WsRelaySink`] (Story
+//!   1.4 — owns per-session event logs + seq counters + subscriber set) and
+//!   calls [`serve`].
 //! - Dev static serving of `dist-web/` is [`assets`] (Story 1.3); production
 //!   rust-embed serving is Story 1.11.
 //!
-//! Auth / sandbox land in later stories.
+//! Auth / sandbox land in later stories. The WS relay protocol (envelope, seq,
+//! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
 pub mod config;
 pub mod router;
 pub mod sink;
+pub mod ws;
 
 pub use config::ServerConfig;
 pub use sink::{EventSink, TauriEventSink, WsRelaySink, fan_out};
+pub use ws::{AppState, ReliabilityTier, SequencedEvent, WsErrorCode};
 
 use std::sync::Arc;
 
@@ -28,11 +33,15 @@ use crate::acp::AcpManager;
 
 /// Bind and serve the standalone ACP HTTP server until SIGINT/SIGTERM.
 ///
-/// On signal: drains Axum first (graceful shutdown), then kills all agent
-/// subprocesses via [`AcpManager::kill_all`]. Bind failures are returned to
-/// the caller. On serve error, agents are still killed before returning.
+/// `ws_relay` is the live [`WsRelaySink`] (Story 1.4) — passed to both
+/// `AcpManager::new` (as an event sink) and the router (so `/ws` can subscribe
+/// clients + replay cursors). On signal: drains Axum first (graceful shutdown),
+/// then kills all agent subprocesses via [`AcpManager::kill_all`]. Bind
+/// failures are returned to the caller. On serve error, agents are still
+/// killed before returning.
 pub async fn serve(
     acp: Arc<AcpManager>,
+    ws_relay: Arc<WsRelaySink>,
     cfg: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
@@ -54,7 +63,7 @@ pub async fn serve(
         );
     }
 
-    let app = router::router(Arc::clone(&acp));
+    let app = router::router(Arc::clone(&acp), Arc::clone(&ws_relay));
 
     let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(async {

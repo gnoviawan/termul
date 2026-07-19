@@ -50,6 +50,8 @@ impl BindMode {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Per-session event-log capacity (bounded ring; AC4). Default 4096.
+    pub event_log_capacity: usize,
 }
 
 impl ServerConfig {
@@ -76,6 +78,7 @@ impl ServerConfig {
     {
         let mut host = "127.0.0.1".to_string();
         let mut port: u16 = 8080;
+        let mut event_log_capacity: usize = 4096;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -108,6 +111,23 @@ impl ServerConfig {
                     }
                     port = parsed;
                 }
+                "--event-log-capacity" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --event-log-capacity".into())
+                    })?;
+                    let parsed = value.as_ref().parse::<usize>().map_err(|_| {
+                        ParseCliError::Message(format!(
+                            "invalid --event-log-capacity '{}': expected a positive integer",
+                            value.as_ref()
+                        ))
+                    })?;
+                    if parsed == 0 {
+                        return Err(ParseCliError::Message(
+                            "invalid --event-log-capacity '0': use a positive integer".into(),
+                        ));
+                    }
+                    event_log_capacity = parsed;
+                }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
                 }
@@ -119,7 +139,11 @@ impl ServerConfig {
             }
         }
 
-        Ok(Self { host, port })
+        Ok(Self {
+            host,
+            port,
+            event_log_capacity,
+        })
     }
 }
 
@@ -169,6 +193,7 @@ mod tests {
         let cfg = ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
+            event_log_capacity: 4096,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -178,6 +203,7 @@ mod tests {
         let bad = ServerConfig {
             host: "example.com".to_string(),
             port: 8080,
+            event_log_capacity: 4096,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -187,6 +213,7 @@ mod tests {
         let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
+        assert_eq!(cfg.event_log_capacity, 4096, "default event-log-capacity is 4096 (AC4)");
     }
 
     #[test]
@@ -216,6 +243,39 @@ mod tests {
     fn from_args_rejects_port_zero() {
         assert!(matches!(
             ServerConfig::from_args(["--port", "0"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_accepts_event_log_capacity() {
+        let cfg = ServerConfig::from_args(["--event-log-capacity", "1024"]).expect("parse");
+        assert_eq!(cfg.event_log_capacity, 1024);
+        // The other defaults stay intact.
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+    }
+
+    #[test]
+    fn from_args_rejects_event_log_capacity_zero() {
+        assert!(matches!(
+            ServerConfig::from_args(["--event-log-capacity", "0"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_non_numeric_event_log_capacity() {
+        assert!(matches!(
+            ServerConfig::from_args(["--event-log-capacity", "big"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_missing_event_log_capacity_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--event-log-capacity"]),
             Err(ParseCliError::Message(_))
         ));
     }

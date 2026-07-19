@@ -1,8 +1,10 @@
 //! Axum router for the standalone `termul-server`.
 //!
-//! Exposes `/health`, a WS-upgrade placeholder (501 until Story 1.4), and
-//! `ServeDir` static serving of repo-root `dist-web/` (Story 1.3). Production
-//! rust-embed serving is Story 1.11. Live WS relay and auth land later.
+//! Exposes `/health`, the live WS upgrade at `/ws` (Story 1.4 — replaces the
+//! 501 placeholder), and `ServeDir` static serving of repo-root `dist-web/`
+//! (Story 1.3). Production rust-embed serving is Story 1.11. The `/ws` route
+//! is registered explicitly AHEAD of the `fallback_service` static mount so it
+//! is not shadowed by `ServeDir` (AC1).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,41 +17,40 @@ use axum::{
 };
 
 use crate::acp::AcpManager;
+use crate::web::sink::WsRelaySink;
+use crate::web::ws::{ws_upgrade, AppState};
 
 use super::assets;
 
 /// Build the standalone-server Axum router (serves repo `dist-web/`).
 ///
-/// `acp` is held for later WS/permission routes (Stories 1.4 / 1.7); this
-/// story does not yet route through it.
-pub fn router(acp: Arc<AcpManager>) -> Router {
+/// `ws_relay` is threaded into the router state so `/ws` can subscribe clients
+/// and replay cursors (Story 1.4). The `/ws` route is registered before the
+/// `fallback_service` static mount so `ServeDir` cannot shadow it (AC1).
+pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        .route("/ws", get(ws_upgrade_placeholder))
+        .route("/ws", get(ws_upgrade))
         .fallback_service(assets::static_service())
-        .with_state(acp)
+        .with_state(AppState { acp, relay: ws_relay })
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
-pub fn router_with_static(acp: Arc<AcpManager>, static_dir: &Path) -> Router {
+pub fn router_with_static(
+    acp: Arc<AcpManager>,
+    ws_relay: Arc<WsRelaySink>,
+    static_dir: &Path,
+) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        .route("/ws", get(ws_upgrade_placeholder))
+        .route("/ws", get(ws_upgrade))
         .fallback_service(assets::static_service_from(static_dir))
-        .with_state(acp)
+        .with_state(AppState { acp, relay: ws_relay })
 }
 
 /// Liveness probe — mirrors `remote::server::health_check`.
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
-}
-
-/// Placeholder until Story 1.4 wires the WS relay.
-async fn ws_upgrade_placeholder() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "WebSocket relay not implemented yet (Story 1.4)",
-    )
 }
 
 #[cfg(test)]
@@ -90,7 +91,11 @@ mod tests {
     }
 
     fn test_router_with_fixture(dir: &Path) -> Router {
-        router_with_static(Arc::new(AcpManager::new(vec![])), dir)
+        router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            Arc::new(WsRelaySink::new()),
+            dir,
+        )
     }
 
     #[tokio::test]
@@ -113,7 +118,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ws_placeholder_returns_501() {
+    async fn ws_route_no_longer_returns_501_placeholder() {
         let dir = TempDir::new("ws");
         let resp = test_router_with_fixture(dir.path())
             .oneshot(
@@ -124,7 +129,19 @@ mod tests {
             )
             .await
             .expect("router response");
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        // Story 1.4: /ws is now a live WS upgrade handler. A non-WS GET (no
+        // Upgrade headers) is rejected with a 4xx (400/426) — NOT the old 501
+        // placeholder (AC1).
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_IMPLEMENTED,
+            "/ws must not return the old 501 placeholder"
+        );
+        assert!(
+            resp.status().is_client_error(),
+            "/ws non-WS request should be a 4xx rejection, got {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

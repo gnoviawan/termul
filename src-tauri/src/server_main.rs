@@ -50,9 +50,14 @@ fn main() -> ExitCode {
     };
 
     runtime.block_on(async move {
-        let acp = Arc::new(AcpManager::new(vec![Arc::new(WsRelaySink::new())]));
+        // Story 1.4: construct the LIVE relay sink (per-session event logs +
+        // seq counters + subscriber set) and pass it to BOTH the ACP manager
+        // (as an event sink) and `serve` (so `/ws` can subscribe clients +
+        // replay cursors). AC7: standalone registers ONLY WsRelaySink (1 sink).
+        let ws_relay = Arc::new(WsRelaySink::with_log_capacity(cfg.event_log_capacity));
+        let acp = Arc::new(AcpManager::new(vec![ws_relay.clone()]));
         // `serve` always kill_all()s after Axum returns (ok or err).
-        match serve(acp, cfg).await {
+        match serve(acp, ws_relay, cfg).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("termul-server failed: {e}");
@@ -63,9 +68,10 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N]\n\n\
      Options:\n\
-       --host HOST   Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
-       --port PORT   Bind port (default: 8080)\n\
-       -h, --help    Show this help"
+       --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
+       --port PORT                 Bind port (default: 8080)\n\
+       --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
+       -h, --help                  Show this help"
 }
