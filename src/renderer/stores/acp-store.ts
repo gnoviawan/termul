@@ -1017,6 +1017,13 @@ function promotePreparedSession(
   // Promoted: no longer an un-promoted pooled session — remove from the
   // ephemeral set so a later disconnect/close persists (not drops) it.
   ephemeralSessionIds.delete(sessionId)
+  // Prepared keys exclude projectId; if projects share a cwd, the seed's
+  // projectId would be wrong for the consumer — stamp the consuming project.
+  set((s) => {
+    const session = s.sessions[sessionId]
+    if (!session) return {}
+    return { sessions: { ...s.sessions, [sessionId]: { ...session, projectId } } }
+  })
   persistSession(get(), sessionId, (entries) => set(() => ({ sessionIndex: entries })))
   cancelPreparedChatEntry(key, set)
   const state = get()
@@ -2360,7 +2367,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
       }
     })
-    if (get().sessions[e.sessionId]) {
+    // Gate on sessionIndex membership so an un-promoted (ephemeral) pooled
+    // session is never persisted by an event before `startChat` promotes it
+    // (matches the prompt/error reducers).
+    if (
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
   },
@@ -2552,8 +2565,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => {
         const sessions = { ...s.sessions }
         delete sessions[e.sessionId]
+        // Also drop any warm-slot lookup pointing at this session so the UI
+        // stops reporting "Session ready" and startChat can't promote a dead id.
+        const preparedSessions = { ...s.preparedSessions }
+        for (const [k, sid] of Object.entries(preparedSessions)) {
+          if (sid === e.sessionId) delete preparedSessions[k]
+        }
         return {
           sessions,
+          preparedSessions,
           pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
           plans: dropPlanForSession(s.plans, e.sessionId)
         }

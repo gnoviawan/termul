@@ -139,10 +139,10 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
 
   const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
     ? { label: 'Session ready', tone: 'ready' }
-    : warmState.connected
-      ? { label: 'Warm', tone: 'ready' }
-      : warmState.warming || warmState.warmingSession
-        ? { label: 'Warming…', tone: 'muted' }
+    : warmState.warming || warmState.warmingSession
+      ? { label: 'Warming…', tone: 'muted' }
+      : warmState.connected
+        ? { label: 'Warm', tone: 'ready' }
         : entry.status === 'ready'
           ? { label: 'Available', tone: 'ready' }
           : entry.status === 'install-required'
