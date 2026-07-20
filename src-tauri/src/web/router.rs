@@ -1,10 +1,10 @@
-//! Axum router for the standalone `termul-server`.
+//! Axum router for the ACP web server (standalone `termul-server` + desktop).
 //!
-//! Exposes `/health`, the live WS upgrade at `/ws` (Story 1.4 — replaces the
-//! 501 placeholder), and `ServeDir` static serving of repo-root `dist-web/`
-//! (Story 1.3). Production rust-embed serving is Story 1.11. The `/ws` route
-//! is registered explicitly AHEAD of the `fallback_service` static mount so it
-//! is not shadowed by `ServeDir` (AC1).
+//! Exposes `/health`, the live WS upgrade at `/ws`, and static serving of the
+//! web client: from disk `ServeDir` in dev (`dist-web/` on disk) or the
+//! embedded `rust-embed` bundle in release. The `/ws` route is registered
+//! explicitly AHEAD of the static fallback so it is not shadowed by the static
+//! mount (AC1).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,17 +22,28 @@ use crate::web::ws::{ws_upgrade, AppState};
 
 use super::assets;
 
-/// Build the standalone-server Axum router (serves repo `dist-web/`).
+/// Build the ACP web-server Axum router (serves the web client + WS + health).
 ///
 /// `ws_relay` is threaded into the router state so `/ws` can subscribe clients
-/// and replay cursors (Story 1.4). The `/ws` route is registered before the
-/// `fallback_service` static mount so `ServeDir` cannot shadow it (AC1).
+/// and replay cursors (Story 1.4). The `/ws` + `/health` routes are registered
+/// BEFORE the static fallback so the static mount cannot shadow them (AC1).
+///
+/// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
+/// or from the embedded `Assets` bundle in release — see
+/// [`assets::static_fallback`].
 pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
-    Router::new()
+    let mut r = Router::new()
         .route("/health", get(health_check))
-        .route("/ws", get(ws_upgrade))
-        .fallback_service(assets::static_service())
-        .with_state(AppState { acp, relay: ws_relay })
+        .route("/ws", get(ws_upgrade));
+    // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
+    // bundle in release. `/health` + `/ws` are registered above so the static
+    // mount cannot shadow them (Story 1.3 AC1).
+    if assets::dist_web_ready() {
+        r = r.fallback_service(assets::static_service());
+    } else {
+        r = r.fallback(assets::serve_embedded);
+    }
+    r.with_state(AppState { acp, relay: ws_relay })
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.

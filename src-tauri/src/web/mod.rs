@@ -9,7 +9,7 @@
 //!   1.4 — owns per-session event logs + seq counters + subscriber set) and
 //!   calls [`serve`].
 //! - Dev static serving of `dist-web/` is [`assets`] (Story 1.3); production
-//!   rust-embed serving is Story 1.11.
+//!   rust-embed embedding/serving is complete.
 //!
 //! Auth / sandbox land in later stories. The WS relay protocol (envelope, seq,
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).

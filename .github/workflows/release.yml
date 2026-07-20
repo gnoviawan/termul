@@ -202,6 +202,20 @@ jobs:
           TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
         run: bun scripts/align-version.ts
 
+      # Build the Vite WEB bundle (dist-web/) BEFORE the desktop release build so
+      # rust-embed embeds it into the desktop binary (the desktop's in-process
+      # shared-live server serves this embedded bundle in a release install
+      # without dist-web/ on disk). tauri-action's beforeBuildCommand only builds
+      # the tauri renderer (dist-tauri/); dist-web/ is separate + gitignored, so
+      # it must be built here. A missing dist-web/ fails the release build
+      # clearly via the web_embed_missing compile_error in assets.rs.
+      - name: Build web client (dist-web/)
+        run: bun run build:web
+
+      - name: Assert dist-web/index.html exists
+        shell: bash
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
       - name: Build and publish release artifacts
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
@@ -220,9 +234,11 @@ jobs:
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
   # Standalone headless server for VPS deploy (Story 1.2 scaffold).
-  # Build sequencing: bun run build:web MUST run before cargo release build so
-  # rust-embed (Story 1.11) can embed dist-web/. Today embedding is a stub;
-  # keep the ordering so release CI stays ready.
+  # Build sequencing: bun run build:web MUST run before the cargo release
+  # build so rust-embed embeds dist-web/ into the binary (Story 1.11 — a
+  # missing/stale dist-web/ now fails the release build clearly via the
+  # web_embed_missing compile_error in assets.rs; the ordering here keeps the
+  # embed non-empty).
   standalone-server:
     name: Build termul-server (linux-x64)
     needs: [changelog, create_release]

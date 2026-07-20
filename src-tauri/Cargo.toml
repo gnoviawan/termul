@@ -23,8 +23,10 @@ required-features = ["standalone-server"]
 
 [features]
 default = []
-# Enables the termul-server binary + rust-embed (full embedding lands in Story 1.11).
-standalone-server = ["dep:rust-embed"]
+# Enables the termul-server binary entry. rust-embed is now always-on (the
+# desktop's in-process shared-live server serves the SAME embedded bundle in a
+# release install without dist-web/ on disk).
+standalone-server = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -110,9 +112,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
 
-# Embed web static bundle into termul-server (Story 1.11 owns full wiring;
-# Story 1.2 only adds the dep behind the standalone-server feature).
-rust-embed = { version = "8.12", optional = true }
+# Embed the Vite web bundle (dist-web/) into the binary so the standalone
+# termul-server AND the desktop's in-process shared-live server serve the web
+# client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
+# green when the bundle is absent; the release build fails clearly via
+# build.rs when it is missing.
+rust-embed = { version = "8.12", features = ["mime-guess"] }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }

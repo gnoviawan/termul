@@ -2,7 +2,7 @@
 //!
 //! Constructs an [`AcpManager`] with a [`WsRelaySink`] stub (no Tauri
 //! `AppHandle`) and serves the Axum skeleton from `termul_manager_lib::web`.
-//! Live WS relay is Story 1.4; static embedding is Story 1.11.
+//! Live WS relay + static-embed serving are wired via the shared `web` module.
 //!
 //! Path is intentionally **outside** `src/bin/` so Tauri's bundler stage-2
 //! disk scan (tauri#15325) does not re-add this target into the desktop
