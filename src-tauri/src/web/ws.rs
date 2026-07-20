@@ -400,17 +400,22 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Drop the original sender so the write loop ends when the read task
     // (which owns the only remaining sender clone) finishes.
     drop(out_tx);
+    // Patch L: the `tokio::select!` completes the WINNING branch's JoinHandle
+    // (it is polled to completion inside select). Re-awaiting the winner
+    // panics in tokio ≥ 1.52 ("JoinHandle polled after completion"). So we
+    // only await the LOSING (aborted) task — the winner is already joined.
     tokio::select! {
         _ = &mut write_task => {
             read_task.abort();
+            // Read is the loser — await its abort to avoid orphaning.
+            let _ = read_task.await;
         }
         _ = &mut read_task => {
             write_task.abort();
+            // Write is the loser — await its abort to avoid orphaning.
+            let _ = write_task.await;
         }
     }
-    // Join both so the abort is observed and tasks are not orphaned.
-    let _ = write_task.await;
-    let _ = read_task.await;
 }
 
 /// CamelCase subscribe payload (Story 1.6) — envelope snake_case, payload camelCase.

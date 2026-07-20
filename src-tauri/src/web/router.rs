@@ -12,11 +12,12 @@ use std::sync::Arc;
 use axum::{
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 
 use crate::acp::AcpManager;
+use crate::web::fs_api;
 use crate::web::sink::WsRelaySink;
 use crate::web::ws::{ws_upgrade, AppState};
 
@@ -34,7 +35,16 @@ use super::assets;
 pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
-        .route("/ws", get(ws_upgrade));
+        .route("/ws", get(ws_upgrade))
+        // Project-creation fs/git/shell routes (Story: Web/remote project
+        // creation). Registered AHEAD of the static fallback so `/health` +
+        // `/ws` keep priority and the SPA fallback cannot shadow them.
+        .route("/fs/mkdir", post(fs_api::mkdir))
+        .route("/fs/write", post(fs_api::write))
+        .route("/fs/ls", get(fs_api::ls))
+        .route("/fs/browse", get(fs_api::browse))
+        .route("/git/init", post(fs_api::git_init))
+        .route("/shells", get(fs_api::shells));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -55,6 +65,12 @@ pub fn router_with_static(
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
+        .route("/fs/mkdir", post(fs_api::mkdir))
+        .route("/fs/write", post(fs_api::write))
+        .route("/fs/ls", get(fs_api::ls))
+        .route("/fs/browse", get(fs_api::browse))
+        .route("/git/init", post(fs_api::git_init))
+        .route("/shells", get(fs_api::shells))
         .fallback_service(assets::static_service_from(static_dir))
         .with_state(AppState { acp, relay: ws_relay })
 }

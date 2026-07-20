@@ -16,6 +16,7 @@
 
 pub mod assets;
 pub mod config;
+pub mod fs_api;
 pub mod permissions;
 pub mod router;
 pub mod sink;
@@ -114,10 +115,16 @@ pub async fn serve_router(
     let app = router::router(Arc::clone(&acp), Arc::clone(&ws_relay));
 
     let handle = tokio::spawn(async move {
-        let serve_result = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown)
-            .await
-            .inspect_err(|e| error!("ACP web server error: {}", e));
+        // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
+        // the fs WRITE routes can extract `ConnectInfo<SocketAddr>` for the
+        // localhost-only guard. Read routes and `/ws` are unaffected.
+        let serve_result = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown)
+        .await
+        .inspect_err(|e| error!("ACP web server error: {}", e));
 
         match serve_result {
             Ok(()) => info!("ACP web server stopped"),

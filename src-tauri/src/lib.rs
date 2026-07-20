@@ -22,7 +22,7 @@ mod worktree;
 use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
 use remote::RemoteServerState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -127,17 +127,17 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 // `AppHandle` at all.
 use web::{PermissionRendezvous, TauriEventSink, WsRelaySink};
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
     pub display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DetectedShells {
     pub available: Vec<ShellInfo>,
     pub default: Option<ShellInfo>,
@@ -149,6 +149,14 @@ static CACHE_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 
 #[tauri::command]
 fn detect_shells() -> Result<DetectedShells, String> {
+    detect_shells_inner()
+}
+
+/// Reusable shell-detection entry point (same logic as the `detect_shells`
+/// Tauri command, without the `#[tauri::command]` macro). The HTTP `/shells`
+/// route (`web::fs_api::shells`) calls this directly so the web/remote path
+/// can reach shell detection without a Tauri runtime.
+pub(crate) fn detect_shells_inner() -> Result<DetectedShells, String> {
     let count = CACHE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::debug!("[ShellDetect] detect_shells called (call #{})", count);
 

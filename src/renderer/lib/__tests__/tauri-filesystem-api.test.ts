@@ -8,6 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type WatchCallback = (event: unknown) => void
 
+// These tests exercise the DESKTOP path (`@tauri-apps/plugin-fs`). The renderer
+// facade branches to the web-server client when `!isTauriContext()`, and jsdom
+// has no `__TAURI_INTERNALS__` so that branch would fire by default. Pin the
+// context to true here so the desktop path is under test; the web branch is
+// covered by `web-server-api.test.ts` + `tauri-filesystem-api.web.test.ts`.
+const { mockIsTauriContext } = vi.hoisted(() => ({
+  mockIsTauriContext: vi.fn(() => true)
+}))
+
+vi.mock('../tauri-runtime', () => ({
+  isTauriContext: mockIsTauriContext
+}))
+
 const defaultStat: FileInfo = {
   isFile: true,
   isDirectory: false,
@@ -120,6 +133,12 @@ describe('tauriFilesystemApi', () => {
         expect(result.data![1].name).toBe('file1.txt')
         expect(result.data![1].type).toBe('file')
       }
+      // Patch H (byte-identical desktop guarantee): the desktop branch must
+      // actually call the @tauri-apps/plugin-fs `readDir` mock — not silently
+      // fall through to a web/server client. The mock fires once with the
+      // raw directory path.
+      expect(vi.mocked(readDir)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(readDir)).toHaveBeenCalledWith('/test')
     })
 
     it('should flag ALWAYS_IGNORE patterns as ignored but still include them', async () => {
@@ -353,6 +372,19 @@ describe('tauriFilesystemApi', () => {
         expect(result.code).toBe('CREATE_ERROR')
       }
     })
+
+    // Patch H (byte-identical desktop guarantee): when isTauriContext() is
+    // true, createFile MUST call the @tauri-apps/plugin-fs `writeTextFile`
+    // mock (not the web/server client).
+    it('calls the @tauri-apps/plugin-fs writeTextFile mock on the desktop branch (Patch H)', async () => {
+      vi.mocked(writeTextFile).mockClear()
+      vi.mocked(writeTextFile).mockResolvedValue(undefined)
+
+      await tauriFilesystemApi.createFile('/test/desktop-create.txt', 'body')
+
+      expect(vi.mocked(writeTextFile)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(writeTextFile)).toHaveBeenCalledWith('/test/desktop-create.txt', 'body')
+    })
   })
 
   describe('createDirectory', () => {
@@ -374,6 +406,23 @@ describe('tauriFilesystemApi', () => {
       if (!result.success) {
         expect(result.code).toBe('MKDIR_ERROR')
       }
+    })
+
+    // Patch H (byte-identical desktop guarantee): when isTauriContext() is
+    // true, createDirectory MUST call the @tauri-apps/plugin-fs `mkdir` mock
+    // (not the web/server client). The three methods moved to the web branch
+    // (createDirectory, createFile, readDirectory) must keep their desktop
+    // path byte-identical — this pins it.
+    it('calls the @tauri-apps/plugin-fs mkdir mock on the desktop branch (Patch H)', async () => {
+      vi.mocked(mkdir).mockClear()
+      vi.mocked(mkdir).mockResolvedValue(undefined)
+
+      await tauriFilesystemApi.createDirectory('/test/desktop-mkdir')
+
+      expect(vi.mocked(mkdir)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(mkdir)).toHaveBeenCalledWith('/test/desktop-mkdir', {
+        recursive: true
+      })
     })
   })
 
