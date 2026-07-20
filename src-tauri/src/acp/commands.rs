@@ -176,6 +176,18 @@ pub async fn acp_authenticate(
 }
 
 /// Respond to a pending permission request. `optionId == None` cancels it.
+///
+/// Two paths can resolve the same permission: the desktop renderer (this
+/// command, direct `AcpManager::respond_permission`) and a phone over WS (the
+/// `respond_permission` handler → `PermissionRendezvous::try_respond` →
+/// `AcpManager::respond_permission`). Both converge on the agent driver's
+/// single-use `take_permission` gate, so whichever responds first wins.
+///
+/// When this command loses the race (the phone resolved first, or the user
+/// clicked twice), `take_permission` returns `None` and the driver replies
+/// `Err("unknown permission request: …")`. That is a benign "already resolved"
+/// outcome, not a real error — surface it as `Ok(())` so the renderer doesn't
+/// show a confusing error for the loser of a race the user intended to win.
 #[tauri::command]
 pub async fn acp_respond_permission(
     manager: State<'_, Arc<AcpManager>>,
@@ -183,9 +195,16 @@ pub async fn acp_respond_permission(
     request_id: String,
     option_id: Option<String>,
 ) -> Result<(), String> {
-    manager
+    match manager
         .respond_permission(&agent_id, request_id, option_id)
         .await
+    {
+        Ok(()) => Ok(()),
+        // Loser of a first-response-wins race: the permission was already
+        // resolved by the other path. Treat as success (idempotent resolve).
+        Err(e) if e.starts_with("unknown permission request") => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.

@@ -2985,20 +2985,32 @@ pub async fn sftp_create_file(
 
 // ==================== Remote Server Commands ====================
 
-/// Start the remote terminal server
+/// Start the desktop-hosted shared-live web server.
+///
+/// Shares the desktop's live `AcpManager` sessions with a browser/phone client
+/// over the LAN (the same server the standalone `termul-server` binary uses).
+/// Bind mode defaults to localhost; `all` exposes it on the LAN.
 #[tauri::command]
 pub async fn remote_server_start(
-    app_handle: AppHandle,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let bind_mode = bind_mode
-        .as_deref()
-        .and_then(remote::server::RemoteBindMode::parse)
-        .unwrap_or(remote::server::RemoteBindMode::Localhost);
+    // Default to localhost only when the caller omits the bind mode; an
+    // explicit-but-unrecognized value (e.g. a typo of "all") is an error — do
+    // not silently downgrade to localhost (the phone would silently fail to
+    // connect on the LAN).
+    let bind_mode = match bind_mode.as_deref() {
+        None => remote::RemoteBindMode::Localhost,
+        Some(s) => remote::RemoteBindMode::parse(s).ok_or_else(|| {
+            format!(
+                "invalid bind mode '{s}': use 'localhost' or 'all'",
+            )
+        })?,
+    };
     match remote_state
-        .start(pty_manager.inner().clone(), app_handle, bind_mode)
+        .start(acp_manager.inner().clone(), ws_relay.inner().clone(), bind_mode)
         .await
     {
         Ok(status) => Ok(IpcResult::success(status)),
@@ -3006,7 +3018,10 @@ pub async fn remote_server_start(
     }
 }
 
-/// Stop the remote terminal server
+/// Stop the desktop-hosted web server.
+///
+/// Signals graceful shutdown to the serve task. The desktop's live agents are
+/// NOT killed — they survive a shared-live toggle-off.
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
@@ -3017,25 +3032,12 @@ pub async fn remote_server_stop(
     }
 }
 
-/// Get remote server status
+/// Get the desktop-hosted web server status.
 #[tauri::command]
 pub async fn remote_server_status(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     Ok(IpcResult::success(remote_state.status()))
-}
-
-/// Publish the renderer's project → terminal tree to the remote server.
-///
-/// The web client reads this tree from `GET /api/projects`. The renderer should
-/// call this whenever its projects/terminals change (and once on server start).
-#[tauri::command]
-pub async fn remote_publish_projects(
-    tree: remote::ProjectTree,
-    remote_state: State<'_, Arc<remote::RemoteServerState>>,
-) -> Result<IpcResult<()>, String> {
-    remote_state.registry.replace(tree);
-    Ok(IpcResult::success(()))
 }
 
 // ==================== Git Commands ====================

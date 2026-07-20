@@ -182,6 +182,14 @@ impl PermissionRendezvous {
 
     /// Create a rendezvous with an explicit timeout (testable; also wired from
     /// `ServerConfig::permission_timeout_secs` in `serve`).
+    ///
+    /// Captures the *current* tokio runtime handle. Call from within a tokio
+    /// runtime context (`serve`/`main`'s `block_on`). For callers that may NOT be
+    /// inside a runtime at construction time (e.g. the desktop path, which
+    /// builds the rendezvous in Tauri's `setup` callback), use
+    /// [`Self::with_handle`] with an explicitly-captured `tauri::async_runtime`
+    /// handle so the per-ticket timeout is reliably armed from the agent driver
+    /// thread.
     #[must_use]
     pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
         Self {
@@ -189,11 +197,25 @@ impl PermissionRendezvous {
             sessions: Mutex::new(HashMap::new()),
             acp,
             timeout,
-            // Capture the runtime handle; if there is none (e.g. a unit test
-            // constructing a rendezvous outside a runtime), `arm_timeout` falls
-            // back to `tokio::spawn` (which only works when the caller is inside
-            // a runtime — fine for the test helpers that wrap `block_on`).
             handle: tokio::runtime::Handle::try_current(),
+        }
+    }
+
+    /// Create a rendezvous with an explicit runtime handle + timeout.
+    ///
+    /// Use this when construction happens outside a guaranteed-runtime context
+    /// (the desktop path in Tauri's `setup`) but a runtime handle is available
+    /// via `tauri::async_runtime::handle()`. Passing the handle explicitly makes
+    /// `arm_timeout` reliable — it does not depend on `Handle::try_current()`
+    /// succeeding at construction time.
+    #[must_use]
+    pub fn with_handle(acp: Arc<AcpManager>, timeout: Duration, handle: tokio::runtime::Handle) -> Self {
+        Self {
+            tickets: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+            acp,
+            timeout,
+            handle: Ok(handle),
         }
     }
 

@@ -1,22 +1,15 @@
-//! Remote terminal access module
+//! Desktop-hosted shared-live ACP web server module.
 //!
-//! Provides HTTP + WebSocket server for accessing PTY terminals from web browsers.
-//! Designed with security-first principles:
-//! - Same-origin validation to prevent CSWSH (no token; reachable by ip:port)
-//! - Per-terminal connection limits
-//! - Defaults to localhost-only binding
+//! Wraps the in-process Axum server from [`crate::web`] so the desktop shares
+//! its live [`crate::acp::AcpManager`] sessions with a browser/phone client over
+//! the LAN — "shared-live" mode. Lifecycle (start/stop/status) is driven by the
+//! status-bar control through the `remote_server_*` Tauri commands.
 //!
-//! Architecture:
-//! - Uses `tokio::sync::broadcast` to receive terminal output from PtyManager
-//! - Replays per-terminal scrollback on connect for persistence/parity
-//! - Uses Axum 0.8 (reuses existing tokio/hyper stack, no separate runtime)
-//! - Supports multiple concurrent WebSocket clients per terminal
-//! - Renderer publishes a project → terminal tree into `ProjectRegistry`
+//! The legacy PTY bridge (separate WebSocket proxying live PTY I/O, a
+//! renderer-published project tree, same-origin auth) has been removed; the ACP
+//! web server has no `/api/projects` or `/api/spawn` routes — the phone connects
+//! directly to a session via the WS URL. Auth / token-gating land in Epic 2.
 
-pub mod auth;
-pub mod registry;
-pub mod server;
-pub mod ws;
+pub mod host;
 
-pub use registry::ProjectTree;
-pub use server::{RemoteServerState, RemoteStatus};
+pub use host::{RemoteBindMode, RemoteServerState, RemoteStatus};

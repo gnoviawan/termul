@@ -48,7 +48,7 @@ pub fn router_with_static(
         .with_state(AppState { acp, relay: ws_relay })
 }
 
-/// Liveness probe — mirrors `remote::server::health_check`.
+/// Liveness probe for the ACP web server.
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }

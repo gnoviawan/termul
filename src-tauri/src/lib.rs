@@ -125,7 +125,7 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
-use web::TauriEventSink;
+use web::{PermissionRendezvous, TauriEventSink, WsRelaySink};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -993,13 +993,41 @@ pub fn run() {
             app.manage(browser_tab_manager);
 
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
-            // Desktop mode registers a single `TauriEventSink` so the existing
-            // `acp:*` Tauri event flow is byte-for-byte unchanged (AC8). Story
-            // 1.10 will add a second `WsRelaySink` here for shared-live mode.
+            //
+            // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
+            // (the renderer's `acp:*` events, byte-for-byte unchanged) and a
+            // `WsRelaySink` (the shared-live web server's per-session event log
+            // + subscriber set). `fan_out` serializes once and fans N, so adding
+            // the second sink does not change the `TauriEventSink` payloads.
+            //
+            // The shared-live web server (`remote/host.rs`) pulls both
+            // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
+            // the desktop's live sessions to a browser/phone over the LAN.
+            let ws_relay = Arc::new(WsRelaySink::new());
             let acp_manager = Arc::new(AcpManager::new(vec![
                 Arc::new(TauriEventSink::new(handle.clone())),
+                ws_relay.clone(),
             ]));
+            // Attach the server-side permission rendezvous so a phone can
+            // respond to `acp:permission_request` over WS. The desktop renderer
+            // still responds via the `acp_respond_permission` Tauri command
+            // (direct `AcpManager::respond_permission`); the rendezvous's
+            // at-most-one `take_permission` gate ensures whichever path responds
+            // first wins.
+            //
+            // Capture the runtime handle explicitly (`tauri::async_runtime`)
+            // rather than relying on `Handle::try_current()` — `setup` runs on
+            // the main thread and is not guaranteed to be inside a tokio runtime
+            // context, so capturing the handle here keeps `arm_timeout` reliable
+            // when it runs later on the agent driver thread.
+            let rendezvous = Arc::new(PermissionRendezvous::with_handle(
+                Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(60),
+                tauri::async_runtime::handle().inner().clone(),
+            ));
+            ws_relay.set_rendezvous(rendezvous);
             app.manage(acp_manager);
+            app.manage(ws_relay);
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -1222,7 +1250,6 @@ pub fn run() {
             commands::remote_server_start,
             commands::remote_server_stop,
             commands::remote_server_status,
-            commands::remote_publish_projects,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])

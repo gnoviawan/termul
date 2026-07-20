@@ -1,8 +1,9 @@
 //! Bind configuration for the standalone `termul-server` HTTP listener.
 //!
-//! Mirrors `remote::server::RemoteBindMode` so `--host` parsing stays consistent
-//! across the embedded PTY bridge and the headless ACP server. Auth/TLS land in
-//! Epic 2 — this story owns host/port + the permission-rendezvous timeout.
+//! Mirrors `remote::host::RemoteBindMode` so `--host` parsing stays consistent
+//! across the desktop-hosted shared-live server and the headless ACP server.
+//! Auth/TLS land in Epic 2 — this story owns host/port + the
+//! permission-rendezvous timeout.
 
 use std::net::SocketAddr;
 

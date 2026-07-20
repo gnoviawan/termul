@@ -136,8 +136,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     remoteServerApi: {
       start: vi.fn(),
       stop: vi.fn(),
-      status: vi.fn(),
-      publishProjects: vi.fn()
+      status: vi.fn()
     },
     openerApi: {
       openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
