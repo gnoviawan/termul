@@ -1185,6 +1185,13 @@ impl WorktreeManager {
             }
         }
 
+        // Deduplicate suggestions by (strategy, reason) key
+        let mut seen = std::collections::HashSet::new();
+        suggestions.retain(|s| {
+            let key = (s.strategy.as_str(), s.reason.as_str());
+            seen.insert(key)
+        });
+
         // If no auto-resolution suggestions, provide manual guidance
         if suggestions.is_empty() {
             suggestions.push(ConflictSuggestion {
@@ -1288,6 +1295,10 @@ impl WorktreeManager {
                 .replace(";", "")
                 .replace(",\n", "\n")
                 .replace(", ", " ")
+                // Remove trailing commas before closing delimiters
+                .replace(",]", "]")
+                .replace(",}", "}")
+                .replace(",)", ")")
                 .chars()
                 .filter(|c| !c.is_whitespace())
                 .collect()
