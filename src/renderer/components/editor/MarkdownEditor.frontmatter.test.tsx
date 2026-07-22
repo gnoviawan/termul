@@ -142,8 +142,14 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
 
     expect(onChange).toHaveBeenCalledTimes(1)
     const emitted = onChange.mock.calls[0]?.[0] as string
-    expect(emitted).toContain('title: Spec')
-    expect(emitted).toContain('# Heading\n\nEdited body.\n')
+    expect(emitted).toBe(`---
+title: Spec
+status: draft
+---
+# Heading
+
+Edited body.
+`)
     expect(replaceContent).not.toHaveBeenCalled()
 
     // Parent echoes the emitted full file back as the content prop (verbatim).
