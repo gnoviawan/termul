@@ -136,7 +136,8 @@ export function FrontmatterProperties({
   )
 
   return (
-    <div className="border-b border-border bg-muted/20 px-4 py-3">
+    // Match BlockNote `.bn-editor { padding-inline: 54px }` so Properties align with body text.
+    <div className="border-b border-border px-[54px] py-3">
       <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         Properties
       </div>
@@ -145,7 +146,7 @@ export function FrontmatterProperties({
         {entries.map(([key, value]) => {
           const Icon = iconForKey(key)
           return (
-            <div key={key} className="group flex items-start gap-2 rounded-md px-1 py-1">
+            <div key={key} className="group flex items-start gap-2 rounded-md py-1">
               <Icon className="mt-2 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <label
                 htmlFor={`${baseId}-${key}`}
