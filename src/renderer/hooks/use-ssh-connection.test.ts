@@ -257,4 +257,35 @@ describe('useSSHConnection', () => {
     expect(conn?.status).toBe('connected')
     expect(result.current.sftpReady).toBe(true)
   })
+
+  it('resets profile-local terminal state when switching between SSH profiles', async () => {
+    const secondProfile: SSHProfile = {
+      ...baseProfile,
+      id: 'profile-2',
+      name: 'Staging',
+      host: 'staging.example.com'
+    }
+
+    const { result, rerender } = renderHook(({ profile }) => useSSHConnection(profile), {
+      initialProps: { profile: baseProfile as SSHProfile | null }
+    })
+
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR'
+    })
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    expect(result.current.localTerminalPtyId).toBe('pty-1')
+
+    rerender({ profile: secondProfile })
+
+    expect(result.current.localTerminalPtyId).toBeNull()
+    expect(result.current.isConnecting).toBe(false)
+    expect(result.current.sftpReady).toBe(false)
+  })
 })

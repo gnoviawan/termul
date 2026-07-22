@@ -26,6 +26,34 @@ export function useSSHConnection(profile: SSHProfile | null) {
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [isLoadingRoot, setIsLoadingRoot] = useState(false)
 
+  // Pending timers so we can cancel writes/loads on disconnect/unmount/profile switch.
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const profileId = profile?.id ?? null
+  const previousProfileIdRef = useRef<string | null>(profileId)
+
+  useEffect(() => {
+    if (previousProfileIdRef.current === profileId) return
+    previousProfileIdRef.current = profileId
+    setLocalTerminalPtyId(null)
+    setIsConnecting(false)
+    setSftpReady(false)
+    setEntries([])
+    setCurrentPath('/')
+    setExpandedDirs(new Set())
+    setChildEntries(new Map())
+    setLoadingDirs(new Set())
+    setIsLoadingRoot(false)
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current)
+      writeTimerRef.current = null
+    }
+    if (restoreTimerRef.current) {
+      clearTimeout(restoreTimerRef.current)
+      restoreTimerRef.current = null
+    }
+  }, [profileId])
+
   const loadDirectory = useCallback(
     async (path: string, overrideConnectionId?: string) => {
       const id = overrideConnectionId ?? connectionId
@@ -50,9 +78,6 @@ export function useSSHConnection(profile: SSHProfile | null) {
   const loadDirRef = useRef(loadDirectory)
   loadDirRef.current = loadDirectory
 
-  // Pending timers so we can cancel writes/loads on disconnect/unmount
-  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
