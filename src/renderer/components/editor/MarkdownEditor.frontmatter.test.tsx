@@ -129,4 +129,42 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
     // FM-only edit must not treat store echo as external reload
     expect(replaceContent).not.toHaveBeenCalled()
   })
+
+  it('verbatim store echo clears pending local emits so later external reloads apply', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(
+      <MarkdownEditor filePath="/docs/spec.md" content={FM_CONTENT} isVisible onChange={onChange} />
+    )
+
+    act(() => {
+      capturedOptions.onChange('# Heading\n\nEdited body.\n')
+    })
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const emitted = onChange.mock.calls[0]?.[0] as string
+    expect(emitted).toContain('title: Spec')
+    expect(emitted).toContain('# Heading\n\nEdited body.\n')
+    expect(replaceContent).not.toHaveBeenCalled()
+
+    // Parent echoes the emitted full file back as the content prop (verbatim).
+    rerender(
+      <MarkdownEditor filePath="/docs/spec.md" content={emitted} isVisible onChange={onChange} />
+    )
+    expect(replaceContent).not.toHaveBeenCalled()
+
+    const external = `---
+title: Spec
+status: draft
+---
+# Heading
+
+External reload.
+`
+    rerender(
+      <MarkdownEditor filePath="/docs/spec.md" content={external} isVisible onChange={onChange} />
+    )
+
+    expect(replaceContent).toHaveBeenCalledTimes(1)
+    expect(replaceContent).toHaveBeenCalledWith('# Heading\n\nExternal reload.\n')
+  })
 })

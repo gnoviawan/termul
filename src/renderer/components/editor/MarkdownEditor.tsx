@@ -211,14 +211,19 @@ export function MarkdownEditor({
       return
     }
 
-    if (content !== prevContentRef.current) {
-      if (pendingLocalEmitsRef.current > 0) {
-        pendingLocalEmitsRef.current -= 1
-      } else {
-        applyExternalContent(content)
-      }
-      prevContentRef.current = content
+    // Verbatim store echo of our emit: content already matches prevContentRef
+    // (set in emitFullContent). Still clear pending so a later genuine external
+    // update is not consumed as a leftover local emit.
+    if (content === prevContentRef.current) {
+      pendingLocalEmitsRef.current = 0
+      return
     }
+
+    // Distinct content → external. Never burn pending on a mismatch; that used
+    // to drop real reloads after a same-content echo left the counter elevated.
+    pendingLocalEmitsRef.current = 0
+    applyExternalContent(content)
+    prevContentRef.current = content
   }, [applyExternalContent, content, filePath])
 
   useEffect(() => {
