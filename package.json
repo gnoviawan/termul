@@ -154,6 +154,7 @@
     "tauri-pty": "^0.1",
     "unicode-animations": "^1.0.3",
     "vaul": "^0.9.9",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76",
     "zustand": "^5.0.9"
   },
