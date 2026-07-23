@@ -1197,6 +1197,60 @@ describe('ConnectedTerminal', () => {
       expect(mockTerminalInstance.selectAll).toHaveBeenCalled()
     })
 
+    it('should send a newline (LF) on Shift+Enter instead of CR', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      // Wait for spawn so the PTY id is bound before the key is dispatched.
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      })
+
+      const result = handler(event)
+
+      // Must prevent xterm's default (\r) so the app receives a newline.
+      expect(result).toBe(false)
+      expect(event.defaultPrevented).toBe(true)
+
+      // The same byte Ctrl+J produces (LF) is written to the PTY.
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('terminal-123', '\n')
+      })
+    })
+
+    it('should not remap Shift+Enter when another modifier is held', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Ctrl+Shift+Enter must NOT be swallowed — it may be an app shortcut.
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
+    })
+
     it('should handle Cmd key on macOS for copy/paste', async () => {
       // On non-macOS test environments (jsdom has empty platform),
       // isPlatformModifier checks ctrlKey, not metaKey.

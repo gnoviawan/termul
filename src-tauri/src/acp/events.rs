@@ -47,6 +47,8 @@ pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
 /// Event name: the agent updated session metadata (e.g. title).
 pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
+/// Event name: the agent reported context window utilization (and optional cost).
+pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -212,6 +214,30 @@ pub struct SessionInfoUpdateEvent {
     pub title: Option<String>,
 }
 
+/// Cumulative session cost reported by the agent (optional on `UsageUpdateEvent`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCostEvent {
+    pub amount: f64,
+    pub currency: String,
+}
+
+/// `acp:usage_update`
+///
+/// Emitted when the agent pushes context window utilization via ACP
+/// `sessionUpdate: "usage_update"`. Requires the `unstable_session_usage`
+/// feature on the protocol crate.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageUpdateEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub used: u64,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<UsageCostEvent>,
+}
+
 /// Emit a payload to the renderer, logging (but not propagating) any error.
 ///
 /// Emission failures are non-fatal: they only mean no renderer is listening, so
@@ -319,5 +345,39 @@ mod tests {
         assert_eq!(value["agentId"], "a");
         assert_eq!(value["sessionId"], "s");
         assert_eq!(value["title"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn usage_update_serializes_camel_case() {
+        let event = UsageUpdateEvent {
+            agent_id: AgentId("a".to_string()),
+            session_id: SessionId::new("s"),
+            used: 53_000,
+            size: 200_000,
+            cost: Some(UsageCostEvent {
+                amount: 0.045,
+                currency: "USD".to_string(),
+            }),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["agentId"], "a");
+        assert_eq!(value["sessionId"], "s");
+        assert_eq!(value["used"], 53_000);
+        assert_eq!(value["size"], 200_000);
+        assert_eq!(value["cost"]["amount"], 0.045);
+        assert_eq!(value["cost"]["currency"], "USD");
+    }
+
+    #[test]
+    fn usage_update_omits_none_cost() {
+        let event = UsageUpdateEvent {
+            agent_id: AgentId("a".to_string()),
+            session_id: SessionId::new("s"),
+            used: 1_000,
+            size: 128_000,
+            cost: None,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert!(value.get("cost").is_none());
     }
 }

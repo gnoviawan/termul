@@ -663,6 +663,26 @@ function ConnectedTerminalComponent({
         return true
       }
 
+      // Shift+Enter → newline (LF). xterm.js sends \r for Enter regardless of
+      // Shift, so multiline TUI apps (Claude Code, Ink, etc.) can't tell it
+      // apart from a plain Enter and treat it as "submit". Send \n (LF) — the
+      // same byte Ctrl+J produces — so Shift+Enter inserts a newline instead.
+      // Pure Shift+Enter only: ignore it when other modifiers are held (so
+      // Cmd/Ctrl+Shift+Enter app shortcuts are unaffected) and during IME
+      // composition.
+      if (
+        event.key === 'Enter' &&
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.isComposing
+      ) {
+        event.preventDefault()
+        handleTerminalData('\n')
+        return false
+      }
+
       return true
     })
 

@@ -7,7 +7,6 @@ import {
   FileText,
   FolderInput,
   Globe,
-  Loader2,
   Search,
   Shuffle,
   TerminalSquare,
@@ -158,7 +157,7 @@ function ToolCallCardComponent({
   const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
   const hasDetail = hasContent || resultText.length > 0
   const status = toolCall.status
-  const running = status === 'in_progress' || status === 'pending'
+  const inProgress = status === 'in_progress'
   const failed = status === 'failed'
 
   // Collapsed by default for a clean, scannable list; a click reveals details.
@@ -208,12 +207,6 @@ function ToolCallCardComponent({
           {formatDuration(durationMs)}
         </span>
       )}
-      {running && (
-        <Loader2
-          size={12}
-          className="shrink-0 animate-spin text-amber-400 motion-reduce:animate-none"
-        />
-      )}
       {failed && <AlertCircle size={12} className="shrink-0 text-red-400" />}
       {hasDetail && (
         <motion.span
@@ -230,33 +223,40 @@ function ToolCallCardComponent({
 
   return (
     <motion.div
-      className="group/tool my-1.5 w-full overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
+      aria-busy={inProgress || undefined}
+      data-status={status}
+      className={cn(
+        'group/tool relative my-1.5 w-full overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50',
+        inProgress && 'tool-call-card-running'
+      )}
       initial={animateEnter ? enter.initial : false}
       animate={enter.animate}
       transition={enter.transition}
     >
-      {hasDetail ? (
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          data-press-feedback="off"
-          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-card/60"
-        >
-          {row}
-        </button>
-      ) : (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs">{row}</div>
-      )}
-      {hasDetail && (
-        <CollapseExpandMotion open={open}>
-          <div className="flex flex-col gap-1.5 border-t border-border/50 bg-background/30 px-2.5 pb-2.5 pt-2">
-            {hasContent
-              ? content.map((item, i) => renderContentItem(item, i))
-              : resultText && <ResultBlock text={resultText} />}
-          </div>
-        </CollapseExpandMotion>
-      )}
+      <div className="relative z-10">
+        {hasDetail ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            data-press-feedback="off"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-card/60"
+          >
+            {row}
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs">{row}</div>
+        )}
+        {hasDetail && (
+          <CollapseExpandMotion open={open}>
+            <div className="flex flex-col gap-1.5 border-t border-border/50 bg-background/30 px-2.5 pb-2.5 pt-2">
+              {hasContent
+                ? content.map((item, i) => renderContentItem(item, i))
+                : resultText && <ResultBlock text={resultText} />}
+            </div>
+          </CollapseExpandMotion>
+        )}
+      </div>
     </motion.div>
   )
 }

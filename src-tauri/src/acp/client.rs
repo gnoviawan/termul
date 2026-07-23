@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::{
-    ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest, ReadTextFileResponse,
+    ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse,
     SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
 use tauri::AppHandle;
@@ -21,7 +21,16 @@ use crate::acp::config::AgentId;
 use crate::acp::events::{
     self, ChunkRole, CommandsUpdateEvent, ConfigOptionsUpdateEvent, MessageChunkEvent,
     ModeUpdateEvent, PlanUpdateEvent, SessionInfoUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
+    UsageCostEvent, UsageUpdateEvent,
 };
+
+/// Cursor ACP extension: when present on `clientCapabilities._meta`, Cursor
+/// exposes Fast / thought-level as separate session `configOptions` instead of
+/// collapsing each model to a single default variant.
+///
+/// Not part of the ACP spec; advertised via the standard `_meta` extensibility
+/// hook. Unknown agents ignore unrecognized `_meta` keys.
+const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
@@ -29,13 +38,22 @@ use crate::acp::events::{
 /// capability is advertised ONLY when the agent's config opted in
 /// (`allow_terminal`). Terminal access is arbitrary command execution, so it is
 /// off by default (M6) and enabled per trusted agent.
+///
+/// Always advertise Cursor's `parameterizedModelPicker` `_meta` flag so Cursor
+/// ACP sessions can surface Fast / reasoning controls through standard
+/// `configOptions`. Harmless for agents that ignore unknown `_meta` keys.
 #[must_use]
 pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
+    let meta = Meta::from_iter([(
+        PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
+        serde_json::Value::Bool(true),
+    )]);
     ClientCapabilities::new()
         .fs(FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(allow_terminal)
+        .meta(meta)
 }
 
 /// Resolve an agent-supplied absolute path against a session's workspace root,
@@ -213,7 +231,7 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 }
                 other => format!("{other:?}"),
             };
-            log::info!(
+            log::debug!(
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
                 session_id.0
             );
@@ -256,15 +274,19 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 update,
             },
         ),
-        SessionUpdate::Plan(plan) => events::emit(
-            app,
-            events::EVENT_PLAN_UPDATE,
-            PlanUpdateEvent {
-                agent_id: agent_id.clone(),
-                session_id,
-                plan,
-            },
-        ),
+        SessionUpdate::Plan(plan) => {
+            // ACP agent-plan: each update is a full replace; forward verbatim.
+            // https://agentclientprotocol.com/protocol/v1/agent-plan
+            events::emit(
+                app,
+                events::EVENT_PLAN_UPDATE,
+                PlanUpdateEvent {
+                    agent_id: agent_id.clone(),
+                    session_id,
+                    plan,
+                },
+            )
+        }
         SessionUpdate::AvailableCommandsUpdate(update) => events::emit(
             app,
             events::EVENT_COMMANDS_UPDATE,
@@ -318,6 +340,23 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 ),
             }
         }
+        SessionUpdate::UsageUpdate(update) => {
+            let cost = update.cost.map(|c| UsageCostEvent {
+                amount: c.amount,
+                currency: c.currency,
+            });
+            events::emit(
+                app,
+                events::EVENT_USAGE_UPDATE,
+                UsageUpdateEvent {
+                    agent_id: agent_id.clone(),
+                    session_id,
+                    used: update.used,
+                    size: update.size,
+                    cost,
+                },
+            );
+        }
         // Any future (non_exhaustive) variants have no dedicated event;
         // ignore them — but log so a silently-dropped update can be diagnosed
         // instead of vanishing.
@@ -343,6 +382,16 @@ mod tests {
         let denied = client_capabilities(false);
         assert!(denied.fs.read_text_file);
         assert!(!denied.terminal);
+    }
+
+    #[test]
+    fn client_capabilities_advertise_parameterized_model_picker_meta() {
+        let caps = client_capabilities(false);
+        let meta = caps.meta.expect("expected client capabilities _meta");
+        assert_eq!(
+            meta.get(PARAMETERIZED_MODEL_PICKER_META_KEY),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     #[tokio::test]

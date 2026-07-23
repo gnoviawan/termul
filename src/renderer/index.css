@@ -6,6 +6,12 @@
 @import "shadcn/tailwind.css";
 @config "../../tailwind.config.ts";
 
+/* Streamdown ships Tailwind utility classes in its dist bundles; Tailwind v4
+   must scan them to generate the matching CSS (chat markdown renderer). */
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
+
 @layer base {
   :root {
     /* Background layers - Codex dark theme */
@@ -52,6 +58,16 @@
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
+    /* Transitions.dev tooltip open/close tokens (Radix maps delay via
+       TooltipProvider delayDuration — do not also set CSS transition-delay
+       on open, or tips double-wait). */
+    --tt-in-dur: 150ms;
+    --tt-out-dur: 50ms;
+    --tt-scale: 0.98;
+    --tt-delay: 80ms;
+    --tt-in-ease: ease-out;
+    --tt-out-ease: ease-out;
+
     /* Terminal-specific */
     --terminal-bg: 0 0% 7%; /* #121212 */
     --terminal-fg: 0 0% 85%;
@@ -62,6 +78,13 @@
 
     /* Status bar (VS Code style) */
     --status-bar: 217 91% 40%; /* #007acc */
+
+    /* Shimmer text (transitions.dev) — demo hex defaults */
+    --shimmer-dur: 2000ms;
+    --shimmer-base: #6e6e6e;
+    --shimmer-highlight: #ededed;
+    --shimmer-band: 400%;
+    --shimmer-ease: linear;
 
     /* Project colors */
     --project-blue: 217 91% 60%;
@@ -334,6 +357,49 @@
     animation-timing-function: var(--ease-drawer);
     animation-duration: 200ms;
   }
+
+  /* ------------------------------------------------------------
+   * Tooltip open/close (transitions.dev recipe, Radix-adapted).
+   * Appear-only delay lives on TooltipProvider (--tt-delay / 80ms).
+   * Default rule = LEAVE (50ms, no delay). Open = 150ms fade+scale.
+   * Radix open states are delayed-open | instant-open (not "open").
+   * @starting-style so first mount still plays the enter transition.
+   * ------------------------------------------------------------ */
+  .animate-tooltip-in {
+    opacity: 0;
+    transform: scale(var(--tt-scale));
+    transition:
+      opacity var(--tt-out-dur) var(--tt-out-ease),
+      transform var(--tt-out-dur) var(--tt-out-ease);
+  }
+
+  .animate-tooltip-in[data-state="delayed-open"],
+  .animate-tooltip-in[data-state="instant-open"] {
+    opacity: 1;
+    transform: scale(1);
+    transition-duration: var(--tt-in-dur);
+    transition-timing-function: var(--tt-in-ease);
+  }
+
+  @starting-style {
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 0;
+      transform: scale(var(--tt-scale));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-tooltip-in {
+      transition: none !important;
+    }
+
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 1;
+      transform: none;
+    }
+  }
 }
 
 @layer utilities {
@@ -561,5 +627,127 @@
     border: none;
     border-top: 1px solid hsl(var(--border) / 0.6);
     margin: 1em 0;
+  }
+}
+
+/* Streamdown code blocks (agent chat): looser line-height for readable code,
+   and a comfortable min-height so short snippets don't feel cramped. */
+@layer components {
+  @keyframes tool-card-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  .tool-call-card-running::before {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    z-index: 0;
+    width: 45%;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
+    animation: tool-card-shimmer 1.8s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tool-call-card-running::before {
+      width: 100%;
+      transform: none;
+      animation: none;
+    }
+  }
+
+  /* transitions.dev shimmer-text — highlight band sweeps across muted label */
+  .t-shimmer {
+    position: relative;
+    display: inline-block;
+    color: var(--shimmer-base);
+  }
+  .t-shimmer::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      var(--shimmer-highlight) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    background-size: var(--shimmer-band) 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+  }
+  @keyframes t-shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: 0% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-shimmer::before {
+      animation: none !important;
+    }
+  }
+
+  .chat-streamdown [data-streamdown="code-block-body"] {
+    line-height: 1.65;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] pre,
+  .chat-streamdown [data-streamdown="code-block-body"] code {
+    line-height: inherit;
+  }
+
+  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  .chat-streamdown [data-streamdown="table-toolbar"] .relative {
+    display: contents;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  .chat-streamdown [data-streamdown="table"] th {
+    background: hsl(var(--muted) / 0.5);
+    font-weight: 600;
+  }
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    padding: 0.35rem 0.6rem;
+    text-align: left;
   }
 }

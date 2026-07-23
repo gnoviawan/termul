@@ -1,10 +1,11 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { platform as osPlatform } from '@tauri-apps/plugin-os'
-import { ArrowUp, Check, Download, FolderOpen, Loader2, Paperclip } from 'lucide-react'
+import { ArrowUp, Check, Download, FolderOpen, Loader2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
+import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
@@ -26,6 +27,8 @@ import {
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
+import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
+import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -273,15 +276,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
-        useAcpStore.getState().prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+        // Retarget the app-level warm pool to this agent+cwd: drains stale
+        // pooled sessions for other agents (same cwd) and seeds a warm session
+        // for this one. The pool owns the session lifecycle, so — unlike the
+        // old launcher-scoped prepareChat — we do NOT cancel on close (a warm
+        // session stays ready for the next chat / a project switch-back).
+        useAcpStore.getState().setSelectedAgentConfigId(activeConfigId)
+        useAcpStore.getState().retargetWarmPool(activeConfigId, projectRoot, activeProjectId)
       } catch (err) {
-        console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
+        console.warn('[acp] failed to retarget warm pool for', activeConfigId, err)
       }
     })()
-    const key = prepareChatKey(activeConfigId, projectRoot, undefined)
     return () => {
       cancelled = true
-      useAcpStore.getState().cancelPreparedChat(key)
     }
   }, [
     activeConfigId,
@@ -374,27 +381,38 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
 
   const handleSetConfig = useCallback(
-    (configId: string, valueId: string) => {
-      if (!preparedSessionId) return
-      void useAcpStore
-        .getState()
-        .setConfigOption(preparedSessionId, configId, valueId)
-        .catch((err) => toast.error(`Failed to set option: ${String(err)}`))
+    async (configId: string, valueId: string) => {
+      if (!preparedSessionId) {
+        throw new Error('No prepared ACP session is ready yet')
+      }
+      try {
+        await useAcpStore.getState().setConfigOption(preparedSessionId, configId, valueId)
+      } catch (err) {
+        toast.error(`Failed to set option: ${String(err)}`)
+        throw err
+      }
     },
     [preparedSessionId]
   )
 
   const handleSetModel = useCallback(
-    (valueId: string) => {
-      if (!preparedSessionId) return
+    async (valueId: string) => {
+      if (!preparedSessionId) {
+        throw new Error('No prepared ACP session is ready yet')
+      }
       if (modelSource === 'models') {
-        void useAcpStore
-          .getState()
-          .setModel(preparedSessionId, valueId)
-          .catch((err) => toast.error(`Failed to set model: ${String(err)}`))
+        try {
+          await useAcpStore.getState().setModel(preparedSessionId, valueId)
+        } catch (err) {
+          toast.error(`Failed to set model: ${String(err)}`)
+          throw err
+        }
         return
       }
-      if (modelOption) handleSetConfig(modelOption.id, valueId)
+      if (!modelOption) {
+        throw new Error('No model option is available for this session')
+      }
+      await handleSetConfig(modelOption.id, valueId)
     },
     [handleSetConfig, modelOption, modelSource, preparedSessionId]
   )
@@ -407,12 +425,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   }, [activeConfigId, preparedKey, projectRoot, activeProjectId])
 
   const handleSetMode = useCallback(
-    (modeId: string) => {
-      if (!preparedSessionId) return
-      void useAcpStore
-        .getState()
-        .setMode(preparedSessionId, modeId)
-        .catch((err) => toast.error(`Failed to set agent: ${String(err)}`))
+    async (modeId: string) => {
+      if (!preparedSessionId) {
+        throw new Error('No prepared ACP session is ready yet')
+      }
+      try {
+        await useAcpStore.getState().setMode(preparedSessionId, modeId)
+      } catch (err) {
+        toast.error(`Failed to set agent: ${String(err)}`)
+        throw err
+      }
     },
     [preparedSessionId]
   )
@@ -553,12 +575,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       className={cn('absolute inset-0 flex flex-col items-center justify-center p-8', className)}
     >
       <div className="mb-8 flex flex-col items-center gap-4 text-center">
-        <EntryGlyph
-          config={selectedConfig}
-          templateId={selectedEntry?.agent.id}
-          name={selectedEntry?.agent.name}
-          size="lg"
-        />
+        <TermulMark size={48} className="text-foreground" />
         <h1 className="text-3xl font-medium tracking-tight text-foreground md:text-4xl">
           {`What should we do in ${projectLabel}?`}
         </h1>
@@ -663,16 +680,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <button
-                type="button"
-                onClick={() => void pickFiles()}
-                disabled={!canPick}
-                className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title="Attach files"
-                aria-label="Attach files"
-              >
-                <Paperclip size={16} />
-              </button>
+              <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
                 <AcpAgentPicker
                   agents={supportedAgents}
@@ -1014,10 +1022,15 @@ function AcpModelPicker({
   errorMessage: string | null
   disabled: boolean
   onRetry: () => void
-  onSelectModel: (valueId: string) => void
+  onSelectModel: (valueId: string) => void | Promise<void>
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const currentModel = modelOption?.options.find((o) => o.value === modelOption.currentValue)
+  const [open, setOpen] = useState(false)
+  const { displayValue, pending, select } = useOptimisticSelect(
+    modelOption?.currentValue,
+    onSelectModel
+  )
+  const currentModel = modelOption?.options.find((o) => o.value === displayValue)
   const label = loading
     ? 'Loading model…'
     : errorMessage
@@ -1033,14 +1046,22 @@ function AcpModelPicker({
         .toLowerCase()
         .includes(normalizedQuery)
     }) ?? []
+
+  const handleSelectModel = (valueId: string): void => {
+    setQuery('')
+    setOpen(false)
+    select(valueId)
+  }
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill
           disabled={disabled}
           aria-label={`Select model: ${label}`}
           className="max-w-[220px]"
           chevron
+          pending={pending}
         >
           <span className="truncate">{label}</span>
         </ComposerPill>
@@ -1076,13 +1097,15 @@ function AcpModelPicker({
                   <button
                     key={value.value}
                     type="button"
-                    onClick={() => {
-                      setQuery('')
-                      onSelectModel(value.value)
+                    onPointerDown={(event) => {
+                      if ((event.button ?? 0) !== 0) return
+                      event.preventDefault()
+                      handleSelectModel(value.value)
                     }}
+                    onClick={() => handleSelectModel(value.value)}
                     className={cn(
                       'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                      value.value === modelOption.currentValue && 'bg-accent/50'
+                      value.value === displayValue && 'bg-accent/50'
                     )}
                   >
                     <span className="min-w-0 flex-1">
@@ -1093,7 +1116,7 @@ function AcpModelPicker({
                         </span>
                       )}
                     </span>
-                    {value.value === modelOption.currentValue && (
+                    {value.value === displayValue && (
                       <Check size={14} className="mt-0.5 text-muted-foreground" />
                     )}
                   </button>
@@ -1134,13 +1157,11 @@ function AcpModelPicker({
 const EntryGlyph = memo(function EntryGlyph({
   config,
   templateId,
-  name,
-  size = 'sm'
+  name
 }: {
   config: StoredAgentConfig | null
   templateId?: string
   name?: string
-  size?: 'sm' | 'lg'
 }): React.JSX.Element {
   const normalized = useMemo(() => {
     const key = config?.templateId ?? templateId
@@ -1148,8 +1169,7 @@ const EntryGlyph = memo(function EntryGlyph({
     const icon = findBundledIconByKey(`acp:${key}`)?.svg
     return icon ? sanitizeInlineAgentSvg(icon) : null
   }, [config?.templateId, templateId])
-  const className =
-    size === 'lg' ? 'h-12 w-12 rounded-2xl text-base' : 'h-4 w-4 rounded-sm text-4xs'
+  const className = 'h-4 w-4 rounded-sm text-4xs'
 
   if (normalized) {
     return (

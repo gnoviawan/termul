@@ -1,14 +1,26 @@
+import { code as codePlugin } from '@streamdown/code'
+import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { type LinkSafetyConfig, type LinkSafetyModalProps, Streamdown } from 'streamdown'
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
 import type { ContentBlock } from '@/lib/acp-api'
+import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
-import { inlineCodeClass } from '@/lib/chat-inline-code'
-import { renderChatMarkdown } from '@/lib/chat-markdown'
-import { copyText } from '@/lib/copy-text'
+import { stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import {
@@ -21,6 +33,8 @@ import {
   isLocalFileUri,
   uint8ToBase64
 } from './chat-attachments'
+import { ChatMarkdownCode } from './chat-markdown-code'
+import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
 
@@ -110,87 +124,109 @@ function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element 
   )
 }
 
-/** Lucide-style SVGs for the DOM-injected code-block copy control. */
-const CODE_COPY_CLIPBOARD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`
-const CODE_COPY_CHECK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`
+/**
+ * Shiki syntax-highlighting for fenced code blocks. Themes track the app's
+ * light/dark mode via Streamdown's dual-theme output (github-light/dark).
+ */
+const CODE_PLUGIN = codePlugin
+/** Live Mermaid diagram rendering for ```mermaid fences. */
+const MERMAID_PLUGIN = mermaidPlugin
+const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
 
-type CodeCopyIconState = 'copy' | 'copied' | 'failed'
+// Copy on code blocks, plus download (save an agent-generated file); no line
+// numbers (chat snippets are short). Mermaid keeps its interactive controls.
+const STREAMDOWN_CONTROLS = {
+  // Fenced code copy/download come from ChatMarkdownCode (IconActionButton).
+  code: false,
+  table: { copy: true, download: true, fullscreen: true },
+  mermaid: { copy: true, download: true, fullscreen: true, panZoom: true }
+} as const
 
-function setCodeCopyButtonIcon(btn: HTMLButtonElement, state: CodeCopyIconState): void {
-  if (state === 'copied') {
-    btn.innerHTML = CODE_COPY_CHECK_SVG
-    btn.setAttribute('aria-label', 'Copied')
-    btn.title = 'Copied'
-    return
-  }
-  btn.innerHTML = CODE_COPY_CLIPBOARD_SVG
-  btn.setAttribute('aria-label', state === 'failed' ? 'Failed to copy' : 'Copy')
-  btn.title = state === 'failed' ? 'Failed to copy' : 'Copy'
-}
+const STREAMDOWN_COMPONENTS = {
+  code: ChatMarkdownCode,
+  table: ChatMarkdownTable
+} as const
+
+// Word-by-word reveal so replies feel like they stream even when an agent
+// sends its text as one big chunk. `animated` uses the styles.css keyframes
+// imported in main.tsx; already-visible words get duration 0 (no re-animation).
+const STREAMDOWN_ANIMATED = { animation: 'blurIn', sep: 'word', duration: 350, stagger: 8 } as const
 
 /**
- * Post-process sanitized prose: inline code pill classes + `<pre>` copy buttons.
- * Runs against the live DOM so it can't reintroduce markup the sanitizer stripped.
+ * Confirm external links, then hand off to the OS browser.
+ *
+ * `onLinkCheck` only decides whether to show the confirm UI (never opens).
+ * Opening happens in the modal action so Streamdown's default `window.open`
+ * path is not used and the dialog actually closes after confirm.
  */
-function enhanceProse(root: HTMLElement): () => void {
-  const cleanups: Array<() => void> = []
-
-  for (const code of Array.from(root.querySelectorAll('code'))) {
-    if (code.closest('pre')) continue
-    const cls = inlineCodeClass(code.textContent ?? '')
-    code.classList.add(cls)
-  }
-
-  for (const pre of Array.from(root.querySelectorAll('pre'))) {
-    if (pre.dataset.copyEnhanced) continue
-    pre.dataset.copyEnhanced = 'true'
-    pre.style.position = 'relative'
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'chat-code-copy'
-    setCodeCopyButtonIcon(btn, 'copy')
-    const onClick = (): void => {
-      const code = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
-      void copyText(code).then((ok) => {
-        setCodeCopyButtonIcon(btn, ok ? 'copied' : 'failed')
-        btn.classList.toggle('is-copied', ok)
-        setTimeout(() => {
-          setCodeCopyButtonIcon(btn, 'copy')
-          btn.classList.remove('is-copied')
-        }, 1500)
-      })
-    }
-    btn.addEventListener('click', onClick)
-    pre.appendChild(btn)
-    cleanups.push(() => {
-      btn.removeEventListener('click', onClick)
-      btn.remove()
-      delete pre.dataset.copyEnhanced
-    })
-  }
-  return () => {
-    for (const c of cleanups) c()
-  }
+function StreamdownLinkSafetyModal({
+  isOpen,
+  onClose,
+  url
+}: LinkSafetyModalProps): React.JSX.Element {
+  return (
+    <AlertDialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Open external link?</AlertDialogTitle>
+          <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              void openerApi.openUrlWithSystemBrowser(url)
+              onClose()
+            }}
+          >
+            Open
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
 }
 
-/** Agent reply rendered as sanitized markdown prose. */
-function AgentProse({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element {
-  const html = useMemo(() => renderChatMarkdown(blocksToText(blocks)), [blocks])
-  const ref = useRef<HTMLDivElement>(null)
-  // Re-run after each render of new markdown so freshly-streamed code blocks get
-  // a copy button; `html` is the change trigger even though it's read indirectly.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: html drives re-enhancement
-  useEffect(() => {
-    if (!ref.current) return
-    return enhanceProse(ref.current)
-  }, [html])
+const LINK_SAFETY: LinkSafetyConfig = {
+  enabled: true,
+  // Always take the confirm path; never open from the check callback.
+  onLinkCheck: () => false,
+  renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
+}
+
+/** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
+function AgentProse({
+  text,
+  streaming,
+  reduced
+}: {
+  text: string
+  streaming: boolean
+  reduced: boolean
+}): React.JSX.Element {
   return (
-    <div
-      ref={ref}
-      className="chat-prose text-sm leading-relaxed text-foreground"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="chat-streamdown text-sm leading-relaxed text-foreground">
+      <Streamdown
+        mode="streaming"
+        isAnimating={streaming}
+        caret="block"
+        animated={reduced ? false : STREAMDOWN_ANIMATED}
+        parseIncompleteMarkdown
+        plugins={STREAMDOWN_PLUGINS}
+        controls={STREAMDOWN_CONTROLS}
+        components={STREAMDOWN_COMPONENTS}
+        lineNumbers={false}
+        linkSafety={LINK_SAFETY}
+        shikiTheme={['github-light', 'github-dark']}
+      >
+        {text}
+      </Streamdown>
+    </div>
   )
 }
 
@@ -314,6 +350,8 @@ function ChatMessageComponent({
     )
   }
 
+  const streaming = message.streaming && isLast
+  const proseText = stripEmptyFences(text, streaming)
   const proseDelay = nextDelay()
   const mediaDelay = hasMedia ? nextDelay() : null
   const actionsDelay = nextDelay()
@@ -326,7 +364,7 @@ function ChatMessageComponent({
               so they don't render a blank shell above the media grid. The
               streaming caret still needs a bubble to live in while the turn is
               in progress, even before any text has arrived. */}
-          {(text.length > 0 || (message.streaming && isLast)) && (
+          {(proseText.length > 0 || streaming) && (
             <Bubble variant="ghost" className="w-fit max-w-full">
               <BubbleContent>
                 <StaggerSection
@@ -335,8 +373,10 @@ function ChatMessageComponent({
                   reduced={reduced}
                   animateEnter={animateEnter}
                 >
-                  {text.length > 0 && <AgentProse blocks={message.blocks} />}
-                  {message.streaming && isLast && (
+                  {proseText.length > 0 && (
+                    <AgentProse text={proseText} streaming={streaming} reduced={reduced} />
+                  )}
+                  {streaming && proseText.length === 0 && (
                     <span
                       aria-hidden="true"
                       className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"

@@ -60,6 +60,12 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// former 30s budget on first launch). Overridable for diagnostics via
 /// [`session_new_timeout`].
 const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long to wait for `session/load` / `session/resume` before returning an
+/// error to the caller. Without a bound, a wedged agent parks the renderer's
+/// "reconnecting" state forever (the reopened chat can never recover). 60s
+/// matches the `session/new` budget: a load replays the full conversation and
+/// can legitimately take a while on large histories.
+const SESSION_REOPEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
@@ -79,6 +85,52 @@ fn session_new_timeout() -> Duration {
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or(SESSION_NEW_TIMEOUT)
+}
+
+/// `session/load` / `session/resume` timeout, overridable via
+/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (seconds, must be > 0). Defaults
+/// to [`SESSION_REOPEN_TIMEOUT`]. A load replays the full conversation before
+/// responding, so very large histories may need a longer budget.
+fn session_reopen_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(SESSION_REOPEN_TIMEOUT)
+}
+
+/// Timed `session/load` / `session/resume`: map agent errors and timeouts to
+/// `Result<(), String>`, and record the session root on success.
+async fn run_session_reopen<Fut, T, E>(
+    op: &str,
+    session_id: &str,
+    cwd: &str,
+    req_state: &Mutex<DriverState>,
+    request: Fut,
+) -> Result<(), String>
+where
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: ToString,
+{
+    let timeout = session_reopen_timeout();
+    let outcome = tokio::time::timeout(timeout, request).await;
+    let result = match outcome {
+        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+        Err(_) => {
+            log::warn!(
+                "[acp] session {session_id} {op} timed out after {timeout:?}; \
+                 check agent stderr in RUST_LOG=debug"
+            );
+            Err(format!("{op} timed out after {timeout:?}"))
+        }
+    };
+    if result.is_ok() {
+        req_state
+            .lock()
+            .set_session_root(session_id.to_string(), PathBuf::from(cwd));
+    }
+    result
 }
 
 /// Outcome of creating a new session, returned to the command caller.
@@ -829,6 +881,7 @@ async fn drive_connection(
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
     let notif_app = app.clone();
     let notif_agent_id = agent_id.clone();
+    let notif_state = driver_state.clone();
     let perm_app = app.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -861,6 +914,19 @@ async fn drive_connection(
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::SessionNotification, _cx| {
+                let session_id = notification.session_id.0.to_string();
+                let tool_call_id = match &notification.update {
+                    agent_client_protocol::schema::SessionUpdate::ToolCall(tool_call) => {
+                        Some(tool_call.tool_call_id.0.to_string())
+                    }
+                    agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update) => {
+                        Some(update.tool_call_id.0.to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(tool_call_id) = tool_call_id {
+                    notif_state.lock().bind_tool_call(tool_call_id, session_id);
+                }
                 client::emit_session_update(&notif_app, &notif_agent_id, notification);
                 Ok(())
             },
@@ -879,6 +945,10 @@ async fn drive_connection(
                 let session_string = session_id.0.to_string();
                 let request_id = {
                     let mut state = perm_state.lock();
+                    state.bind_tool_call(
+                        tool_call.tool_call_id.0.to_string(),
+                        session_string.clone(),
+                    );
                     state.register_permission(session_string.clone(), responder)
                 };
                 events::emit(
@@ -1222,14 +1292,19 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
+                    // Bounded like session/new: a wedged agent must not park the
+                    // renderer's reconnect forever (the reply sender would be
+                    // held indefinitely).
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let result = run_session_reopen(
+                        "session/load",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1244,13 +1319,15 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let result = run_session_reopen(
+                        "session/resume",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1313,8 +1390,9 @@ async fn run_command_loop(
                 // receiver when the turn may proceed.
                 let cancel_rx = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(cancel_rx) = cancel_rx else {
+                    // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
                     let _ = reply.send(Err(format!(
-                        "a prompt turn is already in progress for session {}",
+                        "ACP_TURN_IN_PROGRESS: session {}",
                         session_id.0
                     )));
                     continue;
@@ -1691,6 +1769,39 @@ mod tests {
             Ok(StopReason::Cancelled),
             "a stuck turn must be force-resolved as Cancelled after the grace window"
         );
+    }
+
+    /// Shape test (like `cancel_grace_forcibly_resolves_a_stuck_turn`): mirrors
+    /// the timeout-around-request pattern of the `LoadSession`/`ResumeSession`
+    /// arms against a never-resolving future, using a short local bound so the
+    /// test is fast. The arms themselves need a live connection + AppHandle and
+    /// are not driven here; this covers the match shape plus the production
+    /// timeout resolution below.
+    #[tokio::test]
+    async fn session_reopen_times_out_instead_of_hanging() {
+        const TEST_TIMEOUT: Duration = Duration::from_millis(50);
+        let request = std::future::pending::<Result<(), String>>();
+        let outcome = tokio::time::timeout(TEST_TIMEOUT, request).await;
+        let result: Result<(), String> = match outcome {
+            Ok(result) => result,
+            Err(_) => Err(format!("session/load timed out after {TEST_TIMEOUT:?}")),
+        };
+        assert!(
+            result.is_err_and(|e| e.contains("timed out")),
+            "a hung reopen must resolve to a timeout error"
+        );
+    }
+
+    /// The production reopen budget resolves to the 60s default and honors the
+    /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` diagnostic override contract
+    /// (mirrors `session_new_timeout`). Only the default path is asserted —
+    /// mutating process env in a test would race other tests.
+    #[test]
+    fn session_reopen_timeout_defaults_to_constant() {
+        if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_err() {
+            assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
+        }
+        assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).

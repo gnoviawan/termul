@@ -133,7 +133,7 @@ const router = createHashRouter(
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
+    <TooltipProvider delayDuration={80} skipDelayDuration={300}>
       <AppEffects />
       <Toaster />
       <Sonner />

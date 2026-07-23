@@ -203,11 +203,19 @@ export function ChatHistoryTab(): React.JSX.Element {
     async (entry: SidebarEntry) => {
       try {
         if (entry.discovered && entry.agentId && entry.cwd) {
+          // Discovered entries have no local transcript to show, so the pane
+          // only becomes useful once load/resume succeeds — keep awaiting.
           await openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
+          addAgentChatTab(entry.id)
         } else {
-          await openHistorySession(entry.id)
+          // Mirror entries: open the tab immediately (the pane shows a
+          // restoring state, then the local transcript) and reconnect in the
+          // background — a cold agent spawn must not block the click.
+          addAgentChatTab(entry.id)
+          void openHistorySession(entry.id).catch((err) => {
+            toast.error(`Failed to reconnect chat: ${String(err)}`)
+          })
         }
-        addAgentChatTab(entry.id)
       } catch (err) {
         toast.error(`Failed to open chat: ${String(err)}`)
       }

@@ -403,9 +403,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
     renderWithRouter()
 
-    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
     expect(strip).not.toBeNull()
     expect(strip?.className).toContain('h-8')
+    // Panel-visibility toggles were relocated into the macOS titlebar strip.
+    expect(strip?.querySelector('button[title="Toggle sidebar"]')).not.toBeNull()
+    expect(strip?.querySelector('button[title="Toggle file explorer"]')).not.toBeNull()
   })
 
   it('renders active project name in macOS titlebar strip when a project is active', () => {
@@ -422,7 +425,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
     renderWithRouter()
 
-    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
     expect(strip).not.toBeNull()
     expect(strip?.querySelector('span')).not.toBeTruthy()
   })

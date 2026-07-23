@@ -158,6 +158,25 @@ describe('ChatHistoryTab scoping', () => {
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
+  it('opens the tab immediately without waiting for the history reconnect', () => {
+    // A cold agent spawn can take ~30s+; the click must not block on it. The
+    // tab is added synchronously and openHistorySession runs in the background.
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+    let resolveOpen: (() => void) | undefined
+    mockOpen.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOpen = resolve
+        })
+    )
+    render(<ChatHistoryTab />)
+    fireEvent.click(screen.getByText('s1'))
+    // Tab added while the open is still pending.
+    expect(mockAddTab).toHaveBeenCalledWith('s1')
+    expect(mockOpen).toHaveBeenCalledWith('s1')
+    resolveOpen?.()
+  })
+
   it('caps the rendered rows and lazily loads more', () => {
     // 60 sessions; page size is 50, so the first render shows 50 + a Load more.
     sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>

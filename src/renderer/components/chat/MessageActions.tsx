@@ -1,29 +1,10 @@
 import { Check, Copy, Pencil, RotateCcw } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
-
-interface ActionButtonProps {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-}
-
-function ActionButton({ label, onClick, children }: ActionButtonProps): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      className="flex size-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:scale-[0.96] [&_svg]:size-3.5"
-    >
-      {children}
-    </button>
-  )
-}
 
 interface MessageActionsProps {
   /** Plain text to place on the clipboard for the copy action. */
@@ -41,6 +22,7 @@ interface MessageActionsProps {
 /**
  * Toolbar for a chat message — copy, plus optional edit (user turns) and
  * retry (assistant turns). Hover-revealed by default; pinned stays visible.
+ * No action pill: icons flush with prose left edge (assistant) / bubble (user).
  */
 export function MessageActions({
   text,
@@ -67,27 +49,31 @@ export function MessageActions({
   return (
     <div
       className={cn(
+        // -ml-1 pulls the size-6 hit box so the 14px glyph lines up with prose.
         'flex items-center gap-0.5 transition-opacity duration-150 focus-within:opacity-100',
         pinned ? 'opacity-100' : 'opacity-0 group-hover/message:opacity-100',
-        align === 'end' && 'flex-row-reverse',
+        align === 'start' && '-ml-1',
+        align === 'end' && 'justify-end',
         className
       )}
     >
-      <ActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy}>
-        <IconSwap iconKey={copied}>
-          {copied ? <Check className="text-green-400" /> : <Copy />}
-        </IconSwap>
-      </ActionButton>
-      {onEdit && (
-        <ActionButton label="Edit" onClick={onEdit}>
-          <Pencil />
-        </ActionButton>
-      )}
-      {onRetry && (
-        <ActionButton label="Retry" onClick={onRetry}>
-          <RotateCcw />
-        </ActionButton>
-      )}
+      <div className={cn('flex items-center gap-0.5', align === 'end' && 'flex-row-reverse')}>
+        <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy}>
+          <IconSwap iconKey={copied}>
+            {copied ? <Check className="text-green-400" /> : <Copy />}
+          </IconSwap>
+        </IconActionButton>
+        {onEdit && (
+          <IconActionButton label="Edit" onClick={onEdit}>
+            <Pencil />
+          </IconActionButton>
+        )}
+        {onRetry && (
+          <IconActionButton label="Retry" onClick={onRetry}>
+            <RotateCcw />
+          </IconActionButton>
+        )}
+      </div>
     </div>
   )
 }

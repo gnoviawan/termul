@@ -326,6 +326,30 @@ export interface SessionInfoUpdateEvent {
   title?: string | null
 }
 
+export interface UsageCost {
+  amount: number
+  currency: string
+}
+
+export interface UsageUpdateEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  used: number
+  size: number
+  cost?: UsageCost | null
+}
+
+/** Agent-reported context window state for a session. */
+export interface SessionUsage {
+  used: number
+  size: number
+  /** First `used` snapshot for this session — static agent bootstrap prefix. */
+  baselineUsed: number
+  cost?: UsageCost
+  updatedAt: number
+  source: 'reported'
+}
+
 export const ACP_EVENTS = {
   agentSpawned: 'acp:agent_spawned',
   sessionCreated: 'acp:session_created',
@@ -341,7 +365,8 @@ export const ACP_EVENTS = {
   agentError: 'acp:agent_error',
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
-  sessionInfoUpdate: 'acp:session_info_update'
+  sessionInfoUpdate: 'acp:session_info_update',
+  usageUpdate: 'acp:usage_update'
 } as const
 
 // --- Command wrappers ------------------------------------------------------

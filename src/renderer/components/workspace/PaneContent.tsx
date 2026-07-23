@@ -395,7 +395,7 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <AgentChatPanel sessionId={tab.sessionId} />
+                    <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
                   </div>
                 )
               })}

@@ -1,6 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useEffect, useMemo, useRef } from 'react'
-import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -10,6 +9,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
+import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import type { AgentId, SessionId } from '@/lib/acp-api'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
@@ -32,8 +32,8 @@ interface ChatMessageListProps {
   sessionId: SessionId
   /** Agent behind this session (drives the agent name/icon on replies). */
   agentId: AgentId
-  /** True while a turn is in flight but no agent text has streamed yet. */
-  showTyping: boolean
+  /** True for the complete duration of an in-flight agent turn. */
+  showRunningIndicator: boolean
   /** Seed the composer with a user message's text (edit affordance). */
   onEditMessage?: (text: string) => void
   /** Re-run the latest user turn (regenerate affordance on agent replies). */
@@ -94,7 +94,7 @@ export function ChatMessageList({
   items,
   sessionId,
   agentId,
-  showTyping,
+  showRunningIndicator,
   onEditMessage,
   onRetry
 }: ChatMessageListProps): React.JSX.Element {
@@ -102,7 +102,7 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
   const shouldAnimateEnter = useAnimateEnter(sessionId, items)
 
-  if (items.length === 0 && !showTyping) {
+  if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
 
@@ -145,7 +145,7 @@ export function ChatMessageList({
                 </MessageScrollerItem>
               ))}
               <AnimatePresence initial={false}>
-                {showTyping && <TypingIndicator key="typing" />}
+                {showRunningIndicator && <TurnRunningIndicator key="running" />}
               </AnimatePresence>
             </MessageScrollerContent>
           </MessageScrollerViewport>
@@ -156,8 +156,8 @@ export function ChatMessageList({
   )
 }
 
-/** "Agent is typing" status shown before the first text chunk streams. */
-function TypingIndicator(): React.JSX.Element {
+/** Persistent turn-running cue — gradient matrix spin (no visible text label). */
+function TurnRunningIndicator(): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   return (
     <motion.div
@@ -167,23 +167,7 @@ function TypingIndicator(): React.JSX.Element {
       exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
-      <Marker role="status">
-        <MarkerIcon className="gap-1">
-          <TypingDots />
-        </MarkerIcon>
-        <MarkerContent className="shimmer">Thinking…</MarkerContent>
-      </Marker>
+      <MonochromeSpinner pattern="diagonal" label="Agent is working" />
     </motion.div>
-  )
-}
-
-/** Three staggered hopping dots — the classic "is typing" cue. */
-function TypingDots(): React.JSX.Element {
-  return (
-    <span className="flex items-center gap-1" aria-hidden="true">
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground motion-reduce:animate-none" />
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground [animation-delay:150ms] motion-reduce:animate-none" />
-      <span className="size-1.5 animate-typing-bounce rounded-full bg-muted-foreground [animation-delay:300ms] motion-reduce:animate-none" />
-    </span>
   )
 }

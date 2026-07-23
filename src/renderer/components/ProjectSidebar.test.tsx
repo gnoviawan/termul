@@ -450,6 +450,17 @@ describe('ProjectSidebar Archived Projects', () => {
 
     expect(screen.queryByText(/Archived/)).not.toBeInTheDocument()
   })
+
+  it('does not apply extra opacity to an archived project activity spinner', () => {
+    mockUseProjectsWithActivity.mockReturnValue(['2'])
+    renderWithRouter({ projects: projectsWithArchived })
+    fireEvent.click(screen.getByText(/Archived \(1\)/))
+
+    const row = screen.getByTestId('archived-project-item-2')
+    const spinner = screen.getByRole('status', { name: 'Project activity' })
+    expect(row).toHaveClass('opacity-60')
+    expect(spinner).not.toHaveClass('opacity-60')
+  })
 })
 
 describe('ProjectSidebar Default Shell Submenu', () => {
@@ -519,6 +530,7 @@ describe('ProjectSidebar Activity Indicator', () => {
     const item = screen.getByTestId('project-item-2')
     expect(activityIndicator(item)).not.toBeNull()
     expect(activityIndicator(item)).toHaveAttribute('title', 'Activity')
+    expect(screen.getByRole('status', { name: 'Project activity' })).toBeInTheDocument()
   })
 
   it('should show activity indicator when agent chat is active', () => {
@@ -528,6 +540,7 @@ describe('ProjectSidebar Activity Indicator', () => {
 
     const item = screen.getByTestId('project-item-2')
     expect(activityIndicator(item)).not.toBeNull()
+    expect(screen.getByRole('status', { name: 'Project activity' })).toBeInTheDocument()
   })
 
   it('should show activity indicator even when project is active if hasActivity is true', () => {

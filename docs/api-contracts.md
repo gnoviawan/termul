@@ -225,6 +225,71 @@ Representative error codes include:
 - `MIGRATION_*`
 - `ROLLBACK_FAILED`
 
+## ACP Agent Chat Events
+
+ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/acp/events.rs` and `src/renderer/lib/acp-api.ts`).
+
+### `acp:plan_update`
+
+**Purpose:** Agent execution plan changed ([Agent Plan spec](https://agentclientprotocol.com/protocol/v1/agent-plan)).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  plan: {
+    entries: Array<{
+      content: string
+      priority?: 'high' | 'medium' | 'low'
+      status?: 'pending' | 'in_progress' | 'completed'
+    }>
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent sends `session/update` with `sessionUpdate: "plan"`.
+- Each event replaces the session plan entirely (full list).
+- Empty `entries` clears the plan in the renderer (`PlanPanel` hidden).
+
+See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
+
+### `acp:usage_update`
+
+**Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  used: number
+  size: number
+  cost?: {
+    amount: number
+    currency: string
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent pushes a usage update; Rust forwards `used`/`size`/`cost` without additional gating (`UsageUpdateEvent` in `src-tauri/src/acp/events.rs`).
+- Each event **replaces** the renderer’s current usage state for that session (`used`/`size`; optional `cost` when accepted).
+- Renderer validation (`_onUsageUpdate` in `acp-store.ts`):
+  - Drops the update when `used` or `size` is non-finite, or when `used <= 0` or `size <= 0`.
+  - Ignores updates for unknown sessions.
+  - Keeps optional `cost` only when `amount` is finite and `> 0` and `currency` is non-empty; otherwise omits cost (zero/placeholder costs are not stored).
+- TypeScript mirror: `UsageUpdateEvent` / `ACP_EVENTS.usageUpdate` in `src/renderer/lib/acp-api.ts`. Keep Rust and TypeScript field names (`agentId`, `sessionId`, `used`, `size`, `cost`) aligned.
+
+### `acp_send_prompt` errors
+
+When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.

@@ -138,7 +138,10 @@ function MessageScrollerViewport({
     <div
       ref={registerViewport}
       data-slot="message-scroller-viewport"
-      className={cn('size-full min-h-0 min-w-0 overflow-y-auto overscroll-contain', className)}
+      className={cn(
+        'size-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable_both-edges]',
+        className
+      )}
       {...props}
     />
   )
