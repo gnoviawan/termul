@@ -120,3 +120,19 @@ export function filterDuplicateModeConfigOptions(
   if (!modes || modes.availableModes.length === 0) return options
   return options.filter((option) => option.category !== MODE_CATEGORY)
 }
+
+/**
+ * True when `session.modes` is the same control as a `thought_level` config
+ * option (every mode id is also a thought_level value). pi-acp dual-publishes
+ * thinking this way — prefer the promoted Thinking chip and hide ModeChip
+ * (issue #444). Real agent/plan/ask modes do not match and still render.
+ */
+export function modesRedundantWithThoughtLevel(
+  modes: SessionModeState | null | undefined,
+  thoughtLevel: SessionConfigOption | null
+): boolean {
+  if (!modes || modes.availableModes.length === 0 || !thoughtLevel) return false
+  if (thoughtLevel.options.length === 0) return false
+  const thoughtValues = new Set(thoughtLevel.options.map((option) => option.value))
+  return modes.availableModes.every((mode) => thoughtValues.has(mode.id))
+}

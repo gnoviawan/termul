@@ -34,6 +34,7 @@ import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
+  modesRedundantWithThoughtLevel,
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
@@ -129,6 +130,7 @@ export function ChatInputBar({
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
+  const showModeChip = !modesRedundantWithThoughtLevel(modes, thoughtLevel)
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
@@ -484,12 +486,14 @@ export function ChatInputBar({
                     ))}
                   </>
                 ) : null}
-                <ModeChip
-                  session={session}
-                  disabled={disabled}
-                  onSelect={onSetMode}
-                  label="Agent"
-                />
+                {showModeChip ? (
+                  <ModeChip
+                    session={session}
+                    disabled={disabled}
+                    onSelect={onSetMode}
+                    label="Agent"
+                  />
+                ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />

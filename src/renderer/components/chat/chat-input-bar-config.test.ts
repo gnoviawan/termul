@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import {
   filterDuplicateModeConfigOptions,
+  modesRedundantWithThoughtLevel,
   partitionConfigOptions,
   shouldAdvertiseConfigOption
 } from './chat-input-bar-config'
@@ -126,5 +127,54 @@ describe('filterDuplicateModeConfigOptions', () => {
     const mode = opt('mode', 'mode')
     const custom = opt('custom', 'custom')
     expect(filterDuplicateModeConfigOptions([mode, custom], modes)).toEqual([custom])
+  })
+})
+
+describe('modesRedundantWithThoughtLevel', () => {
+  const thoughtLevel: SessionConfigOption = {
+    id: 'thought_level',
+    name: 'Thinking',
+    category: 'thought_level',
+    type: 'select',
+    currentValue: 'off',
+    description: null,
+    options: [
+      { value: 'off', name: 'Thinking: off', description: null },
+      { value: 'low', name: 'Thinking: low', description: null },
+      { value: 'medium', name: 'Thinking: medium', description: null }
+    ]
+  }
+
+  it('detects pi-acp dual-published thinking modes', () => {
+    const modes: SessionModeState = {
+      currentModeId: 'off',
+      availableModes: [
+        { id: 'off', name: 'Thinking: off' },
+        { id: 'low', name: 'Thinking: low' },
+        { id: 'medium', name: 'Thinking: medium' }
+      ]
+    }
+    expect(modesRedundantWithThoughtLevel(modes, thoughtLevel)).toBe(true)
+  })
+
+  it('keeps real agent/plan modes alongside thought_level', () => {
+    const modes: SessionModeState = {
+      currentModeId: 'agent',
+      availableModes: [
+        { id: 'agent', name: 'Agent' },
+        { id: 'plan', name: 'Plan' }
+      ]
+    }
+    expect(modesRedundantWithThoughtLevel(modes, thoughtLevel)).toBe(false)
+  })
+
+  it('returns false when either side is missing', () => {
+    expect(modesRedundantWithThoughtLevel(null, thoughtLevel)).toBe(false)
+    expect(
+      modesRedundantWithThoughtLevel(
+        { currentModeId: 'off', availableModes: [{ id: 'off', name: 'Thinking: off' }] },
+        null
+      )
+    ).toBe(false)
   })
 })

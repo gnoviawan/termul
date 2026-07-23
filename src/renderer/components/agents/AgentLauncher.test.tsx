@@ -400,6 +400,59 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('hides ModeChip when session.modes duplicates thought_level (pi-acp)', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    const session = preparedSession(ACP_CONFIG, [
+      { value: 'm1', name: 'Model One' },
+      { value: 'm2', name: 'Model Two' }
+    ])
+    session.modes = {
+      currentModeId: 'off',
+      availableModes: [
+        { id: 'off', name: 'Thinking: off' },
+        { id: 'low', name: 'Thinking: low' },
+        { id: 'medium', name: 'Thinking: medium' }
+      ]
+    }
+    session.configOptions = [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'm1',
+        options: [
+          { value: 'm1', name: 'Model One' },
+          { value: 'm2', name: 'Model Two' }
+        ]
+      },
+      {
+        id: 'thought_level',
+        name: 'Thinking',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'off',
+        options: [
+          { value: 'off', name: 'Thinking: off' },
+          { value: 'low', name: 'Thinking: low' },
+          { value: 'medium', name: 'Thinking: medium' }
+        ]
+      }
+    ]
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': session }
+    renderLauncher()
+
+    expect(await screen.findByRole('button', { name: 'Thinking: off' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Thinking: off' })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /^Agent$/ })).not.toBeInTheDocument()
+  }, 10000)
+
   it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     let resolveConfig!: () => void
