@@ -14,6 +14,17 @@ export const MODEL_CATEGORY = 'model'
 /** ACP semantic category for session mode config options. */
 export const MODE_CATEGORY = 'mode'
 
+/**
+ * Categories that map to a single promoted UI control. Agents may advertise
+ * multiple options with the same category; clients keep the first (ACP array
+ * order) and discard the rest so the composer does not show duplicate chips
+ * (issue #444).
+ */
+export const PROMOTED_SINGLETON_CATEGORIES = new Set<string>([
+  MODEL_CATEGORY,
+  THOUGHT_LEVEL_CATEGORY
+])
+
 export interface PartitionedConfigOptions {
   /** The first `model` option, if the agent advertises one. */
   model: SessionConfigOption | null
@@ -29,16 +40,35 @@ export interface ResolvedModelOption {
 }
 
 /**
+ * First-wins gate for promoted singleton categories (`model`, `thought_level`).
+ * Mutates `seenPromotedCategories` when accepting the first option of a
+ * category. Non-singleton / uncategorized options always pass through.
+ */
+export function shouldAdvertiseConfigOption(
+  option: Pick<SessionConfigOption, 'category'>,
+  seenPromotedCategories: Set<string>
+): boolean {
+  const category = option.category
+  if (!category || !PROMOTED_SINGLETON_CATEGORIES.has(category)) return true
+  if (seenPromotedCategories.has(category)) return false
+  seenPromotedCategories.add(category)
+  return true
+}
+
+/**
  * Split usable config options into promoted `model` / `thought_level` options
  * (first match wins for each) and the rest, preserving the rest's original
- * order. Options with an unknown/other category fall through to `rest` and
- * render as plain chips.
+ * order. Later options that share a promoted singleton category are discarded
+ * rather than falling through to `rest`. Unknown/other categories still render
+ * as plain chips.
  */
 export function partitionConfigOptions(options: SessionConfigOption[]): PartitionedConfigOptions {
   let model: SessionConfigOption | null = null
   let thoughtLevel: SessionConfigOption | null = null
   const rest: SessionConfigOption[] = []
+  const seenPromotedCategories = new Set<string>()
   for (const option of options) {
+    if (!shouldAdvertiseConfigOption(option, seenPromotedCategories)) continue
     if (model === null && option.category === MODEL_CATEGORY) {
       model = option
     } else if (thoughtLevel === null && option.category === THOUGHT_LEVEL_CATEGORY) {
@@ -89,4 +119,20 @@ export function filterDuplicateModeConfigOptions(
 ): SessionConfigOption[] {
   if (!modes || modes.availableModes.length === 0) return options
   return options.filter((option) => option.category !== MODE_CATEGORY)
+}
+
+/**
+ * True when `session.modes` is the same control as a `thought_level` config
+ * option (every mode id is also a thought_level value). pi-acp dual-publishes
+ * thinking this way — prefer the promoted Thinking chip and hide ModeChip
+ * (issue #444). Real agent/plan/ask modes do not match and still render.
+ */
+export function modesRedundantWithThoughtLevel(
+  modes: SessionModeState | null | undefined,
+  thoughtLevel: SessionConfigOption | null
+): boolean {
+  if (!modes || modes.availableModes.length === 0 || !thoughtLevel) return false
+  if (thoughtLevel.options.length === 0) return false
+  const thoughtValues = new Set(thoughtLevel.options.map((option) => option.value))
+  return modes.availableModes.every((mode) => thoughtValues.has(mode.id))
 }

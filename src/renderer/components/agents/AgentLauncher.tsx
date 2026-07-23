@@ -11,6 +11,7 @@ import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
 import {
   filterDuplicateModeConfigOptions,
+  modesRedundantWithThoughtLevel,
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
@@ -190,10 +191,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     model,
     draftSession?.models
   )
+  const draftModes = draftSession?.modes ?? null
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(
     genericConfigOptions,
-    draftSession?.modes ?? null
+    draftModes
   )
+  const showModeChip =
+    Boolean(draftSession) && !modesRedundantWithThoughtLevel(draftModes, thoughtLevel)
   const menuOpen = isSlashTrigger(prompt)
   const {
     onInput,
@@ -715,7 +719,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     onSelect={(valueId) => handleSetConfig(option.id, valueId)}
                   />
                 ))}
-                {draftSession && (
+                {showModeChip && draftSession && (
                   <ModeChip
                     session={draftSession}
                     disabled={false}

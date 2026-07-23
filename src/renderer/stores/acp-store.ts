@@ -14,6 +14,10 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import {
+  modesRedundantWithThoughtLevel,
+  THOUGHT_LEVEL_CATEGORY
+} from '@/components/chat/chat-input-bar-config'
+import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   type StoredAgentConfig,
   saveAgentConfigs as saveAgentConfigsToDisk
@@ -2139,9 +2143,47 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     const updated = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
-    set((s) => ({
-      sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
-    }))
+
+    // pi-acp dual-publishes thinking as thought_level + session.modes. After we
+    // hide ModeChip, Thinking only writes set_config_option — keep modes in
+    // sync so a later agent rebuild from modes does not snap the chip back to
+    // "off" (e.g. launcher xhigh → running ChatInputBar shows off).
+    const thoughtLevel =
+      updated.find((option) => option.category === THOUGHT_LEVEL_CATEGORY) ??
+      session.configOptions.find((option) => option.category === THOUGHT_LEVEL_CATEGORY) ??
+      null
+    const shouldSyncMode =
+      thoughtLevel?.id === configId &&
+      modesRedundantWithThoughtLevel(session.modes, thoughtLevel) &&
+      Boolean(session.modes?.availableModes.some((mode) => mode.id === valueId))
+
+    let modeSynced = false
+    if (shouldSyncMode) {
+      try {
+        await acpApi.setMode(session.agentId, sessionId, valueId)
+        modeSynced = true
+      } catch {
+        // Config write already succeeded; do not fail the Thinking chip on
+        // set_mode errors.
+      }
+    }
+
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            configOptions: updated,
+            ...(modeSynced && current.modes
+              ? { modes: { ...current.modes, currentModeId: valueId } }
+              : {})
+          }
+        }
+      }
+    })
   },
 
   setMode: async (sessionId, modeId) => {
@@ -2151,12 +2193,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current?.modes) return {}
+      const thoughtLevel =
+        current.configOptions.find((option) => option.category === THOUGHT_LEVEL_CATEGORY) ?? null
+      const syncThought =
+        modesRedundantWithThoughtLevel(current.modes, thoughtLevel) &&
+        Boolean(thoughtLevel?.options.some((option) => option.value === modeId))
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...current,
-            modes: { ...current.modes, currentModeId: modeId }
+            modes: { ...current.modes, currentModeId: modeId },
+            ...(syncThought && thoughtLevel
+              ? {
+                  configOptions: current.configOptions.map((option) =>
+                    option.id === thoughtLevel.id ? { ...option, currentValue: modeId } : option
+                  )
+                }
+              : {})
           }
         }
       }
