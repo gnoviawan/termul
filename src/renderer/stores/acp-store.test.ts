@@ -239,6 +239,182 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
   })
 
+  it('setConfigOption dual-writes set_mode when modes duplicate thought_level (pi-acp)', async () => {
+    const thoughtOptions = [
+      { value: 'off', name: 'Thinking: off', description: null },
+      { value: 'low', name: 'Thinking: low', description: null },
+      { value: 'xhigh', name: 'Thinking: xhigh', description: null }
+    ]
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          modes: {
+            currentModeId: 'off',
+            availableModes: [
+              { id: 'off', name: 'Thinking: off' },
+              { id: 'low', name: 'Thinking: low' },
+              { id: 'xhigh', name: 'Thinking: xhigh' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'thought_level',
+              name: 'Thinking',
+              category: 'thought_level',
+              type: 'select',
+              currentValue: 'off',
+              description: null,
+              options: thoughtOptions
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_set_config_option') {
+        return [
+          {
+            id: 'thought_level',
+            name: 'Thinking',
+            category: 'thought_level',
+            type: 'select',
+            currentValue: 'xhigh',
+            description: null,
+            options: thoughtOptions
+          }
+        ]
+      }
+      if (cmd === 'acp_set_mode') return undefined
+      throw new Error(`unexpected invoke: ${cmd}`)
+    })
+
+    await useAcpStore.getState().setConfigOption('s1', 'thought_level', 'xhigh')
+
+    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      configId: 'thought_level',
+      valueId: 'xhigh'
+    })
+    expect(invoke).toHaveBeenCalledWith('acp_set_mode', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modeId: 'xhigh'
+    })
+    const session = useAcpStore.getState().sessions['s1']
+    expect(session.configOptions[0]?.currentValue).toBe('xhigh')
+    expect(session.modes?.currentModeId).toBe('xhigh')
+  })
+
+  it('setConfigOption does not call set_mode for real agent/plan modes', async () => {
+    const thoughtOptions = [
+      { value: 'off', name: 'Thinking: off', description: null },
+      { value: 'xhigh', name: 'Thinking: xhigh', description: null }
+    ]
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          modes: {
+            currentModeId: 'agent',
+            availableModes: [
+              { id: 'agent', name: 'Agent' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'thought_level',
+              name: 'Thinking',
+              category: 'thought_level',
+              type: 'select',
+              currentValue: 'off',
+              description: null,
+              options: thoughtOptions
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_set_config_option') {
+        return [
+          {
+            id: 'thought_level',
+            name: 'Thinking',
+            category: 'thought_level',
+            type: 'select',
+            currentValue: 'xhigh',
+            description: null,
+            options: thoughtOptions
+          }
+        ]
+      }
+      throw new Error(`unexpected invoke: ${cmd}`)
+    })
+
+    await useAcpStore.getState().setConfigOption('s1', 'thought_level', 'xhigh')
+
+    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      configId: 'thought_level',
+      valueId: 'xhigh'
+    })
+    expect(invoke).not.toHaveBeenCalledWith('acp_set_mode', expect.anything())
+    expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('agent')
+  })
+
+  it('setMode patches thought_level when modes duplicate thinking (pi-acp)', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          modes: {
+            currentModeId: 'off',
+            availableModes: [
+              { id: 'off', name: 'Thinking: off' },
+              { id: 'xhigh', name: 'Thinking: xhigh' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'thought_level',
+              name: 'Thinking',
+              category: 'thought_level',
+              type: 'select',
+              currentValue: 'off',
+              description: null,
+              options: [
+                { value: 'off', name: 'Thinking: off', description: null },
+                { value: 'xhigh', name: 'Thinking: xhigh', description: null }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await useAcpStore.getState().setMode('s1', 'xhigh')
+
+    expect(invoke).toHaveBeenCalledWith('acp_set_mode', {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      modeId: 'xhigh'
+    })
+    const session = useAcpStore.getState().sessions['s1']
+    expect(session.modes?.currentModeId).toBe('xhigh')
+    expect(session.configOptions[0]?.currentValue).toBe('xhigh')
+  })
+
   it('sendPrompt appends a user message and marks the turn active', async () => {
     seedSession('s1', 'agent-1', false)
     // never resolve, so the turn stays active for the assertion
