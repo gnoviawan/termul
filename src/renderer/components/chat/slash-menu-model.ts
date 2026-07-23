@@ -11,6 +11,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import type { AgentSkillSummary } from '@/lib/skills-api'
+import { shouldAdvertiseConfigOption } from './chat-input-bar-config'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -111,7 +112,11 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   }
 
   if (configOptions.length > 0) {
+    const seenPromotedCategories = new Set<string>()
     for (const option of configOptions) {
+      // Keep slash sections aligned with the composer chip row: one section per
+      // promoted singleton category (`model` / `thought_level`), first-wins.
+      if (!shouldAdvertiseConfigOption(option, seenPromotedCategories)) continue
       const items: SlashItem[] = option.options
         .filter((v) => matches(filter, v.name, v.description, option.name))
         .map((v) => ({

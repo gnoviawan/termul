@@ -139,4 +139,64 @@ describe('buildSlashSections', () => {
       buildSlashSections({ commands: [], configOptions: [], modes: null, filter: '' })
     ).toEqual([])
   })
+
+  it('keeps only the first model and thought_level config sections', () => {
+    const duplicateOptions: SessionConfigOption[] = [
+      {
+        id: 'model-a',
+        name: 'Model A',
+        category: 'model',
+        type: 'select',
+        currentValue: 'm1',
+        description: null,
+        options: [{ value: 'm1', name: 'Sonnet', description: null }]
+      },
+      {
+        id: 'thinking-a',
+        name: 'Thinking A',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'off',
+        description: null,
+        options: [{ value: 'off', name: 'off', description: null }]
+      },
+      {
+        id: 'model-b',
+        name: 'Model B',
+        category: 'model',
+        type: 'select',
+        currentValue: 'm2',
+        description: null,
+        options: [{ value: 'm2', name: 'Opus', description: null }]
+      },
+      {
+        id: 'thinking-b',
+        name: 'Thinking B',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'off',
+        description: null,
+        options: [{ value: 'off', name: 'off', description: null }]
+      },
+      {
+        id: 'custom',
+        name: 'Custom',
+        category: 'something-new',
+        type: 'select',
+        currentValue: 'x',
+        description: null,
+        options: [{ value: 'x', name: 'X', description: null }]
+      }
+    ]
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: duplicateOptions,
+      modes: null,
+      filter: ''
+    })
+    const ids = sections.map((s) => s.id)
+    expect(ids).toEqual(['config:model-a', 'config:thinking-a', 'config:custom'])
+    expect(ids).not.toContain('config:model-b')
+    expect(ids).not.toContain('config:thinking-b')
+  })
 })
