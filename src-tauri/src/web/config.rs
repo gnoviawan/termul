@@ -213,7 +213,24 @@ impl ServerConfig {
                             "invalid --project-root '': must be a non-empty path".into(),
                         ));
                     }
-                    project_root = Some(PathBuf::from(trimmed));
+                    // Fail-fast on a bad explicit --project-root: validate
+                    // the path exists and is accessible at parse time so the
+                    // server doesn't start successfully and only surface the
+                    // error as a per-request `OUTSIDE_ROOT` on every /fs/*
+                    // call (hard to diagnose post-mortem). We also store the
+                    // canonicalized form so downstream comparisons
+                    // (`check_within_root` re-canonicalizes the root) don't
+                    // race against a path that was canonical at parse time
+                    // but has since been replaced by a symlink.
+                    let candidate = PathBuf::from(trimmed)
+                        .canonicalize()
+                        .map_err(|e| {
+                            ParseCliError::Message(format!(
+                                "invalid --project-root '{trimmed}': \
+                                 path does not exist or is not accessible ({e})"
+                            ))
+                        })?;
+                    project_root = Some(candidate);
                 }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));

@@ -211,10 +211,17 @@ impl RemoteServerState {
         // PR-S4: resolve the project-root boundary for the fs_api routes.
         // Honor an explicit override from the desktop settings (when wired
         // through), then fall back to $TERMUL_PROJECT_ROOT, then to $HOME /
-        // $USERPROFILE. The desktop's host starts in the user's home
-        // directory by default — the same fallback the standalone binary uses.
+        // $USERPROFILE. Per `default_project_root`'s contract, `None` here
+        // means no home dir is discoverable — treat it as fatal rather than
+        // silently widening the boundary to the process CWD (which on a
+        // desktop app is the bundle/install dir, much more permissive than
+        // the per-user boundary this PR is meant to enforce).
         let project_root = crate::web::config::default_project_root()
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
+            .ok_or_else(|| {
+                "could not determine project root for shared-live server: \
+                 set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
+                    .to_string()
+            })?;
 
         let cfg = ServerConfig {
             host: bind_mode.host().to_string(),
