@@ -204,6 +204,9 @@ interface AcpState {
    * or cwd-only navigation.
    */
   agentOptionsCache: Record<string, AgentOptionsCacheEntry>
+  /** The agent the warm-session pool targets (drives refill-on-consume +
+   * agent-switch drain). Null = no active pool (no refill, no drain). */
+  selectedAgentConfigId: string | null
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -253,7 +256,8 @@ interface AcpState {
     agentId: AgentId,
     cwd: string,
     mcpServers: McpServer[] | undefined,
-    projectId: string
+    projectId: string,
+    opts?: { ephemeral?: boolean }
   ) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
@@ -279,7 +283,8 @@ interface AcpState {
     configId: string,
     cwd: string,
     mcpServers: McpServer[] | undefined,
-    projectId: string
+    projectId: string,
+    opts?: { silent?: boolean }
   ) => void
   /** Drop any prepared session for this key (e.g. dialog closed or inputs changed). */
   cancelPreparedChat: (key: string) => void
@@ -292,9 +297,10 @@ interface AcpState {
   ) => Promise<SessionId>
   /**
    * Take ownership of a prepared session so launcher unmount cleanup cannot
-   * reap it after the chat tab is already open.
+   * reap it after the chat tab is already open. Promotes ephemeral pooled
+   * sessions into persisted history.
    */
-  claimPreparedChat: (key: string) => SessionId | null
+  claimPreparedChat: (key: string, projectId: string) => SessionId | null
   /**
    * Local-only initializing session so the chat tab can open before ACP
    * `session/new` finishes. Painted from options cache (+ pending overlays).
@@ -346,6 +352,10 @@ interface AcpState {
       | null
       | undefined
   ) => Promise<void>
+  /** Set the agent the warm-session pool targets (reactive driver for retarget + refill gate). */
+  setSelectedAgentConfigId: (configId: string | null) => void
+  /** Drain stale pooled sessions for `cwd` (other agents) and seed `configId`'s pool. */
+  retargetWarmPool: (configId: string, cwd: string, projectId: string) => void
 
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
@@ -662,6 +672,29 @@ function dropRecordKey<T>(
   return next
 }
 
+/**
+ * Free per-session transcript maps held in the WebView heap.
+ * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
+ * Call only after any needed `persistSession` so the last mirror is flushed.
+ */
+function dropSessionTranscriptState(
+  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
+  sessionId: SessionId
+): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
+  return {
+    messages: dropRecordKey(state.messages, sessionId),
+    toolCalls: dropRecordKey(state.toolCalls, sessionId),
+    commands: dropRecordKey(state.commands, sessionId),
+    sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
+    plans: dropRecordKey(state.plans, sessionId)
+  }
+}
+
+/** True when live (or mid-replay) session updates may mutate transcript maps. */
+function acceptsSessionTranscriptEvents(session: AcpSession | undefined): session is AcpSession {
+  return Boolean(session && (session.status !== 'closed' || session.replaying))
+}
+
 /** Move a failed optimistic send into the queue when the backend is still busy. */
 function recoverPromptToQueue(
   set: TurnEndSetter,
@@ -830,6 +863,9 @@ function persistSession(
   // title update streamed as part of the replay) would truncate the on-disk
   // history if the app quits before the next full persist.
   if (session.replaying) return
+  // After WebView transcript eviction the map key is absent. Never rewrite
+  // disk with `[]` from a second close / late prompt-complete / title event.
+  if (!(sessionId in state.messages)) return
   // `streaming` is transient UI state; persisting it would restore a message
   // stuck in its shimmer state after a restart.
   const messages = (state.messages[sessionId] ?? []).map((m) =>
@@ -1081,6 +1117,21 @@ export function hasModelRelevantOptionsCache(
 }
 
 /**
+ * Session ids created via `createSession({ ephemeral: true })` (warm-pool seeds)
+ * that have NOT yet been promoted to a real chat by `startChat`. Tracked so the
+ * disconnect/close handlers can DROP an un-promoted pooled session (never
+ * persisted) instead of persisting an orphan "Untitled Chat" to the history
+ * index. Removed on promotion (`promotePreparedSession`) and on drop
+ * (disconnect/close/liveness-check).
+ */
+const ephemeralSessionIds = new Set<string>()
+
+/** Test-only: clear the ephemeral-session tracking set between tests. */
+export function _resetEphemeralSessionIdsForTesting(): void {
+  ephemeralSessionIds.clear()
+}
+
+/**
  * In-flight `openHistorySession` calls keyed by session id, so the sidebar
  * click and the restored-tab rehydrate (which can race at startup) coalesce
  * into one open instead of double-loading/spawning. Held outside reactive
@@ -1196,6 +1247,43 @@ function cancelPreparedChatEntry(
     delete prepareChatErrors[key]
     return { preparedSessions, preparingChatKeys, prepareChatErrors }
   })
+}
+
+/**
+ * Promote an ephemeral pooled session to a real (persisted) chat now that it is
+ * actually consumed by `startChat`. Persisting here (not at prepare time) is
+ * what keeps an unconsumed warm session from leaving an orphan "Untitled Chat"
+ * on disk. Also clears the warm-slot lookup and refills one warm session for the
+ * pool's target agent (default MCP only), so the next chat is instant too.
+ *
+ * Refill is gated by `selectedAgentConfigId` so callers that don't opt into the
+ * warm pool (and the GH-288 reuse assertion of a single `acp_new_session` invoke)
+ * never fire an extra session/new.
+ */
+function promotePreparedSession(
+  key: string,
+  sessionId: SessionId,
+  projectId: string,
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+): void {
+  // Promoted: no longer an un-promoted pooled session — remove from the
+  // ephemeral set so a later disconnect/close persists (not drops) it.
+  ephemeralSessionIds.delete(sessionId)
+  // Prepared keys exclude projectId; if projects share a cwd, the seed's
+  // projectId would be wrong for the consumer — stamp the consuming project.
+  set((s) => {
+    const session = s.sessions[sessionId]
+    if (!session) return {}
+    return { sessions: { ...s.sessions, [sessionId]: { ...session, projectId } } }
+  })
+  persistSession(get(), sessionId, (entries) => set(() => ({ sessionIndex: entries })))
+  cancelPreparedChatEntry(key, set)
+  const state = get()
+  const [kConfig, kCwd, kMcp] = key.split('\0')
+  if (kConfig === state.selectedAgentConfigId && !kMcp) {
+    void state.prepareChat(kConfig, kCwd, undefined, projectId, { silent: true })
+  }
 }
 
 /**
@@ -1543,6 +1631,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   preparingChatKeys: {},
   prepareChatErrors: {},
   agentOptionsCache: {},
+  selectedAgentConfigId: null,
   sessionIndex: [],
   openingHistoryIds: {},
   launchingSessionIds: {},
@@ -1619,7 +1708,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  createSession: async (agentId, cwd, mcpServers, projectId) => {
+  createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
     const sessionId = outcome.sessionId
     set((s) => {
@@ -1647,12 +1736,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
         },
         messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
-        activeSessionId: s.activeSessionId ?? sessionId
+        activeSessionId: opts?.ephemeral ? s.activeSessionId : (s.activeSessionId ?? sessionId)
       }
     })
-    // mirror to disk (index + payload)
-    const st = get()
-    persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
+    // Track un-promoted pooled sessions so disconnect/close can drop (not persist) them.
+    if (opts?.ephemeral) ephemeralSessionIds.add(sessionId)
+    // Mirror to disk (index + payload). Skipped for ephemeral (pooled) sessions,
+    // which are promoted to history only when `startChat` consumes them — so an
+    // unconsumed warm session never leaves an orphan "Untitled Chat" on disk.
+    if (!opts?.ephemeral) {
+      const st = get()
+      persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    // Cache models/modes even for ephemeral prepares so the launcher can paint
+    // instantly from the warm pool.
     const configId = configIdForAgentId(get(), agentId)
     if (configId) {
       writeAgentOptionsCache(set, configId, {
@@ -1689,12 +1786,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         sessions,
-        plans: dropPlanForSession(s.plans, sessionId),
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
     })
+    // Flush closed status + last transcript to disk while maps still hold it,
+    // then drop in-memory maps so WebView2 can reclaim heap. Ephemeral (warm
+    // pool) sessions are never mirrored.
+    if (!ephemeralSessionIds.has(sessionId) && get().sessions[sessionId]) {
+      persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    set((s) => dropSessionTranscriptState(s, sessionId))
   },
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
@@ -1812,7 +1915,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
   },
 
-  prepareChat: (configId, cwd, mcpServers, projectId) => {
+  prepareChat: (configId, cwd, mcpServers, projectId, opts) => {
     const trimmedCwd = cwd.trim()
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
@@ -1856,7 +1959,25 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           settle(null)
           return
         }
-        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId)
+        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId, {
+          ephemeral: true
+        })
+        // Disconnect race: if the agent died mid-prepare, don't register a dead
+        // session — drop it (createSession added it to `ephemeralSessionIds`) and
+        // bail so the pool re-seeds lazily on the next chat (re-spawn + refill).
+        if (get().agentStatus[agentId] !== 'connected') {
+          if (ephemeralSessionIds.has(sessionId)) {
+            ephemeralSessionIds.delete(sessionId)
+            set((s) => {
+              if (!s.sessions[sessionId]) return s
+              const sessions = { ...s.sessions }
+              delete sessions[sessionId]
+              return { sessions }
+            })
+          }
+          settle(null)
+          return
+        }
         // Task-identity guard: cancel deletes the map entry; a newer prepare
         // replaces it. Either way the stale task must not write results.
         if (inFlightPrepared.get(key) !== task) {
@@ -1884,7 +2005,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           set((s) => ({
             prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
           }))
-          toast.error(message)
+          // Pool seeds are best-effort (silent): only surface a toast for
+          // user-initiated prepares so a failing agent doesn't spam on startup.
+          if (!opts?.silent) toast.error(message)
         }
         settle(null)
       } finally {
@@ -1961,14 +2084,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     for (;;) {
       const prepared = get().preparedSessions[key]
       if (prepared) {
-        cancelPreparedChatEntry(key, set)
+        promotePreparedSession(key, prepared, projectId, get, set)
         return prepared
       }
       const inFlight = inFlightPrepared.get(key)
       if (!inFlight) break
       const sessionId = await inFlight
       if (sessionId) {
-        cancelPreparedChatEntry(key, set)
+        promotePreparedSession(key, sessionId, projectId, get, set)
         return sessionId
       }
       // null: cancelled or failed — re-check for a newer prepare before spawning.
@@ -1978,10 +2101,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
   },
 
-  claimPreparedChat: (key) => {
+  claimPreparedChat: (key, projectId) => {
     const sessionId = get().preparedSessions[key]
     if (!sessionId) return null
-    cancelPreparedChatEntry(key, set)
+    promotePreparedSession(key, sessionId, projectId, get, set)
     return sessionId
   },
 
@@ -2249,6 +2372,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  setSelectedAgentConfigId: (configId) => set({ selectedAgentConfigId: configId }),
+
+  retargetWarmPool: (configId, cwd, projectId) => {
+    const trimmedCwd = cwd.trim()
+    if (!configId || trimmedCwd.length === 0) return
+    // Agent-switch drain (single-target): close + drop pooled sessions for THIS
+    // cwd but a DIFFERENT agent. Sessions for other cwds stay warm so switching
+    // projects back is instant (per-cwd warm, like processes). Idempotent: a
+    // retarget to the same target drains nothing and `prepareChat` dedupes the seed.
+    const state = get()
+    const targetCwd = normalizeCwd(trimmedCwd)
+    for (const k of new Set([
+      ...Object.keys(state.preparedSessions),
+      ...Object.keys(state.preparingChatKeys)
+    ])) {
+      const [kConfig, kCwd] = k.split('\0')
+      if (kConfig !== configId && normalizeCwd(kCwd) === targetCwd) {
+        get().cancelPreparedChat(k)
+      }
+    }
+    // Seed the new target (fire-and-forget; prepareChat dedupes in-flight work
+    // and is silent on failure — chat still lazy-spawns if the warm-up fails).
+    void get().prepareChat(configId, trimmedCwd, undefined, projectId, { silent: true })
+  },
+
   loadSessionIndex: async () => {
     const entries = await loadSessionIndexFromDisk()
     // Continue the placeholder counter from the highest persisted suffix so a
@@ -2301,7 +2449,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           replaying: null
         }
       }
-      return { sessionIndex: next, sessions }
+      return {
+        sessionIndex: next,
+        sessions,
+        ...dropSessionTranscriptState(s, id)
+      }
     })
     // Reclaim any app-owned temp files staged for this session.
     void deleteSessionTempFiles(id)
@@ -2780,6 +2932,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCall: (e) =>
     set((s) => {
+      // Same guard as message chunks: never grow maps for unknown/closed sessions.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
       const stamped: ToolCall = {
@@ -2797,6 +2951,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCallUpdate: (e) =>
     set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
@@ -2812,11 +2967,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (entries.length === 0) {
         return { plans: dropPlanForSession(s.plans, e.sessionId) }
       }
+      // Do not re-grow plan cache for closed/unknown sessions after eviction.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       return { plans: { ...s.plans, [e.sessionId]: entries } }
     }),
 
   _onCommandsUpdate: (e) =>
-    set((s) => ({ commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } })),
+    set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      return { commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } }
+    }),
 
   _onModeUpdate: (e) => {
     set((s) => {
@@ -2863,7 +3023,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
       }
     })
-    if (get().sessions[e.sessionId]) {
+    // Gate on sessionIndex membership so an un-promoted (ephemeral) pooled
+    // session is never persisted by an event before `startChat` promotes it
+    // (matches the prompt/error reducers).
+    if (
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
   },
@@ -2873,7 +3039,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return
     }
     set((s) => {
-      if (!s.sessions[e.sessionId]) return {}
+      // Closed shells remain in `sessions` after eviction — still reject usage.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const prev = s.sessionUsage[e.sessionId]
       const baselineUsed = prev?.baselineUsed ?? e.used
       const next: SessionUsage = {
@@ -3047,27 +3214,34 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
+    const dropTranscriptIds: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
-        // Story 1.9 review: a session already in 'error' status (set by the
-        // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
-        // — the crash's distinguishing Error state must survive the always-
-        // following disconnect event so the UI can show a manual-restart action.
-        if (
-          sessions[id].agentId === e.agentId &&
-          sessions[id].status !== 'closed' &&
-          sessions[id].status !== 'error'
-        ) {
-          sessions[id] = {
-            ...sessions[id],
-            status: 'closed',
-            activeTurn: false,
-            openTurnId: null,
-            replaying: null
+        if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
+          if (ephemeralSessionIds.has(id)) {
+            // Un-promoted pooled session (never persisted): drop it entirely
+            // instead of marking closed + persisting, so no orphan "Untitled
+            // Chat" survives in the history index on agent disconnect.
+            delete sessions[id]
+            ephemeralSessionIds.delete(id)
+            dropTranscriptIds.push(id)
+          } else if (sessions[id].status !== 'error') {
+            // Story 1.9 review: a session already in 'error' status (set by the
+            // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
+            // — the crash's distinguishing Error state must survive the always-
+            // following disconnect event so the UI can show a manual-restart action.
+            sessions[id] = {
+              ...sessions[id],
+              status: 'closed',
+              activeTurn: false,
+              openTurnId: null,
+              replaying: null
+            }
+            affected.push(id)
+            dropTranscriptIds.push(id)
           }
-          affected.push(id)
         }
       }
       const discoveredSessions = { ...s.discoveredSessions }
@@ -3076,17 +3250,37 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       for (const k of Object.keys(discoveredSessions)) {
         if (k.startsWith(prefix)) delete discoveredSessions[k]
       }
+      // Drop pooled (ephemeral) prepared sessions whose backend just died so a
+      // later `startChat` does not try to promote a closed session. Uses the
+      // original state (s.sessions) so it is independent of the ephemeral-session
+      // deletions in the loop above; the pool re-seeds lazily on the next chat.
+      const preparedSessions = { ...s.preparedSessions }
+      for (const [k, sid] of Object.entries(preparedSessions)) {
+        const sess = s.sessions[sid]
+        if (sess && sess.agentId === e.agentId) delete preparedSessions[k]
+      }
       return {
         agentStatus,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
-        discoveredSessions
+        discoveredSessions,
+        preparedSessions
       }
     })
-    // Persist the closed status for each session the disconnect affected, so the
-    // history index reflects it across restarts (mirrors _onSessionClosed).
+    // Persist closed status + transcript while maps still hold content, then
+    // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
       persistSession(get(), id, (entries) => set({ sessionIndex: entries }))
+    }
+    if (dropTranscriptIds.length > 0) {
+      set((s) => {
+        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> =
+          s
+        for (const id of dropTranscriptIds) {
+          next = dropSessionTranscriptState(next, id)
+        }
+        return next
+      })
     }
   },
 
@@ -3094,13 +3288,39 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // Reclaim app-owned temp files staged for this session (e.g. agent
     // disconnected) so they do not linger in the OS temp dir.
     void deleteSessionTempFiles(e.sessionId)
+    if (ephemeralSessionIds.has(e.sessionId)) {
+      // Un-promoted pooled session closed by the backend: drop it entirely
+      // (never persisted) so no orphan "Untitled Chat" survives in the index.
+      ephemeralSessionIds.delete(e.sessionId)
+      set((s) => {
+        const sessions = { ...s.sessions }
+        delete sessions[e.sessionId]
+        // Also drop any warm-slot lookup pointing at this session so the UI
+        // stops reporting "Session ready" and startChat can't promote a dead id.
+        const preparedSessions = { ...s.preparedSessions }
+        for (const [k, sid] of Object.entries(preparedSessions)) {
+          if (sid === e.sessionId) delete preparedSessions[k]
+        }
+        return {
+          sessions,
+          preparedSessions,
+          pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
+          ...dropSessionTranscriptState(s, e.sessionId)
+        }
+      })
+      return
+    }
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-      if (!session) return { pendingPermissions, plans: dropPlanForSession(s.plans, e.sessionId) }
+      if (!session) {
+        return {
+          pendingPermissions,
+          ...dropSessionTranscriptState(s, e.sessionId)
+        }
+      }
       return {
         pendingPermissions,
-        plans: dropPlanForSession(s.plans, e.sessionId),
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
@@ -3113,9 +3333,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    // Persist while transcript maps still hold content, then free WebView heap.
     if (get().sessions[e.sessionId]) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
+    set((s) => dropSessionTranscriptState(s, e.sessionId))
   }
 }))
 
@@ -3284,6 +3506,10 @@ export interface ConfigWarmState {
   connected: boolean
   /** A background warm spawn for this config is in flight (any cwd). */
   warming: boolean
+  /** A warm `session/new` for this config is ready (pooled, any cwd). */
+  sessionReady: boolean
+  /** A warm `session/new` for this config is in flight (any cwd). */
+  warmingSession: boolean
 }
 
 /**
@@ -3300,7 +3526,13 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
   const warming = Object.keys(state.warmingConfigs).some(
     (key) => configIdFromReuseKey(key) === configId
   )
-  return { connected, warming }
+  const sessionReady = Object.keys(state.preparedSessions).some(
+    (key) => configIdFromReuseKey(key) === configId
+  )
+  const warmingSession = Object.keys(state.preparingChatKeys).some(
+    (key) => configIdFromReuseKey(key) === configId
+  )
+  return { connected, warming, sessionReady, warmingSession }
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

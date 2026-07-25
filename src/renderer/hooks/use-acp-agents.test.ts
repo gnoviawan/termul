@@ -11,6 +11,8 @@ const {
   mockLoadAgentConfigs,
   mockPrewarmAgent,
   mockSaveAgentConfig,
+  mockSetSelectedAgentConfigId,
+  mockRetargetWarmPool,
   mockPersistRead,
   stateRef,
   projectRef
@@ -18,6 +20,8 @@ const {
   mockLoadAgentConfigs: vi.fn(),
   mockPrewarmAgent: vi.fn(),
   mockSaveAgentConfig: vi.fn(),
+  mockSetSelectedAgentConfigId: vi.fn(),
+  mockRetargetWarmPool: vi.fn(),
   mockPersistRead: vi.fn(),
   stateRef: { current: { agentConfigs: [] as StoredAgentConfig[] } },
   projectRef: { current: { activeProjectId: 'proj-1' as string } }
@@ -55,7 +59,9 @@ vi.mock('@/stores/acp-store', () => {
     agentConfigs: stateRef.current.agentConfigs,
     loadAgentConfigs: mockLoadAgentConfigs,
     saveAgentConfig: mockSaveAgentConfig,
-    prewarmAgent: mockPrewarmAgent
+    prewarmAgent: mockPrewarmAgent,
+    setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
+    retargetWarmPool: mockRetargetWarmPool
   })
   const useAcpStore = (sel?: (s: ReturnType<typeof getState>) => unknown) =>
     sel ? sel(getState()) : getState()
@@ -104,6 +110,12 @@ describe('useAcpAgents', () => {
       expect(mockPrewarmAgent).toHaveBeenCalledWith('acp-registry:gemini', '/work/proj-1')
     })
     expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
+    expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith('acp-registry:gemini')
+    expect(mockRetargetWarmPool).toHaveBeenCalledWith(
+      'acp-registry:gemini',
+      '/work/proj-1',
+      'proj-1'
+    )
   })
 
   it('prewarms the default supported agent when no selection is persisted', async () => {

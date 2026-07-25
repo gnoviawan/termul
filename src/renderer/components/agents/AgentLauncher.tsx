@@ -339,17 +339,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
-        // Process-only warm first (non-blocking); prepareChat still creates the session.
-        void useAcpStore.getState().prewarmAgent(activeConfigId, projectRoot)
-        useAcpStore.getState().prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+        // Retarget the app-level warm pool to this agent+cwd: drains stale
+        // pooled sessions for other agents (same cwd) and seeds a warm session
+        // for this one. The pool owns the session lifecycle, so — unlike the
+        // old launcher-scoped prepareChat — we do NOT cancel on close (a warm
+        // session stays ready for the next chat / a project switch-back).
+        useAcpStore.getState().setSelectedAgentConfigId(activeConfigId)
+        useAcpStore.getState().retargetWarmPool(activeConfigId, projectRoot, activeProjectId)
       } catch (err) {
-        console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
+        console.warn('[acp] failed to retarget warm pool for', activeConfigId, err)
       }
     })()
-    const key = prepareChatKey(activeConfigId, projectRoot, undefined)
     return () => {
       cancelled = true
-      useAcpStore.getState().cancelPreparedChat(key)
     }
   }, [
     activeConfigId,
@@ -594,7 +596,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // Open the chat immediately; ACP spawn/session/send continue in the chat view.
     const store = useAcpStore.getState()
     let sessionId =
-      preparedKeySnapshot != null ? store.claimPreparedChat(preparedKeySnapshot) : null
+      preparedKeySnapshot != null
+        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
+        : null
     let usedPlaceholder = false
     let seededOptimistic = false
 

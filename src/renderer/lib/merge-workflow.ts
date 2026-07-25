@@ -11,6 +11,25 @@ export type ConflictSeverity = 'low' | 'medium' | 'high'
 
 export type DetectionMode = 'fast' | 'accurate'
 
+export type ResolutionStrategy =
+  | 'accept-ours'
+  | 'accept-theirs'
+  | 'accept-either'
+  | 'accept-ours-then-format'
+  | 'auto-format'
+  | 'auto-sort-imports'
+  | 'regenerate'
+  | 'manual'
+
+export type SuggestionConfidence = 'low' | 'medium' | 'high'
+
+export interface ConflictSuggestion {
+  strategy: ResolutionStrategy
+  confidence: SuggestionConfidence
+  reason: string
+  description: string
+}
+
 export interface ConflictFile {
   path: string
   severity: ConflictSeverity
@@ -18,6 +37,8 @@ export interface ConflictFile {
   conflictCount: number
   /** Whether the conflict is in a lock file (low priority) */
   isLockFile: boolean
+  /** Resolution suggestions for this conflict */
+  suggestions: ConflictSuggestion[]
 }
 
 export interface MergePreview {
@@ -32,6 +53,8 @@ export interface MergePreview {
   totalChanges: number
   /** Detection mode used */
   detectionMode: DetectionMode
+  /** Whether any conflicts have high-confidence auto-resolution suggestions */
+  hasAutoResolvable: boolean
 }
 
 export type MergeStep = 'preview' | 'resolve' | 'confirm' | 'executing' | 'complete' | 'failed'
