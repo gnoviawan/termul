@@ -212,15 +212,26 @@ impl RemoteServerState {
         // Honor an explicit override from the desktop settings (when wired
         // through), then fall back to $TERMUL_PROJECT_ROOT, then to $HOME /
         // $USERPROFILE. Per `default_project_root`'s contract, `None` here
-        // means no home dir is discoverable — treat it as fatal rather than
-        // silently widening the boundary to the process CWD (which on a
-        // desktop app is the bundle/install dir, much more permissive than
-        // the per-user boundary this PR is meant to enforce).
-        let project_root = crate::web::config::default_project_root()
+        // means no home dir is discoverable — treat it as fatal. We then
+        // run the result through `resolve_and_validate_project_root` so
+        // the value stored in `ServerConfig::project_root` is a canonical
+        // absolute path to an existing directory, exactly like the
+        // standalone `termul-server` binary does. A misconfigured $HOME
+        // (deleted account, broken symlink, etc.) now fails the start
+        // call rather than leaking through and confusing the boundary
+        // check.
+        let raw_root = crate::web::config::default_project_root()
             .ok_or_else(|| {
                 "could not determine project root for shared-live server: \
                  set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
                     .to_string()
+            })?;
+        let project_root = crate::web::config::resolve_and_validate_project_root(&raw_root)
+            .map_err(|e| {
+                format!(
+                    "shared-live server refused to start: {e} \
+                     (set $TERMUL_PROJECT_ROOT to a valid directory)"
+                )
             })?;
 
         let cfg = ServerConfig {

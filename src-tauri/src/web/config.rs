@@ -6,7 +6,7 @@
 //! permission-rendezvous timeout.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolve the default project-root boundary for the fs_api routes (PR-S4).
 ///
@@ -38,6 +38,43 @@ pub fn default_project_root() -> Option<PathBuf> {
     #[cfg(not(any(unix, windows)))]
     let home = std::env::var_os("HOME").map(PathBuf::from);
     home
+}
+
+/// Validate a raw project-root path and return its canonical absolute form.
+///
+/// Used at every entry point that constructs a `ServerConfig::project_root`
+/// (the `from_args` `--project-root` flag, the desktop shared-live host's
+/// `default_project_root()` fallback, the standalone `termul-server`
+/// binary) so the boundary check in `fs_api::check_within_root` can rely
+/// on `project_root` being a real, accessible directory rather than a path
+/// string that only resolves correctly at the first request.
+///
+/// Rejects:
+/// - Paths that do not exist or are not accessible (canonicalize fails).
+/// - Paths that exist but are not directories.
+///
+/// Returns the canonical absolute path on success, or an error message
+/// suitable for surfacing to the operator at startup.
+pub fn resolve_and_validate_project_root(raw: &Path) -> Result<PathBuf, String> {
+    // 1) Canonicalize: absolute path, symlinks resolved, and the path must
+    //    exist for canonicalize to succeed.
+    let canonical = raw.canonicalize().map_err(|e| {
+        format!(
+            "project root '{}' is not accessible: {e}",
+            raw.display()
+        )
+    })?;
+    // 2) Must be a directory. A file is a valid fs target for the
+    //    boundary check, but it would make the fs_api routes useless
+    //    (`mkdir` cannot create children inside a file, `ls`/`browse`
+    //    cannot list a file), so fail fast at startup instead.
+    if !canonical.is_dir() {
+        return Err(format!(
+            "project root '{}' is not a directory",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 /// Which network interface(s) the standalone HTTP server binds to.
@@ -214,23 +251,15 @@ impl ServerConfig {
                         ));
                     }
                     // Fail-fast on a bad explicit --project-root: validate
-                    // the path exists and is accessible at parse time so the
-                    // server doesn't start successfully and only surface the
-                    // error as a per-request `OUTSIDE_ROOT` on every /fs/*
-                    // call (hard to diagnose post-mortem). We also store the
-                    // canonicalized form so downstream comparisons
-                    // (`check_within_root` re-canonicalizes the root) don't
-                    // race against a path that was canonical at parse time
-                    // but has since been replaced by a symlink.
-                    let candidate = PathBuf::from(trimmed)
-                        .canonicalize()
-                        .map_err(|e| {
-                            ParseCliError::Message(format!(
-                                "invalid --project-root '{trimmed}': \
-                                 path does not exist or is not accessible ({e})"
-                            ))
-                        })?;
-                    project_root = Some(candidate);
+                    // the path exists, is accessible, and is a directory at
+                    // parse time so the server doesn't start successfully
+                    // and only surface the error as a per-request
+                    // `OUTSIDE_ROOT` on every /fs/* call (hard to diagnose
+                    // post-mortem). The canonical absolute form is stored
+                    // so the boundary check is stable.
+                    let validated = resolve_and_validate_project_root(Path::new(trimmed))
+                        .map_err(ParseCliError::Message)?;
+                    project_root = Some(validated);
                 }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
@@ -245,12 +274,21 @@ impl ServerConfig {
 
         let project_root = match project_root {
             Some(p) => p,
-            None => default_project_root().ok_or_else(|| {
-                ParseCliError::Message(
-                    "could not determine project root: set --project-root, $TERMUL_PROJECT_ROOT, or $HOME"
-                        .into(),
-                )
-            })?,
+            None => {
+                let raw = default_project_root().ok_or_else(|| {
+                    ParseCliError::Message(
+                        "could not determine project root: \
+                         set --project-root, $TERMUL_PROJECT_ROOT, or $HOME"
+                            .into(),
+                    )
+                })?;
+                // Validate the env-var / $HOME fallback the same way we
+                // validate an explicit --project-root: it must exist and
+                // be a directory. A misconfigured $HOME (deleted account,
+                // broken symlink, etc.) now fails fast at startup instead
+                // of leaking through and confusing the boundary check.
+                resolve_and_validate_project_root(&raw).map_err(ParseCliError::Message)?
+            }
         };
 
         Ok(Self {
@@ -285,6 +323,73 @@ impl std::error::Error for ParseCliError {}
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+
+    // PR-S4: validate the project-root helper. TempDir scopes are used so
+    // the tests don't depend on a specific filesystem layout outside
+    // `std::env::temp_dir()`. TempDir is already a dev-dep of the workspace
+    // (used by `web::fs_api::tests`); if that ever changes, swap to
+    // `std::env::temp_dir().join("...")` plus manual cleanup.
+
+    #[test]
+    fn resolve_and_validate_accepts_existing_directory() {
+        let dir = tempdir_like("resolve-ok");
+        let validated = resolve_and_validate_project_root(&dir).expect("dir is valid");
+        // The validated path is the canonical absolute form of `dir`.
+        // `Path::is_absolute` returns true on every supported platform for
+        // the result of `canonicalize` (Windows paths may carry a `\\?\`
+        // verbatim prefix but are still reported as absolute).
+        assert!(validated.is_absolute());
+        // And the result is idempotent under a second canonicalize.
+        let again = validated.canonicalize().expect("canonicalize again");
+        assert_eq!(validated, again);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn resolve_and_validate_rejects_nonexistent_path() {
+        let dir = tempdir_like("resolve-missing");
+        let missing = dir.join("does-not-exist");
+        let err = resolve_and_validate_project_root(&missing).unwrap_err();
+        assert!(
+            err.contains("not accessible"),
+            "expected 'not accessible' in: {err}"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn resolve_and_validate_rejects_file() {
+        let dir = tempdir_like("resolve-file");
+        let file = dir.join("a-file.txt");
+        std::fs::write(&file, "x").expect("write");
+        let err = resolve_and_validate_project_root(&file).unwrap_err();
+        assert!(
+            err.contains("not a directory"),
+            "expected 'not a directory' in: {err}"
+        );
+        cleanup(&dir);
+    }
+
+    /// Minimal in-test TempDir substitute so this test module doesn't need
+    /// to depend on the `tempfile` crate just for two tests. Returns a
+    /// unique subdirectory of the OS temp dir; tests are responsible for
+    /// calling `cleanup` on success or early return.
+    fn tempdir_like(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let p = std::env::temp_dir().join(format!(
+            "termul-config-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&p).expect("create tempdir_like");
+        p
+    }
+
+    fn cleanup(p: &Path) {
+        let _ = std::fs::remove_dir_all(p);
+    }
 
     #[test]
     fn bind_mode_parse_and_addrs() {
