@@ -843,15 +843,15 @@ describe('AgentLauncher ACP new thread', () => {
     ).toBeInTheDocument()
   })
 
-  it('background-prewarms the selected agent when the launcher opens', async () => {
+  it('retargets the warm pool when the launcher opens', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrewarmAgent).toHaveBeenCalledWith(defaultAgent.configId, '/work')
+      expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith(defaultAgent.configId)
     )
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
   })
 

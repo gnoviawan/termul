@@ -1317,7 +1317,6 @@ struct ConflictBlock {
     theirs: String,
     base: String,
 }
-}
 
 /// Get an ISO 8601 timestamp string for the current time.
 fn chrono_timestamp() -> String {
