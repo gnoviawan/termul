@@ -135,14 +135,6 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    /// Construct a `ServerConfig` with the default project root resolved
-    /// from `$TERMUL_PROJECT_ROOT` or the user's home directory. Returns
-    /// `None` when no home directory can be discovered.
-    pub fn with_default_project_root(mut self) -> Option<Self> {
-        self.project_root = default_project_root()?;
-        Some(self)
-    }
-
     /// Resolve the bind mode from [`Self::host`], defaulting unknown hosts to
     /// a parse error at the CLI layer (callers should validate first).
     pub fn bind_mode(&self) -> Option<BindMode> {
@@ -169,9 +161,11 @@ impl ServerConfig {
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
         // PR-S4: when `--project-root` is absent, fall back to the env var or
-        // the user's home directory. The fallback is resolved by the caller
-        // via `with_default_project_root()`; here we only honor the explicit
-        // CLI flag.
+        // the user's home directory via `default_project_root()`. The
+        // resolved value is run through `resolve_and_validate_project_root`
+        // (below, after the match block) so a misconfigured environment
+        // fails fast at startup rather than leaking through to the
+        // boundary check.
         let mut project_root: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
