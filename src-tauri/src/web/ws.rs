@@ -36,6 +36,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
 use crate::web::sink::{ClientId, ReplayResult, WsRelaySink};
 
@@ -494,6 +495,9 @@ async fn handle_request(
         "resume_session" => handle_resume_session(id, &req.payload, acp).await,
         "close_session" => handle_close_session(id, &req.payload, acp).await,
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp).await,
+        "kill_agent" => handle_kill_agent(id, &req.payload, acp).await,
+        "list_agents" => handle_list_agents(id, acp),
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
@@ -562,6 +566,77 @@ fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsReply {
 // method, and maps `Result<T, String>` → `WsReply`. The streaming events
 // emitted by `AcpManager` (via `fan_out` → `WsRelaySink`) flow back to the
 // browser automatically — these handlers only own the request/reply half.
+
+/// `spawn_agent` → `AcpManager::spawn(config)`. Mirrors Tauri `acp_spawn_agent`
+/// invoke args `{ config }`. Reply payload = `AgentId` (JSON string).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpawnAgentPayload {
+    config: AgentConfig,
+}
+
+async fn handle_spawn_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let mut parsed: SpawnAgentPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed spawn_agent payload (want config): {e}"),
+            )
+        }
+    };
+    // Mirror desktop `validateAgentConfig`: trim + require non-empty name/command.
+    parsed.config.name = parsed.config.name.trim().to_string();
+    parsed.config.command = parsed.config.command.trim().to_string();
+    if parsed.config.name.is_empty() {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "spawn_agent requires a non-empty `config.name`",
+        );
+    }
+    if parsed.config.command.is_empty() {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "spawn_agent requires a non-empty `config.command`",
+        );
+    }
+    match acp.spawn(parsed.config).await {
+        Ok(agent_id) => ok_with_payload(id, &agent_id),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `kill_agent` → `AcpManager::kill(agent_id)`. Mirrors Tauri `acp_kill_agent`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KillAgentPayload {
+    agent_id: crate::acp::AgentId,
+}
+
+async fn handle_kill_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: KillAgentPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed kill_agent payload (want agentId): {e}"),
+            )
+        }
+    };
+    match acp.kill(&parsed.agent_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
+/// `list_agents` → `AcpManager::list_agents()`. Reply = `AgentId[]` (JSON array).
+fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
+    ok_with_payload(id, &acp.list_agents())
+}
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
@@ -1187,9 +1262,10 @@ mod tests {
         }
     }
 
-    /// Story 1.8: the 10 ACP command handlers are wired. With an empty payload
+    /// Story 1.8: ACP command handlers are wired. With an empty payload
     /// they reject `unsupported` (malformed payload) — proving the match arm
     /// routes to the handler (not the `_ => not_implemented` stub).
+    /// `list_agents` accepts `{}` and is covered separately.
     #[test]
     fn handle_request_post_auth_acp_commands_reject_malformed_payload() {
         let mut authed = true;
@@ -1204,6 +1280,8 @@ mod tests {
             "set_mode",
             "set_model",
             "set_config_option",
+            "spawn_agent",
+            "kill_agent",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -1216,6 +1294,31 @@ mod tests {
                 "{ty} should route to its live handler (malformed-payload → unsupported, NOT not_implemented)"
             );
         }
+    }
+
+    /// Browser agent lifecycle: `list_agents` with empty payload returns `[]`
+    /// (no-op manager has zero agents) — proves the arm is live.
+    #[test]
+    fn handle_list_agents_returns_empty_array() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"list_agents","payload":{}}"#,
+            &mut authed,
+        );
+        assert!(reply.ok, "list_agents should succeed");
+        assert_eq!(reply.payload, Some(json!([])));
+    }
+
+    /// `spawn_agent` rejects empty `config.command` (mirrors create_session cwd guard).
+    #[test]
+    fn handle_spawn_agent_rejects_empty_command() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"spawn_agent","payload":{"config":{"name":"x","command":""}}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
     }
 
     /// Story 1.8 review (EC4): `create_session` rejects an empty/whitespace

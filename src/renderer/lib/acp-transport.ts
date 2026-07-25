@@ -341,16 +341,18 @@ export class WsAcpTransport implements AcpTransport {
     return { agents: [], source: 'empty', fetchedAt: null }
   }
 
-  async spawnAgent(_config: AgentConfig): Promise<AgentId> {
-    throw new AcpTransportError('unsupported', 'spawnAgent is desktop-only on the web client')
+  // --- Agent lifecycle (desktop parity over WS) ----------------------------
+
+  async spawnAgent(config: AgentConfig): Promise<AgentId> {
+    return this.request<AgentId>('spawn_agent', { config })
   }
 
-  async killAgent(_agentId: AgentId): Promise<void> {
-    throw new AcpTransportError('unsupported', 'killAgent is desktop-only on the web client')
+  async killAgent(agentId: AgentId): Promise<void> {
+    await this.request('kill_agent', { agentId })
   }
 
   async listAgents(): Promise<AgentId[]> {
-    throw new AcpTransportError('unsupported', 'listAgents is desktop-only on the web client')
+    return this.request<AgentId[]>('list_agents', {})
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------

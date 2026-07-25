@@ -77,10 +77,13 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
 // ============================================================================
 
 /**
- * The 14 WS request `type` names. Mirror the existing `acp_*` Tauri command
+ * The 17 WS request `type` names. Mirror the existing `acp_*` Tauri command
  * names with the `acp_` prefix dropped, snake_case. `create_session` maps to
  * the Tauri command `acp_new_session` (NOT `acp_create_session`); the WS
  * request `type` is `create_session` per architecture naming.
+ *
+ * Agent lifecycle (`spawn_agent` / `kill_agent` / `list_agents`) mirrors
+ * `acp_spawn_agent` / `acp_kill_agent` / `acp_list_agents` for web desktop parity.
  *
  * `subscribe` (Story 1.6) is relay-level (not an `acp_*` command): binds a
  * connection to a session event log with an optional `lastSeq` cursor.
@@ -97,6 +100,9 @@ export const WS_REQUEST_TYPES = [
   'resume_session',
   'close_session',
   'list_sessions',
+  'spawn_agent',
+  'kill_agent',
+  'list_agents',
   'switch_project',
   'authenticate',
   'subscribe'

@@ -29,6 +29,8 @@ class FakeWebSocket {
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
+  /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
+  liveAgents = new Set<string>()
 
   constructor(public url: string) {
     queueMicrotask(() => {
@@ -120,6 +122,47 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: false, err })
       return
     }
+    if (req.type === 'spawn_agent') {
+      const payload = req.payload as { config?: { command?: string } }
+      if (!payload.config?.command?.trim()) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed spawn_agent' }
+        })
+        return
+      }
+      if (payload.config.command === '__fail__') {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'not_implemented', message: 'agent failed to start: not found' }
+        })
+        return
+      }
+      const agentId = 'agent-spawned-1'
+      this.liveAgents.add(agentId)
+      this.emitReply({ id: req.id, ok: true, payload: agentId })
+      return
+    }
+    if (req.type === 'list_agents') {
+      this.emitReply({ id: req.id, ok: true, payload: [...this.liveAgents] })
+      return
+    }
+    if (req.type === 'kill_agent') {
+      const payload = req.payload as { agentId?: string }
+      if (!payload.agentId) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed kill_agent' }
+        })
+        return
+      }
+      this.liveAgents.delete(payload.agentId)
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     this.emitReply({
       id: req.id,
       ok: false,
@@ -158,6 +201,41 @@ describe('acp-transport helpers', () => {
 describe('WsAcpTransport', () => {
   afterEach(() => {
     _resetAcpTransportForTests(null)
+  })
+
+  it('spawnAgent / listAgents / killAgent mirror desktop lifecycle over WS', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+
+    expect(await transport.listAgents()).toEqual([])
+
+    const agentId = await transport.spawnAgent({
+      name: 'test',
+      command: 'npx',
+      args: ['-y', '@example/agent'],
+      env: {},
+      allowTerminal: false
+    })
+    expect(agentId).toBe('agent-spawned-1')
+    expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
+
+    await transport.killAgent(agentId)
+    expect(await transport.listAgents()).toEqual([])
+
+    await expect(
+      transport.spawnAgent({
+        name: 'bad',
+        command: '__fail__',
+        args: [],
+        env: {},
+        allowTerminal: false
+      })
+    ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
   })
 
   it('authenticates on auth_required and correlates request/reply by id', async () => {
