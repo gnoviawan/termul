@@ -16,7 +16,7 @@
 
 use std::fs;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use axum::{
     extract::{ConnectInfo, Query, State},
@@ -164,6 +164,163 @@ fn get_extension(name: &str) -> Option<String> {
     Some(name[idx..].to_string())
 }
 
+/// PR-S4: enforce a project-root boundary on a request path.
+///
+/// Rejects:
+/// - Any path containing a `..` component (explicit traversal) with
+///   `code: "PATH_TRAVERSAL"`.
+/// - Any path whose canonicalized form resolves outside `root` (absolute
+///   paths, symlinks pointing outside, or non-existent paths whose parent
+///   resolves outside) with `code: "OUTSIDE_ROOT"`.
+///
+/// Returns `Ok(())` when the path resolves inside `root` (or the parent
+/// directory of a not-yet-existing path resolves inside `root`).
+///
+/// Notes:
+/// - `root` is canonicalized internally; non-canonical roots (e.g. relative
+///   paths or paths with `..`) are accepted and normalized on the fly.
+/// - Symlink protection relies on `fs::canonicalize` resolving through the
+///   link before the boundary check — a symlink whose target is outside the
+///   root will be rejected even if the symlink itself is inside the root.
+/// - This is intentionally separate from the existing
+///   `path_validation::validate_search_path` because that helper requires the
+///   search path to exist (it short-circuits on `!exists()`); the fs_api
+///   routes also create new paths (`mkdir`, `write`), which need a different
+///   shape that tolerates non-existing targets.
+fn check_within_root(path: &Path, root: &Path) -> Result<(), (String, &'static str)> {
+    // 1) Reject explicit `..` traversal components. This is a fast, cheap
+    //    pre-filter that catches the obvious attack without needing a real
+    //    filesystem call. We allow the `..` to appear in the LAST component
+    //    only when the path is exactly the canonical root (a no-op), but
+    //    `..` anywhere else is rejected. A directory name like `foo..bar`
+    //    (legitimate, see `path_validation::tests::test_accepts_directory_name_containing_double_dots`)
+    //    is NOT a `Component::ParentDir` because it is a single path segment;
+    //    it survives this check and is then caught or accepted by the
+    //    canonicalize+`starts_with` check below.
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err((
+            format!(
+                "path traversal: '..' component in request path '{}'",
+                path.display()
+            ),
+            "PATH_TRAVERSAL",
+        ));
+    }
+
+    // 2) Canonicalize the root (caller is expected to pass an existing
+    //    absolute path; if it doesn't exist or is invalid, we surface that
+    //    rather than silently accepting the request).
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| {
+            (
+                format!(
+                    "project root '{}' is not accessible: {e}",
+                    root.display()
+                ),
+                "OUTSIDE_ROOT",
+            )
+        })?;
+
+    // 3) Resolve the request path. We canonicalize the path when it exists
+    //    (covers symlink resolution); when it does NOT exist (e.g. the
+    //    renderer is asking us to create it), we canonicalize the nearest
+    //    existing ancestor and verify that ancestor is inside the root —
+    //    preventing a path like `/root/newfile` where `/root` is inside
+    //    the boundary but `/root/../etc/newfile` is not.
+    let resolved = if path.exists() {
+        path.canonicalize().map_err(|e| {
+            (
+                format!("failed to resolve path '{}': {e}", path.display()),
+                "OUTSIDE_ROOT",
+            )
+        })?
+    } else {
+        // Walk up until we find an existing ancestor. The path itself cannot
+        // canonicalize because it does not exist yet.
+        let mut ancestor = path.to_path_buf();
+        loop {
+            let Some(parent) = ancestor.parent() else {
+                return Err((
+                    format!(
+                        "path '{}' has no existing ancestor inside project root",
+                        path.display()
+                    ),
+                    "OUTSIDE_ROOT",
+                ));
+            };
+            if parent.as_os_str().is_empty() {
+                return Err((
+                    format!("path '{}' has no existing ancestor", path.display()),
+                    "OUTSIDE_ROOT",
+                ));
+            }
+            if parent.exists() {
+                let canonical_parent = parent.canonicalize().map_err(|e| {
+                    (
+                        format!(
+                            "failed to resolve parent of '{}': {e}",
+                            path.display()
+                        ),
+                        "OUTSIDE_ROOT",
+                    )
+                })?;
+                // Re-attach the non-existing tail so the returned
+                // canonicalized path matches what the caller will actually
+                // create. We don't return this; we only use it for the
+                // `starts_with` check below.
+                break canonical_parent;
+            }
+            ancestor = parent.to_path_buf();
+        }
+    };
+
+    // 4) Boundary check. `canonical_root` always ends with a separator-free
+    //    path; `Path::starts_with` does a per-component match (not a string
+    //    prefix), so a sibling with a common prefix like `/home/user2` is
+    //    NOT confused with `/home/user`. (We strip the `\\?\` verbatim
+    //    prefix that `fs::canonicalize` adds on Windows before comparing —
+    //    `Path::starts_with` is a per-component check that handles
+    //    verbatim-aware `\\?\` semantics. We re-derive the path from
+    //    `to_string_lossy` and re-parse it to keep the comparison portable
+    //    across the verbatim and non-verbatim forms. The owned `PathBuf`s
+    //    below are kept alive for the duration of the `starts_with` check.)
+    #[cfg(windows)]
+    let (resolved_clean, root_clean) = {
+        let raw = resolved.to_string_lossy();
+        let stripped_resolved = raw
+            .strip_prefix(r"\\?\UNC\")
+            .map(|s| format!(r"\\{}", s))
+            .or_else(|| raw.strip_prefix(r"\\?\").map(|s| s.to_string()))
+            .unwrap_or_else(|| raw.into_owned());
+        let raw_root = canonical_root.to_string_lossy();
+        let stripped_root = raw_root
+            .strip_prefix(r"\\?\UNC\")
+            .map(|s| format!(r"\\{}", s))
+            .or_else(|| raw_root.strip_prefix(r"\\?\").map(|s| s.to_string()))
+            .unwrap_or_else(|| raw_root.into_owned());
+        (PathBuf::from(stripped_resolved), PathBuf::from(stripped_root))
+    };
+    #[cfg(not(windows))]
+    let (resolved_clean, root_clean) = (resolved.clone(), canonical_root.clone());
+
+    if !resolved_clean.starts_with(root_clean) {
+        return Err((
+            format!(
+                "path '{}' is outside project root '{}'",
+                path.display(),
+                canonical_root.display()
+            ),
+            "OUTSIDE_ROOT",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Build a `DirectoryEntryDto` from a directory entry path + optional
 /// metadata. Falls back to conservative defaults (`size: 0`,
 /// `modified_at: 0`, type inferred from `file_type()` when available else
@@ -226,8 +383,14 @@ fn entry_dto(parent: &Path, name: String, metadata: Option<&fs::Metadata>) -> Di
 /// to `0.0.0.0`; read routes (`/fs/ls`, `/fs/browse`) are intentionally left
 /// open. The router MUST be built with `into_make_service_with_connect_info`
 /// so `ConnectInfo<SocketAddr>` is available.
+///
+/// **Project-root boundary (PR-S4):** the target path must canonicalize
+/// inside `AppState::project_root`. Paths that escape the root (via
+/// `..` components, absolute paths outside the root, or symlinks pointing
+/// outside) are refused with `code: "OUTSIDE_ROOT"` or
+/// `code: "PATH_TRAVERSAL"` before any filesystem mutation.
 pub async fn mkdir(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<MkdirRequest>,
 ) -> impl IntoResponse {
@@ -235,6 +398,12 @@ pub async fn mkdir(
         return (StatusCode::OK, Json(forbidden));
     }
     let path = req.path;
+    if let Err((msg, code)) = check_within_root(Path::new(&path), state.project_root.as_path()) {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<()>::err(msg, code)),
+        );
+    }
     let result = tokio::task::spawn_blocking(move || fs::create_dir_all(&path))
         .await
         .map_err(|e| format!("mkdir task failed: {e}"));
@@ -254,7 +423,7 @@ pub async fn mkdir(
 /// **Localhost guard (Patch D):** same guard as `mkdir` — refused unless the
 /// peer is loopback.
 pub async fn write(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
@@ -262,6 +431,12 @@ pub async fn write(
         return (StatusCode::OK, Json(forbidden));
     }
     let path = req.path;
+    if let Err((msg, code)) = check_within_root(Path::new(&path), state.project_root.as_path()) {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<()>::err(msg, code)),
+        );
+    }
     let content = req.content;
     let result = tokio::task::spawn_blocking(move || fs::write(&path, content.as_bytes()))
         .await
@@ -279,10 +454,16 @@ pub async fn write(
 /// `{ success: false, error, code: "READ_ERROR" }` (missing dir = failure;
 /// the renderer's empty-check already treats missing as empty).
 pub async fn ls(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     let path = q.path;
+    if let Err((msg, code)) = check_within_root(Path::new(&path), state.project_root.as_path()) {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<Vec<DirectoryEntryDto>>::err(msg, code)),
+        );
+    }
     let entries = tokio::task::spawn_blocking(move || list_dir(&path))
         .await
         .map_err(|e| format!("ls task failed: {e}"));
@@ -299,10 +480,16 @@ pub async fn ls(
 /// Returns directories only is a renderer-side concern; the server returns all
 /// entries and the picker filters as needed.
 pub async fn browse(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     let path = q.path;
+    if let Err((msg, code)) = check_within_root(Path::new(&path), state.project_root.as_path()) {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<Vec<DirectoryEntryDto>>::err(msg, code)),
+        );
+    }
     let entries = tokio::task::spawn_blocking(move || list_dir(&path))
         .await
         .map_err(|e| format!("browse task failed: {e}"));
@@ -461,9 +648,25 @@ mod tests {
     }
 
     fn test_state() -> AppState {
+        // Default: no project root bound (legacy behavior preserved for tests
+        // that do not exercise the PR-S4 boundary). PR-S4 tests use
+        // `test_state_with_root` to set an explicit project root.
+        test_state_with_root(std::env::temp_dir().as_path())
+    }
+
+    /// PR-S4: build an `AppState` with the project-root boundary set to
+    /// `root`. The fs_api routes reject any request whose canonicalized path
+    /// is outside this root. Tests that previously used the default
+    /// `test_state()` keep working because the default root is the OS temp
+    /// dir (and the existing tests only touch temp dirs).
+    fn test_state_with_root(root: &Path) -> AppState {
         AppState {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
+            project_root: Arc::new(
+                root.canonicalize()
+                    .unwrap_or_else(|_| root.to_path_buf()),
+            ),
         }
     }
 
@@ -916,6 +1119,131 @@ mod tests {
         // Re-serialize and assert the camelCase key is preserved on the way out.
         let re = serde_json::to_string(entry).expect("re-serialize");
         assert!(re.contains("\"modifiedAt\""), "re-serialize keeps camelCase: {re}");
+    }
+
+    /// PR-S4: project-root boundary on `/fs/mkdir` (CWE-22). A target path
+    /// outside the configured `project_root` must be refused with
+    /// `code: "OUTSIDE_ROOT"` (or "PATH_TRAVERSAL") and must NOT create the
+    /// directory.
+    #[tokio::test]
+    async fn mkdir_rejects_path_outside_project_root() {
+        let root = TempDir::new("mkdir-root");
+        let outside = TempDir::new("mkdir-outside");
+        let target = outside.path().join("evil");
+        let req_body = serde_json::json!({ "path": target.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/mkdir", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "mkdir outside root must be refused");
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "OUTSIDE_ROOT" || code == "PATH_TRAVERSAL",
+            "expected OUTSIDE_ROOT or PATH_TRAVERSAL, got {code:?}"
+        );
+        assert!(
+            !target.exists(),
+            "refused mkdir must not create the directory"
+        );
+    }
+
+    /// PR-S4: explicit `..` traversal components in the request path must be
+    /// rejected even when the result would coincidentally land inside root
+    /// (defense-in-depth — never trust raw client paths).
+    #[tokio::test]
+    async fn mkdir_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("mkdir-trav-root");
+        // Build a path that starts inside the root but escapes via `..`.
+        // canonicalize at test-build time so the test is platform-agnostic.
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal = inside.join("..").join("..").join("etc");
+        let req_body = serde_json::json!({ "path": traversal.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/mkdir", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal must be refused");
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "PATH_TRAVERSAL" || code == "OUTSIDE_ROOT",
+            "expected PATH_TRAVERSAL or OUTSIDE_ROOT, got {code:?}"
+        );
+    }
+
+    /// PR-S4: project-root boundary on `/fs/write`. A file written outside the
+    /// configured root must be refused and the file must not exist after the
+    /// call.
+    #[tokio::test]
+    async fn write_rejects_path_outside_project_root() {
+        let root = TempDir::new("write-root");
+        let outside = TempDir::new("write-outside");
+        let target = outside.path().join("evil.txt");
+        let req_body =
+            serde_json::json!({ "path": target.to_string_lossy(), "content": "pwn" });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/write", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "write outside root must be refused");
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "OUTSIDE_ROOT" || code == "PATH_TRAVERSAL",
+            "expected OUTSIDE_ROOT or PATH_TRAVERSAL, got {code:?}"
+        );
+        assert!(!target.exists(), "refused write must not create the file");
+    }
+
+    /// PR-S4: project-root boundary on `/fs/ls`. Listing a directory outside
+    /// the configured root must be refused with `code: "OUTSIDE_ROOT"` (read
+    /// routes previously had no boundary; PR-S4 closes the gap).
+    #[tokio::test]
+    async fn ls_rejects_path_outside_project_root() {
+        let root = TempDir::new("ls-root");
+        let outside = TempDir::new("ls-outside");
+        let uri = format!(
+            "/fs/ls?path={}",
+            urlencoding(&outside.path().to_string_lossy())
+        );
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "ls outside root must be refused");
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "OUTSIDE_ROOT" || code == "PATH_TRAVERSAL",
+            "expected OUTSIDE_ROOT or PATH_TRAVERSAL, got {code:?}"
+        );
+    }
+
+    /// PR-S4: a symlink that lives INSIDE the project root but points OUTSIDE
+    /// must be refused on `/fs/browse` (canonicalize resolves the link and the
+    /// post-canonicalize path is checked against root).
+    #[tokio::test]
+    async fn browse_rejects_symlink_pointing_outside_root() {
+        let root = TempDir::new("browse-sym-root");
+        let outside = TempDir::new("browse-sym-outside");
+        let link = root.path().join("evil_link");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+        }
+        #[cfg(windows)]
+        {
+            // On Windows, directory symlinks require elevation/dev mode;
+            // skip the assertion if creation fails (the traversal-rejection
+            // path is still exercised by the other tests in this module).
+            if std::os::windows::fs::symlink_dir(outside.path(), &link).is_err() {
+                eprintln!("skipping: cannot create symlink on this Windows host");
+                return;
+            }
+        }
+        let uri = format!("/fs/browse?path={}", urlencoding(&link.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
+        assert!(
+            !body.success,
+            "symlink pointing outside root must be refused"
+        );
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "OUTSIDE_ROOT" || code == "PATH_TRAVERSAL",
+            "expected OUTSIDE_ROOT or PATH_TRAVERSAL, got {code:?}"
+        );
     }
 
     /// Patch I: git-init failure path is explicitly asserted. The existing

@@ -208,6 +208,14 @@ impl RemoteServerState {
             );
         }
 
+        // PR-S4: resolve the project-root boundary for the fs_api routes.
+        // Honor an explicit override from the desktop settings (when wired
+        // through), then fall back to $TERMUL_PROJECT_ROOT, then to $HOME /
+        // $USERPROFILE. The desktop's host starts in the user's home
+        // directory by default — the same fallback the standalone binary uses.
+        let project_root = crate::web::config::default_project_root()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
         let cfg = ServerConfig {
             host: bind_mode.host().to_string(),
             // OS-assigned ephemeral port (avoids fixed-port conflicts).
@@ -217,6 +225,7 @@ impl RemoteServerState {
                 .rendezvous()
                 .map(|r| r.timeout().as_secs())
                 .unwrap_or(60),
+            project_root,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

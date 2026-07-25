@@ -6,6 +6,39 @@
 //! permission-rendezvous timeout.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
+
+/// Resolve the default project-root boundary for the fs_api routes (PR-S4).
+///
+/// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
+/// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
+/// Windows). The fallback is intentionally permissive enough to allow
+/// ordinary project-creation flows under the user's own account — tightening
+/// to a per-project subtree is left to the host application or a future
+/// per-request override.
+///
+/// `None` is returned only when no home directory is discoverable and the
+/// env var is unset; callers should treat that as a fatal startup error.
+pub fn default_project_root() -> Option<PathBuf> {
+    if let Ok(env_root) = std::env::var("TERMUL_PROJECT_ROOT") {
+        let trimmed = env_root.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    // `dirs` is not in the dep tree; resolve the home dir via std-only env
+    // vars (HOME on Unix, USERPROFILE on Windows). This avoids pulling in a
+    // new crate just for one call site.
+    #[cfg(unix)]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    #[cfg(not(any(unix, windows)))]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    home
+}
 
 /// Which network interface(s) the standalone HTTP server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +89,23 @@ pub struct ServerConfig {
     /// Permission-rendezvous timeout in seconds (Story 1.7 / FR14). On expiry
     /// the pending permission resolves as deny (`Cancelled`). Default 60.
     pub permission_timeout_secs: u64,
+    /// PR-S4: project-root boundary enforced by the fs_api routes. Requests
+    /// whose canonicalized target path resolves outside this root are
+    /// refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit
+    /// `..` components). Defaults to the user's home directory when unset
+    /// (see [`default_project_root`]).
+    pub project_root: PathBuf,
 }
 
 impl ServerConfig {
+    /// Construct a `ServerConfig` with the default project root resolved
+    /// from `$TERMUL_PROJECT_ROOT` or the user's home directory. Returns
+    /// `None` when no home directory can be discovered.
+    pub fn with_default_project_root(mut self) -> Option<Self> {
+        self.project_root = default_project_root()?;
+        Some(self)
+    }
+
     /// Resolve the bind mode from [`Self::host`], defaulting unknown hosts to
     /// a parse error at the CLI layer (callers should validate first).
     pub fn bind_mode(&self) -> Option<BindMode> {
@@ -84,6 +131,11 @@ impl ServerConfig {
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
+        // PR-S4: when `--project-root` is absent, fall back to the env var or
+        // the user's home directory. The fallback is resolved by the caller
+        // via `with_default_project_root()`; here we only honor the explicit
+        // CLI flag.
+        let mut project_root: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -145,10 +197,23 @@ impl ServerConfig {
                     })?;
                     if parsed == 0 {
                         return Err(ParseCliError::Message(
-                            "invalid --permission-timeout '0': use a positive integer (seconds)".into(),
+                            "invalid --permission-timeout '0': use a positive integer (seconds)"
+                                .into(),
                         ));
                     }
                     permission_timeout_secs = parsed;
+                }
+                "--project-root" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --project-root".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --project-root '': must be a non-empty path".into(),
+                        ));
+                    }
+                    project_root = Some(PathBuf::from(trimmed));
                 }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
@@ -161,11 +226,22 @@ impl ServerConfig {
             }
         }
 
+        let project_root = match project_root {
+            Some(p) => p,
+            None => default_project_root().ok_or_else(|| {
+                ParseCliError::Message(
+                    "could not determine project root: set --project-root, $TERMUL_PROJECT_ROOT, or $HOME"
+                        .into(),
+                )
+            })?,
+        };
+
         Ok(Self {
             host,
             port,
             event_log_capacity,
             permission_timeout_secs,
+            project_root,
         })
     }
 }
@@ -218,6 +294,7 @@ mod tests {
             port: 8080,
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
+            project_root: PathBuf::from("/tmp"),
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -229,6 +306,7 @@ mod tests {
             port: 8080,
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
+            project_root: PathBuf::from("/tmp"),
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -242,6 +320,14 @@ mod tests {
         assert_eq!(
             cfg.permission_timeout_secs, 60,
             "default permission-timeout is 60s (Story 1.7 / FR14)"
+        );
+        // PR-S4: project_root defaults to $HOME / $USERPROFILE when the env var
+        // is unset. The CI hosts in this repo all set $HOME, so the resolved
+        // value should be non-empty. We don't assert an exact path because the
+        // test environment may differ across platforms.
+        assert!(
+            !cfg.project_root.as_os_str().is_empty(),
+            "default project_root should resolve from $HOME when $TERMUL_PROJECT_ROOT is unset"
         );
     }
 

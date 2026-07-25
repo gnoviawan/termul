@@ -268,6 +268,12 @@ pub struct AppState {
     pub acp: Arc<AcpManager>,
     /// The live WS relay sink (owns per-session logs + seq counters + subs).
     pub relay: Arc<WsRelaySink>,
+    /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
+    /// canonicalized target path resolves outside this root are refused with
+    /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
+    /// components). Resolved from `ServerConfig::project_root` at startup;
+    /// defaults to the user's home directory when unset.
+    pub project_root: Arc<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------

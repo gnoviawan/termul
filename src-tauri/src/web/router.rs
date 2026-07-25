@@ -6,7 +6,7 @@
 //! explicitly AHEAD of the static fallback so it is not shadowed by the static
 //! mount (AC1).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
@@ -29,10 +29,18 @@ use super::assets;
 /// and replay cursors (Story 1.4). The `/ws` + `/health` routes are registered
 /// BEFORE the static fallback so the static mount cannot shadow them (AC1).
 ///
+/// `project_root` (PR-S4) is the boundary the fs_api routes enforce — see
+/// `crate::web::fs_api::check_within_root`. Resolved by the caller from
+/// `ServerConfig::project_root` (or its default).
+///
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
 /// [`assets::static_fallback`].
-pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
+pub fn router(
+    acp: Arc<AcpManager>,
+    ws_relay: Arc<WsRelaySink>,
+    project_root: PathBuf,
+) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
@@ -53,7 +61,11 @@ pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
     } else {
         r = r.fallback(assets::serve_embedded);
     }
-    r.with_state(AppState { acp, relay: ws_relay })
+    r.with_state(AppState {
+        acp,
+        relay: ws_relay,
+        project_root: Arc::new(project_root),
+    })
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
@@ -61,6 +73,7 @@ pub fn router_with_static(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
     static_dir: &Path,
+    project_root: PathBuf,
 ) -> Router {
     Router::new()
         .route("/health", get(health_check))
@@ -72,7 +85,11 @@ pub fn router_with_static(
         .route("/git/init", post(fs_api::git_init))
         .route("/shells", get(fs_api::shells))
         .fallback_service(assets::static_service_from(static_dir))
-        .with_state(AppState { acp, relay: ws_relay })
+        .with_state(AppState {
+            acp,
+            relay: ws_relay,
+            project_root: Arc::new(project_root),
+        })
 }
 
 /// Liveness probe for the ACP web server.
@@ -118,10 +135,15 @@ mod tests {
     }
 
     fn test_router_with_fixture(dir: &Path) -> Router {
+        // PR-S4: `router_with_static` now requires a project root for the
+        // fs_api boundary. The fixture tests under `assets.rs` only exercise
+        // `/health` and `/ws` (no fs routes), so any existing directory works;
+        // we pass the OS temp dir for symmetry with the legacy default.
         router_with_static(
             Arc::new(AcpManager::new(vec![])),
             Arc::new(WsRelaySink::new()),
             dir,
+            std::env::temp_dir(),
         )
     }
 
