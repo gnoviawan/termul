@@ -14,8 +14,8 @@ import { type RefObject, useEffect, useState } from 'react'
 export const NARROW_PANE_PX = 400
 
 /**
- * Horizontal chat column gutter: tighter on narrow panes, `px-5` (16px) when the
- * pane container is ≥ {@link NARROW_PANE_PX}.
+ * Horizontal chat column gutter: tighter on narrow panes, `px-3` (12px) or
+ * `px-5` (20px) when the pane container is ≥ {@link NARROW_PANE_PX}.
  */
 export const CHAT_GUTTER_X = 'px-3 @[400px]:px-5'
 
@@ -52,11 +52,24 @@ export function useComposerToolbarMode(
       setMode(resolveComposerToolbarMode(width, thresholdPx))
     }
 
-    apply(el.getBoundingClientRect().width)
+    // Measure border-box width consistently for both the initial read and the
+    // observer callback. The composer root spans the full pane, so its
+    // border-box width matches the `@container` (pane) width that the CSS
+    // `@[400px]:` gutter variant resolves against — using `contentRect.width`
+    // here would exclude the gutter padding and disagree with the CSS threshold
+    // by 12–20px, causing a visible narrow↔wide flip near 400px.
+    const measureBorderBox = (): number => el.getBoundingClientRect().width
 
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width
-      if (width != null) apply(width)
+    apply(measureBorderBox())
+
+    // Older mobile WebViews / SSR / jsdom-without-setup may not expose
+    // ResizeObserver; fall back to the initial measurement so the composer
+    // still renders (wide) instead of throwing inside the effect and
+    // unmounting the chat subtree.
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(() => {
+      apply(measureBorderBox())
     })
     observer.observe(el)
     return () => observer.disconnect()

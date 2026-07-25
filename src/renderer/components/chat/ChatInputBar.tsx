@@ -496,43 +496,46 @@ export function ChatInputBar({
               />
             </div>
             <div
-              className="flex items-stretch justify-between gap-3 px-2.5 pb-2.5"
+              className="flex items-center justify-between gap-3 px-2.5 pb-2.5"
               data-composer-toolbar={toolbarMode}
             >
               {toolbarMode === 'narrow' ? (
-                <div className="flex min-w-0 flex-1 flex-col gap-2">
-                  <div
-                    className="flex min-w-0 flex-wrap items-center gap-2"
-                    data-composer-toolbar-row="1"
-                  >
-                    {agentModeChip}
-                    {modelChip}
-                  </div>
-                  <div
-                    className="flex min-w-0 flex-wrap items-center gap-2"
-                    data-composer-toolbar-row="2"
-                  >
-                    {hasConfigOptions ? (
-                      <>
-                        {thoughtChip}
-                        {genericChips}
-                      </>
-                    ) : null}
-                    {mcpBadge}
-                  </div>
-                </div>
+                (() => {
+                  const hasRow1 = Boolean(agentModeChip || modelChip)
+                  const hasRow2 = hasConfigOptions || Boolean(mcpBadge)
+                  if (!hasRow1 && !hasRow2) return null
+                  return (
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      {hasRow1 && (
+                        <div
+                          className="flex min-w-0 flex-wrap items-center gap-2"
+                          data-composer-toolbar-row="1"
+                        >
+                          {agentModeChip}
+                          {modelChip}
+                        </div>
+                      )}
+                      {hasRow2 && (
+                        <div
+                          className="flex min-w-0 flex-wrap items-center gap-2"
+                          data-composer-toolbar-row="2"
+                        >
+                          {thoughtChip}
+                          {genericChips}
+                          {mcpBadge}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()
               ) : (
                 <div
                   className="flex min-w-0 flex-wrap items-center gap-2"
                   data-composer-toolbar-row="single"
                 >
                   {modelChip}
-                  {hasConfigOptions ? (
-                    <>
-                      {thoughtChip}
-                      {genericChips}
-                    </>
-                  ) : null}
+                  {thoughtChip}
+                  {genericChips}
                   {agentModeChip}
                   {mcpBadge}
                 </div>

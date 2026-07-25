@@ -1480,7 +1480,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       {activeSSHProfile ? (
         <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
       ) : projects.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center bg-background px-6">
+        <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 rounded-xl">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -1525,7 +1525,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               />
             </motion.div>
           ) : (
-            <div className="relative flex-1 overflow-hidden bg-background">
+            <div className="relative flex-1 overflow-hidden bg-background rounded-xl">
               <div className="h-full w-full">
                 <Outlet />
               </div>
@@ -1534,6 +1534,164 @@ export default function WorkspaceLayout(): React.JSX.Element {
           {!isMobileWebShell && <StatusBar project={activeProject} />}
         </>
       )}
+    </>
+  )
+
+  const appModals = (
+    <>
+      <NewProjectModal
+        isOpen={isNewProjectModalOpen}
+        onClose={() => setIsNewProjectModalOpen(false)}
+        onCreateProject={addProject}
+      />
+
+      <ThemePicker />
+
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        projects={projects}
+        onSwitchProject={selectProject}
+        onAddTerminal={() => handleAddTerminal(undefined)}
+        onShowAgentLauncher={() => {
+          const paneId = useWorkspaceStore.getState().activePaneId
+          if (paneId) {
+            useWorkspaceStore.getState().showAgentLauncher(paneId)
+          }
+        }}
+        onLaunchAgent={handleLaunchAgent}
+        onNewBrowserTab={handleNewBrowserTab}
+        onSaveSnapshot={handleOpenSnapshotModal}
+        onOpenProjectSettings={handleOpenProjectSettings}
+        onOpenAppPreferences={handleOpenAppPreferences}
+        onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+        onOpenShortcutMenu={handleOpenShortcutMenu}
+        onOpenThemePicker={handleOpenThemePicker}
+        onSSHConnect={handleSSHConnect}
+        sshProfiles={sshProfiles.map((p) => ({
+          id: p.id,
+          name: p.name,
+          host: p.host,
+          username: p.username
+        }))}
+        getShortcutLabel={getShortcutLabel}
+        getProjectShortcutLabel={getProjectShortcutLabel}
+      />
+
+      <CreateSnapshotModal
+        isOpen={isCreateSnapshotModalOpen}
+        onClose={() => setIsCreateSnapshotModalOpen(false)}
+        onCreateSnapshot={handleCreateSnapshot}
+      />
+
+      <CommandHistoryModal
+        isOpen={isCommandHistoryOpen}
+        onClose={() => setIsCommandHistoryOpen(false)}
+        entries={commandHistory}
+        allEntries={allCommandHistory}
+        onSelectCommand={handleInsertCommand}
+        onClearHistory={handleClearCommandHistory}
+      />
+
+      {/* SSH Password Prompt */}
+      {sshPasswordPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
+            <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Enter password for{' '}
+              <span className="font-medium">{sshPasswordPrompt.profileName}</span>
+            </p>
+            <input
+              type="password"
+              value={sshPasswordInput}
+              onChange={(e) => setSSHPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSSHPasswordSubmit()
+                if (e.key === 'Escape') {
+                  setSSHPasswordPrompt(null)
+                  setSSHPasswordInput('')
+                }
+              }}
+              placeholder="Password"
+              autoFocus
+              className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSSHPasswordPrompt(null)
+                  setSSHPasswordInput('')
+                }}
+                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSSHPasswordSubmit}
+                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close Terminal Confirmation */}
+      <ConfirmDialog
+        isOpen={closeConfirmTerminal !== null}
+        title="Close Terminal"
+        message={`Are you sure you want to close "${
+          terminalToClose?.name || 'this terminal'
+        }"? Any running processes will be terminated.`}
+        confirmLabel="Close"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={closeConfirmLoading}
+        onConfirm={handleConfirmCloseTerminal}
+        onCancel={handleCancelCloseTerminal}
+      >
+        <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+          <input
+            type="checkbox"
+            checked={closeConfirmRememberChoice}
+            onChange={(e) => setCloseConfirmRememberChoice(e.target.checked)}
+            disabled={closeConfirmLoading}
+            className="rounded border-border bg-background"
+          />
+          Don't ask again when closing terminals
+        </label>
+      </ConfirmDialog>
+
+      {/* Dirty File Close Confirmation */}
+      <ConfirmDialog
+        isOpen={dirtyCloseFilePath !== null}
+        title="Unsaved Changes"
+        message={`Save changes to "${dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''}" before closing?`}
+        confirmLabel="Save"
+        cancelLabel="Cancel"
+        secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
+        onConfirm={handleSaveThenClose}
+        onCancel={handleCancelDirtyClose}
+      />
+
+      {/* App Close Unsaved Files Confirmation */}
+      <ConfirmDialog
+        isOpen={isAppCloseDialogOpen}
+        title="Unsaved Changes"
+        message={`You have ${appCloseDirtyCount} unsaved file${appCloseDirtyCount !== 1 ? 's' : ''}. Save changes before closing?`}
+        confirmLabel="Save All"
+        cancelLabel="Cancel"
+        secondaryAction={{
+          label: "Don't Save",
+          onClick: handleDiscardAllAndClose
+        }}
+        onConfirm={handleSaveAllAndClose}
+        onCancel={handleCancelAppClose}
+      />
     </>
   )
 
@@ -1548,67 +1706,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           </PaneDndProvider>
         </MobileChatShell>
 
-        <NewProjectModal
-          isOpen={isNewProjectModalOpen}
-          onClose={() => setIsNewProjectModalOpen(false)}
-          onCreateProject={addProject}
-        />
-
-        <CommandPalette
-          isOpen={isCommandPaletteOpen}
-          onClose={() => setIsCommandPaletteOpen(false)}
-          projects={projects}
-          onSwitchProject={selectProject}
-          onAddTerminal={() => handleAddTerminal(undefined)}
-          onShowAgentLauncher={() => {
-            const paneId = useWorkspaceStore.getState().activePaneId
-            if (paneId) {
-              useWorkspaceStore.getState().showAgentLauncher(paneId)
-            }
-          }}
-          onLaunchAgent={handleLaunchAgent}
-          onNewBrowserTab={handleNewBrowserTab}
-          onSaveSnapshot={handleOpenSnapshotModal}
-          onOpenProjectSettings={handleOpenProjectSettings}
-          onOpenAppPreferences={handleOpenAppPreferences}
-          onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-          onOpenShortcutMenu={handleOpenShortcutMenu}
-          onOpenThemePicker={handleOpenThemePicker}
-          onSSHConnect={handleSSHConnect}
-          sshProfiles={sshProfiles.map((p) => ({
-            id: p.id,
-            name: p.name,
-            host: p.host,
-            username: p.username
-          }))}
-          getShortcutLabel={getShortcutLabel}
-          getProjectShortcutLabel={getProjectShortcutLabel}
-        />
-
-        <ConfirmDialog
-          isOpen={closeConfirmTerminal !== null}
-          title="Close Terminal"
-          message={`Are you sure you want to close "${
-            terminalToClose?.name || 'this terminal'
-          }"? Any running processes will be terminated.`}
-          confirmLabel="Close"
-          cancelLabel="Cancel"
-          variant="danger"
-          isLoading={closeConfirmLoading}
-          onConfirm={handleConfirmCloseTerminal}
-          onCancel={handleCancelCloseTerminal}
-        >
-          <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
-            <input
-              type="checkbox"
-              checked={closeConfirmRememberChoice}
-              onChange={(e) => setCloseConfirmRememberChoice(e.target.checked)}
-              disabled={closeConfirmLoading}
-              className="rounded border-border bg-background"
-            />
-            Don't ask again when closing terminals
-          </label>
-        </ConfirmDialog>
+        {appModals}
       </div>
     )
   }
@@ -1711,157 +1809,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       </div>
 
       {/* Modals */}
-      <NewProjectModal
-        isOpen={isNewProjectModalOpen}
-        onClose={() => setIsNewProjectModalOpen(false)}
-        onCreateProject={addProject}
-      />
-
-      <ThemePicker />
-
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        projects={projects}
-        onSwitchProject={selectProject}
-        onAddTerminal={() => handleAddTerminal(undefined)}
-        onShowAgentLauncher={() => {
-          const paneId = useWorkspaceStore.getState().activePaneId
-          if (paneId) {
-            useWorkspaceStore.getState().showAgentLauncher(paneId)
-          }
-        }}
-        onLaunchAgent={handleLaunchAgent}
-        onNewBrowserTab={handleNewBrowserTab}
-        onSaveSnapshot={handleOpenSnapshotModal}
-        onOpenProjectSettings={handleOpenProjectSettings}
-        onOpenAppPreferences={handleOpenAppPreferences}
-        onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-        onOpenShortcutMenu={handleOpenShortcutMenu}
-        onOpenThemePicker={handleOpenThemePicker}
-        onSSHConnect={handleSSHConnect}
-        sshProfiles={sshProfiles.map((p) => ({
-          id: p.id,
-          name: p.name,
-          host: p.host,
-          username: p.username
-        }))}
-        getShortcutLabel={getShortcutLabel}
-        getProjectShortcutLabel={getProjectShortcutLabel}
-      />
-
-      <CreateSnapshotModal
-        isOpen={isCreateSnapshotModalOpen}
-        onClose={() => setIsCreateSnapshotModalOpen(false)}
-        onCreateSnapshot={handleCreateSnapshot}
-      />
-
-      <CommandHistoryModal
-        isOpen={isCommandHistoryOpen}
-        onClose={() => setIsCommandHistoryOpen(false)}
-        entries={commandHistory}
-        allEntries={allCommandHistory}
-        onSelectCommand={handleInsertCommand}
-        onClearHistory={handleClearCommandHistory}
-      />
-
-      {/* SSH Password Prompt */}
-      {sshPasswordPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
-            <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
-            <p className="text-xs text-muted-foreground mb-3">
-              Enter password for{' '}
-              <span className="font-medium">{sshPasswordPrompt.profileName}</span>
-            </p>
-            <input
-              type="password"
-              value={sshPasswordInput}
-              onChange={(e) => setSSHPasswordInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSSHPasswordSubmit()
-                if (e.key === 'Escape') {
-                  setSSHPasswordPrompt(null)
-                  setSSHPasswordInput('')
-                }
-              }}
-              placeholder="Password"
-              autoFocus
-              className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-            <div className="flex justify-end gap-2 mt-3">
-              <button
-                onClick={() => {
-                  setSSHPasswordPrompt(null)
-                  setSSHPasswordInput('')
-                }}
-                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSSHPasswordSubmit}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                Connect
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Close Terminal Confirmation */}
-      <ConfirmDialog
-        isOpen={closeConfirmTerminal !== null}
-        title="Close Terminal"
-        message={`Are you sure you want to close "${
-          terminalToClose?.name || 'this terminal'
-        }"? Any running processes will be terminated.`}
-        confirmLabel="Close"
-        cancelLabel="Cancel"
-        variant="danger"
-        isLoading={closeConfirmLoading}
-        onConfirm={handleConfirmCloseTerminal}
-        onCancel={handleCancelCloseTerminal}
-      >
-        <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
-          <input
-            type="checkbox"
-            checked={closeConfirmRememberChoice}
-            onChange={(e) => setCloseConfirmRememberChoice(e.target.checked)}
-            disabled={closeConfirmLoading}
-            className="rounded border-border bg-background"
-          />
-          Don't ask again when closing terminals
-        </label>
-      </ConfirmDialog>
-
-      {/* Dirty File Close Confirmation */}
-      <ConfirmDialog
-        isOpen={dirtyCloseFilePath !== null}
-        title="Unsaved Changes"
-        message={`Save changes to "${dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''}" before closing?`}
-        confirmLabel="Save"
-        cancelLabel="Cancel"
-        secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
-        onConfirm={handleSaveThenClose}
-        onCancel={handleCancelDirtyClose}
-      />
-
-      {/* App Close Unsaved Files Confirmation */}
-      <ConfirmDialog
-        isOpen={isAppCloseDialogOpen}
-        title="Unsaved Changes"
-        message={`You have ${appCloseDirtyCount} unsaved file${appCloseDirtyCount !== 1 ? 's' : ''}. Save changes before closing?`}
-        confirmLabel="Save All"
-        cancelLabel="Cancel"
-        secondaryAction={{
-          label: "Don't Save",
-          onClick: handleDiscardAllAndClose
-        }}
-        onConfirm={handleSaveAllAndClose}
-        onCancel={handleCancelAppClose}
-      />
+      {appModals}
     </div>
   )
 }

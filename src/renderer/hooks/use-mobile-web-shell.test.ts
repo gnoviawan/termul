@@ -29,12 +29,16 @@ describe('resolveMobileWebShell', () => {
 describe('useMobileWebShell', () => {
   let matches = false
   let listeners: Array<(e: MediaQueryListEvent) => void> = []
+  let originalMatchMedia: PropertyDescriptor | undefined
 
   beforeEach(() => {
     matches = false
     listeners = []
     mockIsTauriContext.mockReturnValue(false)
 
+    if (originalMatchMedia === undefined) {
+      originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    }
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       writable: true,
@@ -57,6 +61,10 @@ describe('useMobileWebShell', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    if (originalMatchMedia !== undefined) {
+      Object.defineProperty(window, 'matchMedia', originalMatchMedia)
+    }
+    listeners = []
   })
 
   it('returns false on Tauri', () => {

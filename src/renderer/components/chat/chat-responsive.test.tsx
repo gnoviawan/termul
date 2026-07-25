@@ -50,10 +50,19 @@ type ObserverCallback = (entries: ObserverEntry[]) => void
 let observedElements: Array<{ el: Element; cb: ObserverCallback }> = []
 let mockWidth = 800
 
+let originalGetBoundingClientRect: PropertyDescriptor | undefined
+let originalResizeObserver: typeof ResizeObserver | undefined
+
 function installResizeMocks(width: number): void {
   mockWidth = width
   observedElements = []
 
+  if (originalGetBoundingClientRect === undefined) {
+    originalGetBoundingClientRect = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'getBoundingClientRect'
+    )
+  }
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
     configurable: true,
     value() {
@@ -73,6 +82,9 @@ function installResizeMocks(width: number): void {
     }
   })
 
+  if (originalResizeObserver === undefined) {
+    originalResizeObserver = global.ResizeObserver
+  }
   global.ResizeObserver = class MockResizeObserver {
     private cb: ObserverCallback
     constructor(cb: ObserverCallback) {
@@ -82,9 +94,27 @@ function installResizeMocks(width: number): void {
       observedElements.push({ el, cb: this.cb })
       this.cb([{ target: el, contentRect: { width: mockWidth } }])
     }
-    unobserve(): void {}
-    disconnect(): void {}
+    unobserve(el: Element): void {
+      observedElements = observedElements.filter((entry) => entry.el !== el)
+    }
+    disconnect(): void {
+      observedElements = []
+    }
   } as unknown as typeof ResizeObserver
+}
+
+function restoreResizeMocks(): void {
+  if (originalGetBoundingClientRect !== undefined) {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      'getBoundingClientRect',
+      originalGetBoundingClientRect
+    )
+  }
+  if (originalResizeObserver !== undefined) {
+    global.ResizeObserver = originalResizeObserver
+  }
+  observedElements = []
 }
 
 function setMockWidth(width: number): void {
@@ -158,6 +188,7 @@ describe('Story 5.1 responsive chat layout', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    restoreResizeMocks()
   })
 
   it('keeps max-w-3xl + container gutter classes on the thread column (wide non-regression)', () => {

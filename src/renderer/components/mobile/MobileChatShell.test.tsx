@@ -52,7 +52,7 @@ describe('MobileChatShell', () => {
   })
 
   it('renders slim header with title and no desktop chrome markers', () => {
-    render(
+    const { container } = render(
       <MemoryRouter>
         <MobileChatShell onNewChat={vi.fn()} canNewChat>
           <div>chat body</div>
@@ -65,6 +65,13 @@ describe('MobileChatShell', () => {
     expect(screen.getByLabelText('Open menu')).toBeInTheDocument()
     expect(screen.getByLabelText('New chat')).toBeInTheDocument()
     expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy()
+    // Header title is a heading for screen-reader landmark navigation.
+    expect(container.querySelector('h1')?.textContent).toBe('Hello chat')
+    // Desktop chrome (persistent sidebar, activity rail) must not render inside
+    // the mobile shell — assert their markers are absent.
+    expect(container.querySelector('[data-sidebar]')).toBeNull()
+    // The menu button reflects drawer state for assistive tech.
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('opens the chat drawer and closes it after selecting a session', async () => {
@@ -77,11 +84,13 @@ describe('MobileChatShell', () => {
     )
 
     fireEvent.click(screen.getByLabelText('Open menu'))
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'true')
     expect(await screen.findByText('Open history chat')).toBeInTheDocument()
     expect(screen.getByText('New chat')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Open history chat'))
     expect(screen.queryByText('Open history chat')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('invokes onNewChat from the header action', () => {

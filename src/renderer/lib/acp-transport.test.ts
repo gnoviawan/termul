@@ -633,7 +633,12 @@ describe('WsAcpTransport', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(settled).toBeUndefined()
 
-    await vi.advanceTimersByTimeAsync(540_000) // total 600s
+    await vi.advanceTimersByTimeAsync(540_000) // total 600s — server turn budget elapsed
+    // Client budget = server budget + grace, so the generic timeout must NOT
+    // fire yet (the server's typed `turn timeout` reply should win the race).
+    expect(settled).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(10_000) // total 610s — client grace fires
     await Promise.resolve()
     expect(settled).toMatchObject({
       err: expect.objectContaining({
@@ -661,27 +666,31 @@ describe('WsAcpTransport', () => {
       origSend(data)
     }
 
-    const pending = transport.setMode('a1', 's1', 'agent')
-    let settled: unknown
-    void pending.then(
-      (v) => {
-        settled = { ok: v }
-      },
-      (err) => {
-        settled = { err }
-      }
-    )
+    try {
+      const pending = transport.setMode('a1', 's1', 'agent')
+      let settled: unknown
+      void pending.then(
+        (v) => {
+          settled = { ok: v }
+        },
+        (err) => {
+          settled = { err }
+        }
+      )
 
-    await vi.advanceTimersByTimeAsync(59_999)
-    expect(settled).toBeUndefined()
-    await vi.advanceTimersByTimeAsync(1)
-    await Promise.resolve()
-    expect(settled).toMatchObject({
-      err: expect.objectContaining({
-        code: 'timeout',
-        message: 'Request set_mode timed out'
+      await vi.advanceTimersByTimeAsync(59_999)
+      expect(settled).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
+      expect(settled).toMatchObject({
+        err: expect.objectContaining({
+          code: 'timeout',
+          message: 'Request set_mode timed out'
+        })
       })
-    })
+    } finally {
+      sock.send = origSend // restore the monkeypatched socket method
+    }
     transport.dispose()
     vi.useRealTimers()
   })

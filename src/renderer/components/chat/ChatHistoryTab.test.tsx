@@ -217,4 +217,28 @@ describe('ChatHistoryTab scoping', () => {
     })
     expect(screen.getByText('chat-55')).toBeInTheDocument()
   })
+
+  it('calls onSessionOpened after opening a visible chat', () => {
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+    mockOpen.mockResolvedValue(undefined)
+    const onSessionOpened = vi.fn()
+    render(<ChatHistoryTab onSessionOpened={onSessionOpened} />)
+    fireEvent.click(screen.getByText('s1'))
+    // Mirror entries open the tab immediately and fire onSessionOpened without
+    // waiting on the background reconnect (the drawer closes right away).
+    expect(onSessionOpened).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call onSessionOpened from the catch path when addAgentChatTab throws', () => {
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+    mockOpen.mockResolvedValue(undefined)
+    mockAddTab.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    const onSessionOpened = vi.fn()
+    render(<ChatHistoryTab onSessionOpened={onSessionOpened} />)
+    fireEvent.click(screen.getByText('s1'))
+    // The throw aborts the try block before onSessionOpened?.() runs.
+    expect(onSessionOpened).not.toHaveBeenCalled()
+  })
 })

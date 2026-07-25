@@ -29,7 +29,7 @@ export function resolveMobileWebShell(isTauri: boolean, matchesNarrowViewport: b
  */
 export function useMobileWebShell(): boolean {
   const [active, setActive] = useState(() => {
-    if (typeof window === 'undefined') return false
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
     return resolveMobileWebShell(isTauriContext(), window.matchMedia(MOBILE_QUERY).matches)
   })
 
@@ -39,6 +39,8 @@ export function useMobileWebShell(): boolean {
       return
     }
 
+    if (typeof window.matchMedia !== 'function') return
+
     const mql = window.matchMedia(MOBILE_QUERY)
     const apply = (event?: MediaQueryListEvent): void => {
       setActive(resolveMobileWebShell(false, event?.matches ?? mql.matches))
@@ -46,8 +48,18 @@ export function useMobileWebShell(): boolean {
     apply()
 
     const onChange = (event: MediaQueryListEvent): void => apply(event)
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
+    // `addEventListener` is the modern path; older iOS Safari only exposes the
+    // deprecated `addListener` alias — fall back to it so the shell still
+    // tracks orientation changes on the mobile browsers this hook targets.
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    }
+    if (typeof mql.addListener === 'function') {
+      mql.addListener(onChange)
+      return () => mql.removeListener(onChange)
+    }
+    return
   }, [])
 
   return active

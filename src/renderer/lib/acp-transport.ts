@@ -206,13 +206,26 @@ export function resolveWsUrl(
 
 const REQUEST_TIMEOUT_MS = 60_000
 /**
- * Timeout for `send_prompt`, which awaits the full agent turn on the server.
- * Must stay aligned with Rust `TURN_TIMEOUT` (600s / `TERMUL_ACP_TURN_TIMEOUT_SECS`).
- * A 60s client budget caused `AcpTransportError: Request send_prompt timed out`
- * on mobile/ngrok whenever a turn (tools, thinking, slow models) exceeded a minute
- * — even while streaming events were still arriving.
+ * Grace margin added on top of the server turn budget so the server's typed
+ * `turn timeout` reply wins the race instead of the client's generic timeout.
+ * Rust `CANCEL_GRACE` is 5s (`src-tauri/src/acp/manager.rs`), so 10s leaves
+ * headroom for that plus reply latency.
  */
-const SEND_PROMPT_TIMEOUT_MS = 600_000
+const SEND_PROMPT_GRACE_MS = 10_000
+/**
+ * Timeout for `send_prompt`, which awaits the full agent turn on the server.
+ * Stays slightly above Rust `TURN_TIMEOUT` (600s / `TERMUL_ACP_TURN_TIMEOUT_SECS`)
+ * plus {@link SEND_PROMPT_GRACE_MS} so the server's specific `turn timeout`
+ * error reaches the client before this generic timeout fires. A 60s client
+ * budget caused `AcpTransportError: Request send_prompt timed out` on
+ * mobile/ngrok whenever a turn (tools, thinking, slow models) exceeded a
+ * minute — even while streaming events were still arriving.
+ *
+ * NOTE: if a deployment raises `TERMUL_ACP_TURN_TIMEOUT_SECS` above 600s,
+ * this constant must be raised to match (ideally the server would publish its
+ * turn budget to the client — tracked separately).
+ */
+const SEND_PROMPT_TIMEOUT_MS = 600_000 + SEND_PROMPT_GRACE_MS
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
 

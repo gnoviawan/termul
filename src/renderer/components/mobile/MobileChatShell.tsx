@@ -1,7 +1,6 @@
 import { Menu, MessageSquarePlus, Settings } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useShallow } from 'zustand/shallow'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
@@ -38,14 +37,14 @@ export function MobileChatShell({
   const navigate = useNavigate()
   const activeProject = useActiveProject()
 
-  const activeSessionId = useWorkspaceStore(
-    useShallow((s) => {
-      const pane =
-        getAllLeafPanes(s.root).find((p) => p.id === s.activePaneId) ?? getAllLeafPanes(s.root)[0]
-      const tab = pane?.tabs.find((t) => t.id === pane.activeTabId)
-      return tab?.type === 'agent-chat' ? tab.sessionId : null
-    })
-  )
+  const activeSessionId = useWorkspaceStore((s) => {
+    // Walk the pane tree once (not twice) and return a primitive sessionId —
+    // no `useShallow` needed for a primitive selector.
+    const leaves = getAllLeafPanes(s.root)
+    const pane = leaves.find((p) => p.id === s.activePaneId) ?? leaves[0]
+    const tab = pane?.tabs.find((t) => t.id === pane.activeTabId)
+    return tab?.type === 'agent-chat' ? tab.sessionId : null
+  })
 
   const sessionTitle = useAcpStore((s) => {
     if (!activeSessionId) return null
@@ -71,13 +70,15 @@ export function MobileChatShell({
           size="icon"
           className="size-10 shrink-0"
           aria-label="Open menu"
+          aria-expanded={drawerOpen}
+          aria-controls={drawerOpen ? 'mobile-chat-drawer' : undefined}
           onClick={() => setDrawerOpen(true)}
         >
           <Menu size={20} />
         </Button>
 
         <div className="min-w-0 flex-1 text-center">
-          <p className="truncate text-sm font-medium text-foreground">{headerTitle}</p>
+          <h1 className="truncate text-sm font-medium text-foreground">{headerTitle}</h1>
         </div>
 
         <Button
@@ -98,6 +99,7 @@ export function MobileChatShell({
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent
           side="left"
+          id="mobile-chat-drawer"
           className="flex w-[min(100vw-3rem,20rem)] flex-col gap-0 p-0 sm:max-w-sm"
         >
           <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
