@@ -11,6 +11,7 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
+import { MobileChatShell } from '@/components/mobile/MobileChatShell'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ResizeEdges } from '@/components/ResizeEdges'
 import { SidebarTabs } from '@/components/SidebarTabs'
@@ -37,6 +38,7 @@ import {
 } from '@/hooks/use-command-history'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
@@ -227,6 +229,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // File explorer & editor state
   const isExplorerVisible = useFileExplorerVisible()
   const isSidebarVisible = useSidebarVisible()
+  const isMobileWebShell = useMobileWebShell()
 
   // SSH state
   const sshProfiles = useSSHProfiles()
@@ -1439,6 +1442,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
+    if (isMobileWebShell) {
+      return (
+        <div className="flex h-screen flex-col overflow-hidden bg-background">
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         <ResizeEdges />
@@ -1459,6 +1471,144 @@ export default function WorkspaceLayout(): React.JSX.Element {
             </div>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  const workspaceMain = (
+    <>
+      {activeSSHProfile ? (
+        <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+      ) : projects.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center bg-background px-6">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
+            className="flex max-w-md flex-col items-center text-center"
+          >
+            <div className="mb-6">
+              <FolderKanban className="h-24 w-24 text-muted-foreground/50" />
+            </div>
+            <h2 className="mb-2 text-xl font-semibold text-foreground">No Projects Yet</h2>
+            <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
+              Create your first project to organize your terminals, snapshots, and commands
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsNewProjectModalOpen(true)}
+              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+            >
+              Create Your First Project
+            </button>
+          </motion.div>
+        </div>
+      ) : (
+        <>
+          {isWorkspaceRoute ? (
+            <motion.div
+              key={fullscreenPaneId ? 'fullscreen' : 'normal'}
+              initial={{ opacity: 0.85, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="h-full min-h-0 flex-1 overflow-hidden"
+            >
+              <PaneRenderer
+                node={fullscreenPane ?? paneRoot}
+                onAddTerminal={handleAddTerminal}
+                onAddBrowserTab={handleNewBrowserTab}
+                onCloseTerminal={handleCloseTerminal}
+                onRenameTerminal={renameTerminal}
+                onCloseEditorTab={handleCloseEditorTab}
+                closingTerminalIds={closingTerminalIds}
+                defaultShell={activeProject?.defaultShell || appDefaultShell}
+              />
+            </motion.div>
+          ) : (
+            <div className="relative flex-1 overflow-hidden bg-background">
+              <div className="h-full w-full">
+                <Outlet />
+              </div>
+            </div>
+          )}
+          {!isMobileWebShell && <StatusBar project={activeProject} />}
+        </>
+      )}
+    </>
+  )
+
+  if (isMobileWebShell) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <MobileChatShell onNewChat={handleOpenAgentChat} canNewChat={Boolean(activeProject?.path)}>
+          <PaneDndProvider>
+            <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+              {workspaceMain}
+            </main>
+          </PaneDndProvider>
+        </MobileChatShell>
+
+        <NewProjectModal
+          isOpen={isNewProjectModalOpen}
+          onClose={() => setIsNewProjectModalOpen(false)}
+          onCreateProject={addProject}
+        />
+
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          projects={projects}
+          onSwitchProject={selectProject}
+          onAddTerminal={() => handleAddTerminal(undefined)}
+          onShowAgentLauncher={() => {
+            const paneId = useWorkspaceStore.getState().activePaneId
+            if (paneId) {
+              useWorkspaceStore.getState().showAgentLauncher(paneId)
+            }
+          }}
+          onLaunchAgent={handleLaunchAgent}
+          onNewBrowserTab={handleNewBrowserTab}
+          onSaveSnapshot={handleOpenSnapshotModal}
+          onOpenProjectSettings={handleOpenProjectSettings}
+          onOpenAppPreferences={handleOpenAppPreferences}
+          onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+          onOpenShortcutMenu={handleOpenShortcutMenu}
+          onOpenThemePicker={handleOpenThemePicker}
+          onSSHConnect={handleSSHConnect}
+          sshProfiles={sshProfiles.map((p) => ({
+            id: p.id,
+            name: p.name,
+            host: p.host,
+            username: p.username
+          }))}
+          getShortcutLabel={getShortcutLabel}
+          getProjectShortcutLabel={getProjectShortcutLabel}
+        />
+
+        <ConfirmDialog
+          isOpen={closeConfirmTerminal !== null}
+          title="Close Terminal"
+          message={`Are you sure you want to close "${
+            terminalToClose?.name || 'this terminal'
+          }"? Any running processes will be terminated.`}
+          confirmLabel="Close"
+          cancelLabel="Cancel"
+          variant="danger"
+          isLoading={closeConfirmLoading}
+          onConfirm={handleConfirmCloseTerminal}
+          onCancel={handleCancelCloseTerminal}
+        >
+          <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+            <input
+              type="checkbox"
+              checked={closeConfirmRememberChoice}
+              onChange={(e) => setCloseConfirmRememberChoice(e.target.checked)}
+              disabled={closeConfirmLoading}
+              className="rounded border-border bg-background"
+            />
+            Don't ask again when closing terminals
+          </label>
+        </ConfirmDialog>
       </div>
     )
   }
@@ -1511,69 +1661,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
                   {/* Main Content Area */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
-                    {activeSSHProfile ? (
-                      /* SSH Workspace */
-                      <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
-                    ) : projects.length === 0 ? (
-                      /* No Projects Empty State */
-                      <div className="flex-1 flex flex-col items-center justify-center bg-background px-6 rounded-xl">
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ duration: 0.4, ease: 'easeOut' }}
-                          className="flex flex-col items-center text-center max-w-md"
-                        >
-                          <div className="mb-6">
-                            <FolderKanban className="w-24 h-24 text-muted-foreground/50" />
-                          </div>
-                          <h2 className="text-xl font-semibold text-foreground mb-2">
-                            No Projects Yet
-                          </h2>
-                          <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-                            Create your first project to organize your terminals, snapshots, and
-                            commands
-                          </p>
-                          <button
-                            onClick={() => setIsNewProjectModalOpen(true)}
-                            className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                          >
-                            Create Your First Project
-                          </button>
-                        </motion.div>
-                      </div>
-                    ) : (
-                      <>
-                        {isWorkspaceRoute ? (
-                          <motion.div
-                            key={fullscreenPaneId ? 'fullscreen' : 'normal'}
-                            initial={{ opacity: 0.85, scale: 0.97 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ duration: 0.2, ease: 'easeOut' }}
-                            className="flex-1 min-h-0 h-full overflow-hidden"
-                          >
-                            <PaneRenderer
-                              node={fullscreenPane ?? paneRoot}
-                              onAddTerminal={handleAddTerminal}
-                              onAddBrowserTab={handleNewBrowserTab}
-                              onCloseTerminal={handleCloseTerminal}
-                              onRenameTerminal={renameTerminal}
-                              onCloseEditorTab={handleCloseEditorTab}
-                              closingTerminalIds={closingTerminalIds}
-                              defaultShell={activeProject?.defaultShell || appDefaultShell}
-                            />
-                          </motion.div>
-                        ) : (
-                          <div className="flex-1 overflow-hidden bg-background relative rounded-xl">
-                            <div className="w-full h-full">
-                              <Outlet />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Status Bar */}
-                        <StatusBar project={activeProject} />
-                      </>
-                    )}
+                    {workspaceMain}
                   </main>
 
                   {/* File Explorer - separate floating panel */}

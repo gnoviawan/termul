@@ -40,7 +40,12 @@ interface SidebarEntry {
 }
 
 /** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
-export function ChatHistoryTab(): React.JSX.Element {
+export function ChatHistoryTab({
+  onSessionOpened
+}: {
+  /** Optional callback after a chat row successfully opens (e.g. close a mobile drawer). */
+  onSessionOpened?: () => void
+} = {}): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const discoveredSessions = useAcpStore((s) => s.discoveredSessions)
   const agents = useAcpStore((s) => s.agents)
@@ -216,11 +221,12 @@ export function ChatHistoryTab(): React.JSX.Element {
             toast.error(`Failed to reconnect chat: ${String(err)}`)
           })
         }
+        onSessionOpened?.()
       } catch (err) {
         toast.error(`Failed to open chat: ${String(err)}`)
       }
     },
-    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId]
+    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
   )
 
   const handleDelete = useCallback(
