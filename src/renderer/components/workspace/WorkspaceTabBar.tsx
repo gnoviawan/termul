@@ -643,6 +643,7 @@ function AgentChatTabInline({
 
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
   // The persisted index entry carries the effective title (agent-pushed title,
   // first-message derivation, or "Untitled Chat N"). `session.title` stays null
@@ -650,7 +651,9 @@ function AgentChatTabInline({
   const indexTitle = useAcpStore(
     (s) => s.sessionIndex.find((e) => e.id === tab.sessionId)?.title ?? null
   )
-  const connected = isAgentConnected(session, agentStatus)
+  // Treat in-flight launcher handoff as connected so we don't flash a red
+  // disconnected lamp on the optimistic placeholder chat.
+  const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 

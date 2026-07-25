@@ -65,6 +65,7 @@ const FRESH = {
   agentOptionsCache: {},
   sessionIndex: [],
   openingHistoryIds: {},
+  launchingSessionIds: {},
   discoveredSessions: {},
   discoveringKeys: {},
   mcpServers: [],

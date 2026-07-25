@@ -30,6 +30,12 @@ const {
   mockStartChat,
   mockPrepareChat,
   mockCancelPreparedChat,
+  mockClaimPreparedChat,
+  mockCreateLaunchPlaceholder,
+  mockFinalizeChatLaunch,
+  mockApplyPendingLauncherOptions,
+  mockSeedLaunchUserMessage,
+  mockClearLaunchingSession,
   mockPrewarmAgent,
   mockSendPrompt,
   mockSaveAgentConfig,
@@ -38,6 +44,7 @@ const {
   mockSetModel,
   mockInstallRegistryBinary,
   mockAddAgentChatTab,
+  mockRemapAgentChatSession,
   mockHideAgentLauncher,
   mockPersistRead,
   mockPersistWrite,
@@ -47,6 +54,12 @@ const {
   mockStartChat: vi.fn(),
   mockPrepareChat: vi.fn(),
   mockCancelPreparedChat: vi.fn(),
+  mockClaimPreparedChat: vi.fn(),
+  mockCreateLaunchPlaceholder: vi.fn(),
+  mockFinalizeChatLaunch: vi.fn(),
+  mockApplyPendingLauncherOptions: vi.fn(),
+  mockSeedLaunchUserMessage: vi.fn(),
+  mockClearLaunchingSession: vi.fn(),
   mockPrewarmAgent: vi.fn(),
   mockSendPrompt: vi.fn(),
   mockSaveAgentConfig: vi.fn(),
@@ -55,6 +68,7 @@ const {
   mockSetModel: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
+  mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
@@ -74,6 +88,7 @@ const {
           updatedAt: number
         }
       >,
+      launchingSessionIds: {} as Record<string, true>,
       sessions: {} as Record<string, AcpSession>,
       commands: {}
     }
@@ -135,6 +150,7 @@ vi.mock('@/stores/workspace-store', () => {
   const state = {
     hideAgentLauncher: mockHideAgentLauncher,
     addAgentChatTab: mockAddAgentChatTab,
+    remapAgentChatSession: mockRemapAgentChatSession,
     activePaneId: 'pane1'
   }
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
@@ -147,8 +163,15 @@ vi.mock('@/stores/acp-store', () => {
     startChat: mockStartChat,
     prepareChat: mockPrepareChat,
     cancelPreparedChat: mockCancelPreparedChat,
+    claimPreparedChat: mockClaimPreparedChat,
+    createLaunchPlaceholder: mockCreateLaunchPlaceholder,
+    finalizeChatLaunch: mockFinalizeChatLaunch,
+    applyPendingLauncherOptions: mockApplyPendingLauncherOptions,
+    seedLaunchUserMessage: mockSeedLaunchUserMessage,
+    clearLaunchingSession: mockClearLaunchingSession,
     prewarmAgent: mockPrewarmAgent,
     sendPrompt: mockSendPrompt,
+    sendPromptBlocks: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
@@ -281,12 +304,28 @@ beforeEach(() => {
     preparingChatKeys: {},
     prepareChatErrors: {},
     agentOptionsCache: {},
+    launchingSessionIds: {},
     sessions: {},
     commands: {}
   }
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
+  mockClaimPreparedChat.mockReturnValue(null)
+  mockCreateLaunchPlaceholder.mockReturnValue('launch-placeholder-1')
+  mockFinalizeChatLaunch.mockImplementation(
+    async (args: { adoptSession?: (a: string, b: string) => void; placeholderId: string }) => {
+      args.adoptSession?.(args.placeholderId, 'session-1')
+      return 'session-1'
+    }
+  )
+  mockApplyPendingLauncherOptions.mockResolvedValue(undefined)
+  mockSeedLaunchUserMessage.mockImplementation(() => undefined)
+  mockClearLaunchingSession.mockImplementation(() => undefined)
+  mockPrepareChat.mockImplementation(() => undefined)
+  mockCancelPreparedChat.mockImplementation(() => undefined)
+  mockPrewarmAgent.mockResolvedValue(undefined)
+  mockSendPrompt.mockResolvedValue(undefined)
   mockSaveAgentConfig.mockImplementation(async (config: StoredAgentConfig) => {
     const existing = acpStateRef.current.agentConfigs.findIndex((entry) => entry.id === config.id)
     acpStateRef.current.agentConfigs =
@@ -301,21 +340,64 @@ beforeEach(() => {
 })
 
 describe('AgentLauncher ACP new thread', () => {
-  it('routes submit to ACP startChat + addAgentChatTab and forwards the prompt', async () => {
+  it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
-    await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
-    expect(mockStartChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
-    await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
-    expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalled()
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placeholderId: 'launch-placeholder-1',
+        configId: defaultAgent.configId,
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'hello acp' }],
+        adoptSession: expect.any(Function)
+      })
+    )
+    expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+      'launch-placeholder-1',
+      'session-1',
+      'pane1'
+    )
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
       agentId: defaultAgent.configId,
       mode: 'acp'
     })
+  })
+
+  it('claims a prepared session so launch skips the placeholder path', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    mockClaimPreparedChat.mockReturnValue('prepared-ready-1')
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    renderLauncher()
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'ready now' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    expect(mockClaimPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+    expect(mockSeedLaunchUserMessage).toHaveBeenCalledWith('prepared-ready-1', [
+      { type: 'text', text: 'ready now' }
+    ])
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('prepared-ready-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        'prepared-ready-1',
+        [{ type: 'text', text: 'ready now' }],
+        { skipUserAppend: true }
+      )
+    )
   })
 
   it('prepares the selected ACP session in the background', async () => {
@@ -661,13 +743,19 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
     const modelChip = await screen.findByRole('button', { name: 'Select model: Cached Model' })
-    expect(modelChip).toBeInTheDocument()
-    expect(modelChip).toBeDisabled()
+    expect(modelChip).toBeEnabled()
     expect(
       screen.queryByRole('button', { name: 'Select model: Loading model…' })
     ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Connecting/)).not.toBeInTheDocument()
     const modeChip = screen.getByRole('button', { name: /^Agent$/ })
-    expect(modeChip).toBeDisabled()
+    expect(modeChip).toBeEnabled()
+
+    fireEvent.click(modelChip)
+    clickMenuOption('Cached Two')
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Cached Two' })
+    ).toBeInTheDocument()
   })
 
   it('still shows Loading model when cache has modes only (no model options)', async () => {
@@ -752,12 +840,15 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
-  it('awaits startChat while launching with a visible launching state (send-while-cold)', async () => {
-    let resolveStart!: (id: string) => void
-    mockStartChat.mockImplementation(
-      () =>
+  it('opens chat instantly while finalizeChatLaunch runs in the background (send-while-cold)', async () => {
+    let resolveFinalize!: (id: string) => void
+    mockFinalizeChatLaunch.mockImplementation(
+      (args: { adoptSession?: (a: string, b: string) => void; placeholderId: string }) =>
         new Promise<string>((resolve) => {
-          resolveStart = resolve
+          resolveFinalize = (id: string) => {
+            args.adoptSession?.(args.placeholderId, id)
+            resolve(id)
+          }
         })
     )
     renderLauncher()
@@ -765,14 +856,27 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello cold' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
-    await waitFor(() => expect(mockStartChat).toHaveBeenCalled())
-    expect(screen.getByLabelText('Start agent chat')).toBeDisabled()
-    expect(screen.getByLabelText('Start agent chat')).toHaveAttribute('title', 'Starting…')
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialUserBlocks: [{ type: 'text', text: 'hello cold' }]
+      })
+    )
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+    expect(screen.getByLabelText('Start agent chat').querySelector('.animate-spin')).toBeNull()
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
 
     await act(async () => {
-      resolveStart('session-cold')
+      resolveFinalize('session-cold')
     })
-    await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-cold', 'pane1'))
-    expect(mockSendPrompt).toHaveBeenCalledWith('session-cold', 'hello cold')
+
+    await waitFor(() =>
+      expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+        'launch-placeholder-1',
+        'session-cold',
+        'pane1'
+      )
+    )
   })
 })

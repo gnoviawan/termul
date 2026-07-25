@@ -2,14 +2,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AcpSession } from '@/stores/acp-store'
 
-const { mockOpen, sessionRef, indexRef, openingRef } = vi.hoisted(() => ({
+const { mockOpen, sessionRef, indexRef, openingRef, launchingRef } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   // AcpSession shape; typed loosely here because vi.hoisted runs before the
   // type-only import below is usable at runtime. `seedLiveSession` constructs
   // the value with a `satisfies AcpSession` check.
   sessionRef: { current: null as object | null },
   indexRef: { current: [] as Array<{ id: string }> },
-  openingRef: { current: {} as Record<string, true> }
+  openingRef: { current: {} as Record<string, true> },
+  launchingRef: { current: {} as Record<string, true> }
 }))
 
 vi.mock('@/stores/acp-store', () => {
@@ -23,6 +24,7 @@ vi.mock('@/stores/acp-store', () => {
     configToLiveAgent: {},
     sessionIndex: indexRef.current,
     openingHistoryIds: openingRef.current,
+    launchingSessionIds: launchingRef.current,
     openHistorySession: mockOpen,
     sendPrompt: vi.fn(),
     sendPromptBlocks: vi.fn(),
@@ -82,6 +84,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     sessionRef.current = null
     indexRef.current = []
     openingRef.current = {}
+    launchingRef.current = {}
   })
 
   it('rehydrates a visible restored tab from persisted history', () => {

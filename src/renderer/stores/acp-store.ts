@@ -210,6 +210,11 @@ interface AcpState {
 
   /** Session ids whose `openHistorySession` is in flight (drives UI loading states). */
   openingHistoryIds: Record<string, true>
+  /**
+   * Placeholder session ids created for instant launcher→chat handoff while
+   * `startChat` / first send still run in the background.
+   */
+  launchingSessionIds: Record<string, true>
 
   // Discovered (agent-native) sessions via `session/list` — ephemeral, not persisted.
   // Keyed by `discoveryKey(agentId, cwd)` so each (agent, cwd) pair owns its own
@@ -285,6 +290,62 @@ interface AcpState {
     mcpServers: McpServer[] | undefined,
     projectId: string
   ) => Promise<SessionId>
+  /**
+   * Take ownership of a prepared session so launcher unmount cleanup cannot
+   * reap it after the chat tab is already open.
+   */
+  claimPreparedChat: (key: string) => SessionId | null
+  /**
+   * Local-only initializing session so the chat tab can open before ACP
+   * `session/new` finishes. Painted from options cache (+ pending overlays).
+   */
+  createLaunchPlaceholder: (args: {
+    cwd: string
+    projectId: string
+    models?: SessionModelState | null
+    modes?: SessionModeState | null
+    configOptions?: SessionConfigOption[]
+    /** Optimistic first-turn content so the chat looks like a normal send. */
+    initialUserBlocks?: ContentBlock[]
+  }) => SessionId
+  /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
+  discardLaunchPlaceholder: (sessionId: SessionId) => void
+  /** Paint an optimistic user turn on an already-live session (prepared-path launch). */
+  seedLaunchUserMessage: (sessionId: SessionId, blocks: ContentBlock[]) => void
+  /** Clear the launching indicator once the first turn is handed off. */
+  clearLaunchingSession: (sessionId: SessionId) => void
+  /**
+   * Complete an instant launch: `startChat`, apply pending options, send the
+   * first turn, and tear down the placeholder when the real session id differs.
+   */
+  finalizeChatLaunch: (args: {
+    placeholderId: SessionId
+    configId: string
+    cwd: string
+    projectId: string
+    mcpServers?: McpServer[]
+    pending?: {
+      modelId?: string
+      modeId?: string
+      configValues: Record<string, string>
+    } | null
+    initialText?: string | null
+    initialBlocks?: ContentBlock[] | null
+    /** Remap the workspace tab as soon as the real session exists (before send). */
+    adoptSession?: (fromSessionId: SessionId, toSessionId: SessionId) => void
+  }) => Promise<SessionId>
+  /** Apply launcher pending model/mode/config selections to a live session. */
+  applyPendingLauncherOptions: (
+    sessionId: SessionId,
+    pending:
+      | {
+          modelId?: string
+          modeId?: string
+          configValues: Record<string, string>
+        }
+      | null
+      | undefined
+  ) => Promise<void>
 
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
@@ -310,7 +371,11 @@ interface AcpState {
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
   /** Send a prompt turn carrying structured content blocks (text + image/resource). */
-  sendPromptBlocks: (sessionId: SessionId, blocks: ContentBlock[]) => Promise<void>
+  sendPromptBlocks: (
+    sessionId: SessionId,
+    blocks: ContentBlock[],
+    options?: { skipUserAppend?: boolean }
+  ) => Promise<void>
   cancelPrompt: (sessionId: SessionId) => Promise<void>
   removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
   /** Cancel the active turn if needed, then send a queued prompt immediately. */
@@ -1337,7 +1402,8 @@ async function runPromptTurn(
   sessionId: SessionId,
   userBlocks: ContentBlock[],
   dispatch: (session: AcpSession) => Promise<StopReason>,
-  queuedOrigin?: QueuedPrompt
+  queuedOrigin?: QueuedPrompt,
+  options?: { skipUserAppend?: boolean }
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
@@ -1348,13 +1414,15 @@ async function runPromptTurn(
   let userMessage: ChatMessage | null = null
   let openTurnId = ''
   const previousOpenTurnId = session.openTurnId
+  const skipUserAppend = Boolean(options?.skipUserAppend)
 
   // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
   set((s) => {
     const current = s.sessions[sessionId]
     if (!current || current.status === 'closed') return {}
 
-    if (sessionTurnBusy(current)) {
+    // Launch handoff already painted the user message + active turn; don't re-queue.
+    if (sessionTurnBusy(current) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {
@@ -1370,6 +1438,38 @@ async function runPromptTurn(
     }
 
     openTurnId = newId('turn')
+    if (skipUserAppend) {
+      userMessage =
+        [...(s.messages[sessionId] ?? [])].reverse().find((m) => m.role === 'user') ?? null
+      if (!userMessage) {
+        userMessage = {
+          id: newId('msg'),
+          role: 'user',
+          blocks: userBlocks,
+          streaming: false,
+          timestamp: Date.now(),
+          seq: nextSeq()
+        }
+        return {
+          messages: {
+            ...s.messages,
+            [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+          },
+          plans: dropPlanForSession(s.plans, sessionId),
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+          }
+        }
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+        }
+      }
+    }
+
     userMessage = {
       id: newId('msg'),
       role: 'user',
@@ -1445,6 +1545,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   agentOptionsCache: {},
   sessionIndex: [],
   openingHistoryIds: {},
+  launchingSessionIds: {},
   discoveredSessions: {},
   discoveringKeys: {},
   mcpServers: [],
@@ -1877,6 +1978,277 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
   },
 
+  claimPreparedChat: (key) => {
+    const sessionId = get().preparedSessions[key]
+    if (!sessionId) return null
+    cancelPreparedChatEntry(key, set)
+    return sessionId
+  },
+
+  createLaunchPlaceholder: ({
+    cwd,
+    projectId,
+    models,
+    modes,
+    configOptions,
+    initialUserBlocks
+  }) => {
+    const sessionId = newId('launch')
+    const blocks = initialUserBlocks ?? []
+    const openTurnId = blocks.length > 0 ? newId('turn') : null
+    const userMessage: ChatMessage | null =
+      blocks.length > 0
+        ? {
+            id: newId('msg'),
+            role: 'user',
+            blocks,
+            streaming: false,
+            timestamp: Date.now(),
+            seq: nextSeq()
+          }
+        : null
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId: '',
+          cwd,
+          projectId,
+          status: 'initializing',
+          title: null,
+          activeTurn: Boolean(userMessage),
+          openTurnId,
+          modes: modes ?? null,
+          models: models ?? null,
+          configOptions: configOptions ?? [],
+          lastError: null,
+          createdAt: Date.now(),
+          replaying: null
+        }
+      },
+      messages: {
+        ...s.messages,
+        [sessionId]: userMessage ? [userMessage] : (s.messages[sessionId] ?? [])
+      },
+      launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+    }))
+    return sessionId
+  },
+
+  discardLaunchPlaceholder: (sessionId) => {
+    set((s) => {
+      if (!s.launchingSessionIds[sessionId] && !s.sessions[sessionId]) return s
+      const sessions = { ...s.sessions }
+      const messages = { ...s.messages }
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      delete sessions[sessionId]
+      delete messages[sessionId]
+      delete launchingSessionIds[sessionId]
+      return {
+        sessions,
+        messages,
+        launchingSessionIds,
+        activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId
+      }
+    })
+  },
+
+  seedLaunchUserMessage: (sessionId, blocks) => {
+    if (blocks.length === 0) return
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current || current.status === 'closed') return s
+      if ((s.messages[sessionId] ?? []).some((m) => m.role === 'user')) {
+        return {
+          launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true },
+          sessions: {
+            ...s.sessions,
+            [sessionId]: {
+              ...current,
+              activeTurn: true,
+              openTurnId: current.openTurnId ?? newId('turn'),
+              lastError: null
+            }
+          }
+        }
+      }
+      const userMessage: ChatMessage = {
+        id: newId('msg'),
+        role: 'user',
+        blocks,
+        streaming: false,
+        timestamp: Date.now(),
+        seq: nextSeq()
+      }
+      return {
+        messages: {
+          ...s.messages,
+          [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+        },
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            activeTurn: true,
+            openTurnId: newId('turn'),
+            lastError: null
+          }
+        },
+        launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+      }
+    })
+  },
+
+  clearLaunchingSession: (sessionId) => {
+    set((s) => {
+      if (!s.launchingSessionIds[sessionId]) return s
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      delete launchingSessionIds[sessionId]
+      return { launchingSessionIds }
+    })
+  },
+
+  applyPendingLauncherOptions: async (sessionId, pending) => {
+    if (!pending) return
+    const session = get().sessions[sessionId]
+    if (!session || session.status === 'closed') return
+    if (pending.modeId) {
+      await get().setMode(sessionId, pending.modeId)
+    }
+    if (pending.modelId) {
+      const hasNative =
+        session.models?.availableModels.some((m) => m.modelId === pending.modelId) ?? false
+      if (hasNative) {
+        await get().setModel(sessionId, pending.modelId)
+      } else {
+        const modelOpt = session.configOptions.find((o) => o.category === 'model')
+        if (modelOpt) {
+          await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+        }
+      }
+    }
+    for (const [configId, valueId] of Object.entries(pending.configValues)) {
+      await get().setConfigOption(sessionId, configId, valueId)
+    }
+  },
+
+  finalizeChatLaunch: async ({
+    placeholderId,
+    configId,
+    cwd,
+    projectId,
+    mcpServers,
+    pending,
+    initialText,
+    initialBlocks,
+    adoptSession
+  }) => {
+    try {
+      const sessionId = await get().startChat(configId, cwd, mcpServers, projectId)
+
+      // Move optimistic UI onto the real session, then remap the tab before send
+      // so the user stays on one chat (never a blank disconnected placeholder).
+      const hadOptimisticUser = (get().messages[placeholderId] ?? []).some((m) => m.role === 'user')
+      if (sessionId !== placeholderId) {
+        set((s) => {
+          const placeholder = s.sessions[placeholderId]
+          const real = s.sessions[sessionId]
+          if (!real) return s
+          const placeholderMessages = s.messages[placeholderId] ?? []
+          const realMessages = s.messages[sessionId] ?? []
+          const messages = { ...s.messages }
+          const sessions = { ...s.sessions }
+          const launchingSessionIds = { ...s.launchingSessionIds }
+          messages[sessionId] = realMessages.length > 0 ? realMessages : placeholderMessages
+          if (placeholder) {
+            sessions[sessionId] = {
+              ...real,
+              activeTurn: placeholder.activeTurn || real.activeTurn,
+              openTurnId: real.openTurnId ?? placeholder.openTurnId,
+              title: real.title ?? placeholder.title,
+              modes: real.modes ?? placeholder.modes,
+              models: real.models ?? placeholder.models,
+              configOptions:
+                real.configOptions.length > 0
+                  ? real.configOptions
+                  : (placeholder.configOptions ?? [])
+            }
+          }
+          delete sessions[placeholderId]
+          delete messages[placeholderId]
+          delete launchingSessionIds[placeholderId]
+          return {
+            sessions,
+            messages,
+            launchingSessionIds,
+            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId
+          }
+        })
+        adoptSession?.(placeholderId, sessionId)
+      } else {
+        set((s) => {
+          if (!s.launchingSessionIds[placeholderId]) return s
+          const launchingSessionIds = { ...s.launchingSessionIds }
+          delete launchingSessionIds[placeholderId]
+          return { launchingSessionIds }
+        })
+      }
+
+      await get().applyPendingLauncherOptions(sessionId, pending)
+
+      const blocks =
+        initialBlocks && initialBlocks.length > 0
+          ? initialBlocks
+          : initialText && initialText.trim().length > 0
+            ? ([{ type: 'text', text: initialText }] as ContentBlock[])
+            : null
+      if (blocks) {
+        await runPromptTurn(
+          set,
+          get,
+          sessionId,
+          blocks,
+          (session) => {
+            const only = blocks.length === 1 ? blocks[0] : null
+            if (only?.type === 'text' && typeof only.text === 'string') {
+              return acpApi.sendPrompt(session.agentId, sessionId, only.text)
+            }
+            return acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
+          },
+          undefined,
+          { skipUserAppend: hadOptimisticUser }
+        )
+      }
+      return sessionId
+    } catch (err) {
+      set((s) => {
+        const targetId = s.sessions[placeholderId]
+          ? placeholderId
+          : (s.activeSessionId ?? placeholderId)
+        const target = s.sessions[targetId]
+        if (!target) return s
+        return {
+          sessions: {
+            ...s.sessions,
+            [targetId]: {
+              ...target,
+              status: 'error',
+              activeTurn: false,
+              openTurnId: null,
+              lastError: err instanceof Error ? err.message : String(err)
+            }
+          },
+          launchingSessionIds: dropRecordKey(
+            dropRecordKey(s.launchingSessionIds, placeholderId),
+            targetId
+          )
+        }
+      })
+      throw err
+    }
+  },
+
   loadSessionIndex: async () => {
     const entries = await loadSessionIndexFromDisk()
     // Continue the placeholder counter from the highest persisted suffix so a
@@ -2139,9 +2511,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       acpApi.sendPrompt(session.agentId, sessionId, text)
     ),
 
-  sendPromptBlocks: (sessionId, blocks) =>
-    runPromptTurn(set, get, sessionId, blocks, (session) =>
-      acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
+  sendPromptBlocks: (sessionId, blocks, options) =>
+    runPromptTurn(
+      set,
+      get,
+      sessionId,
+      blocks,
+      (session) => acpApi.sendPromptBlocks(session.agentId, sessionId, blocks),
+      undefined,
+      options
     ),
 
   cancelPrompt: async (sessionId) => {

@@ -96,6 +96,7 @@ export function AgentChatPanel({
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const hasHistoryEntry = useAcpStore((s) => s.sessionIndex.some((e) => e.id === sessionId))
   const isOpeningHistory = useAcpStore((s) => Boolean(s.openingHistoryIds[sessionId]))
+  const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[sessionId]))
   const [rehydrateError, setRehydrateError] = useState<string | null>(null)
   useEffect(() => {
     if (!isVisible || session || !hasHistoryEntry || rehydrateError) return
@@ -264,13 +265,21 @@ export function AgentChatPanel({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {isClosed && isOpeningHistory && (
+      {(isLaunchingSession ||
+        (session.status === 'initializing' && !session.agentId) ||
+        (isLaunchingSession && session.activeTurn)) && (
+        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+          <Loader2 size={12} className="animate-spin" />
+          Starting agent…
+        </div>
+      )}
+      {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
           Reconnecting to agent…
         </div>
       )}
-      {isClosed && !isOpeningHistory && hasHistoryEntry && (
+      {isClosed && !isOpeningHistory && !isLaunchingSession && hasHistoryEntry && (
         <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <span>Chat disconnected.</span>
           <button
