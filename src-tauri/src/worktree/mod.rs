@@ -1187,10 +1187,7 @@ impl WorktreeManager {
 
         // Deduplicate suggestions by (strategy, reason) key
         let mut seen = std::collections::HashSet::new();
-        suggestions.retain(|s| {
-            let key = (s.strategy.as_str(), s.reason.as_str());
-            seen.insert(key)
-        });
+        suggestions.retain(|s| seen.insert((s.strategy.clone(), s.reason.clone())));
 
         // If no auto-resolution suggestions, provide manual guidance
         if suggestions.is_empty() {
