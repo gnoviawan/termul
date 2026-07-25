@@ -1312,6 +1312,8 @@ impl WorktreeManager {
 struct ConflictBlock {
     ours: String,
     theirs: String,
+    /// Diff3 common-ancestor section when present; reserved for future suggestions.
+    #[allow(dead_code)]
     base: String,
 }
 
