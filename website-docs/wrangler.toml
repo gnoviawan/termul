@@ -1,0 +1,3 @@
+name = "termul-docs"
+pages_build_output_dir = "./build/client"
+compatibility_date = "2026-07-25"

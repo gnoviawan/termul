@@ -52,7 +52,11 @@
     "landing:dev": "bun run --cwd landing dev",
     "landing:build": "bun run --cwd landing build",
     "landing:lint": "bun run --cwd landing lint",
-    "landing:preview": "bun run --cwd landing preview"
+    "landing:preview": "bun run --cwd landing preview",
+    "docs:dev": "bun run --cwd website-docs dev",
+    "docs:build": "bun run --cwd website-docs build",
+    "docs:lint": "bun run --cwd website-docs lint",
+    "docs:typecheck": "bun run --cwd website-docs types:check"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",
