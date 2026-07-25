@@ -29,6 +29,8 @@ class FakeWebSocket {
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
+  /** When true, do not auto-reply to `send_prompt` (for timeout tests). */
+  holdSendPrompt = false
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
 
@@ -88,6 +90,7 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'send_prompt') {
+      if (this.holdSendPrompt) return
       // Story 1.8 AC3 chat-flow test: stream message_chunk events + a
       // prompt_complete (echoing the client turnId) so the transport's event
       // subscribers + seenTurnIds dedup are exercised end-to-end.
@@ -603,6 +606,84 @@ describe('WsAcpTransport', () => {
     expect(first.dispose).toHaveBeenCalledOnce()
     _resetAcpTransportForTests(null)
     expect(second.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('keeps send_prompt pending past the 60s default (matches server turn budget)', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.holdSendPrompt = true
+
+    const pending = transport.sendPrompt('a1', 's1', 'long turn')
+    let settled: unknown
+    void pending.then(
+      (v) => {
+        settled = { ok: v }
+      },
+      (err) => {
+        settled = { err }
+      }
+    )
+
+    // Still well under the 10-minute turn budget — must not time out at 60s.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(settled).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(540_000) // total 600s
+    await Promise.resolve()
+    expect(settled).toMatchObject({
+      err: expect.objectContaining({
+        name: 'AcpTransportError',
+        code: 'timeout',
+        message: 'Request send_prompt timed out'
+      })
+    })
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it('still times out quick commands at 60s', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const origSend = sock.send.bind(sock)
+    sock.send = (data: string) => {
+      const req = JSON.parse(data) as { type: string }
+      if (req.type === 'set_mode') return // hold — no reply
+      origSend(data)
+    }
+
+    const pending = transport.setMode('a1', 's1', 'agent')
+    let settled: unknown
+    void pending.then(
+      (v) => {
+        settled = { ok: v }
+      },
+      (err) => {
+        settled = { err }
+      }
+    )
+
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    await Promise.resolve()
+    expect(settled).toMatchObject({
+      err: expect.objectContaining({
+        code: 'timeout',
+        message: 'Request set_mode timed out'
+      })
+    })
+    transport.dispose()
+    vi.useRealTimers()
   })
 })
 

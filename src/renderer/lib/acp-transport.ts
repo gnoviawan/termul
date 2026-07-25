@@ -205,8 +205,20 @@ export function resolveWsUrl(
 }
 
 const REQUEST_TIMEOUT_MS = 60_000
+/**
+ * Timeout for `send_prompt`, which awaits the full agent turn on the server.
+ * Must stay aligned with Rust `TURN_TIMEOUT` (600s / `TERMUL_ACP_TURN_TIMEOUT_SECS`).
+ * A 60s client budget caused `AcpTransportError: Request send_prompt timed out`
+ * on mobile/ngrok whenever a turn (tools, thinking, slow models) exceeded a minute
+ * — even while streaming events were still arriving.
+ */
+const SEND_PROMPT_TIMEOUT_MS = 600_000
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
+
+function requestTimeoutMs(type: WsRequestType): number {
+  return type === 'send_prompt' ? SEND_PROMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+}
 
 type Pending = {
   resolve: (value: unknown) => void
@@ -710,7 +722,7 @@ export class WsAcpTransport implements AcpTransport {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new AcpTransportError('timeout', `Request ${type} timed out`))
-      }, REQUEST_TIMEOUT_MS)
+      }, requestTimeoutMs(type))
       this.pending.set(id, {
         resolve: (v) => resolve(v as T),
         reject,
