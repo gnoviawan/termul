@@ -59,7 +59,13 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { prepareChatKey, useAcpSession, useAcpStore } from '@/stores/acp-store'
+import {
+  type AcpSession,
+  hasModelRelevantOptionsCache,
+  prepareChatKey,
+  useAcpSession,
+  useAcpStore
+} from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -129,6 +135,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const prepareError = useAcpStore((s) =>
     preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
   )
+  const cachedOptions = useAcpStore((s) =>
+    activeConfigId ? (s.agentOptionsCache[activeConfigId] ?? null) : null
+  )
   const displayPrepareError = useMemo(() => {
     if (!prepareError) return null
     return formatAcpSpawnError(prepareError, selectedConfig ?? undefined)
@@ -178,22 +187,53 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     supportedAgents.some((entry) => entry.status === 'ready') ? projectRoot : undefined
   )
 
-  const usableConfigOptions = (draftSession?.configOptions ?? []).filter(
-    (o) => o.options.length > 0
-  )
+  // Live session wins; otherwise paint last-known options (stale-while-revalidate).
+  const effectiveConfigOptions = draftSession?.configOptions ?? cachedOptions?.configOptions ?? []
+  const effectiveModels = draftSession?.models ?? cachedOptions?.models ?? null
+  const effectiveModes = draftSession?.modes ?? cachedOptions?.modes ?? null
+  const hasCachedModels = hasModelRelevantOptionsCache(cachedOptions)
+  const hasCachedOptions = Boolean(cachedOptions)
+  const optionsConnecting = Boolean(isPreparing && !draftSession)
+  const optionsStale = Boolean(hasCachedOptions && !draftSession && (isPreparing || prepareError))
+
+  const usableConfigOptions = effectiveConfigOptions.filter((o) => o.options.length > 0)
   const {
     model,
     thoughtLevel,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
-  const { option: modelOption, source: modelSource } = resolveModelOption(
-    model,
-    draftSession?.models
-  )
+  const { option: modelOption, source: modelSource } = resolveModelOption(model, effectiveModels)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(
     genericConfigOptions,
-    draftSession?.modes ?? null
+    effectiveModes
   )
+  const modePreviewSession = useMemo((): AcpSession | null => {
+    if (draftSession) return draftSession
+    if (!effectiveModes) return null
+    return {
+      id: 'options-cache-preview',
+      agentId: '',
+      cwd: projectRoot ?? '',
+      projectId: activeProjectId ?? '',
+      status: 'initializing',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: effectiveModes,
+      models: effectiveModels,
+      configOptions: effectiveConfigOptions,
+      lastError: null,
+      createdAt: cachedOptions?.updatedAt ?? 0
+    }
+  }, [
+    draftSession,
+    effectiveModes,
+    projectRoot,
+    activeProjectId,
+    effectiveModels,
+    effectiveConfigOptions,
+    cachedOptions?.updatedAt
+  ])
   const menuOpen = isSlashTrigger(prompt)
   const {
     onInput,
@@ -221,13 +261,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       menuOpen
         ? buildSlashSections({
             commands,
-            configOptions: draftSession?.configOptions ?? [],
-            modes: draftSession?.modes ?? null,
+            // Mode/config slash actions require a live prepared session.
+            configOptions: draftSession ? effectiveConfigOptions : [],
+            modes: draftSession ? effectiveModes : null,
             skills,
             filter: slashFilter(prompt)
           })
         : [],
-    [menuOpen, commands, draftSession?.configOptions, draftSession?.modes, skills, prompt]
+    [menuOpen, commands, draftSession, effectiveConfigOptions, effectiveModes, skills, prompt]
   )
 
   const persistSelection = useCallback((configId: string) => {
@@ -276,6 +317,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
+        // Process-only warm first (non-blocking); prepareChat still creates the session.
+        void useAcpStore.getState().prewarmAgent(activeConfigId, projectRoot)
         useAcpStore.getState().prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
       } catch (err) {
         console.warn('[acp] failed to prepare supported agent', activeConfigId, err)
@@ -689,9 +732,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 <AcpModelPicker
                   selectedEntry={selectedEntry}
                   modelOption={modelOption}
-                  loading={!prepareError && isPreparing && !draftSession}
+                  loading={!prepareError && isPreparing && !draftSession && !hasCachedModels}
+                  connecting={optionsConnecting && hasCachedModels}
+                  stale={optionsStale && hasCachedModels}
                   errorMessage={displayPrepareError}
-                  disabled={isLaunching || Boolean(installingConfigId) || savingManualPath}
+                  disabled={
+                    isLaunching ||
+                    Boolean(installingConfigId) ||
+                    savingManualPath ||
+                    // Keep picker openable when prepare failed so Retry is reachable.
+                    (!draftSession && Boolean(modelOption) && !displayPrepareError)
+                  }
                   onRetry={handleRetryPrepare}
                   onSelectModel={handleSetModel}
                 />
@@ -711,10 +762,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     onSelect={(valueId) => handleSetConfig(option.id, valueId)}
                   />
                 ))}
-                {draftSession && (
+                {modePreviewSession && (
                   <ModeChip
-                    session={draftSession}
-                    disabled={false}
+                    session={modePreviewSession}
+                    disabled={!draftSession}
                     onSelect={handleSetMode}
                     label="Agent"
                   />
@@ -1007,6 +1058,8 @@ function AcpModelPicker({
   selectedEntry,
   modelOption,
   loading,
+  connecting = false,
+  stale = false,
   errorMessage,
   disabled,
   onRetry,
@@ -1015,6 +1068,8 @@ function AcpModelPicker({
   selectedEntry: SupportedAcpAgentEntry | null
   modelOption: ReturnType<typeof partitionConfigOptions>['model']
   loading: boolean
+  connecting?: boolean
+  stale?: boolean
   errorMessage: string | null
   disabled: boolean
   onRetry: () => void
@@ -1032,7 +1087,7 @@ function AcpModelPicker({
     : errorMessage
       ? 'Model unavailable'
       : (currentModel?.name ?? 'Model')
-  const showSearch = Boolean(modelOption && modelOption.options.length > 5)
+  const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !errorMessage)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredModels =
     modelOption?.options.filter((value) => {
@@ -1055,9 +1110,9 @@ function AcpModelPicker({
         <ComposerPill
           disabled={disabled}
           aria-label={`Select model: ${label}`}
-          className="max-w-[220px]"
+          className={cn('max-w-[220px]', (connecting || stale) && !errorMessage && 'opacity-80')}
           chevron
-          pending={pending}
+          pending={pending || (connecting && !errorMessage)}
         >
           <span className="truncate">{label}</span>
         </ComposerPill>
@@ -1065,6 +1120,12 @@ function AcpModelPicker({
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           Model
+          {connecting && !errorMessage && (
+            <span className="ml-1 font-normal normal-case tracking-normal">· Connecting…</span>
+          )}
+          {stale && !connecting && !errorMessage && (
+            <span className="ml-1 font-normal normal-case tracking-normal">· Cached</span>
+          )}
         </div>
         {selectedEntry?.status !== 'ready' ? (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
@@ -1075,6 +1136,22 @@ function AcpModelPicker({
                 : selectedEntry?.status === 'manual-install'
                   ? 'Install this agent manually before loading model options.'
                   : 'This ACP agent is not available on this platform.'}
+          </div>
+        ) : errorMessage ? (
+          <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
+            <div>
+              <div className="font-medium text-foreground/85">Could not load model options.</div>
+              <div className="mt-1 line-clamp-3 break-words">{errorMessage}</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
           </div>
         ) : modelOption ? (
           <>
@@ -1122,22 +1199,6 @@ function AcpModelPicker({
               )}
             </div>
           </>
-        ) : errorMessage ? (
-          <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
-            <div>
-              <div className="font-medium text-foreground/85">Could not load model options.</div>
-              <div className="mt-1 line-clamp-3 break-words">{errorMessage}</div>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={onRetry}
-            >
-              Retry
-            </Button>
-          </div>
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {loading

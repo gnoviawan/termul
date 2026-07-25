@@ -103,6 +103,17 @@ export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 export type MessageRole = 'user' | 'agent' | 'thought'
 
+/**
+ * Last-known model/mode/config options for an agent config id (in-memory only).
+ * Used as stale-while-revalidate paint while `prepareChat` / `session/new` catch up.
+ */
+export interface AgentOptionsCacheEntry {
+  models: SessionModelState | null
+  modes: SessionModeState | null
+  configOptions: SessionConfigOption[]
+  updatedAt: number
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
@@ -187,6 +198,12 @@ interface AcpState {
   preparingChatKeys: Record<string, true>
   /** Last background prepare error keyed by prepare key. */
   prepareChatErrors: Record<string, string>
+  /**
+   * In-memory last-known models/modes/configOptions keyed by agent config id.
+   * Invalidated only when cmd/args/env (identity) change — not on launcher close
+   * or cwd-only navigation.
+   */
+  agentOptionsCache: Record<string, AgentOptionsCacheEntry>
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
@@ -871,6 +888,133 @@ export function prepareChatKey(
 /** In-flight `session/new` for a prepare key. */
 const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
 
+/** Test-only: clear module-level prepare dedupe maps between tests. */
+export function _resetInFlightPreparedForTesting(): void {
+  inFlightPrepared.clear()
+}
+
+/**
+ * Identity fingerprint for options-cache invalidation: cmd / args / env /
+ * allowTerminal (path and install identity are reflected in `command` + `args`).
+ * Env keys are sorted so insertion-order differences do not spuriously invalidate.
+ */
+export function agentConfigIdentityKey(
+  config: Pick<StoredAgentConfig, 'command' | 'args' | 'env' | 'allowTerminal'>
+): string {
+  const envKeys = Object.keys(config.env).sort()
+  const env: Record<string, string> = {}
+  for (const key of envKeys) {
+    env[key] = config.env[key]
+  }
+  return JSON.stringify({
+    command: config.command,
+    args: config.args,
+    env,
+    allowTerminal: Boolean(config.allowTerminal)
+  })
+}
+
+export function agentConfigIdentityChanged(
+  prev: StoredAgentConfig | undefined,
+  next: StoredAgentConfig
+): boolean {
+  if (!prev) return false
+  return agentConfigIdentityKey(prev) !== agentConfigIdentityKey(next)
+}
+
+type AcpSet = (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+type AcpGet = () => AcpState
+
+function configIdForAgentId(state: AcpState, agentId: AgentId): string | null {
+  for (const [key, id] of Object.entries(state.configToLiveAgent)) {
+    if (id === agentId) return configIdFromReuseKey(key)
+  }
+  return null
+}
+
+function writeAgentOptionsCache(
+  set: AcpSet,
+  configId: string,
+  patch: {
+    models?: SessionModelState | null
+    modes?: SessionModeState | null
+    configOptions?: SessionConfigOption[]
+  }
+): void {
+  set((s) => {
+    const prev = s.agentOptionsCache[configId]
+    const next: AgentOptionsCacheEntry = {
+      models: patch.models !== undefined ? patch.models : (prev?.models ?? null),
+      modes: patch.modes !== undefined ? patch.modes : (prev?.modes ?? null),
+      configOptions:
+        patch.configOptions !== undefined ? patch.configOptions : (prev?.configOptions ?? []),
+      updatedAt: Date.now()
+    }
+    // Avoid writing empty shells that would look like a real cache hit.
+    const hasContent =
+      next.models != null ||
+      next.modes != null ||
+      (next.configOptions != null && next.configOptions.length > 0)
+    if (!hasContent) {
+      if (!prev) return s
+      const agentOptionsCache = { ...s.agentOptionsCache }
+      delete agentOptionsCache[configId]
+      return { agentOptionsCache }
+    }
+    return {
+      agentOptionsCache: { ...s.agentOptionsCache, [configId]: next }
+    }
+  })
+}
+
+function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
+  set((s) => {
+    if (!(configId in s.agentOptionsCache)) return s
+    const agentOptionsCache = { ...s.agentOptionsCache }
+    delete agentOptionsCache[configId]
+    return { agentOptionsCache }
+  })
+}
+
+function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId): void {
+  const state = get()
+  const session = state.sessions[sessionId]
+  if (!session) return
+  const configId = configIdForAgentId(state, session.agentId)
+  if (!configId) return
+  writeAgentOptionsCache(set, configId, {
+    models: session.models ?? null,
+    modes: session.modes ?? null,
+    configOptions: session.configOptions ?? []
+  })
+}
+
+/** Best-effort tear-down for a session created by a cancelled/stale prepare. */
+function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
+  // createSession may have set activeSessionId as a side effect; that must not
+  // block reaping a session that never became a published preparedSessions entry.
+  set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
+  void get()
+    .closeSession(sessionId)
+    .catch(() => {
+      /* best-effort: backend may already be gone */
+    })
+    .finally(() => {
+      void get().deleteHistorySession(sessionId)
+    })
+}
+
+/** True when cache has model-relevant content (native models or model config option). */
+export function hasModelRelevantOptionsCache(
+  entry: AgentOptionsCacheEntry | null | undefined
+): boolean {
+  if (!entry) return false
+  if (entry.models && entry.models.availableModels.length > 0) return true
+  return entry.configOptions.some(
+    (option) => option.category === 'model' && option.options.length > 0
+  )
+}
+
 /**
  * In-flight `openHistorySession` calls keyed by session id, so the sidebar
  * click and the restored-tab rehydrate (which can race at startup) coalesce
@@ -968,6 +1112,8 @@ function cancelPreparedChatEntry(
   key: string,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
 ): void {
+  // Drop the in-flight promise identity so a stale task cannot write results
+  // or clear a newer prepare's preparingChatKeys in `finally`.
   inFlightPrepared.delete(key)
   set((s) => {
     if (
@@ -1296,6 +1442,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   preparedSessions: {},
   preparingChatKeys: {},
   prepareChatErrors: {},
+  agentOptionsCache: {},
   sessionIndex: [],
   openingHistoryIds: {},
   discoveredSessions: {},
@@ -1405,6 +1552,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // mirror to disk (index + payload)
     const st = get()
     persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
+    const configId = configIdForAgentId(get(), agentId)
+    if (configId) {
+      writeAgentOptionsCache(set, configId, {
+        models: outcome.models ?? null,
+        modes: outcome.modes ?? null,
+        configOptions: outcome.configOptions ?? []
+      })
+    }
     return sessionId
   },
 
@@ -1458,6 +1613,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   saveAgentConfig: async (config) => {
     const list = get().agentConfigs
     const idx = list.findIndex((c) => c.id === config.id)
+    const prev = idx === -1 ? undefined : list[idx]
     const next = idx === -1 ? [...list, config] : list.map((c) => (c.id === config.id ? config : c))
     set({ agentConfigs: next })
     try {
@@ -1466,6 +1622,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // roll back the in-memory change on persistence failure
       set({ agentConfigs: list })
       throw err
+    }
+    // Invalidate options cache only on identity-changing fields (cmd/args/env).
+    // Do not kill warm agents here — that remains deleteAgentConfig's job.
+    if (agentConfigIdentityChanged(prev, config)) {
+      invalidateAgentOptionsCache(set, config.id)
     }
   },
 
@@ -1521,6 +1682,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (configIdFromReuseKey(key) !== id) continue
       get().cancelPreparedChat(key)
     }
+    invalidateAgentOptionsCache(set, id)
   },
 
   prewarmAgent: async (configId, cwd) => {
@@ -1563,24 +1725,59 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })
 
-    const task = (async (): Promise<SessionId | null> => {
+    // Register the promise before any await so cancel/reopen can replace it
+    // atomically and stale tasks can detect they are no longer current.
+    let settle!: (value: SessionId | null) => void
+    const task = new Promise<SessionId | null>((resolve) => {
+      settle = resolve
+    })
+    inFlightPrepared.set(key, task)
+
+    void (async (): Promise<void> => {
       try {
         const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
-        if (!agentId) return null
-        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId)
-        if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
-          return null
+        if (inFlightPrepared.get(key) !== task) {
+          settle(null)
+          return
         }
-        if (!inFlightPrepared.has(key)) {
-          return null
+        if (!agentId) {
+          if (inFlightPrepared.get(key) === task) {
+            const config = get().agentConfigs.find((c) => c.id === configId)
+            const message = formatAcpSpawnError(
+              new Error(`failed to spawn agent for config ${configId}`),
+              config
+            )
+            set((s) => ({
+              prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
+            }))
+            toast.error(message)
+          }
+          settle(null)
+          return
+        }
+        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId)
+        // Task-identity guard: cancel deletes the map entry; a newer prepare
+        // replaces it. Either way the stale task must not write results.
+        if (inFlightPrepared.get(key) !== task) {
+          reapOrphanPreparedSession(get, set, sessionId)
+          settle(null)
+          return
+        }
+        if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
+          reapOrphanPreparedSession(get, set, sessionId)
+          settle(null)
+          return
         }
         set((s) => ({
           preparedSessions: { ...s.preparedSessions, [key]: sessionId }
         }))
-        return sessionId
+        // createSession already wrote the options cache when possible; refresh
+        // from the live session in case events enriched modes/models.
+        cacheOptionsFromSession(set, get, sessionId)
+        settle(sessionId)
       } catch (err) {
         console.warn('[acp] prepareChat failed', configId, err)
-        if (inFlightPrepared.has(key)) {
+        if (inFlightPrepared.get(key) === task) {
           const config = get().agentConfigs.find((c) => c.id === configId)
           const message = formatAcpSpawnError(err, config)
           set((s) => ({
@@ -1588,17 +1785,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }))
           toast.error(message)
         }
-        return null
+        settle(null)
       } finally {
-        inFlightPrepared.delete(key)
-        set((s) => {
-          const preparingChatKeys = { ...s.preparingChatKeys }
-          delete preparingChatKeys[key]
-          return { preparingChatKeys }
-        })
+        // Only this task may clear preparing / in-flight state.
+        if (inFlightPrepared.get(key) === task) {
+          inFlightPrepared.delete(key)
+          set((s) => {
+            const preparingChatKeys = { ...s.preparingChatKeys }
+            delete preparingChatKeys[key]
+            return { preparingChatKeys }
+          })
+        }
       }
     })()
-    inFlightPrepared.set(key, task)
   },
 
   testConnection: async (config) => {
@@ -1656,18 +1855,22 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) throw new Error(`unknown agent config ${configId}`)
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
-    const prepared = get().preparedSessions[key]
-    if (prepared) {
-      cancelPreparedChatEntry(key, set)
-      return prepared
-    }
-    const inFlight = inFlightPrepared.get(key)
-    if (inFlight) {
+    // Loop so a cancelled in-flight prepare that returns null can pick up a
+    // newer prepare that started during the await (cancel+reopen race).
+    for (;;) {
+      const prepared = get().preparedSessions[key]
+      if (prepared) {
+        cancelPreparedChatEntry(key, set)
+        return prepared
+      }
+      const inFlight = inFlightPrepared.get(key)
+      if (!inFlight) break
       const sessionId = await inFlight
       if (sessionId) {
         cancelPreparedChatEntry(key, set)
         return sessionId
       }
+      // null: cancelled or failed — re-check for a newer prepare before spawning.
     }
     const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
     if (!agentId) throw new Error(`failed to spawn agent for config ${configId}`)
@@ -2009,6 +2212,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => ({
       sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
     }))
+    const agentConfigId = configIdForAgentId(get(), session.agentId)
+    if (agentConfigId) {
+      writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
+    }
   },
 
   setMode: async (sessionId, modeId) => {
@@ -2028,6 +2235,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    cacheOptionsFromSession(set, get, sessionId)
   },
 
   setModel: async (sessionId, modelId) => {
@@ -2047,6 +2255,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    cacheOptionsFromSession(set, get, sessionId)
   },
 
   respondPermission: async (requestId, optionId) => {
@@ -2079,7 +2288,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })),
 
-  _onSessionCreated: (e) =>
+  _onSessionCreated: (e) => {
     set((s) => {
       if (s.sessions[e.sessionId]) {
         // already created via createSession(); enrich with capability data
@@ -2117,7 +2326,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         },
         messages: { ...s.messages, [e.sessionId]: s.messages[e.sessionId] ?? [] }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
 
   _onMessageChunk: (e) =>
     set((s) => {
@@ -2229,7 +2440,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onCommandsUpdate: (e) =>
     set((s) => ({ commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } })),
 
-  _onModeUpdate: (e) =>
+  _onModeUpdate: (e) => {
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -2246,16 +2457,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
         }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
 
-  _onConfigOptionsUpdate: (e) =>
+  _onConfigOptionsUpdate: (e) => {
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
       return {
         sessions: { ...s.sessions, [e.sessionId]: { ...session, configOptions: e.configOptions } }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
 
   _onSessionInfoUpdate: (e) => {
     // `title` is `undefined` when the field is absent (no change), `null` when
