@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { CheckCircle2, Circle, ListChecks, Loader2 } from 'lucide-react'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import { CHAT_GUTTER_X } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
 interface PlanPanelProps {
@@ -56,7 +57,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
           transition={reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT}
           className="shrink-0"
         >
-          <div className="px-5 py-2">
+          <div className={cn(CHAT_GUTTER_X, 'py-2')}>
             <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50">
               <div className="flex items-center gap-1.5 px-3 py-2 text-2xs font-semibold text-muted-foreground">
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />

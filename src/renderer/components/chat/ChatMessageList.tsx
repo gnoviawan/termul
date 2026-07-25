@@ -11,8 +11,10 @@ import {
 } from '@/components/ui/message-scroller'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import type { AgentId, SessionId } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
+import { CHAT_GUTTER_X } from './chat-layout'
 import { agentTurnMeta, type TimelineItem } from './chat-timeline'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
@@ -114,7 +116,7 @@ export function ChatMessageList({
       <MessageScrollerProvider autoScroll>
         <ItemCountReporter count={items.length} />
         <MessageScroller>
-          <MessageScrollerViewport className="px-5 py-4">
+          <MessageScrollerViewport className={cn(CHAT_GUTTER_X, 'py-4')}>
             <MessageScrollerContent className="mx-auto w-full max-w-3xl">
               {items.map((it, i) => (
                 <MessageScrollerItem

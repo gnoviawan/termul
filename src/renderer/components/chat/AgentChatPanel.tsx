@@ -264,7 +264,7 @@ export function AgentChatPanel({
     session.lastError && session.lastError !== dismissedError ? session.lastError : null
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="@container flex h-full flex-col bg-background">
       {(isLaunchingSession ||
         (session.status === 'initializing' && !session.agentId) ||
         (isLaunchingSession && session.activeTurn)) && (

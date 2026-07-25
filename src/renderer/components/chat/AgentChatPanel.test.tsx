@@ -95,6 +95,13 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
+  it('marks the live chat pane root as a pane-scoped @container (Story 5.1)', () => {
+    seedLiveSession('s1')
+    const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(container.firstElementChild?.className).toContain('@container')
+    expect(container.firstElementChild?.className).toMatch(/flex h-full flex-col/)
+  })
+
   it('does not rehydrate a hidden tab (no background cold spawns)', () => {
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible={false} />)

@@ -4,6 +4,8 @@ import {
   planSupportHintMessage,
   shouldShowPlanSupportHint
 } from '@/lib/agents/acp-plan-compliance'
+import { cn } from '@/lib/utils'
+import { CHAT_GUTTER_X } from './chat-layout'
 
 interface PlanSupportHintProps {
   agentId: string
@@ -21,7 +23,7 @@ export function PlanSupportHint({
   if (!message) return null
 
   return (
-    <div className="shrink-0 border-b border-border/40 bg-muted/20 px-5 py-2">
+    <div className={cn('shrink-0 border-b border-border/40 bg-muted/20 py-2', CHAT_GUTTER_X)}>
       <div className="mx-auto flex w-full max-w-3xl items-start gap-2 text-xs text-muted-foreground">
         <Info size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
         <p className="text-pretty">{message}</p>

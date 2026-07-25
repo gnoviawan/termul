@@ -37,6 +37,7 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
+import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
 import { LoadedSkillChip } from './LoadedSkillChip'
@@ -156,6 +157,8 @@ export function ChatInputBar({
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  const rootRef = useRef<HTMLDivElement>(null)
+  const toolbarMode = useComposerToolbarMode(rootRef)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<SlashMenuHandle>(null)
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
@@ -372,8 +375,48 @@ export function ChatInputBar({
     })
   }, [seedNonce, updateMentions, clampHeight])
 
+  const modelChip = modelOption ? (
+    <ConfigChip
+      key={modelOption.id}
+      option={modelOption}
+      disabled={disabled}
+      searchable
+      maxVisibleOptions={5}
+      onSelect={(valueId) =>
+        modelSource === 'models' ? onSetModel(valueId) : onSetConfig(modelOption.id, valueId)
+      }
+    />
+  ) : null
+
+  const thoughtChip = thoughtLevel ? (
+    <ConfigChip
+      key={thoughtLevel.id}
+      option={thoughtLevel}
+      disabled={disabled}
+      promoted
+      onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
+    />
+  ) : null
+
+  const genericChips = hasConfigOptions
+    ? visibleGenericConfigOptions.map((option) => (
+        <ConfigChip
+          key={option.id}
+          option={option}
+          disabled={disabled}
+          onSelect={(valueId) => onSetConfig(option.id, valueId)}
+        />
+      ))
+    : null
+
+  const agentModeChip = (
+    <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
+  )
+
+  const mcpBadge = <McpBadge count={mcpCount} />
+
   return (
-    <div className="px-5 pb-3.5 pt-3">
+    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-3.5 pt-3')}>
       <div className="relative mx-auto w-full max-w-3xl">
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />
@@ -452,52 +495,54 @@ export function ChatInputBar({
                 )}
               />
             </div>
-            <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                {modelOption && (
-                  <ConfigChip
-                    key={modelOption.id}
-                    option={modelOption}
-                    disabled={disabled}
-                    searchable
-                    maxVisibleOptions={5}
-                    onSelect={(valueId) =>
-                      modelSource === 'models'
-                        ? onSetModel(valueId)
-                        : onSetConfig(modelOption.id, valueId)
-                    }
-                  />
+            <div
+              className="flex items-stretch justify-between gap-3 px-2.5 pb-2.5"
+              data-composer-toolbar={toolbarMode}
+            >
+              {toolbarMode === 'narrow' ? (
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <div
+                    className="flex min-w-0 flex-wrap items-center gap-2"
+                    data-composer-toolbar-row="1"
+                  >
+                    {agentModeChip}
+                    {modelChip}
+                  </div>
+                  <div
+                    className="flex min-w-0 flex-wrap items-center gap-2"
+                    data-composer-toolbar-row="2"
+                  >
+                    {hasConfigOptions ? (
+                      <>
+                        {thoughtChip}
+                        {genericChips}
+                      </>
+                    ) : null}
+                    {mcpBadge}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="flex min-w-0 flex-wrap items-center gap-2"
+                  data-composer-toolbar-row="single"
+                >
+                  {modelChip}
+                  {hasConfigOptions ? (
+                    <>
+                      {thoughtChip}
+                      {genericChips}
+                    </>
+                  ) : null}
+                  {agentModeChip}
+                  {mcpBadge}
+                </div>
+              )}
+              <div
+                className={cn(
+                  'flex shrink-0 items-center gap-2',
+                  toolbarMode === 'narrow' && 'self-end'
                 )}
-                {hasConfigOptions ? (
-                  <>
-                    {thoughtLevel && (
-                      <ConfigChip
-                        key={thoughtLevel.id}
-                        option={thoughtLevel}
-                        disabled={disabled}
-                        promoted
-                        onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
-                      />
-                    )}
-                    {visibleGenericConfigOptions.map((option) => (
-                      <ConfigChip
-                        key={option.id}
-                        option={option}
-                        disabled={disabled}
-                        onSelect={(valueId) => onSetConfig(option.id, valueId)}
-                      />
-                    ))}
-                  </>
-                ) : null}
-                <ModeChip
-                  session={session}
-                  disabled={disabled}
-                  onSelect={onSetMode}
-                  label="Agent"
-                />
-                <McpBadge count={mcpCount} />
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
+              >
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
                 <div className="relative size-[34px] shrink-0 overflow-visible">

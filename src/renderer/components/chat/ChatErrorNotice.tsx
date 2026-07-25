@@ -1,5 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { CHAT_GUTTER_X } from './chat-layout'
 
 interface ChatErrorNoticeProps {
   /** Error text to show, or null/empty to hide. */
@@ -26,7 +28,9 @@ export function ChatErrorNotice({
           transition={{ duration: 0.18, ease: 'easeOut' }}
           className="overflow-hidden border-b border-destructive/30 bg-destructive/10"
         >
-          <div className="mx-auto flex w-full max-w-3xl items-start gap-2 px-5 py-2">
+          <div
+            className={cn('mx-auto flex w-full max-w-3xl items-start gap-2 py-2', CHAT_GUTTER_X)}
+          >
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
             <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-2xs text-destructive">
               {message}
