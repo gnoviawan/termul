@@ -2,7 +2,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AcpSession } from '@/stores/acp-store'
 
-const { mockOpen, sessionRef, indexRef, openingRef, launchingRef } = vi.hoisted(() => ({
+const {
+  mockOpen,
+  sessionRef,
+  indexRef,
+  openingRef,
+  launchingRef,
+  oskRef,
+  transportReconnectingRef
+} = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   // AcpSession shape; typed loosely here because vi.hoisted runs before the
   // type-only import below is usable at runtime. `seedLiveSession` constructs
@@ -10,7 +18,10 @@ const { mockOpen, sessionRef, indexRef, openingRef, launchingRef } = vi.hoisted(
   sessionRef: { current: null as object | null },
   indexRef: { current: [] as Array<{ id: string }> },
   openingRef: { current: {} as Record<string, true> },
-  launchingRef: { current: {} as Record<string, true> }
+  launchingRef: { current: {} as Record<string, true> },
+  // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
+  oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
+  transportReconnectingRef: { current: false }
 }))
 
 vi.mock('@/stores/acp-store', () => {
@@ -25,6 +36,7 @@ vi.mock('@/stores/acp-store', () => {
     sessionIndex: indexRef.current,
     openingHistoryIds: openingRef.current,
     launchingSessionIds: launchingRef.current,
+    transportReconnecting: transportReconnectingRef.current,
     openHistorySession: mockOpen,
     sendPrompt: vi.fn(),
     sendPromptBlocks: vi.fn(),
@@ -43,6 +55,15 @@ vi.mock('@/stores/acp-store', () => {
     configIdFromReuseKey: (key: string) => key
   }
 })
+
+// Story 5.3 (AC1): mock the OSK + mobile shell hooks so we can drive
+// `isOskOpen` / `keyboardHeight` from the test seam.
+vi.mock('@/hooks/use-osk-viewport', () => ({
+  useOskViewport: () => oskRef.current
+}))
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => true
+}))
 
 vi.mock('./PlanSupportHint', () => ({ PlanSupportHint: () => null }))
 
@@ -85,6 +106,8 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     indexRef.current = []
     openingRef.current = {}
     launchingRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    transportReconnectingRef.current = false
   })
 
   it('rehydrates a visible restored tab from persisted history', () => {
@@ -152,5 +175,65 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     render(<AgentChatPanel sessionId="s1" isVisible />)
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
     expect(mockOpen).toHaveBeenCalledWith('s1')
+  })
+})
+
+// Story 5.3 (AC1, AC3, AC4) — OSK spacer + reconnect overlay.
+describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    launchingRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    transportReconnectingRef.current = false
+  })
+
+  it('applies OSK bottom padding when the OSK is open on mobile (AC1)', () => {
+    seedLiveSession('s1')
+    oskRef.current = { isOskOpen: true, keyboardHeight: 300, height: 500, offsetTop: 300 }
+    const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.paddingBottom).toContain('300px')
+  })
+
+  it('does not apply OSK padding when the OSK is closed (desktop non-regression)', () => {
+    seedLiveSession('s1')
+    const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.paddingBottom).toBe('')
+  })
+
+  it('renders the transport reconnect overlay when transportReconnecting is true (AC3)', () => {
+    seedLiveSession('s1')
+    transportReconnectingRef.current = true
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    // The overlay reuses AgentConnectionLamp (amber) and shows "Reconnecting…"
+    expect(screen.getByText(/Reconnecting/)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+
+  it('does not render the transport reconnect overlay when transportReconnecting is false (AC3)', () => {
+    seedLiveSession('s1')
+    transportReconnectingRef.current = false
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    // The transport-level overlay must be absent. (The session-level
+    // "Reconnecting to agent…" banner is also absent because the session
+    // isn't closed + reopening.)
+    expect(screen.queryByText(/^Reconnecting$/)).toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('the reconnect overlay container is pointer-events-none (non-blocking, AC3)', () => {
+    seedLiveSession('s1')
+    transportReconnectingRef.current = true
+    const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    // The overlay chip lives at top-right; it must not block clicks on
+    // already-rendered messages.
+    const status = screen.getByRole('status')
+    const overlay = status.closest('[class*="pointer-events-none"]')
+    expect(overlay).not.toBeNull()
+    void container
   })
 })

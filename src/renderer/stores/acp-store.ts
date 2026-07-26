@@ -85,6 +85,11 @@ import {
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
+// Story 5.3 (AC3): used to register the WS reconnect listener that flips the
+// store's `transportReconnecting` flag. `getAcpTransport` returns the
+// process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
+// only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
+import { getAcpTransport } from '@/lib/acp-transport'
 import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import {
@@ -248,6 +253,16 @@ interface AcpState {
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
   suppressQueueFlush: Record<SessionId, true>
+
+  /**
+   * Story 5.3 (AC3): WS transport-level reconnect flag. True while the WS
+   * transport is reconnecting (drop detected, backoff in flight). Drives the
+   * non-blocking `AgentConnectionLamp` overlay in `AgentChatPanel`. Stays
+   * `false` on Tauri desktop (no WS transport) and on the initial connect.
+   * Distinct from the session-level `isClosed && isOpeningHistory` banner
+   * (which fires when `openHistorySession` is in flight — both can show).
+   */
+  transportReconnecting: boolean
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
@@ -1648,6 +1663,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   pendingPermissions: {},
   promptQueues: {},
   suppressQueueFlush: {},
+  transportReconnecting: false,
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -3358,6 +3374,19 @@ export function initAcpEventListeners(): () => void {
     }
   }
   listenersInitialized = true
+  // Story 5.3 (AC3): register the WS reconnect listener so the store's
+  // `transportReconnecting` flag flips when the WS transport drops/reconnects.
+  // The flag drives the non-blocking `AgentConnectionLamp` overlay in
+  // `AgentChatPanel`. On Tauri desktop, the transport is IPC-based (no
+  // `setReconnectListener` method), so this is a no-op there — the flag stays
+  // `false`. The listener is idempotent: re-registration overwrites the
+  // previous callback.
+  const transport = getAcpTransport()
+  if (typeof transport.setReconnectListener === 'function') {
+    transport.setReconnectListener((reconnecting) => {
+      useAcpStore.setState({ transportReconnecting: reconnecting })
+    })
+  }
   teardown = [
     acpApi.onEvent<AgentSpawnedEvent>(ACP_EVENTS.agentSpawned, (e) =>
       useAcpStore.getState()._onAgentSpawned(e)

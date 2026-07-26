@@ -79,7 +79,8 @@ const FRESH = {
   commands: {},
   pendingPermissions: {},
   promptQueues: {},
-  suppressQueueFlush: {}
+  suppressQueueFlush: {},
+  transportReconnecting: false
 }
 
 /**
@@ -2807,6 +2808,24 @@ describe('acp-store', () => {
       cwd: '/work',
       mcpServers: servers
     })
+  })
+
+  // Story 5.3 (AC3): transportReconnecting flag is additive state — verify
+  // it starts false and can be flipped via setState (the store init wires the
+  // WS transport listener to call setState; here we just verify the state
+  // shape and the setter contract, not the listener wiring which needs the
+  // real WsAcpTransport — covered in acp-transport.test.ts).
+  it('initializes transportReconnecting to false', () => {
+    expect(useAcpStore.getState().transportReconnecting).toBe(false)
+  })
+
+  it('flips transportReconnecting true/false via setState (additive, no AgentStatus change)', () => {
+    useAcpStore.setState({ transportReconnecting: true })
+    expect(useAcpStore.getState().transportReconnecting).toBe(true)
+    // AgentStatus enum is unchanged — transportReconnecting is a separate flag.
+    expect(useAcpStore.getState().agentStatus).toEqual({})
+    useAcpStore.setState({ transportReconnecting: false })
+    expect(useAcpStore.getState().transportReconnecting).toBe(false)
   })
 })
 

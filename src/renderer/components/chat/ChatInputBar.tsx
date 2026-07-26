@@ -17,6 +17,8 @@ import {
   useAgentSkills
 } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type {
   AvailableCommand,
   ContentBlock,
@@ -145,6 +147,14 @@ export function ChatInputBar({
   const [dragActive, setDragActive] = useState(false)
   const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
+  // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
+  // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
+  const osk = useOskViewport()
+  const isMobileShell = useMobileWebShell()
+  // Guard against focus-loop thrash: only scroll the textarea into view once
+  // per OSK-open window (the OSK can re-focus the textarea as it animates;
+  // repeated `scrollIntoView` calls would fight the user's manual scroll).
+  const lastOskFocusRef = useRef<number>(0)
   const {
     attachments,
     addFiles,
@@ -477,8 +487,34 @@ export function ChatInputBar({
                 onKeyUp={onKeyUp}
                 onSelect={onSelect}
                 onPaste={handlePaste}
-                onFocus={() => setFocused(true)}
+                // Story 5.3 (T2.3): on mobile web when the OSK is open, scroll
+                // the textarea into view once per OSK-open window so iOS Safari
+                // doesn't leave the input under the keyboard. rAF-deferred to
+                // let layout settle. Guarded against focus-loop thrash (the OSK
+                // can re-focus the textarea as it animates; only the first
+                // focus per OSK-open window triggers the scroll).
+                onFocus={() => {
+                  setFocused(true)
+                  if (isMobileShell && osk.isOskOpen) {
+                    const now = Date.now()
+                    // Only re-scroll if >800ms since the last OSK-open focus
+                    // (an OSK-open window typically lasts seconds; back-to-back
+                    // focuses within 800ms are animation-driven re-focuses).
+                    if (now - lastOskFocusRef.current > 800) {
+                      lastOskFocusRef.current = now
+                      const el = textareaRef.current
+                      if (el) {
+                        requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
+                      }
+                    }
+                  }
+                }}
                 onBlur={() => setFocused(false)}
+                // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
+                // Do NOT change Enter keyboard semantics — handleKeyDown still
+                // routes Enter→send only when the slash menu is closed.
+                inputMode="text"
+                enterKeyHint="send"
                 disabled={disabled || sending}
                 rows={1}
                 placeholder={

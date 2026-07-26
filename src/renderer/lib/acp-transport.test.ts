@@ -696,6 +696,94 @@ describe('WsAcpTransport', () => {
   })
 })
 
+// Story 5.3 (AC3, T6) — transport-level reconnect listener.
+// Verifies the `setReconnectListener` callback fires `true` on
+// `scheduleReconnect` (WS drop) and `false` on `reconnect` success.
+describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('fires onReconnectStateChange(true) when the socket closes (drop detected)', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const states: boolean[] = []
+    transport.setReconnectListener((reconnecting) => states.push(reconnecting))
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+
+    // `scheduleReconnect` runs synchronously inside `ws.onclose` — the
+    // listener should fire `true` immediately.
+    expect(states).toContain(true)
+
+    // Cleanup: clear the reconnect timer so it doesn't fire after the test.
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it('fires onReconnectStateChange(false) after a successful reconnect', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const states: boolean[] = []
+    transport.setReconnectListener((reconnecting) => states.push(reconnecting))
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+    // Drop detected → true
+    expect(states[0]).toBe(true)
+
+    // Advance past the reconnect backoff (RECONNECT_BASE_MS=500, first
+    // attempt: 500ms). The `reconnect()` method re-opens the socket and
+    // re-subscribes sessions; on success it fires `false`.
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve() // flush microtasks (reconnect's await chain)
+
+    // Reconnect succeeded → false fired. The FakeWebSocket auto-opens on
+    // construction, so `connect()` resolves immediately.
+    expect(states).toContain(false)
+    expect(states[states.length - 1]).toBe(false)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it('does not fire the listener on the initial connect()', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: boolean[] = []
+    transport.setReconnectListener((reconnecting) => states.push(reconnecting))
+    await transport.connect()
+    // Initial connect must NOT fire the listener — only reconnect transitions.
+    expect(states).toEqual([])
+    transport.dispose()
+  })
+})
+
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)

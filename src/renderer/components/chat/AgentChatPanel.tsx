@@ -1,8 +1,10 @@
 import { Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { Button } from '@/components/ui/button'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   configIdFromReuseKey,
@@ -11,6 +13,7 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -88,6 +91,41 @@ export function AgentChatPanel({
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
+  // Story 5.3 (AC3): WS transport-level reconnect flag (separate from the
+  // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
+  // uses the WS transport, so this stays `false` there.
+  const transportReconnecting = useAcpStore((s) => s.transportReconnecting)
+
+  // Story 5.3 (AC1): OSK awareness on mobile web. On Tauri desktop, the hook
+  // returns a no-OSK default and `useMobileWebShell()` is always false — the
+  // spacer and scroll-into-view are inert (desktop non-regression).
+  const osk = useOskViewport()
+  const isMobileShell = useMobileWebShell()
+  const showOskSpacer = isMobileShell && osk.isOskOpen && osk.keyboardHeight > 0
+  // Track closed→open OSK transitions so we can scroll the latest message
+  // into view exactly once per OSK-open window (T2.2).
+  const prevOskOpenRef = useRef(false)
+  useEffect(() => {
+    const wasOpen = prevOskOpenRef.current
+    prevOskOpenRef.current = osk.isOskOpen
+    if (!wasOpen && osk.isOskOpen && isMobileShell) {
+      // OSK just opened — scroll the latest message into view so the
+      // conversation timeline keeps the latest message visible above the OSK.
+      // We locate the inner MessageScrollerViewport (it has
+      // `data-slot="message-scroller-viewport"`) and scroll it to the bottom.
+      // The MessageScrollerProvider's auto-scroll already handles streaming;
+      // this handles the OSK-open transition case.
+      const root = rootRef.current
+      if (root) {
+        const scroller = root.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]')
+        if (scroller) {
+          requestAnimationFrame(() => {
+            scroller.scrollTop = scroller.scrollHeight
+          })
+        }
+      }
+    }
+  }, [osk.isOskOpen, isMobileShell])
 
   // Restored-tab rehydration: a persisted `agent-chat` tab can outlive its
   // in-memory session (app restart). When this panel is visible, its session
@@ -233,6 +271,12 @@ export function AgentChatPanel({
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
 
+  // Story 5.3 (T2.1): the AgentChatPanel root doubles as the OSK-aware
+  // container. We attach a ref so the OSK-open transition effect can locate
+  // the inner message-scroller viewport and scroll the latest message into
+  // view (T2.2).
+  const rootRef = useRef<HTMLDivElement>(null)
+
   if (!session) {
     if (rehydrateError) {
       return (
@@ -264,7 +308,23 @@ export function AgentChatPanel({
     session.lastError && session.lastError !== dismissedError ? session.lastError : null
 
   return (
-    <div className="@container flex h-full flex-col bg-background">
+    <div
+      ref={rootRef}
+      className="@container flex h-full flex-col bg-background"
+      // Story 5.3 (T2.1): apply OSK spacer as bottom padding so the sticky
+      // composer card stays visible above the on-screen keyboard. iOS Safari
+      // ignores `interactive-widget=resizes-content` (T3.1) — the layout
+      // viewport doesn't shrink, so we push the composer up manually. On
+      // Android Chrome 108+ with the meta, the layout viewport already
+      // shrinks; this spacer is a no-op (keyboardHeight mirrors visualViewport
+      // shrink, which is already accounted for by the shrunk h-full). The
+      // `showOskSpacer` gate ensures this only fires in the mobile web shell.
+      style={
+        showOskSpacer
+          ? { paddingBottom: `var(--termul-keyboard-height, ${osk.keyboardHeight}px)` }
+          : undefined
+      }
+    >
       {(isLaunchingSession ||
         (session.status === 'initializing' && !session.agentId) ||
         (isLaunchingSession && session.activeTurn)) && (
@@ -293,6 +353,23 @@ export function AgentChatPanel({
           >
             Reconnect
           </button>
+        </div>
+      )}
+      {transportReconnecting && (
+        // Story 5.3 (AC3, T5.3): transport-level reconnect overlay. This is
+        // DISTINCT from the session-level "Reconnecting to agent…" banner
+        // above (which fires when `openHistorySession` is in flight). Both can
+        // show simultaneously. The overlay is non-blocking (`pointer-events-none`
+        // on the container) so already-rendered messages remain interactive.
+        // Reuses `AgentConnectionLamp` (amber+pulse via the `reconnecting`
+        // prop) — no new indicator component (NFR9, AC3).
+        <div
+          className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <AgentConnectionLamp connected={false} reconnecting size={8} />
+          <span>Reconnecting…</span>
         </div>
       )}
       <ChatErrorNotice
