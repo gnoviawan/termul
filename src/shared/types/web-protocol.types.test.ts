@@ -50,7 +50,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('projects_changed')
   })
 
-  it('exports exactly 17 request types (16 acp_* prefix-dropped + subscribe)', () => {
+  it('exports exactly 17 request types (14 acp_* prefix-dropped + authenticate + switch_project + subscribe)', () => {
     expect(WS_REQUEST_TYPES).toHaveLength(17)
     const expected = [
       'send_prompt',
