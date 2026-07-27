@@ -81,6 +81,7 @@ VERIFICATION_CHECKLIST.md
 .github/copilot-instructions.md
 /.pi
 /.pi-lens
+/.pi-subagents
 /.agents
 .pi-automator-active
 
