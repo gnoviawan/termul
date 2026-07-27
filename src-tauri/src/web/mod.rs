@@ -123,7 +123,12 @@ pub async fn serve_router(
         );
     }
 
-    let app = router::router(Arc::clone(&acp), Arc::clone(&ws_relay), Arc::clone(&registry));
+    let app = router::router(
+        Arc::clone(&acp),
+        Arc::clone(&ws_relay),
+        Arc::clone(&registry),
+        cfg.project_root.clone(),
+    );
 
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so

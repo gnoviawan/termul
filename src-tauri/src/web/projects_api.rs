@@ -71,6 +71,7 @@ mod tests {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
             registry,
+            project_root: Arc::new(std::path::PathBuf::new()),
         }
     }
 

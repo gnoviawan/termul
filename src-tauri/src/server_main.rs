@@ -80,11 +80,12 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH]\n\n\
      Options:\n\
        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
        --port PORT                 Bind port (default: 8080)\n\
        --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
+       --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
        -h, --help                  Show this help"
 }

@@ -279,6 +279,12 @@ pub struct AppState {
     /// In-memory, renderer-fed project registry — source for `GET /projects`
     /// + `switch_project` cwd resolution. Empty on the standalone path.
     pub registry: Arc<ProjectRegistry>,
+    /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
+    /// canonicalized target path resolves outside this root are refused with
+    /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
+    /// components). Resolved from `ServerConfig::project_root` at startup;
+    /// defaults to the user's home directory when unset.
+    pub project_root: Arc<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
