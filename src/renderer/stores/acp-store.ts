@@ -1676,8 +1676,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
         agentStatus[agentId] = 'connected'
+        // The backend emits `acp:agent_spawned` (carrying capabilities) BEFORE
+        // `acp_spawn_agent` returns, so `_onAgentSpawned` has usually already
+        // recorded them by the time this runs. Preserve that entry instead of
+        // resetting it to null: a clobbered `capabilities` makes the
+        // `openHistorySession` capability wait park on a `subscribe` that never
+        // fires again (the event is gone), time out, and fall back to read-only
+        // 'local' — which is why reopened chats could not be continued.
+        const existing = s.agents[agentId]
         return {
-          agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
+          agents: {
+            ...s.agents,
+            [agentId]: { id: agentId, capabilities: existing?.capabilities ?? null }
+          },
           agentStatus
         }
       })

@@ -2319,6 +2319,31 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
   })
 
+  it('spawnAgent keeps capabilities delivered by acp:agent_spawned during its own await', async () => {
+    // Real backend ordering: `acp:agent_spawned` (carrying capabilities) is
+    // emitted BEFORE `acp_spawn_agent` returns, so `_onAgentSpawned` runs while
+    // `spawnAgent` is still awaiting. Resetting the entry to
+    // `capabilities: null` here stranded `openHistorySession` in a capability
+    // wait whose event had already fired -> 3s timeout -> read-only 'local'.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        useAcpStore
+          .getState()
+          ._onAgentSpawned({ agentId: 'agent-caps', capabilities: { loadSession: true } })
+        return 'agent-caps'
+      }
+      throw new Error(`unexpected invoke command in spawn-capabilities test: ${cmd}`)
+    })
+
+    await useAcpStore.getState().spawnAgent({ name: 'Caps', command: 'caps', args: [], env: {} })
+
+    expect(useAcpStore.getState().agents['agent-caps']?.capabilities).toEqual({
+      loadSession: true
+    })
+    expect(useAcpStore.getState().agentStatus['agent-caps']).toBe('connected')
+    vi.mocked(invoke).mockReset()
+  })
+
   it('openHistorySession waits for spawned-agent capabilities before resuming', async () => {
     // No prewarmed agent for cfg-spawn+/w -> ensureLiveAgent spawns one. Its
     // capabilities arrive asynchronously via _onAgentSpawned; the session must
