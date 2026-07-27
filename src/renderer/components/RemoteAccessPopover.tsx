@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
-import { openerApi, remoteServerApi } from '@/lib/api'
+import { toProjectSummaries } from '@/hooks/use-projects-persistence'
+import { openerApi, remoteServerApi, syncProjects } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 import { REMOTE_BIND_MODE_OPTIONS, type RemoteBindMode } from '@/types/settings'
 
@@ -35,6 +37,14 @@ export function RemoteAccessPopover(): React.JSX.Element {
         : await remoteServerApi.stop()
       if (result.success) {
         useRemoteStatusStore.getState().setStatus(result.data)
+        // Epic-4 bridge: seed the in-memory project registry so the web/remote
+        // client sees the desktop's project list immediately (the live-push
+        // path in `useProjectsAutoSave` keeps it in sync on later mutations).
+        // No env-var values cross the wire — redact-by-omission.
+        if (enable) {
+          const { projects, activeProjectId } = useProjectStore.getState()
+          void syncProjects(toProjectSummaries(projects, activeProjectId), activeProjectId || null)
+        }
       } else {
         setRemoteError(result.error)
       }

@@ -15,6 +15,7 @@
  * sees a thrown exception from the network layer.
  */
 import type { DetectedShells, DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
+import type { ProjectListPayload } from '@shared/types/web-projects.types'
 import { isTauriContext } from './tauri-runtime'
 
 /**
@@ -123,5 +124,16 @@ export const webServerGit = {
 export const webServerShell = {
   async getAvailableShells(): Promise<IpcResult<DetectedShells>> {
     return getJson<DetectedShells>('/shells')
+  }
+}
+
+/**
+ * Project-list mirror routed to `termul-server` (`GET /projects`). Returns the
+ * desktop's non-archived + archived project summaries the renderer synced into
+ * the in-memory `ProjectRegistry` (Epic-4 bridge). Web/remote mode only.
+ */
+export const webServerProjects = {
+  async list(): Promise<IpcResult<ProjectListPayload>> {
+    return getJson<ProjectListPayload>('/projects')
   }
 }

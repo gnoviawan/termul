@@ -41,7 +41,8 @@
 /**
  * The 16 `acp:*` event names from `src-tauri/src/acp/events.rs` with the
  * `acp:` prefix dropped, plus the relay-level `auth_required` (not from
- * `events.rs`). 17 total.
+ * `events.rs`) and `projects_changed` (Epic-4 bridge — desktop project-list
+ * live push). 18 total.
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -66,7 +67,9 @@ export const WS_EVENT_TYPES = [
   'commands_update',
   'plan_update',
   // Relay-level (not from events.rs) (reliable)
-  'auth_required'
+  'auth_required',
+  // Desktop project-list live push (Epic-4 bridge — agent-level, seq 0)
+  'projects_changed'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -116,10 +119,11 @@ export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
 // ============================================================================
 
 /**
- * The 9 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The 10 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
- * `unsupported` (OS-cap rejection, AC8) and `not_implemented` (stub request
- * handlers, AC10).
+ * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
+ * handlers, AC10), and `no_agent` (switch_project with no live agent, Epic-4
+ * bridge).
  */
 export const WS_ERROR_CODES = {
   NOT_FOUND: 'not_found',
@@ -130,7 +134,9 @@ export const WS_ERROR_CODES = {
   STALE: 'stale',
   DUPLICATE: 'duplicate',
   UNSUPPORTED: 'unsupported',
-  NOT_IMPLEMENTED: 'not_implemented'
+  NOT_IMPLEMENTED: 'not_implemented',
+  // switch_project with no live agent on the connection (Epic-4 bridge).
+  NO_AGENT: 'no_agent'
 } as const
 
 /** Union of all WS error code strings. */
@@ -182,7 +188,8 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   session_info_update: WS_RELAY_TIERS.RELIABLE,
   usage_update: WS_RELAY_TIERS.RELIABLE,
   permission_request: WS_RELAY_TIERS.RELIABLE,
-  auth_required: WS_RELAY_TIERS.RELIABLE
+  auth_required: WS_RELAY_TIERS.RELIABLE,
+  projects_changed: WS_RELAY_TIERS.RELIABLE
 }
 
 /**

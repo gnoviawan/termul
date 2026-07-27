@@ -4,6 +4,7 @@ import type {
   RemoteServerApi,
   RemoteStatus
 } from '@shared/types/ipc.types'
+import type { ProjectSummary } from '@shared/types/web-projects.types'
 import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
@@ -56,4 +57,20 @@ export const remoteServerApi: RemoteServerApi = {
   async status(): Promise<IpcResult<RemoteStatus>> {
     return invokeIpc<RemoteStatus>(IPC_COMMANDS.STATUS)
   }
+}
+
+/**
+ * Push the desktop renderer's current project list into the in-memory
+ * `ProjectRegistry` (Epic-4 bridge) so the web/remote client can read it via
+ * `GET /projects`. No env-var values cross the wire — `ProjectSummary` redacts
+ * by omission. Call on server-start success + on every project-store mutation
+ * while the server runs (a no-op when the server is stopped just returns ok).
+ */
+export async function syncProjects(
+  projects: ProjectSummary[],
+  activeProjectId: string | null
+): Promise<IpcResult<void>> {
+  return invokeIpc<void>('remote_sync_projects', {
+    payload: { projects, activeProjectId }
+  })
 }

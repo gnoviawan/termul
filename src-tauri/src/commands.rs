@@ -2995,6 +2995,7 @@ pub async fn remote_server_start(
     acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     // Default to localhost only when the caller omits the bind mode; an
@@ -3010,7 +3011,12 @@ pub async fn remote_server_start(
         })?,
     };
     match remote_state
-        .start(acp_manager.inner().clone(), ws_relay.inner().clone(), bind_mode)
+        .start(
+            acp_manager.inner().clone(),
+            ws_relay.inner().clone(),
+            project_registry.inner().clone(),
+            bind_mode,
+        )
         .await
     {
         Ok(status) => Ok(IpcResult::success(status)),
@@ -3021,12 +3027,19 @@ pub async fn remote_server_start(
 /// Stop the desktop-hosted web server.
 ///
 /// Signals graceful shutdown to the serve task. The desktop's live agents are
-/// NOT killed — they survive a shared-live toggle-off.
+/// NOT killed — they survive a shared-live toggle-off. The in-memory project
+/// registry is cleared (it lives only while the server runs — Epic-4 bridge).
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    match remote_state.stop().await {
+    let result = remote_state.stop().await;
+    // Clear the in-memory project mirror so a stale list does not linger after
+    // the server is off (the registry is renderer-fed; it is repopulated on the
+    // next server start via `remote_sync_projects`).
+    project_registry.clear();
+    match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
     }
@@ -3038,6 +3051,30 @@ pub async fn remote_server_status(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     Ok(IpcResult::success(remote_state.status()))
+}
+
+/// Push the desktop renderer's current project list into the in-memory
+/// `ProjectRegistry` (Epic-4 bridge) and broadcast a `projects_changed` WS event
+/// so connected web clients refetch `GET /projects`. Called by the renderer
+/// on server-start success + on every project-store mutation while the server
+/// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProjectsPayload {
+    pub projects: Vec<crate::web::ProjectSummary>,
+    #[serde(default)]
+    pub active_project_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn remote_sync_projects(
+    payload: SyncProjectsPayload,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    project_registry.set(payload.projects, payload.active_project_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.active_project_id.as_deref());
+    Ok(IpcResult::success(()))
 }
 
 // ==================== Git Commands ====================

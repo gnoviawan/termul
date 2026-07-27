@@ -35,7 +35,7 @@ use tracing::{info, warn};
 
 use crate::acp::AcpManager;
 use crate::web::sink::WsRelaySink;
-use crate::web::{serve_router, ServerConfig};
+use crate::web::{ProjectRegistry, serve_router, ServerConfig};
 
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +192,7 @@ impl RemoteServerState {
         &self,
         acp: Arc<AcpManager>,
         ws_relay: Arc<WsRelaySink>,
+        registry: Arc<ProjectRegistry>,
         bind_mode: RemoteBindMode,
     ) -> Result<RemoteStatus, String> {
         {
@@ -225,7 +226,7 @@ impl RemoteServerState {
             info!("Shared-live web server shutting down…");
         };
 
-        let (addr, serve_handle) = serve_router(acp, ws_relay, cfg, shutdown)
+        let (addr, serve_handle) = serve_router(acp, ws_relay, registry, cfg, shutdown)
             .await
             .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
@@ -394,22 +395,28 @@ mod tests {
     /// A real `AcpManager` (zero sinks is legal) + a `WsRelaySink` for the
     /// shared-live host lifecycle tests. The serve task binds a real OS-assigned
     /// localhost socket — safe in tests.
-    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<WsRelaySink>) {
+    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>) {
         let acp = Arc::new(AcpManager::new(vec![]));
         let relay = Arc::new(WsRelaySink::new());
-        (acp, relay)
+        let registry = Arc::new(ProjectRegistry::new());
+        (acp, relay, registry)
     }
 
     #[tokio::test]
     async fn remote_server_state_start_then_stop_lifecycle() {
         // The full start→status(running)→stop→status(stopped)→restart cycle
         // that T8.1 asked for and the old misnamed test never exercised.
-        let (acp, relay) = lifecycle_fixtures();
+        let (acp, relay, registry) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         assert!(!state.status().running);
 
         let status = state
-            .start(acp.clone(), relay.clone(), RemoteBindMode::Localhost)
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+            )
             .await
             .expect("start on localhost binds an OS-assigned port");
         assert!(status.running, "start returns a running status");
@@ -424,7 +431,12 @@ mod tests {
 
         // Restart works (the slot was cleared by stop).
         let again = state
-            .start(acp.clone(), relay.clone(), RemoteBindMode::Localhost)
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+            )
             .await
             .expect("restart after stop succeeds");
         assert!(again.running);
@@ -436,15 +448,25 @@ mod tests {
         // The lose-race guard: a second start while the first is running returns
         // Err — and (per R1) does NOT orphan a second server (its shutdown_tx is
         // signaled before returning). The first server keeps running.
-        let (acp, relay) = lifecycle_fixtures();
+        let (acp, relay, registry) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _first = state
-            .start(acp.clone(), relay.clone(), RemoteBindMode::Localhost)
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+            )
             .await
             .expect("first start succeeds");
 
         let second = state
-            .start(acp.clone(), relay.clone(), RemoteBindMode::Localhost)
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+            )
             .await;
         assert!(
             second.is_err(),
@@ -464,10 +486,15 @@ mod tests {
         // disturbed. (AcpManager::new(vec![]) owns no agents, so there is
         // nothing to kill — this guards the path: start/stop complete without
         // touching kill_all, i.e. no panic, no error, clean drain.)
-        let (acp, relay) = lifecycle_fixtures();
+        let (acp, relay, registry) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
-            .start(acp.clone(), relay.clone(), RemoteBindMode::Localhost)
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+            )
             .await
             .expect("start succeeds");
         // The serve task holds `Arc::clone(&acp)`; stop drains it. The desktop

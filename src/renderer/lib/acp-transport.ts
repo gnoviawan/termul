@@ -83,6 +83,13 @@ export interface AcpTransport {
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(agentId: AgentId, methodId: string): Promise<void>
+  /**
+   * Web/remote only (Epic-4 bridge): switch the shared session to a project's
+   * cwd. Returns the NEW session id at that cwd; the caller points its
+   * tab-focused session id at it + re-subscribes. Absent on the Tauri desktop
+   * transport (desktop switches via the project store).
+   */
+  switchProject?(projectId: string): Promise<{ sessionId: string }>
   onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
@@ -416,6 +423,17 @@ export class WsAcpTransport implements AcpTransport {
       agentId,
       cwd,
       mcpServers
+    })
+    if (outcome?.sessionId) {
+      await this.subscribeSession(outcome.sessionId, null)
+    }
+    return outcome
+  }
+
+  /** Web/remote (Epic-4 bridge): `switch_project` → new session at the project cwd. */
+  async switchProject(projectId: string): Promise<{ sessionId: string }> {
+    const outcome = await this.request<{ sessionId: string }>('switch_project', {
+      projectId
     })
     if (outcome?.sessionId) {
       await this.subscribeSession(outcome.sessionId, null)

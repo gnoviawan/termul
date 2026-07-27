@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { persistenceApi, secureStorageApi, terminalApi, worktreeApi } from '@/lib/api'
+import { getAcpTransport } from '@/lib/acp-transport'
+import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
+import { webServerProjects } from '@/lib/web-server-api'
 import { useProjectStore } from '@/stores/project-store'
+import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
@@ -11,6 +15,7 @@ import type {
   PersistedWorktree
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
+import type { ProjectSummary } from '../../shared/types/web-projects.types'
 
 const REDACTED_VALUE = '[REDACTED]'
 type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
@@ -373,10 +378,79 @@ export async function reconcileProjectWorktreesNow(projectId: string): Promise<v
   }
 }
 
+/**
+ * Build the redacted `ProjectSummary[]` wire shape for the web/remote mirror
+ * (Epic-4 bridge) from the renderer `Project` store. No env-var values cross
+ * the wire — redact-by-omission. Shared by the auto-save live-push path + the
+ * `RemoteAccessPopover` server-start seed.
+ */
+export function toProjectSummaries(projects: Project[], activeProjectId: string): ProjectSummary[] {
+  return projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    path: p.path ?? null,
+    isArchived: p.isArchived ?? false,
+    isActive: p.id === activeProjectId
+  }))
+}
+
+/**
+ * Map a web/remote `ProjectSummary` (the in-memory registry's wire shape) to
+ * the renderer `Project`. The mirror carries NO env-var values (redact-by-
+ * omission — secrets live in secure storage; plain env is omitted for the
+ * interim), so `envVars` is empty and worktree reconciliation is skipped (the
+ * browser cannot shell out to git anyway). `color` is a valid `ProjectColor`
+ * token string the desktop sent, cast through.
+ */
+function summaryToProject(summary: ProjectSummary): Project {
+  return {
+    id: summary.id,
+    name: summary.name,
+    color: summary.color as ProjectColor,
+    path: summary.path ?? undefined,
+    isArchived: summary.isArchived,
+    isActive: summary.isActive,
+    envVars: [],
+    worktrees: [],
+    activeWorktreeId: null
+  }
+}
+
 export function useProjectsLoader(): void {
   const setProjects = useProjectStore((state) => state.setProjects)
 
   useEffect(() => {
+    // Web/remote mode: mirror the desktop's project list from the in-memory
+    // `ProjectRegistry` via `GET /projects`. The browser's stubbed plugin-store
+    // returns nothing, so without this branch the sidebar renders empty. The
+    // mirror is read-only — `useProjectsAutoSave` is disabled in web mode. The
+    // desktop broadcasts `projects_changed` on store mutation; refetch on it.
+    if (!isTauriContext()) {
+      let unsub: (() => void) | undefined
+      // Guard against completing a fetch after unmount (skip the stale
+      // setProjects so a remounted store is not clobbered).
+      let cancelled = false
+      const fetchMirror = async (): Promise<void> => {
+        const result = await webServerProjects.list()
+        if (!cancelled && result.success && result.data) {
+          setProjects(result.data.projects.map(summaryToProject), result.data.activeProjectId ?? '')
+        }
+      }
+      void fetchMirror()
+      try {
+        unsub = getAcpTransport().onEvent('acp:projects_changed', () => {
+          void fetchMirror()
+        })
+      } catch (err) {
+        console.debug('[projects] projects_changed listener unavailable', err)
+      }
+      return () => {
+        cancelled = true
+        unsub?.()
+      }
+    }
+
     async function load(): Promise<void> {
       const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
       if (result.success && result.data) {
@@ -415,6 +489,11 @@ export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
 
   useEffect(() => {
+    // Web/remote mode: the project list is a read-only mirror of the desktop's
+    // store; never persist from the browser (the stubbed plugin-store would
+    // silently drop writes, and edits belong on the desktop anyway).
+    if (!isTauriContext()) return
+
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
       // Skip auto-saving if the store is not yet loaded
@@ -453,6 +532,19 @@ export function useProjectsAutoSave(): void {
       ).catch((err: unknown) => {
         console.error('Failed to auto-save projects:', err)
       })
+
+      // Epic-4 bridge live push: if the shared-live server is running, mirror
+      // the new project list into the in-memory registry + broadcast
+      // `projects_changed` so connected web clients refetch `GET /projects`.
+      // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
+      if (useRemoteStatusStore.getState().status?.running) {
+        void syncProjects(
+          toProjectSummaries(state.projects, state.activeProjectId),
+          state.activeProjectId || null
+        ).catch((err: unknown) => {
+          console.debug('[projects] remote sync failed', err)
+        })
+      }
     })
 
     return () => {

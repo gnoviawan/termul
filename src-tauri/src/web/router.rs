@@ -18,6 +18,8 @@ use axum::{
 
 use crate::acp::AcpManager;
 use crate::web::fs_api;
+use crate::web::project_registry::ProjectRegistry;
+use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
 use crate::web::ws::{ws_upgrade, AppState};
 
@@ -32,10 +34,18 @@ use super::assets;
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
 /// [`assets::static_fallback`].
-pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
+pub fn router(
+    acp: Arc<AcpManager>,
+    ws_relay: Arc<WsRelaySink>,
+    registry: Arc<ProjectRegistry>,
+) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
+        // Project list mirror (Epic-4 bridge): the web client reads the
+        // desktop's non-archived + archived projects here. Registered AHEAD of
+        // the static fallback so the SPA mount cannot shadow it.
+        .route("/projects", get(projects_api::list))
         // Project-creation fs/git/shell routes (Story: Web/remote project
         // creation). Registered AHEAD of the static fallback so `/health` +
         // `/ws` keep priority and the SPA fallback cannot shadow them.
@@ -53,18 +63,24 @@ pub fn router(acp: Arc<AcpManager>, ws_relay: Arc<WsRelaySink>) -> Router {
     } else {
         r = r.fallback(assets::serve_embedded);
     }
-    r.with_state(AppState { acp, relay: ws_relay })
+    r.with_state(AppState {
+        acp,
+        relay: ws_relay,
+        registry,
+    })
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
 pub fn router_with_static(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
+    registry: Arc<ProjectRegistry>,
     static_dir: &Path,
 ) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
+        .route("/projects", get(projects_api::list))
         .route("/fs/mkdir", post(fs_api::mkdir))
         .route("/fs/write", post(fs_api::write))
         .route("/fs/ls", get(fs_api::ls))
@@ -72,7 +88,11 @@ pub fn router_with_static(
         .route("/git/init", post(fs_api::git_init))
         .route("/shells", get(fs_api::shells))
         .fallback_service(assets::static_service_from(static_dir))
-        .with_state(AppState { acp, relay: ws_relay })
+        .with_state(AppState {
+            acp,
+            relay: ws_relay,
+            registry,
+        })
 }
 
 /// Liveness probe for the ACP web server.
@@ -121,6 +141,7 @@ mod tests {
         router_with_static(
             Arc::new(AcpManager::new(vec![])),
             Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             dir,
         )
     }

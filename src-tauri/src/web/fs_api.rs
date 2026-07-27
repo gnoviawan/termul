@@ -424,6 +424,7 @@ mod tests {
     use super::*;
     use crate::acp::AcpManager;
     use crate::web::sink::WsRelaySink;
+    use crate::web::project_registry::ProjectRegistry;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::path::PathBuf;
@@ -464,6 +465,7 @@ mod tests {
         AppState {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
         }
     }
 

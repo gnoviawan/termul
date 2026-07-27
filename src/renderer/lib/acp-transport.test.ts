@@ -241,6 +241,26 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('switchProject sends a switch_project request with { projectId }', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // FakeWebSocket replies `not_implemented` for unknown request types — the
+    // point here is the request frame shape (type + payload), not the reply.
+    await expect(transport.switchProject('p-2')).rejects.toBeInstanceOf(AcpTransportError)
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const switchReq = sent.find((r) => r.type === 'switch_project')
+    expect(switchReq).toBeTruthy()
+    expect(switchReq?.payload).toEqual({ projectId: 'p-2' })
+
+    transport.dispose()
+  })
+
   it('authenticates on auth_required and correlates request/reply by id', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

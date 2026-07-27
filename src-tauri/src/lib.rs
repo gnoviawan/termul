@@ -125,7 +125,7 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
-use web::{PermissionRendezvous, TauriEventSink, WsRelaySink};
+use web::{PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1037,6 +1037,13 @@ pub fn run() {
             app.manage(acp_manager);
             app.manage(ws_relay);
 
+            // In-memory project registry (Epic-4 bridge) — renderer-fed via
+            // `remote_sync_projects`; the source for `GET /projects` +
+            // `switch_project` cwd resolution on the shared-live web server.
+            // Lives only while the server runs; cleared on `remote_server_stop`.
+            let project_registry = Arc::new(ProjectRegistry::new());
+            app.manage(project_registry);
+
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
             app.manage(ssh_manager);
@@ -1258,6 +1265,7 @@ pub fn run() {
             commands::remote_server_start,
             commands::remote_server_stop,
             commands::remote_server_status,
+            commands::remote_sync_projects,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])

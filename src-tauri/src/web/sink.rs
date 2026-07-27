@@ -39,6 +39,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::web::project_registry::ProjectsChangedPayload;
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
 
 // Global lock order for WsRelaySink (never invert — avoids deadlock):
@@ -659,6 +660,34 @@ pub fn fan_out<P: Serialize>(
     }
 }
 
+/// Broadcast a `projects_changed` agent-level event to every connected client.
+///
+/// Called by the `remote_sync_projects` command after it updates the
+/// [`crate::web::project_registry::ProjectRegistry`]. The event is
+/// agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`] fans it out to
+/// ALL connected clients (the wire `type` is `projects_changed` — the `acp:`
+/// prefix is stripped by `emit`). The payload carries only the new
+/// `activeProjectId`; the web client refetches `GET /projects` for the full
+/// list (the desktop is the source of truth).
+///
+/// `active_project_id` is `None` when the desktop has no active project.
+pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, active_project_id: Option<&str>) {
+    // Use the typed `ProjectsChangedPayload` (single source of truth for the
+    // wire shape) rather than hand-rolled `json!` — its `skip_serializing_if`
+    // omits `activeProjectId` when `None` (the web client ignores the payload
+    // + refetches `GET /projects`, so omit-vs-null is cosmetic, but the
+    // struct stays the canonical shape if fields are added later).
+    let payload = ProjectsChangedPayload {
+        active_project_id: active_project_id.map(str::to_string),
+    };
+    // Clone into a concrete `Arc<WsRelaySink>` first so `Arc::clone` infers
+    // `T = WsRelaySink` (not `dyn EventSink`); the unsized coercion to
+    // `Arc<dyn EventSink>` then happens at the vec push.
+    let relay_arc: Arc<WsRelaySink> = Arc::clone(relay);
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay_arc];
+    fan_out(&sinks, None, "acp:projects_changed", &payload);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1078,5 +1107,41 @@ mod tests {
         assert_eq!(b[0].payload["message"], "only-b");
         assert_eq!(a[0].sid.as_deref(), Some("sess-a"));
         assert_eq!(b[0].sid.as_deref(), Some("sess-b"));
+    }
+
+    /// Epic-4 bridge: `broadcast_projects_changed` fans an agent-level
+    /// `projects_changed` event (sid=null, seq=0) to every connected client.
+    /// A client subscribed to ANY session receives it (the web client then
+    /// refetches `GET /projects`).
+    #[test]
+    fn broadcast_projects_changed_reaches_subscribed_client() {
+        let relay = Arc::new(WsRelaySink::new());
+        // Subscribe a client to a session so it is in the relay's client set.
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None);
+
+        broadcast_projects_changed(&relay, Some("p-3"));
+
+        let drained = drain_rx(&mut rx);
+        assert_eq!(drained.len(), 1, "exactly one projects_changed event");
+        let evt = &drained[0];
+        assert_eq!(evt.type_, "projects_changed");
+        assert!(evt.sid.is_none(), "agent-level event: sid must be null");
+        assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
+        assert_eq!(evt.payload["activeProjectId"], "p-3");
+    }
+
+    /// `broadcast_projects_changed` with no active project still fans out
+    /// (payload carries `activeProjectId: null`).
+    #[test]
+    fn broadcast_projects_changed_null_active_id() {
+        let relay = Arc::new(WsRelaySink::new());
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None);
+
+        broadcast_projects_changed(&relay, None);
+
+        let drained = drain_rx(&mut rx);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].type_, "projects_changed");
+        assert_eq!(drained[0].payload["activeProjectId"], serde_json::Value::Null);
     }
 }

@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 17 event types (16 acp:* prefix-dropped + auth_required)', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(17)
+  it('exports exactly 18 event types (16 acp:* prefix-dropped + auth_required + projects_changed)', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(18)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -46,6 +46,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       expect(WS_EVENT_TYPES).toContain(name)
     }
     expect(WS_EVENT_TYPES).toContain('auth_required')
+    // Epic-4 bridge: desktop project-list live push (agent-level, seq 0).
+    expect(WS_EVENT_TYPES).toContain('projects_changed')
   })
 
   it('exports exactly 17 request types (16 acp_* prefix-dropped + subscribe)', () => {
@@ -84,9 +86,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 9 stable error codes', () => {
+  it('exports exactly 10 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(9)
+    expect(codes.size).toBe(10)
     const expected = [
       'not_found',
       'unauthorized',
@@ -96,7 +98,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'stale',
       'duplicate',
       'unsupported',
-      'not_implemented'
+      'not_implemented',
+      'no_agent'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)

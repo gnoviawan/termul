@@ -1,7 +1,8 @@
-import { Menu, MessageSquarePlus, Settings } from 'lucide-react'
+import { FolderGit2, Menu, MessageSquarePlus, Settings } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
+import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +12,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
@@ -34,6 +36,7 @@ export function MobileChatShell({
   canNewChat = false
 }: MobileChatShellProps): React.JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [projectsOpen, setProjectsOpen] = useState(false)
   const navigate = useNavigate()
   const activeProject = useActiveProject()
 
@@ -80,6 +83,19 @@ export function MobileChatShell({
         <div className="min-w-0 flex-1 text-center">
           <h1 className="truncate text-sm font-medium text-foreground">{headerTitle}</h1>
         </div>
+
+        {!isTauriContext() && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 shrink-0"
+            aria-label="Switch project"
+            onClick={() => setProjectsOpen(true)}
+          >
+            <FolderGit2 size={20} />
+          </Button>
+        )}
 
         <Button
           type="button"
@@ -146,6 +162,10 @@ export function MobileChatShell({
           </div>
         </SheetContent>
       </Sheet>
+
+      {!isTauriContext() && (
+        <ProjectSwitcherDrawer open={projectsOpen} onOpenChange={setProjectsOpen} />
+      )}
     </div>
   )
 }

@@ -46,6 +46,10 @@ vi.mock('@/components/chat/ChatHistoryTab', () => ({
   )
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 describe('MobileChatShell', () => {
   beforeEach(() => {
     mockNavigate.mockReset()

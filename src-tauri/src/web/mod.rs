@@ -18,13 +18,16 @@ pub mod assets;
 pub mod config;
 pub mod fs_api;
 pub mod permissions;
+pub mod project_registry;
+pub mod projects_api;
 pub mod router;
 pub mod sink;
 pub mod ws;
 
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
-pub use sink::{EventSink, TauriEventSink, WsRelaySink, fan_out};
+pub use project_registry::{ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload};
+pub use sink::{broadcast_projects_changed, EventSink, TauriEventSink, WsRelaySink, fan_out};
 pub use ws::{AppState, ReliabilityTier, SequencedEvent, WsErrorCode};
 
 use std::future::Future;
@@ -53,7 +56,14 @@ pub async fn serve(
     ws_relay: Arc<WsRelaySink>,
     cfg: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (_addr, handle) = serve_router(acp.clone(), ws_relay, cfg, shutdown_signal_future()).await?;
+    let (_addr, handle) = serve_router(
+        acp.clone(),
+        ws_relay,
+        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        cfg,
+        shutdown_signal_future(),
+    )
+    .await?;
 
     let serve_result = handle.await;
 
@@ -90,6 +100,7 @@ pub async fn serve(
 pub async fn serve_router(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
+    registry: Arc<crate::web::project_registry::ProjectRegistry>,
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
@@ -112,7 +123,7 @@ pub async fn serve_router(
         );
     }
 
-    let app = router::router(Arc::clone(&acp), Arc::clone(&ws_relay));
+    let app = router::router(Arc::clone(&acp), Arc::clone(&ws_relay), Arc::clone(&registry));
 
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so

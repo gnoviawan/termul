@@ -26,6 +26,8 @@
 //! `err.code: "not_implemented"` until Stories 1.7/1.8/Epic 4.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -37,7 +39,8 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::acp::config::AgentConfig;
-use crate::acp::AcpManager;
+use crate::acp::{AcpManager, AgentId, SessionId};
+use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{ClientId, ReplayResult, WsRelaySink};
 
 // ---------------------------------------------------------------------------
@@ -178,7 +181,7 @@ pub struct WsError {
     pub message: String,
 }
 
-/// The 9 stable `err.code` machine strings (AC2). Mirrors the TS
+/// The 10 stable `err.code` machine strings (AC2). Mirrors the TS
 /// `WS_ERROR_CODES` const. Serialized as snake_case via [`WsErrorCode::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsErrorCode {
@@ -191,6 +194,9 @@ pub enum WsErrorCode {
     Duplicate,
     Unsupported,
     NotImplemented,
+    /// `switch_project` was sent on a connection with no live agent yet
+    /// (cold web tab) — the server refuses to auto-spawn. Epic-4 bridge.
+    NoAgent,
 }
 
 impl WsErrorCode {
@@ -207,6 +213,7 @@ impl WsErrorCode {
             Self::Duplicate => "duplicate",
             Self::Unsupported => "unsupported",
             Self::NotImplemented => "not_implemented",
+            Self::NoAgent => "no_agent",
         }
     }
 }
@@ -261,13 +268,17 @@ pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
 // ---------------------------------------------------------------------------
 
 /// Shared Axum state for the standalone server: the ACP manager + the live
-/// WS relay sink. Typed struct (preferred over tuple state past 2 fields).
+/// WS relay sink + the in-memory project registry (Epic-4 bridge). Typed
+/// struct (preferred over tuple state past 2 fields).
 #[derive(Clone)]
 pub struct AppState {
     /// The ACP manager (server is the ACP client-of-record).
     pub acp: Arc<AcpManager>,
     /// The live WS relay sink (owns per-session logs + seq counters + subs).
     pub relay: Arc<WsRelaySink>,
+    /// In-memory, renderer-fed project registry — source for `GET /projects`
+    /// + `switch_project` cwd resolution. Empty on the standalone path.
+    pub registry: Arc<ProjectRegistry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +314,43 @@ pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
     })
 }
 
+/// Keepalive Ping interval for the `/ws` relay.
+///
+/// Browser WebSockets never send their own pings (the WS API hides
+/// ping/pong control frames from JavaScript), so without a server-emitted
+/// Ping the socket goes silent during long agent turns — especially the
+/// "thinking"/reasoning phase, which can produce no `session/update` chunks
+/// for tens of seconds. Idle NAT/proxy hops and backgrounded mobile browser
+/// tabs then RST the TCP connection (surfacing in the log as
+/// "Connection reset without closing handshake" and in the chat UI as a
+/// mid-response disconnect). 20s is well under common idle timeouts
+/// (60–300s) yet light enough not to spam a recovering link.
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+
+/// How long without ANY client→server frame (a Pong answering our keepalive
+/// Ping, a request, or a client Ping) before the server declares the
+/// connection half-open and tears it down. ~3.5× the ping interval to absorb
+/// jitter on slow/mobile links while still bounding a dead socket so the
+/// relay reaps subscriptions + denies outstanding permissions and the
+/// browser's reconnect+cursor-resubscribe path can engage.
+const PONG_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// Reusable Ping payload (opaque; browsers must echo it back in the Pong, but
+/// the relay does not correlate — any inbound frame resets the watchdog).
+/// Must stay under 125 bytes per RFC 6455 control-frame limits.
+const PING_PAYLOAD: &[u8] = b"keepalive";
+
+/// Epoch-millis timestamp for the keepalive watchdog. Uses `SystemTime` (not
+/// `Instant`) so it fits an `AtomicU64`; clock skew inside one process over a
+/// ~minute window is negligible, and `saturating_sub` keeps the compare safe
+/// even if the clock jumps backwards.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Run the per-connection relay loop: a write task draining the outbound
 /// channel + a read task routing requests. Returns when either half closes.
 async fn run_relay(socket: WebSocket, state: AppState) {
@@ -312,8 +360,19 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Story 1.8: the ACP manager — the server is the ACP client-of-record; the
     // 10 ACP command handlers (`send_prompt`, `create_session`, …) forward to it.
     let acp = Arc::clone(&state.acp);
+    // Epic-4 bridge: the in-memory project registry — source for `GET /projects`
+    // (router) + `switch_project` cwd resolution (this handler).
+    let registry = Arc::clone(&state.registry);
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
+    // Per-connection tracking for `switch_project` (Ask-First resolution): the
+    // last agent + session this connection used. `switch_project` reuses the
+    // agent rather than auto-spawning; a cold tab (no agent yet) → `NO_AGENT`.
+    // The old web-focused session is closed server-side after the new one is
+    // ready. Set by `spawn_agent` / `create_session` / `load_session` /
+    // `resume_session` (the handlers that carry an agentId / create a session).
+    let mut current_agent: Option<crate::acp::AgentId> = None;
+    let mut current_session: Option<crate::acp::SessionId> = None;
 
     // AC9: emit auth_required on the connection before anything else.
     if out_tx
@@ -323,28 +382,76 @@ async fn run_relay(socket: WebSocket, state: AppState) {
         return; // receiver dropped before we started — peer already gone.
     }
 
+    // Keepalive watchdog: shared "last seen alive" epoch-ms. The read task
+    // stamps it on every inbound frame (text request, Pong, or client Ping);
+    // the write task consults it on each keepalive tick to detect a
+    // half-open/dead peer. Browser WebSockets auto-pong protocol-level Pings
+    // (the WS API never exposes ping/pong to JS), so a server-emitted Ping is
+    // the only way to refresh NAT/proxy/browser idle timers during silent
+    // reasoning phases and to surface a dead client promptly.
+    let last_activity = Arc::new(AtomicU64::new(now_ms()));
+    let write_last_activity = Arc::clone(&last_activity);
+
     let write_tx = out_tx.clone();
     let mut write_task = tokio::spawn(async move {
-        while let Some(frame) = out_rx.recv().await {
-            let text = match frame {
-                Outbound::Event(evt) => serde_json::to_string(&evt).unwrap_or_else(|e| {
-                    warn!("[ws] failed to serialize event {}: {e}", evt.type_);
-                    String::new()
-                }),
-                Outbound::Reply(rep) => serde_json::to_string(&rep).unwrap_or_else(|e| {
-                    warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
-                    String::new()
-                }),
-            };
-            if text.is_empty() {
-                continue;
-            }
-            if sink.send(Message::Text(text.into())).await.is_err() {
-                break; // peer gone — stop writing.
+        let mut ping = tokio::time::interval(PING_INTERVAL);
+        // Steady, not bursty: if a slow client stalled the write loop, don't
+        // ping-storm it on recovery — delay missed ticks to the next period.
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Discard the immediate first tick so the first keepalive lands one
+        // full interval after connect (a fresh connection needs no keepalive
+        // yet and the auth_required frame has just been queued).
+        ping.tick().await;
+        loop {
+            tokio::select! {
+                frame = out_rx.recv() => {
+                    let Some(frame) = frame else { break };
+                    let text = match frame {
+                        Outbound::Event(evt) => serde_json::to_string(&evt).unwrap_or_else(|e| {
+                            warn!("[ws] failed to serialize event {}: {e}", evt.type_);
+                            String::new()
+                        }),
+                        Outbound::Reply(rep) => serde_json::to_string(&rep).unwrap_or_else(|e| {
+                            warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
+                            String::new()
+                        }),
+                    };
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if sink.send(Message::Text(text.into())).await.is_err() {
+                        break; // peer gone — stop writing.
+                    }
+                }
+                _ = ping.tick() => {
+                    // Send a keepalive Ping. The browser auto-pongs at the
+                    // protocol layer; that Pong (or any client→server frame)
+                    // refreshes `last_activity`.
+                    if sink.send(Message::Ping(PING_PAYLOAD.to_vec().into())).await.is_err() {
+                        break; // peer gone — stop writing.
+                    }
+                    // Dead-peer detection: if nothing has arrived from the
+                    // client for PONG_TIMEOUT (no Pong, no request, no close),
+                    // the connection is half-open. Tear it down so the read
+                    // loop ends and the client's reconnect logic engages
+                    // instead of the server silently holding a dead socket
+                    // (which would otherwise leak subscriptions + pending
+                    // permissions and stall the chat UI mid-response).
+                    let stale = now_ms()
+                        .saturating_sub(write_last_activity.load(Ordering::Relaxed));
+                    if stale > PONG_TIMEOUT.as_millis() as u64 {
+                        warn!(
+                            "[ws] keepalive: no client activity for {stale} ms \
+                             (>{PONG_TIMEOUT:?}); closing connection"
+                        );
+                        break;
+                    }
+                }
             }
         }
     });
 
+    let read_last_activity = Arc::clone(&last_activity);
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
         while let Some(frame) = stream.next().await {
@@ -355,11 +462,25 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     break;
                 }
             };
+            // Any frame from the client (text request, a Pong answering our
+            // keepalive Ping, or a client Ping) proves the connection is live
+            // — stamp it so the write task's watchdog doesn't close a healthy
+            // peer during a burst of agent output.
+            read_last_activity.store(now_ms(), Ordering::Relaxed);
             match msg {
                 Message::Text(t) => {
-                    let handled =
-                        handle_request(&t, &mut authed, &acp, &relay, &write_tx, &mut subscribed_clients)
-                            .await;
+                    let handled = handle_request(
+                        &t,
+                        &mut authed,
+                        &acp,
+                        &relay,
+                        &registry,
+                        &write_tx,
+                        &mut subscribed_clients,
+                        &mut current_agent,
+                        &mut current_session,
+                    )
+                    .await;
                     if write_tx.send(Outbound::Reply(handled)).is_err() {
                         break; // write half closed.
                     }
@@ -439,13 +560,17 @@ struct SubscribePayload {
 /// command types (`send_prompt`, `create_session`, …) forward to
 /// `AcpManager` (Story 1.8); OS-cap requests → `unsupported`; `switch_project`
 /// + unknown types → `not_implemented` (Epic 4).
+#[allow(clippy::too_many_arguments)]
 async fn handle_request(
     text: &str,
     authed: &mut bool,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
+    current_agent: &mut Option<AgentId>,
+    current_session: &mut Option<SessionId>,
 ) -> WsReply {
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
@@ -490,13 +615,23 @@ async fn handle_request(
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
-        "create_session" => handle_create_session(id, &req.payload, acp).await,
-        "load_session" => handle_load_session(id, &req.payload, acp).await,
-        "resume_session" => handle_resume_session(id, &req.payload, acp).await,
+        "create_session" => {
+            handle_create_session(id, &req.payload, acp, current_agent, current_session).await
+        }
+        "load_session" => {
+            handle_load_session(id, &req.payload, acp, current_agent, current_session).await
+        }
+        "resume_session" => {
+            handle_resume_session(id, &req.payload, acp, current_agent, current_session).await
+        }
         "close_session" => handle_close_session(id, &req.payload, acp).await,
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
-        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp).await,
-        "kill_agent" => handle_kill_agent(id, &req.payload, acp).await,
+        "switch_project" => {
+            handle_switch_project(id, &req.payload, acp, registry, current_agent, current_session)
+                .await
+        }
+        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
+        "kill_agent" => handle_kill_agent(id, &req.payload, acp, current_agent, current_session).await,
         "list_agents" => handle_list_agents(id, acp),
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
@@ -511,8 +646,8 @@ async fn handle_request(
                 "`{t}` is an OS-fulfilled cap; the server handles it locally (not relayed to the browser)"
             ),
         ),
-        // Remaining ACP request types: stub not_implemented (Epic 4 — e.g.
-        // `switch_project` belongs to multi-project switching).
+        // Remaining ACP request types: stub not_implemented (Epic 4 — unknown
+        // types not yet routed).
         _ => WsReply::err(
             id,
             WsErrorCode::NotImplemented,
@@ -575,7 +710,12 @@ struct SpawnAgentPayload {
     config: AgentConfig,
 }
 
-async fn handle_spawn_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_spawn_agent(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_agent: &mut Option<crate::acp::AgentId>,
+) -> WsReply {
     let mut parsed: SpawnAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -604,7 +744,12 @@ async fn handle_spawn_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) 
         );
     }
     match acp.spawn(parsed.config).await {
-        Ok(agent_id) => ok_with_payload(id, &agent_id),
+        Ok(agent_id) => {
+            // Track the spawned agent so a later `switch_project` can reuse it
+            // (Ask-First resolution: do NOT auto-spawn on switch).
+            *current_agent = Some(agent_id.clone());
+            ok_with_payload(id, &agent_id)
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -616,7 +761,13 @@ struct KillAgentPayload {
     agent_id: crate::acp::AgentId,
 }
 
-async fn handle_kill_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_kill_agent(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_agent: &mut Option<AgentId>,
+    current_session: &mut Option<SessionId>,
+) -> WsReply {
     let parsed: KillAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -628,7 +779,17 @@ async fn handle_kill_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -
         }
     };
     match acp.kill(&parsed.agent_id).await {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Ok(()) => {
+            // If the killed agent is this connection's tracked agent, drop the
+            // tracking so a later `switch_project` does not reuse the dead id
+            // (which would map `new_session`'s "unknown agent" to `not_found").
+            // The web client must spawn/create a session again first.
+            if current_agent.as_ref().is_some_and(|a| *a == parsed.agent_id) {
+                *current_agent = None;
+                *current_session = None;
+            }
+            WsReply::ok(id, Some(json!({})))
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -649,7 +810,13 @@ struct CreateSessionPayload {
     mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
 }
 
-async fn handle_create_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_create_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_agent: &mut Option<crate::acp::AgentId>,
+    current_session: &mut Option<crate::acp::SessionId>,
+) -> WsReply {
     let parsed: CreateSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed create_session payload (want agentId, cwd, mcpServers?): {e}")),
@@ -661,9 +828,90 @@ async fn handle_create_session(id: String, payload: &Value, acp: &Arc<AcpManager
         return WsReply::err(id, WsErrorCode::Unsupported, "create_session requires a non-empty `cwd`");
     }
     match acp.new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers).await {
-        Ok(outcome) => ok_with_payload(id, &outcome),
+        Ok(outcome) => {
+            // Track the agent + new session for `switch_project` cwd switching.
+            *current_agent = Some(parsed.agent_id.clone());
+            *current_session = Some(outcome.session_id.clone());
+            ok_with_payload(id, &outcome)
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
+}
+
+/// `switch_project` → resolve `projectId` → cwd via the registry, then start a
+/// NEW `AcpManager` session at that cwd. Reuses the connection's last agent
+/// (Ask-First resolution: do NOT auto-spawn). A cold tab with no agent yet →
+/// `NO_AGENT`. The old web-focused session is closed server-side AFTER the
+/// new one is ready (best-effort — the agent may not support `close`). The
+/// desktop's own active project is NOT changed — the web client is a second
+/// viewer; only the web tab's focused session moves.
+///
+/// Reply payload = `{ sessionId }` (the new ACP session id at the project's
+/// cwd). The web client points its tab-focused session id at it + re-subscribes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SwitchProjectPayload {
+    project_id: String,
+}
+
+async fn handle_switch_project(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    registry: &Arc<ProjectRegistry>,
+    current_agent: &mut Option<crate::acp::AgentId>,
+    current_session: &mut Option<crate::acp::SessionId>,
+) -> WsReply {
+    let parsed: SwitchProjectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed switch_project payload (want projectId): {e}"),
+            )
+        }
+    };
+    // Ask-First resolution: reuse the connection's last agent; do NOT auto-spawn.
+    // A cold web tab (no session created / agent spawned yet) → NO_AGENT.
+    let agent_id = match current_agent {
+        Some(a) => a.clone(),
+        None => {
+            return WsReply::err(
+                id,
+                WsErrorCode::NoAgent,
+                "switch_project requires a live agent; spawn or create a session first",
+            )
+        }
+    };
+    // Resolve projectId → cwd via the in-memory registry (renderer-fed).
+    let cwd = match registry.find_path(&parsed.project_id) {
+        Some(p) => p,
+        None => {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                format!(
+                    "project '{}' not found or has no working directory",
+                    parsed.project_id
+                ),
+            )
+        }
+    };
+    // Start a NEW session at the project's cwd (NOT re-rooting a live agent).
+    let new_session = match acp.new_session(&agent_id, cwd, vec![]).await {
+        Ok(outcome) => outcome.session_id,
+        Err(e) => return acp_err_to_reply(id, e),
+    };
+    // Close the old web-focused session AFTER the new one is ready (best-effort
+    // — the agent may not support `close`; a failure must not strand the client).
+    if let Some(old) = current_session.take() {
+        if old != new_session {
+            let _ = acp.close_session(&agent_id, old).await;
+        }
+    }
+    *current_session = Some(new_session.clone());
+    WsReply::ok(id, Some(json!({ "sessionId": new_session })))
 }
 
 /// `load_session` → `AcpManager::load_session(agent_id, session_id, cwd)`.
@@ -675,25 +923,53 @@ struct LoadResumeSessionPayload {
     cwd: String,
 }
 
-async fn handle_load_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_load_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_agent: &mut Option<crate::acp::AgentId>,
+    current_session: &mut Option<crate::acp::SessionId>,
+) -> WsReply {
     let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed load_session payload (want agentId, sessionId, cwd): {e}")),
     };
-    match acp.load_session(&parsed.agent_id, parsed.session_id, parsed.cwd).await {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
+    // Clone the ids before the call moves `parsed.session_id` + `parsed.cwd`;
+    // we still need the session id to track it for `switch_project`.
+    let agent_id = parsed.agent_id.clone();
+    let session_id = parsed.session_id.clone();
+    match acp.load_session(&agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(()) => {
+            *current_agent = Some(agent_id);
+            *current_session = Some(session_id);
+            WsReply::ok(id, Some(json!({})))
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
 
 /// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd)`.
-async fn handle_resume_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_resume_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_agent: &mut Option<crate::acp::AgentId>,
+    current_session: &mut Option<crate::acp::SessionId>,
+) -> WsReply {
     let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed resume_session payload (want agentId, sessionId, cwd): {e}")),
     };
-    match acp.resume_session(&parsed.agent_id, parsed.session_id, parsed.cwd).await {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
+    // Clone the ids before the call moves `parsed.session_id` + `parsed.cwd`;
+    // we still need the session id to track it for `switch_project`.
+    let agent_id = parsed.agent_id.clone();
+    let session_id = parsed.session_id.clone();
+    match acp.resume_session(&agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(()) => {
+            *current_agent = Some(agent_id);
+            *current_session = Some(session_id);
+            WsReply::ok(id, Some(json!({})))
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -1203,11 +1479,29 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
+        // Epic-4 bridge: `handle_request` now also takes the project registry +
+        // per-connection agent/session tracking (for `switch_project`). The
+        // generic tests use an empty registry + no agent/session; the
+        // `switch_project`-specific tests call `handle_request` directly with a
+        // populated registry.
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let mut current_session: Option<SessionId> = None;
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime")
-            .block_on(handle_request(text, authed, &acp, &relay, &tx, &mut subs))
+            .block_on(handle_request(
+                text,
+                authed,
+                &acp,
+                &relay,
+                &registry,
+                &tx,
+                &mut subs,
+                &mut current_agent,
+                &mut current_session,
+            ))
     }
 
     #[test]
@@ -1250,16 +1544,16 @@ mod tests {
         // Story 1.7 wired `respond_permission`; Story 1.8 wired `send_prompt`,
         // `create_session`, `load_session`, `resume_session`, `close_session`,
         // `list_sessions`, `cancel_prompt`, `set_mode`, `set_model`,
-        // `set_config_option`. `switch_project` stays `not_implemented` (Epic 4 —
-        // multi-project switching). Unknown types also stay `not_implemented`.
-        for ty in ["switch_project", "totally_unknown_type"] {
-            let reply = handle_sync(
-                &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
-                &mut authed,
-            );
-            assert!(!reply.ok, "{ty} should be not_implemented");
-            assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
-        }
+        // `set_config_option`. The Epic-4 bridge now wires `switch_project` too
+        // (a malformed `{}` payload → `unsupported`, covered separately). Only
+        // truly unknown types stay `not_implemented`.
+        let ty = "totally_unknown_type";
+        let reply = handle_sync(
+            &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
+            &mut authed,
+        );
+        assert!(!reply.ok, "{ty} should be not_implemented");
+        assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
     }
 
     /// Story 1.8: ACP command handlers are wired. With an empty payload
@@ -1282,6 +1576,7 @@ mod tests {
             "set_config_option",
             "spawn_agent",
             "kill_agent",
+            "switch_project",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -1411,6 +1706,9 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let reply = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1420,8 +1718,11 @@ mod tests {
                 &mut authed,
                 &acp,
                 &relay,
+                &registry,
                 &tx,
                 &mut subs,
+                &mut current_agent,
+                &mut current_session,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -1485,13 +1786,19 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
+            &registry,
             &tx,
             &mut subs.clone(),
+            &mut current_agent,
+            &mut current_session,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -1521,13 +1828,19 @@ mod tests {
         });
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
+            &registry,
             &tx,
             &mut subs.clone(),
+            &mut current_agent,
+            &mut current_session,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -1543,13 +1856,19 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
+            &registry,
             &tx,
             &mut subs.clone(),
+            &mut current_agent,
+            &mut current_session,
         ));
         assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
         // Second frame for the same requestId → stale (ticket evicted).
@@ -1558,8 +1877,11 @@ mod tests {
             &mut authed,
             &acp,
             &relay,
+            &registry,
             &tx,
             &mut subs.clone(),
+            &mut current_agent,
+            &mut current_session,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -1574,13 +1896,19 @@ mod tests {
         let acp = Arc::new(AcpManager::new(vec![]));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
             &acp,
             &relay,
+            &registry,
             &tx,
             &mut subs.clone(),
+            &mut current_agent,
+            &mut current_session,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -1612,6 +1940,9 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
         let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let mut current_session: Option<crate::acp::SessionId> = None;
         let reply = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1621,8 +1952,11 @@ mod tests {
                 &mut authed,
                 &acp,
                 &relay,
+                &registry,
                 &tx,
                 &mut subs,
+                &mut current_agent,
+                &mut current_session,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "stale");
@@ -1638,8 +1972,11 @@ mod tests {
                 &mut authed,
                 &acp,
                 &relay,
+                &registry,
                 &tx,
                 &mut subs2,
+                &mut current_agent,
+                &mut current_session,
             ));
         assert!(reply_ok.ok, "{:?}", reply_ok.err);
         assert_eq!(subs2.len(), 1);
@@ -1654,8 +1991,11 @@ mod tests {
                 &mut authed,
                 &acp,
                 &relay,
+                &registry,
                 &tx,
                 &mut subs2,
+                &mut current_agent,
+                &mut current_session,
             ));
         assert!(reply_resub.ok, "{:?}", reply_resub.err);
         assert_eq!(subs2.len(), 1);
@@ -1671,12 +2011,69 @@ mod tests {
                 &mut authed,
                 &acp,
                 &relay,
+                &registry,
                 &tx,
                 &mut subs3,
+                &mut current_agent,
+                &mut current_session,
             ));
         assert!(reply_live.ok, "{:?}", reply_live.err);
 
         // Drain any replay/live.
         while rx.try_recv().is_ok() {}
+    }
+
+    /// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
+    /// sends `switch_project` → `NO_AGENT` (Ask-First resolution: do NOT
+    /// auto-spawn). `handle_sync` uses `current_agent = None`.
+    #[test]
+    fn handle_switch_project_cold_tab_is_no_agent() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "no_agent");
+    }
+
+    /// `switch_project` with a live agent but an unknown `projectId` →
+    /// `NOT_FOUND` (registry lookup happens BEFORE `new_session`, so the no-op
+    /// AcpManager never creates a session).
+    #[test]
+    fn handle_switch_project_unknown_id_is_not_found() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        // A known project so the registry is non-empty; "missing" is absent.
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_active: true,
+            }],
+            Some("p-1".to_string()),
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let mut authed = true;
+        let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
+        let mut current_session: Option<crate::acp::SessionId> = None;
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &mut current_session,
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
     }
 }
