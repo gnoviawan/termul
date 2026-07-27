@@ -43,7 +43,15 @@ export function RemoteAccessPopover(): React.JSX.Element {
         // No env-var values cross the wire — redact-by-omission.
         if (enable) {
           const { projects, activeProjectId } = useProjectStore.getState()
-          void syncProjects(toProjectSummaries(projects, activeProjectId), activeProjectId || null)
+          // Await + inspect: a failed seed leaves the web client without a
+          // project list until the next desktop mutation re-syncs — surface it.
+          const syncResult = await syncProjects(
+            toProjectSummaries(projects, activeProjectId),
+            activeProjectId || null
+          )
+          if (!syncResult.success) {
+            toast.error(`Failed to seed remote project list: ${syncResult.error}`)
+          }
         }
       } else {
         setRemoteError(result.error)

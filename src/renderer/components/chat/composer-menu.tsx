@@ -55,6 +55,13 @@ interface FlatRow {
   item: ComposerMenuItem
 }
 
+/**
+ * Max finger travel (px) for a touchend to count as a tap rather than a
+ * drag-scroll. A touchend past this radius from its touchstart is treated as
+ * scrolling and does not select (Story 5.3 T4.2 touch-reliability fix).
+ */
+const TOUCH_SELECT_THRESHOLD_PX = 10
+
 /** Flatten sections to a single ordered list for highlight indexing. */
 function flatten(sections: ComposerMenuSection[]): FlatRow[] {
   return sections.flatMap((s) => s.items.map((item) => ({ sectionId: s.id, item })))
@@ -75,6 +82,9 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
     // Tracks the last input type so a tap selects exactly once. Reset after
     // 500ms so the next interaction starts fresh.
     const lastInputType = useRef<'mouse' | 'touch' | null>(null)
+    // Story 5.3 (T4.2): record the touchstart coords so `onTouchEnd` can tell
+    // a tap (select) from a drag-scroll (skip) by travel distance.
+    const touchStartRef = useRef<{ x: number; y: number } | null>(null)
     // Stable id for the listbox + each option so the owning textarea can
     // reference the active option via `aria-activedescendant`.
     const listboxId = useId()
@@ -183,8 +193,29 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     }
                     onSelect(section.id, item)
                   }}
+                  onTouchStart={(e) => {
+                    const t = e.touches[0]
+                    if (t) {
+                      touchStartRef.current = { x: t.clientX, y: t.clientY }
+                    }
+                  }}
                   onTouchEnd={(e) => {
                     e.preventDefault()
+                    const start = touchStartRef.current
+                    touchStartRef.current = null
+                    const t = e.changedTouches[0]
+                    // Only select if the touch stayed within a small movement
+                    // threshold — a touchend after a drag-scroll must not
+                    // select (treat as scrolling). The mouse-synthesis guard
+                    // (`lastInputType`) is only claimed for a real tap.
+                    const isTap =
+                      start && t
+                        ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+                          TOUCH_SELECT_THRESHOLD_PX ** 2
+                        : true
+                    if (!isTap) {
+                      return
+                    }
                     lastInputType.current = 'touch'
                     onSelect(section.id, item)
                     // Reset the guard after a short delay so the next

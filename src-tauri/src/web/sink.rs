@@ -1130,8 +1130,9 @@ mod tests {
         assert_eq!(evt.payload["activeProjectId"], "p-3");
     }
 
-    /// `broadcast_projects_changed` with no active project still fans out
-    /// (payload carries `activeProjectId: null`).
+    /// `broadcast_projects_changed` with no active project still fans out;
+    /// the `ProjectsChangedPayload` struct's `skip_serializing_if` OMITS the
+    /// `activeProjectId` key entirely (not `null`).
     #[test]
     fn broadcast_projects_changed_null_active_id() {
         let relay = Arc::new(WsRelaySink::new());
@@ -1142,6 +1143,10 @@ mod tests {
         let drained = drain_rx(&mut rx);
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].type_, "projects_changed");
-        assert_eq!(drained[0].payload["activeProjectId"], serde_json::Value::Null);
+        // `skip_serializing_if = "Option::is_none"` → the key is omitted, not null.
+        assert!(
+            drained[0].payload.get("activeProjectId").is_none(),
+            "activeProjectId must be omitted (not null) when None"
+        );
     }
 }

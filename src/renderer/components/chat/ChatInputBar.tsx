@@ -151,10 +151,11 @@ export function ChatInputBar({
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
   const osk = useOskViewport()
   const isMobileShell = useMobileWebShell()
-  // Guard against focus-loop thrash: only scroll the textarea into view once
-  // per OSK-open window (the OSK can re-focus the textarea as it animates;
-  // repeated `scrollIntoView` calls would fight the user's manual scroll).
-  const lastOskFocusRef = useRef<number>(0)
+  // OSK-open transition: scroll the textarea into view exactly once per
+  // OSK-open window. The OSK state can lag the focus event (focus fires
+  // before `osk.isOskOpen` flips true), so a closed→open transition effect
+  // is more reliable than reading `osk.isOskOpen` in onFocus.
+  const prevOskOpenRef = useRef(false)
   const {
     attachments,
     addFiles,
@@ -385,6 +386,22 @@ export function ChatInputBar({
     })
   }, [seedNonce, updateMentions, clampHeight])
 
+  // Story 5.3 (T2.3): on mobile web, scroll the textarea into view once per
+  // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
+  // Moved from onFocus (where `osk.isOskOpen` may still be false at focus
+  // time) to a closed→open transition effect — mirrors AgentChatPanel. rAF-
+  // deferred to let layout settle; fires once per OSK-open window.
+  useEffect(() => {
+    const wasOpen = prevOskOpenRef.current
+    prevOskOpenRef.current = osk.isOskOpen
+    if (!wasOpen && osk.isOskOpen && isMobileShell) {
+      const el = textareaRef.current
+      if (el) {
+        requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
+      }
+    }
+  }, [osk.isOskOpen, isMobileShell])
+
   const modelChip = modelOption ? (
     <ConfigChip
       key={modelOption.id}
@@ -495,19 +512,9 @@ export function ChatInputBar({
                 // focus per OSK-open window triggers the scroll).
                 onFocus={() => {
                   setFocused(true)
-                  if (isMobileShell && osk.isOskOpen) {
-                    const now = Date.now()
-                    // Only re-scroll if >800ms since the last OSK-open focus
-                    // (an OSK-open window typically lasts seconds; back-to-back
-                    // focuses within 800ms are animation-driven re-focuses).
-                    if (now - lastOskFocusRef.current > 800) {
-                      lastOskFocusRef.current = now
-                      const el = textareaRef.current
-                      if (el) {
-                        requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
-                      }
-                    }
-                  }
+                  // OSK-open scroll is handled by the `osk.isOskOpen`
+                  // transition effect above (the OSK state can lag the focus
+                  // event, so reading it here was unreliable).
                 }}
                 onBlur={() => setFocused(false)}
                 // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
@@ -537,8 +544,14 @@ export function ChatInputBar({
             >
               {toolbarMode === 'narrow' ? (
                 (() => {
-                  const hasRow1 = Boolean(agentModeChip || modelChip)
-                  const hasRow2 = hasConfigOptions || Boolean(mcpBadge)
+                  // Use the underlying availability conditions, not JSX-element
+                  // truthiness — a chip element is always truthy even when it
+                  // renders null internally, which made this empty-row guard
+                  // unreachable in narrow mode.
+                  const agentModesAvailable =
+                    session.modes != null && session.modes.availableModes.length > 0
+                  const hasRow1 = agentModesAvailable || Boolean(modelChip)
+                  const hasRow2 = hasConfigOptions || mcpCount > 0
                   if (!hasRow1 && !hasRow2) return null
                   return (
                     <div className="flex min-w-0 flex-1 flex-col gap-2">

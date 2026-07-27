@@ -538,12 +538,18 @@ export function useProjectsAutoSave(): void {
       // `projects_changed` so connected web clients refetch `GET /projects`.
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
       if (useRemoteStatusStore.getState().status?.running) {
-        void syncProjects(
+        syncProjects(
           toProjectSummaries(state.projects, state.activeProjectId),
           state.activeProjectId || null
-        ).catch((err: unknown) => {
-          console.debug('[projects] remote sync failed', err)
-        })
+        )
+          .then((result) => {
+            if (!result.success) {
+              console.warn('[projects] remote sync unsuccessful:', result.error)
+            }
+          })
+          .catch((err: unknown) => {
+            console.debug('[projects] remote sync failed', err)
+          })
       }
     })
 

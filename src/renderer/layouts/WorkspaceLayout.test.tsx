@@ -11,6 +11,8 @@ const { platformState } = vi.hoisted(() => ({
   platformState: { isMac: false }
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
+
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
   return {

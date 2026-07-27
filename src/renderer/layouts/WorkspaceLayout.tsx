@@ -62,6 +62,7 @@ import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
@@ -1494,13 +1495,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
               Create your first project to organize your terminals, snapshots, and commands
             </p>
-            <button
-              type="button"
-              onClick={() => setIsNewProjectModalOpen(true)}
-              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
-            >
-              Create Your First Project
-            </button>
+            {isTauriContext() && (
+              <button
+                type="button"
+                onClick={() => setIsNewProjectModalOpen(true)}
+                className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+              >
+                Create Your First Project
+              </button>
+            )}
           </motion.div>
         </div>
       ) : (
