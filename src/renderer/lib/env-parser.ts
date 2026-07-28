@@ -1,6 +1,24 @@
 import type { EnvVariable } from '@/types/project'
 
 /**
+ * Resolve the exact .env file beneath a project root without relying on
+ * platform-specific path APIs in the renderer.
+ */
+export function resolveProjectEnvPath(rootPath: string): string {
+  const isWindowsPath = /^[A-Za-z]:[\\/]/.test(rootPath) || rootPath.startsWith('\\\\')
+  const separator = isWindowsPath && rootPath.includes('\\') ? '\\' : '/'
+  const rootWithoutTrailingSeparators = isWindowsPath
+    ? rootPath.replace(/[\\/]+$/, '')
+    : rootPath.replace(/\/+$/, '')
+
+  if (rootWithoutTrailingSeparators === '') {
+    return `${separator}.env`
+  }
+
+  return `${rootWithoutTrailingSeparators}${separator}.env`
+}
+
+/**
  * Result of parsing a .env file
  */
 export interface EnvParseResult {
