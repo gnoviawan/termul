@@ -2,17 +2,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
-struct SendWrapper<T>(pub T);
-unsafe impl<T> Send for SendWrapper<T> {}
-unsafe impl<T> Sync for SendWrapper<T> {}
-
-impl<T> SendWrapper<T> {
-    pub fn take(self) -> T {
-        self.0
-    }
-}
-
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserTabInfo {
@@ -184,7 +173,7 @@ impl BrowserTabManager {
         });
     }
 
-    pub fn create(
+    pub async fn create(
         &self,
         tab_id: String,
         url: String,
@@ -200,104 +189,103 @@ impl BrowserTabManager {
             tauri::WebviewUrl::External(parsed_url),
         );
 
-        let scale_factor = window.scale_factor().unwrap_or(1.0);
-        log::info!("[BrowserTab] create original bounds: x={}, y={}, w={}, h={}, scale_factor={}", bounds.x, bounds.y, bounds.width, bounds.height, scale_factor);
-
-        #[cfg(target_os = "linux")]
-        let (x, y, w, h) = (
-            bounds.x / scale_factor,
-            bounds.y / scale_factor,
-            bounds.width / scale_factor,
-            bounds.height / scale_factor,
-        );
-
-        #[cfg(not(target_os = "linux"))]
-        let (x, y, w, h) = (bounds.x, bounds.y, bounds.width, bounds.height);
-
-        log::info!("[BrowserTab] create scaled bounds: x={}, y={}, w={}, h={}", x, y, w, h);
-
         let _webview = window
             .add_child(
                 builder,
-                tauri::LogicalPosition::new(x, y),
-                tauri::LogicalSize::new(w, h),
+                tauri::LogicalPosition::new(bounds.x, bounds.y),
+                tauri::LogicalSize::new(bounds.width, bounds.height),
             )
             .map_err(|e| format!("Failed to create webview: {}", e))?;
 
         #[cfg(target_os = "linux")]
         {
-            let child_webview = _webview.clone();
-            if let Ok(main_webview) = window.get_webview("main").ok_or_else(|| "Main webview not found".to_string()) {
-                let bounds_clone = bounds.clone();
-                let _ = main_webview.with_webview(move |main_platform| {
-                    let main_widget = main_platform.inner().clone();
-                    let main_widget_wrapped = SendWrapper(main_widget);
-                    let _ = child_webview.with_webview(move |child_platform| {
-                        let child_widget = child_platform.inner().clone();
-                        let main_widget = main_widget_wrapped.take();
-                        let handle_reparent = || -> Result<(), String> {
-                            use gtk::prelude::*;
+            // Confirm the main webview still exists before changing the GTK hierarchy.
+            if window.get_webview("main").is_none() {
+                let _ = _webview.close();
+                return Err("Main webview not found".to_string());
+            }
 
-                            let parent = main_widget.parent()
-                                .ok_or_else(|| "Main webview has no parent".to_string())?;
+            let (reparent_tx, reparent_rx) = tokio::sync::oneshot::channel();
+            let reparent_bounds = bounds.clone();
+            let dispatch_result = _webview.with_webview(move |child_platform| {
+                let result = (|| -> Result<(), String> {
+                    use gtk::prelude::*;
 
-                            let overlay = if parent.type_().name() == "GtkOverlay" {
-                                parent.dynamic_cast::<gtk::Overlay>()
-                                    .map_err(|_| "Parent is not GtkOverlay".to_string())?
-                            } else {
-                                let vbox = parent.dynamic_cast::<gtk::Box>()
-                                    .map_err(|_| "Main webview parent is not GtkBox".to_string())?;
+                    let child_widget = child_platform.inner();
+                    let parent = child_widget
+                        .parent()
+                        .ok_or_else(|| "Child webview has no parent".to_string())?;
+                    let vbox = parent
+                        .dynamic_cast::<gtk::Box>()
+                        .map_err(|_| "Child webview parent is not GtkBox".to_string())?;
 
-                                let new_overlay = gtk::Overlay::new();
-                                new_overlay.set_hexpand(true);
-                                new_overlay.set_vexpand(true);
+                    // On first creation the main and child webviews are siblings in the
+                    // window's default GtkBox. Later tabs reuse the overlay already placed
+                    // beside the newly-created child, so no GTK handle crosses callbacks.
+                    vbox.remove(&child_widget);
+                    let overlay = if let Some(existing) = vbox
+                        .children()
+                        .into_iter()
+                        .find_map(|widget| widget.dynamic_cast::<gtk::Overlay>().ok())
+                    {
+                        existing
+                    } else {
+                        let main_widget = vbox
+                            .children()
+                            .into_iter()
+                            .find(|widget| widget.type_().name() == "WebKitWebView")
+                            .ok_or_else(|| "Main GTK webview widget not found".to_string())?;
+                        let overlay = gtk::Overlay::new();
+                        overlay.set_hexpand(true);
+                        overlay.set_vexpand(true);
+                        main_widget.set_hexpand(true);
+                        main_widget.set_vexpand(true);
+                        vbox.remove(&main_widget);
+                        vbox.pack_start(&overlay, true, true, 0);
+                        overlay.add(&main_widget);
+                        main_widget.show();
+                        overlay.show();
+                        overlay
+                    };
 
-                                main_widget.set_hexpand(true);
-                                main_widget.set_vexpand(true);
+                    child_widget.set_halign(gtk::Align::Start);
+                    child_widget.set_valign(gtk::Align::Start);
+                    child_widget.set_margin_start(reparent_bounds.x.round() as i32);
+                    child_widget.set_margin_top(reparent_bounds.y.round() as i32);
+                    child_widget.set_size_request(
+                        reparent_bounds.width.round() as i32,
+                        reparent_bounds.height.round() as i32,
+                    );
+                    overlay.add_overlay(&child_widget);
+                    child_widget.show();
+                    overlay.show();
+                    Ok(())
+                })();
 
-                                vbox.remove(&main_widget);
-                                vbox.pack_start(&new_overlay, true, true, 0);
-                                new_overlay.add(&main_widget);
-                                new_overlay.show();
-                                new_overlay
-                            };
+                let _ = reparent_tx.send(result);
+            });
 
-                            if let Some(child_parent) = child_widget.parent() {
-                                if let Ok(vbox) = child_parent.dynamic_cast::<gtk::Box>() {
-                                    vbox.remove(&child_widget);
-                                }
-                            }
+            if let Err(error) = dispatch_result {
+                let _ = _webview.close();
+                return Err(format!("Failed to dispatch Linux GTK reparent: {error}"));
+            }
 
-                            let width = (bounds_clone.width / scale_factor) as i32;
-                            let height = (bounds_clone.height / scale_factor) as i32;
-                            let x_pos = (bounds_clone.x / scale_factor) as i32;
-                            let y_pos = (bounds_clone.y / scale_factor) as i32;
-
-                            child_widget.set_halign(gtk::Align::Start);
-                            child_widget.set_valign(gtk::Align::Start);
-                            child_widget.set_margin_start(x_pos);
-                            child_widget.set_margin_top(y_pos);
-                            child_widget.set_size_request(width, height);
-                            child_widget.show();
-
-                            overlay.add_overlay(&child_widget);
-                            overlay.show_all();
-                            Ok(())
-                        };
-
-                        if let Err(e) = handle_reparent() {
-                            log::error!("[BrowserTab] Linux GTK reparent failed: {}", e);
-                        } else {
-                            log::info!("[BrowserTab] Linux GTK reparent succeeded");
-                        }
-                    });
-                });
-            } else {
-                log::error!("[BrowserTab] Linux GTK reparent failed: Main webview not found");
+            match reparent_rx.await {
+                Ok(Ok(())) => {
+                    log::info!("[BrowserTab] Linux GTK reparent succeeded");
+                }
+                Ok(Err(error)) => {
+                    let _ = _webview.close();
+                    return Err(format!("Linux GTK reparent failed: {error}"));
+                }
+                Err(error) => {
+                    let _ = _webview.close();
+                    return Err(format!("Linux GTK reparent callback canceled: {error}"));
+                }
             }
         }
 
-        // Start background poller to sync URL and loading state from webview
+        // Start background poller only after native placement succeeds.
         self.start_url_poller(tab_id.clone());
 
         let info = BrowserTabInfo {
@@ -517,23 +505,19 @@ impl BrowserTabManager {
 
         #[cfg(target_os = "linux")]
         {
-            let window = self.get_window()?;
-            let scale_factor = window.scale_factor().unwrap_or(1.0);
-            let w = bounds.width / scale_factor;
-            let h = bounds.height / scale_factor;
-            let x = bounds.x / scale_factor;
-            let y = bounds.y / scale_factor;
-
-            log::info!("[BrowserTab] resize: scaled target bounds x={}, y={}, w={}, h={}, scale={}", x, y, w, h, scale_factor);
-
-            let _ = webview.with_webview(move |child_platform| {
-                use gtk::prelude::*;
-                let child_widget = child_platform.inner();
-                child_widget.set_margin_start(x as i32);
-                child_widget.set_margin_top(y as i32);
-                child_widget.set_size_request(w as i32, h as i32);
-                child_widget.queue_resize();
-            });
+            webview
+                .with_webview(move |child_platform| {
+                    use gtk::prelude::*;
+                    let child_widget = child_platform.inner();
+                    child_widget.set_margin_start(bounds.x.round() as i32);
+                    child_widget.set_margin_top(bounds.y.round() as i32);
+                    child_widget.set_size_request(
+                        bounds.width.round() as i32,
+                        bounds.height.round() as i32,
+                    );
+                    child_widget.queue_resize();
+                })
+                .map_err(|e| format!("Resize dispatch failed: {e}"))?;
             Ok(())
         }
 
