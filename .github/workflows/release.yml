@@ -354,11 +354,15 @@ jobs:
 
       - name: Collect platform release assets and updater manifest
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          TAG: ${{ github.ref_name }}
         run: |
           node scripts/release/prepare-platform-artifacts.mjs \
-            --platform "${{ matrix.platform }}" \
-            --version "${{ needs.changelog.outputs.normalized_version }}" \
-            --tag "${{ github.ref_name }}" \
+            --platform "$PLATFORM" \
+            --version "$VERSION" \
+            --tag "$TAG" \
             --artifacts tauri-artifact-paths.json \
             --output collected
 
@@ -515,13 +519,14 @@ jobs:
       - name: Upload all validated release assets and updater manifest once
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
           assets=()
           while IFS= read -r -d '' asset; do
             assets+=("$asset")
           done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
           assets+=(latest.json)
-          gh release upload "${{ github.ref_name }}" "${assets[@]}" --clobber
+          gh release upload "$TAG" "${assets[@]}" --clobber
 
       - name: Publish draft release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7

@@ -106,9 +106,16 @@ EOF
 
 @test "prerelease metadata path does not require a Homebrew token" {
   local workflow="$TERMUL_TEST_REPO_ROOT/.github/workflows/publish-homebrew.yml"
+  local metadata_section
+  local checksums_section
+  metadata_section="$(sed -n '/release_metadata:/,/checksums:/p' "$workflow")"
+  checksums_section="$(sed -n '/checksums:/,/homebrew:/p' "$workflow")"
+
   grep -Fq "if: needs.release_metadata.outputs.is_prerelease == 'false'" "$workflow"
-  ! sed -n '/release_metadata:/,/checksums:/p' "$workflow" | grep -q 'HOMEBREW_TAP_TOKEN'
-  ! sed -n '/checksums:/,/homebrew:/p' "$workflow" | grep -q 'HOMEBREW_TAP_TOKEN'
+  [ -n "$metadata_section" ]
+  [ -n "$checksums_section" ]
+  ! grep -q 'HOMEBREW_TAP_TOKEN' <<<"$metadata_section"
+  ! grep -q 'HOMEBREW_TAP_TOKEN' <<<"$checksums_section"
 }
 
 @test "release workflows preserve permissions token flow portability and tap serialization" {
@@ -121,5 +128,8 @@ EOF
   grep -Fq 'source scripts/release/homebrew.sh' "$release_workflow"
   grep -Fq 'otool -L "$executable"' "$release_workflow"
   grep -Fq 'LC_RPATH' "$release_workflow"
-  ! sed -n '/Verify macOS bundle library portability and signing/,/Collect platform release assets/p' "$release_workflow" | grep -q 'mapfile'
+  local macos_verification_section
+  macos_verification_section="$(sed -n '/Verify macOS bundle library portability and signing/,/Collect platform release assets/p' "$release_workflow")"
+  [ -n "$macos_verification_section" ]
+  ! grep -q 'mapfile' <<<"$macos_verification_section"
 }
