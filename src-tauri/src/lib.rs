@@ -119,9 +119,10 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 pub use acp::AcpManager;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
-// Re-export for `web::fs_api` so the project-root boundary check can reuse
-// the shared Windows verbatim-prefix stripper (PR-S4 nitpick) without
-// promoting the whole `path_validation` module to public visibility.
+// Re-export only where `web::fs_api` uses the Windows-specific boundary
+// normalization. On non-Windows targets the helper is unused, and keeping the
+// re-export enabled there fails the mandatory `-D warnings` clippy gate.
+#[cfg(windows)]
 pub(crate) use path_validation::strip_verbatim_prefix;
 
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
