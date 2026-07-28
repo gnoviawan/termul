@@ -540,15 +540,8 @@ fn open_external_url(url: &str) -> Result<(), String> {
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
-    let file_menu = {
-        #[cfg(target_os = "macos")]
-        let builder = SubmenuBuilder::new(app, "File");
-
-        #[cfg(not(target_os = "macos"))]
-        let builder = SubmenuBuilder::new(app, "File").quit();
-
-        builder.build()?
-    };
+    #[cfg(not(target_os = "macos"))]
+    let file_menu = SubmenuBuilder::new(app, "File").quit().build()?;
 
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -640,7 +633,7 @@ fn build_app_menu<R: tauri::Runtime>(
         .build()?;
 
     #[cfg(target_os = "macos")]
-    let menu = {
+    {
         let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
             .about(None)
             .separator()
@@ -653,13 +646,18 @@ fn build_app_menu<R: tauri::Runtime>(
             .quit()
             .build()?;
 
-        MenuBuilder::new(app).item(&app_menu)
-    };
+        return MenuBuilder::new(app)
+            .item(&app_menu)
+            .item(&edit_menu)
+            .item(&view_menu)
+            .item(&window_menu)
+            .item(&help_menu)
+            .build();
+    }
 
     #[cfg(not(target_os = "macos"))]
-    let menu = MenuBuilder::new(app);
-
-    menu.item(&file_menu)
+    MenuBuilder::new(app)
+        .item(&file_menu)
         .item(&edit_menu)
         .item(&view_menu)
         .item(&window_menu)
