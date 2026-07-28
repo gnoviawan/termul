@@ -26,11 +26,11 @@ async function writeManifest(
 }
 
 function completePlatforms() {
-  return Object.fromEntries(requiredPlatformKeys.map((key) => [key, record(key)]))
+  return Object.fromEntries(requiredPlatformKeys.map((key: string) => [key, record(key)]))
 }
 
 function completeAssetNames() {
-  return requiredPlatformKeys.flatMap((key) => [assetName(key), `${assetName(key)}.sig`])
+  return requiredPlatformKeys.flatMap((key: string) => [assetName(key), `${assetName(key)}.sig`])
 }
 
 describe('mergeUpdaterManifests', () => {
@@ -155,7 +155,7 @@ describe('mergeUpdaterManifests', () => {
     const dir = await fixtureDir()
     const input = join(dir, 'manifest.json')
     const assets = completeAssetNames().filter(
-      (name) => name !== `${assetName('linux-x86_64')}.sig`
+      (name: string) => name !== `${assetName('linux-x86_64')}.sig`
     )
     await writeManifest(input, completePlatforms(), version, assets)
 
