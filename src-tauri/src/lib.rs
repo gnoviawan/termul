@@ -1,8 +1,8 @@
 // Module declarations
 mod acp;
 mod acp_binary_install;
-mod agent_registry;
 mod acp_registry_snapshot;
+mod agent_registry;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -55,6 +55,7 @@ const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-
 const TRAY_ID: &str = "termul-tray";
 const TRAY_MENU_SHOW: &str = "tray-show";
 const TRAY_MENU_QUIT: &str = "tray-quit";
+const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
@@ -913,7 +914,6 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     Ok(())
 }
 
-static IS_QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 // Claimed synchronously when we enter the async cleanup path and never reset.
 // Prevents a second ExitRequested (e.g. an OS exit signal, or the exit(0) we
@@ -946,9 +946,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     let builder = builder.on_menu_event(handle_menu_event);
 
+    // Single-instance must be the first plugin: Tauri initializes plugins in
+    // registration order, so duplicate launches must be rejected before any
+    // other plugin performs setup or side effects. The plugin is desktop-only.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            // Unminimize before focus so the restored window is reliably
+            // foregrounded on every platform.
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
     let mut builder = builder
-        // Logging must be registered first so the global logger is installed
-        // before any other plugin or setup code emits a log line.
+        // Logging is first among the remaining plugins so the global logger is
+        // installed before their setup code emits log lines.
         .plugin(logging::build_log_plugin())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -960,19 +974,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
-
-    // Single-instance guard: jika user buka termul lagi padahal sudah jalan,
-    // cukup fokuskan window yang ada — jangan spawn instance baru.
-    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.show();
-            // Unminimize before focus so the restored window is reliably
-            // foregrounded on every platform (focusing a minimized window can
-            // leave it visible but not raised on some WMs).
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
-    }));
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -1149,6 +1150,7 @@ pub fn run() {
             // Buat tray icon dengan menu klik kanan seperti Telegram.
             // Klik icon → show/focus window.
             // Close button (X) → minimize ke tray, bukan quit.
+            #[cfg(desktop)]
             {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -1181,8 +1183,14 @@ pub fn run() {
                                 }
                             }
                             id if id == TRAY_MENU_QUIT => {
-                                IS_QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
-                                app_handle.exit(0);
+                                // Let the renderer run the existing dirty-file
+                                // prompt and persistence flush before it destroys
+                                // the window. Direct app.exit(0) would bypass it.
+                                let _ = app_handle.emit_to(
+                                    "main",
+                                    TRAY_QUIT_REQUESTED_EVENT,
+                                    (),
+                                );
                             }
                             _ => {}
                         }
@@ -1206,42 +1214,6 @@ pub fn run() {
                     })
                     .build(app)?;
 
-                // Intercept window close (X button) → sembunyikan ke tray,
-                // bukan terminate proses. User bisa quit lewat menu tray.
-                if let Some(window) = app.get_webview_window("main") {
-                    // Only needed on platforms that hide to the tray on close.
-                    #[cfg(not(target_os = "windows"))]
-                    let app_handle_for_close = handle.clone();
-                    window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                            if IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
-                                // Allow close to proceed and terminate the app
-                            } else {
-                                // Intercepting close with prevent_close() would
-                                // also block OS shutdown/logoff on Windows
-                                // (WM_QUERYENDSESSION) and, per issue #390, Windows
-                                // users expect closing the window to fully exit the
-                                // app (not linger in Task Manager). So only hide to
-                                // the tray on non-Windows; on Windows let the window
-                                // close so cleanup runs and the process terminates.
-                                #[cfg(not(target_os = "windows"))]
-                                {
-                                    api.prevent_close();
-                                    if let Some(w) =
-                                        app_handle_for_close.get_webview_window("main")
-                                    {
-                                        let _ = w.hide();
-                                    }
-                                }
-                                #[cfg(target_os = "windows")]
-                                {
-                                    // No-op: allow close to terminate the process.
-                                    let _ = api;
-                                }
-                            }
-                        }
-                    });
-                }
             }
             // ── End Tray ────────────────────────────────────────────────────
 
@@ -1412,6 +1384,11 @@ pub fn run() {
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
+            // Prevent every exit request while the single cleanup task runs.
+            // A re-entrant request must not bypass cleanup through Tauri's
+            // default exit behavior while CLEANUP_IN_PROGRESS is already true.
+            api.prevent_exit();
+
             // Atomically claim the cleanup path. If a previous ExitRequested
             // already started the async cleanup (not yet done), short-circuit
             // so we don't spawn a second task racing kill_all()/destroy_all().
@@ -1426,8 +1403,6 @@ pub fn run() {
             {
                 return;
             }
-            // Prevent the default exit behavior so we can cleanup first
-            api.prevent_exit();
 
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()

@@ -653,6 +653,37 @@ export default function WorkspaceLayout(): React.JSX.Element {
     })
   }, [closeAppWithPersistenceFlush])
 
+  // Tray Quit is an explicit app-quit request. It reuses the renderer's
+  // existing dirty-file prompt and persistence flush instead of bypassing it
+  // with a native app.exit(0).
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined
+    let disposed = false
+    listen<void>('tray:quit-requested', () => {
+      const dirtyCount = useEditorStore.getState().getDirtyFileCount()
+      if (dirtyCount > 0) {
+        setAppCloseDirtyCount(dirtyCount)
+        setIsAppCloseDialogOpen(true)
+      } else {
+        void closeAppWithPersistenceFlush()
+      }
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn()
+        } else {
+          unlisten = fn
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to register tray quit listener:', error)
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [closeAppWithPersistenceFlush])
+
   // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
