@@ -48,6 +48,16 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `editor/TableOfContents.tsx` and `editor/TocPanel.tsx` — heading navigation
 - `editor/MermaidBlock.tsx` — diagram rendering for markdown workflows
 
+### Agent Chat (ACP) Components
+
+- `chat/AgentChatPanel.tsx` — top-level agent-chat pane body coordinating header, message thread, plan panel, permission dialog, and composer for a single ACP session
+- `chat/ChatMessage.tsx` — user/agent message row; renders sanitized markdown prose plus media blocks as AI Elements `Attachments` grid thumbnails (lightbox for inline images, click-to-open for `file://`-backed blocks)
+- `chat/ChatInputBar.tsx` — composer with slash commands, `@`-file mentions, config/mode chips, and staged-attachment badges
+- `chat/AttachmentPreviewGroup.tsx` — staged-attachment badges above the composer using AI Elements `Attachments` inline variant with hover-card image previews and click-to-open for path-backed refs
+- `chat/use-composer-attachments.ts` — hybrid transport hook (OS picker → `resource_link`, drag/paste → inline image or embedded text) shared by the chat input and the new-thread launcher
+- `chat/chat-attachments.ts` — attachment helpers: MIME guessing, name humanization, ACP block mapping, and `pendingToAttachmentData`/`blockToAttachmentData` adapters into AI Elements `AttachmentData`
+- `ai-elements/attachments.tsx` — vendored [AI SDK Elements Attachments](https://elements.ai-sdk.dev/components/attachments) component (grid/inline/list variants) adapted to the repo's shadcn primitives and `ai` package types
+
 ### Browser / Annotation Components
 
 - `browser/BrowserPanel.tsx` — pane host for embedded browser webview state and annotation workflow

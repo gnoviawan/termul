@@ -4,15 +4,35 @@ version = "0.4.8"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
-rust-version = "1.77"
+# ACP 0.12.1 (vendored) is edition 2024 and requires Rust ≥ 1.85; bump MSRV to match.
+rust-version = "1.85"
+# Two binaries live in this crate: the desktop app (`termul-manager`, the
+# implicit src/main.rs) and the standalone headless server (`termul-server`).
+# Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
+# ambiguity. The standalone binary is built explicitly via
+# `cargo build --bin termul-server --features standalone-server`.
+default-run = "termul-manager"
 
 [lib]
 name = "termul_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
+# build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
+# discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
+# disk scan cannot re-add it. Build with:
+#   cargo build --bin termul-server --features standalone-server
+[[bin]]
+name = "termul-server"
+path = "src/server_main.rs"
+required-features = ["standalone-server"]
+
 [features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+default = []
+# Enables the termul-server binary entry. rust-embed is now always-on (the
+# desktop's in-process shared-live server serves the SAME embedded bundle in a
+# release install without dist-web/ on disk).
+standalone-server = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -61,7 +81,7 @@ async-process = "2"
 # is NOT used — it depends on acp 0.11, which would pull a second, incompatible
 # copy of the protocol crate into the tree. See Spec Change Log in
 # spec-adr-003-p0-rust-acp-core.md.
-agent-client-protocol = { version = "0.12", features = ["unstable_session_model"] }
+agent-client-protocol = { version = "0.12", features = ["unstable_session_model", "unstable_session_usage"] }
 
 # Regex and parsing
 regex = "1"
@@ -99,6 +119,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
 
+# Embed the Vite web bundle (dist-web/) into the binary so the standalone
+# termul-server AND the desktop's in-process shared-live server serve the web
+# client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
+# green when the bundle is absent; the release build fails clearly via
+# build.rs when it is missing.
+rust-embed = { version = "8.12", features = ["mime-guess"] }
+
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
@@ -116,9 +143,6 @@ keyring = { version = "3.6", features = ["apple-native"] }
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
-gtk = "0.18"
-webkit2gtk = "2.0"
-
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

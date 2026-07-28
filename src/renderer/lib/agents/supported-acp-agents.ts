@@ -6,7 +6,10 @@ import {
   type RegistryBinaryTarget
 } from '@/lib/agents/acp-registry'
 
-export const SUPPORTED_ACP_AGENT_IDS = [
+const REGISTRY_AGENT_IDS = new Set(REGISTRY_AGENTS.map((agent) => agent.id))
+
+/** Preferred default when no last-selected agent is persisted. */
+export const PREFERRED_DEFAULT_ACP_AGENT_IDS = [
   'codex-acp',
   'claude-acp',
   'gemini',
@@ -15,9 +18,41 @@ export const SUPPORTED_ACP_AGENT_IDS = [
   'pi-acp'
 ] as const
 
-export type SupportedAcpAgentId = (typeof SUPPORTED_ACP_AGENT_IDS)[number]
+export function pickDefaultSupportedAgent(
+  entries: readonly SupportedAcpAgentEntry[]
+): SupportedAcpAgentEntry | null {
+  for (const id of PREFERRED_DEFAULT_ACP_AGENT_IDS) {
+    const match = entries.find((entry) => entry.id === id && entry.status === 'ready')
+    if (match) return match
+  }
+  return entries.find((entry) => entry.status === 'ready') ?? entries[0] ?? null
+}
 
-export type SupportedAcpAgentStatus = 'ready' | 'install-required' | 'unavailable'
+export function filterSupportedAcpAgents(
+  entries: readonly SupportedAcpAgentEntry[],
+  query: string
+): SupportedAcpAgentEntry[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return [...entries]
+  return entries.filter(
+    (entry) =>
+      entry.agent.name.toLowerCase().includes(q) ||
+      entry.agent.id.toLowerCase().includes(q) ||
+      entry.agent.description.toLowerCase().includes(q)
+  )
+}
+
+export interface AcpRuntimeAvailability {
+  npx: boolean
+  uvx: boolean
+}
+
+export type SupportedAcpAgentStatus =
+  | 'ready'
+  | 'install-required'
+  | 'needs-runtime'
+  | 'manual-install'
+  | 'unavailable'
 
 export interface SupportedAcpAgentInstall {
   archiveUrl: string
@@ -26,13 +61,21 @@ export interface SupportedAcpAgentInstall {
   env: Record<string, string>
 }
 
+export interface SupportedAcpAgentManualInstall {
+  cmd: string
+  args: string[]
+  env: Record<string, string>
+}
+
 export interface SupportedAcpAgentEntry {
-  id: SupportedAcpAgentId
+  id: string
   configId: string
   agent: RegistryAgent
   config: StoredAgentConfig | null
   status: SupportedAcpAgentStatus
   install: SupportedAcpAgentInstall | null
+  manualInstall: SupportedAcpAgentManualInstall | null
+  runtimeLauncher: 'npx' | 'uvx' | null
   unavailableReason: string | null
 }
 
@@ -40,8 +83,15 @@ export function registryConfigId(registryId: string): string {
   return `acp-registry:${registryId}`
 }
 
-function isSupportedAcpAgentId(id: string): id is SupportedAcpAgentId {
-  return (SUPPORTED_ACP_AGENT_IDS as readonly string[]).includes(id)
+function runtimeUnavailableReason(launcher: 'npx' | 'uvx'): string {
+  return launcher === 'npx'
+    ? 'Install Node.js so npx is available on your PATH.'
+    : 'Install uv so uvx is available on your PATH.'
+}
+
+function manualInstallReason(agent: RegistryAgent, cmd: string, args: string[]): string {
+  const suffix = args.length > 0 ? ` ${args.join(' ')}` : ''
+  return `Install ${agent.name} from the vendor, then ensure \`${cmd}${suffix}\` is on your PATH.`
 }
 
 function toStoredConfig(agent: RegistryAgent, config: StoredAgentConfig): StoredAgentConfig
@@ -74,18 +124,29 @@ export function installedBinaryConfig(
   })
 }
 
+export function manualBinaryConfig(
+  agent: RegistryAgent,
+  command: string,
+  manual: SupportedAcpAgentManualInstall
+): StoredAgentConfig {
+  return installedBinaryConfig(
+    agent,
+    { command: command.trim(), args: manual.args },
+    { env: manual.env }
+  )
+}
+
 export function buildSupportedAcpAgents(
   persistedConfigs: readonly StoredAgentConfig[],
   platformArch: string,
-  registry: readonly RegistryAgent[] = REGISTRY_AGENTS
+  registry: readonly RegistryAgent[] = REGISTRY_AGENTS,
+  runtime: AcpRuntimeAvailability | null = null
 ): SupportedAcpAgentEntry[] {
   const persistedById = new Map(persistedConfigs.map((config) => [config.id, config]))
-  const registryById = new Map(registry.map((agent) => [agent.id, agent]))
   const entries: SupportedAcpAgentEntry[] = []
 
-  for (const id of SUPPORTED_ACP_AGENT_IDS) {
-    const agent = registryById.get(id)
-    if (!agent) continue
+  for (const agent of [...registry].sort((a, b) => a.name.localeCompare(b.name))) {
+    const id = agent.id
     const configId = registryConfigId(id)
     const persisted = persistedById.get(configId)
     if (persisted) {
@@ -96,6 +157,8 @@ export function buildSupportedAcpAgents(
         config: persisted,
         status: 'ready',
         install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
         unavailableReason: null
       })
       continue
@@ -103,6 +166,38 @@ export function buildSupportedAcpAgents(
 
     const derived = deriveAgentConfig(agent, platformArch)
     if (derived.kind === 'runnable') {
+      const launcher =
+        derived.config.command === 'npx' || derived.config.command === 'uvx'
+          ? derived.config.command
+          : null
+      if (launcher === 'npx' && runtime !== null && !runtime.npx) {
+        entries.push({
+          id,
+          configId,
+          agent,
+          config: null,
+          status: 'needs-runtime',
+          install: null,
+          manualInstall: null,
+          runtimeLauncher: 'npx',
+          unavailableReason: runtimeUnavailableReason('npx')
+        })
+        continue
+      }
+      if (launcher === 'uvx' && runtime !== null && !runtime.uvx) {
+        entries.push({
+          id,
+          configId,
+          agent,
+          config: null,
+          status: 'needs-runtime',
+          install: null,
+          manualInstall: null,
+          runtimeLauncher: 'uvx',
+          unavailableReason: runtimeUnavailableReason('uvx')
+        })
+        continue
+      }
       entries.push({
         id,
         configId,
@@ -110,6 +205,8 @@ export function buildSupportedAcpAgents(
         config: toStoredConfig(agent, derived.config),
         status: 'ready',
         install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
         unavailableReason: null
       })
       continue
@@ -127,7 +224,27 @@ export function buildSupportedAcpAgents(
           args: derived.args,
           env: derived.env
         },
+        manualInstall: null,
+        runtimeLauncher: null,
         unavailableReason: null
+      })
+      continue
+    }
+    if (derived.kind === 'needs-install') {
+      entries.push({
+        id,
+        configId,
+        agent,
+        config: null,
+        status: 'manual-install',
+        install: null,
+        manualInstall: {
+          cmd: derived.cmd,
+          args: derived.args,
+          env: derived.env
+        },
+        runtimeLauncher: null,
+        unavailableReason: manualInstallReason(agent, derived.cmd, derived.args)
       })
       continue
     }
@@ -138,10 +255,9 @@ export function buildSupportedAcpAgents(
       config: null,
       status: 'unavailable',
       install: null,
-      unavailableReason:
-        derived.kind === 'needs-install'
-          ? 'This platform build must be installed manually.'
-          : 'This agent is not available for your platform.'
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: 'This agent is not available for your platform.'
     })
   }
 
@@ -152,5 +268,5 @@ export function isSupportedAcpConfigId(configId: string): boolean {
   const id = configId.startsWith('acp-registry:')
     ? configId.slice('acp-registry:'.length)
     : configId
-  return isSupportedAcpAgentId(id)
+  return REGISTRY_AGENT_IDS.has(id)
 }

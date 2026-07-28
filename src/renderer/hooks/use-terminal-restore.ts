@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
-import { sessionApi, terminalApi } from '@/lib/api'
+import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { shellApi } from '@/lib/shell-api'
 import {
@@ -480,7 +480,7 @@ export function useTerminalRestore(): void {
           correlationId: continuityCorrelationId,
           projectId: projectIdToRestore,
           details: {
-            path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+            path: restoreMode === 'layout' ? 'persisted-replay' : 'empty-state',
             persistedTerminalCount: layout?.terminals.length ?? 0
           }
         })
@@ -488,40 +488,22 @@ export function useTerminalRestore(): void {
         let attempt = 0
 
         if (restoreMode !== 'layout') {
-          const sessionResult = await sessionApi.restore()
-          const sessionWorkspace = sessionResult.success
-            ? sessionResult.data.workspaces.find(
-                (workspace) => workspace.projectId === projectIdToRestore
-              )
-            : null
-          const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
-          const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
-
-          if (restoreResult.status === 'completed') {
-            if (!isCancelled()) {
-              emitTerminalContinuityEvent({
-                name: 'restore-complete',
-                correlationId: continuityCorrelationId,
-                projectId: projectIdToRestore,
-                terminalId: restoreResult.selectedTerminalId,
-                details: {
-                  path: sessionActiveTerminalId ? 'session-active-terminal' : restoreResult.path,
-                  persistedTerminalCount: layout?.terminals.length ?? 0,
-                  restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
-                  attempt
-                }
-              })
-            }
-          } else if (restoreResult.status === 'failed') {
+          // No live or persisted terminals for this project. Do NOT auto-spawn a
+          // default terminal — that forces a terminal on the user every time they
+          // create or switch to a project, which is poor UX. Instead, leave the
+          // workspace on its empty leaf pane so PaneContent renders the empty-state
+          // launcher (AgentLauncher), letting the user choose whether to open a
+          // terminal or launch an agent.
+          if (!isCancelled()) {
             emitTerminalContinuityEvent({
-              name: 'restore-failed',
+              name: 'restore-complete',
               correlationId: continuityCorrelationId,
               projectId: projectIdToRestore,
               details: {
-                callId,
-                attempt,
-                reason: 'permanent-restore-failure',
-                path: restoreResult.path
+                path: 'empty-state',
+                persistedTerminalCount: layout?.terminals.length ?? 0,
+                restoredTerminalCount: 0,
+                attempt
               }
             })
           }

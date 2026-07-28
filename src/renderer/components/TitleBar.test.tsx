@@ -28,6 +28,12 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectState.activeProject
 }))
 
+vi.mock('@/components/TitlebarPanelToggles', () => ({
+  SidebarToggleButton: () => <button type="button">toggle-sidebar</button>,
+  FileExplorerToggleButton: () => <button type="button">toggle-explorer</button>,
+  titlebarNoDragStyle: { WebkitAppRegion: 'no-drag' }
+}))
+
 describe('TitleBar (window control strip)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -46,6 +52,13 @@ describe('TitleBar (window control strip)', () => {
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Maximize window' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument()
+  })
+
+  it('renders the sidebar and file-explorer panel toggles', () => {
+    render(<TitleBar />)
+
+    expect(screen.getByRole('button', { name: 'toggle-sidebar' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'toggle-explorer' })).toBeInTheDocument()
   })
 
   it('renders nothing on macOS (native traffic lights)', () => {

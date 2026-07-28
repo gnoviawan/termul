@@ -5,8 +5,6 @@ import {
   MessageSquarePlus,
   Network,
   Palette,
-  PanelLeft,
-  PanelRight,
   SlidersHorizontal
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -15,8 +13,6 @@ import { TermulMark } from '@/components/TermulMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
-import { useFileExplorerVisible } from '@/stores/file-explorer-store'
-import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 
 const railButtonClass =
@@ -53,12 +49,14 @@ interface ActivityRailProps {
  *   the brand row stays draggable for top-left window moves.
  * - Brand mark at the top, followed by a separator.
  * - Top group: projects (command palette), git changes, SSH panel toggle.
- * - Bottom group (pinned via `mt-auto`): sidebar toggle, file explorer toggle,
- *   keyboard shortcuts, preferences, color themes.
+ * - Bottom group (pinned via `mt-auto`): keyboard shortcuts, preferences,
+ *   color themes. Sidebar/file-explorer visibility toggles moved to the
+ *   titlebar strip (TitleBar / MacOsTitlebarStrip) beside the OS window
+ *   controls.
  *
- * All actions preserve the behavior contracts that previously lived in the
- * top title bar: persistence-aware panel toggles with error toasts, and
- * accessible labels/states.
+ * The SSH panel toggle preserves the persistence-aware updater, error-toast,
+ * and accessible-label contracts that previously lived in the top title bar.
+ * Sidebar/file-explorer visibility toggles now live in the titlebar strip.
  */
 export function ActivityRail({
   isShortcutsOpen,
@@ -73,34 +71,10 @@ export function ActivityRail({
   isThemePickerOpen = false,
   onToggleThemePicker
 }: ActivityRailProps = {}): React.JSX.Element {
-  const isSidebarVisible = useSidebarVisible()
-  const isExplorerVisible = useFileExplorerVisible()
   const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
   const location = useLocation()
-
-  const handleToggleSidebar = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
-    e.stopPropagation()
-    try {
-      await updatePanelVisibility('sidebarVisible', !isSidebarVisible)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
-    }
-  }
-
-  const handleToggleFileExplorer = async (
-    e: React.MouseEvent<HTMLButtonElement>
-  ): Promise<void> => {
-    e.stopPropagation()
-    try {
-      await updatePanelVisibility('fileExplorerVisible', !isExplorerVisible)
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : 'Failed to update file explorer visibility'
-      )
-    }
-  }
 
   const handleToggleSSHPanel = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
     e.stopPropagation()
@@ -208,38 +182,6 @@ export function ActivityRail({
       </button>
 
       <div className="mt-auto flex flex-col items-center pb-1">
-        <button
-          type="button"
-          onClick={(e) => {
-            void handleToggleSidebar(e)
-          }}
-          className={railButtonClass}
-          title="Toggle sidebar"
-          aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-          aria-pressed={isSidebarVisible}
-        >
-          <PanelLeft
-            size={18}
-            className={isSidebarVisible ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
-
-        <button
-          type="button"
-          onClick={(e) => {
-            void handleToggleFileExplorer(e)
-          }}
-          className={railButtonClass}
-          title="Toggle file explorer"
-          aria-label={isExplorerVisible ? 'Hide file explorer' : 'Show file explorer'}
-          aria-pressed={isExplorerVisible}
-        >
-          <PanelRight
-            size={18}
-            className={isExplorerVisible ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
-
         <TitleBarShortcutsPopover
           buttonClassName={railButtonClass}
           open={isShortcutsOpen}

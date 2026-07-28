@@ -1,6 +1,6 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useCallback } from 'react'
 import { isLinux } from '@/lib/platform'
+import { getCurrentWindow } from '@/lib/tauri-window'
 
 /**
  * Resize edges (Linux only).

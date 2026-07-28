@@ -4,14 +4,15 @@ import type { ChatMessage } from '@/stores/acp-store'
 export type TimelineItem =
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'tool'; key: string; tool: ToolCall }
+  | { kind: 'thought-group'; key: string; messages: ChatMessage[] }
 
 interface Stamped {
   item: TimelineItem
+  /** Monotonic arrival seq, or undefined for history persisted before seq. */
+  seq?: number
   ts: number
   /** Source order, stable tiebreaker for equal timestamps. */
   order: number
-  /** True for the agent's final text response (sorts last within its turn). */
-  isAgentText: boolean
 }
 
 /** Arrival timestamp for a tool call (stamped in the store), with a fallback. */
@@ -20,13 +21,14 @@ function toolTs(tool: ToolCall): number {
 }
 
 /**
- * Merge messages and tool calls into one timeline where, within each turn,
- * non-response items (thinking, tool calls) precede the agent's final text
- * response.
+ * Merge messages and tool calls into one timeline in true chronological arrival
+ * order, so text and tool calls interleave exactly as the agent emitted them
+ * (`text → tool → tool → text`).
  *
- * A "turn" starts at a user message. Items are ordered chronologically across
- * turns, but agent text is pinned to the end of its own turn so tool calls and
- * thinking that share (or slightly trail) its timestamp still render first.
+ * Ordering key, in priority: monotonic `seq` (stamped at append time, robust
+ * against same-millisecond ties); items lacking a seq (history persisted before
+ * seq existed) sort first, by `timestamp`; source order breaks any remaining
+ * ties.
  */
 export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): TimelineItem[] {
   const stamped: Stamped[] = []
@@ -34,41 +36,119 @@ export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): T
   messages.forEach((message, i) => {
     stamped.push({
       item: { kind: 'message', key: message.id, message },
+      seq: message.seq,
       ts: message.timestamp,
-      order: i,
-      isAgentText: message.role === 'agent'
+      order: i
     })
   })
 
   toolCalls.forEach((tool, i) => {
     stamped.push({
       item: { kind: 'tool', key: tool.toolCallId, tool },
+      seq: typeof tool.seq === 'number' ? tool.seq : undefined,
       ts: toolTs(tool),
-      order: 1000 + i,
-      isAgentText: false
+      order: 1000 + i
     })
   })
 
-  // Base chronological order (stable on equal timestamps via source order).
-  stamped.sort((a, b) => (a.ts !== b.ts ? a.ts - b.ts : a.order - b.order))
+  stamped.sort((a, b) => {
+    const aHas = a.seq != null
+    const bHas = b.seq != null
+    // Seqless history sorts before any seq-stamped (live) item.
+    if (aHas !== bHas) return aHas ? 1 : -1
+    if (aHas && bHas) return a.seq! - b.seq!
+    if (a.ts !== b.ts) return a.ts - b.ts
+    return a.order - b.order
+  })
 
-  // Assign each item a turn index: increments at every user message.
-  let turn = 0
-  const turnOf = new Map<Stamped, number>()
-  for (const s of stamped) {
-    if (s.item.kind === 'message' && s.item.message.role === 'user') turn += 1
-    turnOf.set(s, turn)
+  return stamped.map((s) => s.item)
+}
+
+/**
+ * Merge adjacent thought messages into a single display group (one Reasoning
+ * block per thinking stretch, per AI SDK Elements pattern).
+ */
+export function consolidateThoughtGroups(items: TimelineItem[]): TimelineItem[] {
+  const out: TimelineItem[] = []
+  let batch: ChatMessage[] = []
+
+  const flush = (): void => {
+    if (batch.length === 0) return
+    out.push({
+      kind: 'thought-group',
+      // Stable key: the first message id of the run. Using every id in the
+      // batch would change the key each time a new thought chunk arrives and
+      // remount the ThoughtGroup, dropping its local open/userOverride state.
+      key: batch[0]!.id,
+      messages: batch
+    })
+    batch = []
   }
 
-  // Re-sort: by turn, then agent-text last within the turn, then chronological.
-  return stamped
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => {
-      const ta = turnOf.get(a.s) ?? 0
-      const tb = turnOf.get(b.s) ?? 0
-      if (ta !== tb) return ta - tb
-      if (a.s.isAgentText !== b.s.isAgentText) return a.s.isAgentText ? 1 : -1
-      return a.i - b.i
-    })
-    .map(({ s }) => s.item)
+  for (const it of items) {
+    if (it.kind === 'message' && it.message.role === 'thought') {
+      batch.push(it.message)
+    } else {
+      flush()
+      out.push(it)
+    }
+  }
+  flush()
+
+  return out
+}
+
+/** Per-turn metadata for agent replies in a timeline. */
+export interface AgentTurnMeta {
+  /** Message ids that end an agent turn (the last agent reply before the next user turn). */
+  tail: Set<string>
+  /** Full turn text per tail id — every agent reply in that turn joined together. */
+  text: Map<string, string>
+}
+
+function agentText(message: ChatMessage): string {
+  return message.blocks
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text ?? '')
+    .join('')
+}
+
+/**
+ * Group consecutive agent replies into turns. A turn is the run of agent
+ * messages following a user message; intervening tool calls and thoughts don't
+ * break it. Only the last agent reply of each turn is marked as the `tail`, and
+ * carries the concatenated text of every agent reply in that turn — so a single
+ * turn-level Copy yields the whole response, not one bubble.
+ */
+export function agentTurnMeta(items: TimelineItem[]): AgentTurnMeta {
+  const tail = new Set<string>()
+  const text = new Map<string, string>()
+
+  let lastAgentId: string | null = null
+  let turnTexts: string[] = []
+
+  const flush = (): void => {
+    if (lastAgentId) {
+      tail.add(lastAgentId)
+      text.set(lastAgentId, turnTexts.filter((t) => t.length > 0).join('\n\n'))
+    }
+    lastAgentId = null
+    turnTexts = []
+  }
+
+  for (const it of items) {
+    if (it.kind !== 'message') continue
+    if (it.message.role === 'user') {
+      flush()
+      continue
+    }
+    if (it.message.role === 'agent') {
+      lastAgentId = it.message.id
+      turnTexts.push(agentText(it.message))
+    }
+    // thoughts: ignore, don't break the turn
+  }
+  flush()
+
+  return { tail, text }
 }

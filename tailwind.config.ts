@@ -140,6 +140,18 @@ export default {
         'slide-in': {
           from: { opacity: '0', transform: 'translateX(-10px)' },
           to: { opacity: '1', transform: 'translateX(0)' }
+        },
+        // Chat "agent is typing" dots: a gentle hop + scale, staggered per dot
+        // via animation-delay at the call site.
+        'typing-bounce': {
+          '0%, 80%, 100%': { transform: 'translateY(0) scale(0.8)', opacity: '0.5' },
+          '40%': { transform: 'translateY(-3px) scale(1)', opacity: '1' }
+        },
+        // Streaming caret: a steady blink while the agent is writing.
+        'caret-blink': {
+          '0%, 45%': { opacity: '1' },
+          '50%, 95%': { opacity: '0' },
+          '100%': { opacity: '1' }
         }
       },
       animation: {
@@ -149,7 +161,9 @@ export default {
         'accordion-down': 'accordion-down 200ms cubic-bezier(0.23, 1, 0.32, 1)',
         'accordion-up': 'accordion-up 200ms cubic-bezier(0.23, 1, 0.32, 1)',
         'fade-in': 'fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1)',
-        'slide-in': 'slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1)'
+        'slide-in': 'slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1)',
+        'typing-bounce': 'typing-bounce 1s cubic-bezier(0.77, 0, 0.175, 1) infinite',
+        'caret-blink': 'caret-blink 1s step-end infinite'
       },
       boxShadow: {
         'glow-blue': '0 0 15px hsla(217, 91%, 60%, 0.3)',

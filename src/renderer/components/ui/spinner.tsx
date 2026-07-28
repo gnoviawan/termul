@@ -1,0 +1,29 @@
+import { Loader2 } from 'lucide-react'
+import type * as React from 'react'
+
+import { cn } from '@/lib/utils'
+
+function Spinner({
+  className,
+  decorative = false,
+  ...props
+}: React.ComponentProps<'svg'> & {
+  /** Hide from the accessibility tree (e.g. chip trailing affordance with aria-busy). */
+  decorative?: boolean
+}): React.JSX.Element {
+  if (decorative) {
+    return (
+      <Loader2 aria-hidden="true" className={cn('size-4 animate-spin', className)} {...props} />
+    )
+  }
+  return (
+    <Loader2
+      role="status"
+      aria-label="Loading"
+      className={cn('size-4 animate-spin', className)}
+      {...props}
+    />
+  )
+}
+
+export { Spinner }

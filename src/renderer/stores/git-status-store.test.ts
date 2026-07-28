@@ -1,9 +1,14 @@
 import type { GitCommitContext, GitStatusDetail } from '@shared/types/ipc.types'
+import { platform } from '@tauri-apps/plugin-os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as gitApiModule from '@/lib/git-api'
 import { diffKey, useGitStatusStore } from './git-status-store'
 import { useProjectStore } from './project-store'
 import { useTerminalStore } from './terminal-store'
+
+vi.mock('@tauri-apps/plugin-os', () => ({
+  platform: vi.fn()
+}))
 
 vi.mock('@/lib/git-api', () => ({
   gitApi: {
@@ -292,22 +297,14 @@ describe('git-status-store stash and branch actions', () => {
 })
 
 describe('git-status-store branch sync cross-store', () => {
-  const originalPlatform = process.platform
-
   afterEach(() => {
-    Object.defineProperty(process, 'platform', {
-      value: originalPlatform,
-      configurable: true
-    })
+    vi.mocked(platform).mockReset()
     useProjectStore.setState({ projects: [] })
     useTerminalStore.setState({ terminals: [] })
   })
 
   it('updates project and terminal branches case-insensitively on Windows', async () => {
-    Object.defineProperty(process, 'platform', {
-      value: 'win32',
-      configurable: true
-    })
+    vi.mocked(platform).mockReturnValue('windows')
 
     useProjectStore.setState({
       projects: [
@@ -328,10 +325,7 @@ describe('git-status-store branch sync cross-store', () => {
   })
 
   it('preserves case sensitivity on non-Windows platforms', async () => {
-    Object.defineProperty(process, 'platform', {
-      value: 'linux',
-      configurable: true
-    })
+    vi.mocked(platform).mockReturnValue('linux')
 
     useProjectStore.setState({
       projects: [{ id: 'proj-1', path: '/Users/Test/Project', gitBranch: 'old-branch' } as any]

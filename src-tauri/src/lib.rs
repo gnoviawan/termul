@@ -2,6 +2,7 @@
 mod acp;
 mod acp_binary_install;
 mod agent_registry;
+mod acp_registry_snapshot;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -14,13 +15,14 @@ mod shell_paths;
 mod skills;
 mod ssh;
 mod trackers;
+pub mod web;
 mod worktree;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
 use remote::RemoteServerState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -122,18 +124,29 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 pub use acp::AcpManager;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+// Re-export for `web::fs_api` so the project-root boundary check can reuse
+// the shared Windows verbatim-prefix stripper (PR-S4 nitpick) without
+// promoting the whole `path_validation` module to public visibility.
+pub(crate) use path_validation::strip_verbatim_prefix;
 
-#[derive(Debug, Serialize, Clone)]
+// Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
+// `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
+// (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
+// binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
+// `AppHandle` at all.
+use web::{PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
     pub display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DetectedShells {
     pub available: Vec<ShellInfo>,
     pub default: Option<ShellInfo>,
@@ -145,6 +158,14 @@ static CACHE_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 
 #[tauri::command]
 fn detect_shells() -> Result<DetectedShells, String> {
+    detect_shells_inner()
+}
+
+/// Reusable shell-detection entry point (same logic as the `detect_shells`
+/// Tauri command, without the `#[tauri::command]` macro). The HTTP `/shells`
+/// route (`web::fs_api::shells`) calls this directly so the web/remote path
+/// can reach shell detection without a Tauri runtime.
+pub(crate) fn detect_shells_inner() -> Result<DetectedShells, String> {
     let count = CACHE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::debug!("[ShellDetect] detect_shells called (call #{})", count);
 
@@ -1012,9 +1033,49 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
-            // Create ACP Manager — spawns/owns ACP agent subprocesses
-            let acp_manager = Arc::new(AcpManager::new(handle.clone()));
+            // Create ACP Manager — spawns/owns ACP agent subprocesses.
+            //
+            // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
+            // (the renderer's `acp:*` events, byte-for-byte unchanged) and a
+            // `WsRelaySink` (the shared-live web server's per-session event log
+            // + subscriber set). `fan_out` serializes once and fans N, so adding
+            // the second sink does not change the `TauriEventSink` payloads.
+            //
+            // The shared-live web server (`remote/host.rs`) pulls both
+            // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
+            // the desktop's live sessions to a browser/phone over the LAN.
+            let ws_relay = Arc::new(WsRelaySink::new());
+            let acp_manager = Arc::new(AcpManager::new(vec![
+                Arc::new(TauriEventSink::new(handle.clone())),
+                ws_relay.clone(),
+            ]));
+            // Attach the server-side permission rendezvous so a phone can
+            // respond to `acp:permission_request` over WS. The desktop renderer
+            // still responds via the `acp_respond_permission` Tauri command
+            // (direct `AcpManager::respond_permission`); the rendezvous's
+            // at-most-one `take_permission` gate ensures whichever path responds
+            // first wins.
+            //
+            // Capture the runtime handle explicitly (`tauri::async_runtime`)
+            // rather than relying on `Handle::try_current()` — `setup` runs on
+            // the main thread and is not guaranteed to be inside a tokio runtime
+            // context, so capturing the handle here keeps `arm_timeout` reliable
+            // when it runs later on the agent driver thread.
+            let rendezvous = Arc::new(PermissionRendezvous::with_handle(
+                Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(60),
+                tauri::async_runtime::handle().inner().clone(),
+            ));
+            ws_relay.set_rendezvous(rendezvous);
             app.manage(acp_manager);
+            app.manage(ws_relay);
+
+            // In-memory project registry (Epic-4 bridge) — renderer-fed via
+            // `remote_sync_projects`; the source for `GET /projects` +
+            // `switch_project` cwd resolution on the shared-live web server.
+            // Lives only while the server runs; cleared on `remote_server_stop`.
+            let project_registry = Arc::new(ProjectRegistry::new());
+            app.manage(project_registry);
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -1255,6 +1316,8 @@ pub fn run() {
             commands::search_content_cancel,
             commands::search_file_names_stream,
             commands::search_file_names_cancel,
+            // Attachment binary reads (brokered; fs:allow-read-file is not granted)
+            commands::read_attachment_bytes,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
@@ -1325,6 +1388,8 @@ pub fn run() {
             acp::commands::acp_set_model,
             acp::commands::acp_respond_permission,
             acp::commands::acp_authenticate,
+            acp::commands::acp_probe_runtime,
+            acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
@@ -1333,7 +1398,7 @@ pub fn run() {
             commands::remote_server_start,
             commands::remote_server_stop,
             commands::remote_server_status,
-            commands::remote_publish_projects,
+            commands::remote_sync_projects,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])

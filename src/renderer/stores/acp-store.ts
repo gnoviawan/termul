@@ -6,9 +6,20 @@
  * this store exactly once via `initAcpEventListeners()` (called at app mount).
  *
  * P1 scope: text conversations. `toolCalls`, `plans`, `commands`,
- * `pendingPermissions`, and config/mode state are tracked here so later phases
- * (P2 slash menu, P3 tool/permission UI) can render them, but P1 renders only
- * messages.
+ * `pendingPermissions`, and config/mode state are tracked here; tool, plan,
+ * permission, and slash-command UI render them when present.
+ *
+ * ## Architecture D6 reconciliation (Story 1.5)
+ *
+ * Architecture asked for "`acp-store`: single-session per tab" **without** a
+ * store refactor. This store remains intentionally **global multi-session**
+ * (`sessions: Record<SessionId, …>` + `activeSessionId`). D6's "one focused
+ * session per browser tab" is honored by the external tab↔session mapping in
+ * `@/lib/web-tab-session` (sessionStorage per tab), not by reshaping Zustand
+ * to a single-session store.
+ *
+ * `activeSessionId` is an in-process UI convenience (especially desktop /
+ * prepared-chat reaping) and is **not** a cross-tab isolation boundary.
  */
 
 import { toast } from 'sonner'
@@ -23,6 +34,7 @@ import {
   ACP_EVENTS,
   type AgentCapabilities,
   type AgentConfig,
+  type AgentCrashedEvent,
   type AgentDisconnectedEvent,
   type AgentErrorEvent,
   type AgentId,
@@ -44,13 +56,17 @@ import {
   type SessionConfigOption,
   type SessionCreatedEvent,
   type SessionId,
+  type SessionInfo,
+  type SessionInfoUpdateEvent,
   type SessionMode,
   type SessionModelState,
   type SessionModeState,
+  type SessionUsage,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
-  type ToolCallUpdateEvent
+  type ToolCallUpdateEvent,
+  type UsageUpdateEvent
 } from '@/lib/acp-api'
 import {
   deleteSessionPayload,
@@ -60,7 +76,8 @@ import {
   type SessionIndexEntry,
   type SessionPayload,
   saveSessionIndex as saveSessionIndexToDisk,
-  saveSessionPayload
+  saveSessionPayload,
+  trackPendingIndexWrite
 } from '@/lib/acp-history-persistence'
 import {
   loadMcpServers as loadMcpServersFromDisk,
@@ -68,10 +85,39 @@ import {
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
+// Story 5.3 (AC3): used to register the WS reconnect listener that flips the
+// store's `transportReconnecting` flag. `getAcpTransport` returns the
+// process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
+// only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
+import { getAcpTransport } from '@/lib/acp-transport'
+import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
+import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import {
+  appendQueuedPrompt,
+  buildRecoverPromptToQueuePatch,
+  dropPromptQueueForSession,
+  isPromptTurnInProgressError,
+  type QueuedPrompt,
+  sessionTurnBusy,
+  waitForTurnClear
+} from './prompt-queue-orchestration'
+
+export type { QueuedPrompt } from './prompt-queue-orchestration'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 export type MessageRole = 'user' | 'agent' | 'thought'
+
+/**
+ * Last-known model/mode/config options for an agent config id (in-memory only).
+ * Used as stale-while-revalidate paint while `prepareChat` / `session/new` catch up.
+ */
+export interface AgentOptionsCacheEntry {
+  models: SessionModelState | null
+  modes: SessionModeState | null
+  configOptions: SessionConfigOption[]
+  updatedAt: number
+}
 
 export interface ChatMessage {
   id: string
@@ -79,12 +125,25 @@ export interface ChatMessage {
   blocks: ContentBlock[]
   streaming: boolean
   timestamp: number
+  /**
+   * Monotonic arrival sequence stamped at append time. Orders messages and
+   * tool calls on one chronological timeline, robust against same-millisecond
+   * ties that `timestamp` alone can't break. Absent on history persisted
+   * before seq existed (those order by `timestamp`).
+   */
+  seq?: number
 }
 
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
   cwd: string
+  /**
+   * Owning `Project.id`. Persisted onto every history entry so the index can
+   * be scoped per-project + per-worktree (`(projectId, cwd)`, with a
+   * projectId-only fallback when the exact cwd yields nothing). See ADR 0002.
+   */
+  projectId: string
   status: SessionStatus
   title: string | null
   /** True while a prompt turn is in flight (UI spinners, cancel). */
@@ -101,6 +160,17 @@ export interface AcpSession {
   configOptions: SessionConfigOption[]
   lastError: string | null
   createdAt: number
+  /**
+   * Set while a `session/load` replay may still deliver history chunks.
+   * 'pending' → load sent, no replayed chunk yet (the locally persisted
+   * transcript stays visible); 'streaming' → the first replayed chunk replaced
+   * the local transcript and later chunks append. Chunks for a session in
+   * either state are accepted even while `status` is still 'closed' (the load
+   * IPC is in flight). Cleared on a deferred macrotask after the load resolves
+   * (see `scheduleReplayEnd`) so stragglers that lose the IPC race still land.
+   * Absent/null means no replay is in flight.
+   */
+  replaying?: 'pending' | 'streaming' | null
 }
 
 export interface PendingPermission {
@@ -133,9 +203,34 @@ interface AcpState {
   preparingChatKeys: Record<string, true>
   /** Last background prepare error keyed by prepare key. */
   prepareChatErrors: Record<string, string>
+  /**
+   * In-memory last-known models/modes/configOptions keyed by agent config id.
+   * Invalidated only when cmd/args/env (identity) change — not on launcher close
+   * or cwd-only navigation.
+   */
+  agentOptionsCache: Record<string, AgentOptionsCacheEntry>
+  /** The agent the warm-session pool targets (drives refill-on-consume +
+   * agent-switch drain). Null = no active pool (no refill, no drain). */
+  selectedAgentConfigId: string | null
 
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
+
+  /** Session ids whose `openHistorySession` is in flight (drives UI loading states). */
+  openingHistoryIds: Record<string, true>
+  /**
+   * Placeholder session ids created for instant launcher→chat handoff while
+   * `startChat` / first send still run in the background.
+   */
+  launchingSessionIds: Record<string, true>
+
+  // Discovered (agent-native) sessions via `session/list` — ephemeral, not persisted.
+  // Keyed by `discoveryKey(agentId, cwd)` so each (agent, cwd) pair owns its own
+  // result slot; switching cwd never clobbers another cwd's results, and a slow
+  // in-flight discovery for one cwd can't overwrite a newer cwd's results.
+  discoveredSessions: Record<string, SessionInfo[]>
+  /** discoveryKeys whose discovery is currently in flight (prevents duplicate requests). */
+  discoveringKeys: Record<string, true>
 
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
@@ -144,17 +239,41 @@ interface AcpState {
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
 
+  /** Agent-reported context window utilization keyed by session id. */
+  sessionUsage: Record<SessionId, SessionUsage>
+
   // Per-session conversation state
   messages: Record<SessionId, ChatMessage[]>
-  toolCalls: Record<SessionId, ToolCall[]> // P3 renders
-  plans: Record<SessionId, PlanEntry[]> // P3 renders
-  commands: Record<SessionId, AvailableCommand[]> // P2 renders
+  toolCalls: Record<SessionId, ToolCall[]>
+  /** ACP agent-plan entries per session (`session/update` plan, full replace). */
+  plans: Record<SessionId, PlanEntry[]>
+  commands: Record<SessionId, AvailableCommand[]>
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
+  /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
+  promptQueues: Record<SessionId, QueuedPrompt[]>
+  /** Sessions whose auto-flush is suppressed during cancel+send-now. */
+  suppressQueueFlush: Record<SessionId, true>
+
+  /**
+   * Story 5.3 (AC3): WS transport-level reconnect flag. True while the WS
+   * transport is reconnecting (drop detected, backoff in flight). Drives the
+   * non-blocking `AgentConnectionLamp` overlay in `AgentChatPanel`. Stays
+   * `false` on Tauri desktop (no WS transport) and on the initial connect.
+   * Distinct from the session-level `isClosed && isOpeningHistory` banner
+   * (which fires when `openHistorySession` is in flight — both can show).
+   */
+  transportReconnecting: boolean
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
-  createSession: (agentId: AgentId, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
+  createSession: (
+    agentId: AgentId,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string,
+    opts?: { ephemeral?: boolean }
+  ) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
 
@@ -175,16 +294,99 @@ interface AcpState {
    * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
    * dedupes in-flight work for the same key.
    */
-  prepareChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => void
+  prepareChat: (
+    configId: string,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string,
+    opts?: { silent?: boolean }
+  ) => void
   /** Drop any prepared session for this key (e.g. dialog closed or inputs changed). */
   cancelPreparedChat: (key: string) => void
   /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
-  startChat: (configId: string, cwd: string, mcpServers?: McpServer[]) => Promise<SessionId>
+  startChat: (
+    configId: string,
+    cwd: string,
+    mcpServers: McpServer[] | undefined,
+    projectId: string
+  ) => Promise<SessionId>
+  /**
+   * Take ownership of a prepared session so launcher unmount cleanup cannot
+   * reap it after the chat tab is already open. Promotes ephemeral pooled
+   * sessions into persisted history.
+   */
+  claimPreparedChat: (key: string, projectId: string) => SessionId | null
+  /**
+   * Local-only initializing session so the chat tab can open before ACP
+   * `session/new` finishes. Painted from options cache (+ pending overlays).
+   */
+  createLaunchPlaceholder: (args: {
+    cwd: string
+    projectId: string
+    models?: SessionModelState | null
+    modes?: SessionModeState | null
+    configOptions?: SessionConfigOption[]
+    /** Optimistic first-turn content so the chat looks like a normal send. */
+    initialUserBlocks?: ContentBlock[]
+  }) => SessionId
+  /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
+  discardLaunchPlaceholder: (sessionId: SessionId) => void
+  /** Paint an optimistic user turn on an already-live session (prepared-path launch). */
+  seedLaunchUserMessage: (sessionId: SessionId, blocks: ContentBlock[]) => void
+  /** Clear the launching indicator once the first turn is handed off. */
+  clearLaunchingSession: (sessionId: SessionId) => void
+  /**
+   * Complete an instant launch: `startChat`, apply pending options, send the
+   * first turn, and tear down the placeholder when the real session id differs.
+   */
+  finalizeChatLaunch: (args: {
+    placeholderId: SessionId
+    configId: string
+    cwd: string
+    projectId: string
+    mcpServers?: McpServer[]
+    pending?: {
+      modelId?: string
+      modeId?: string
+      configValues: Record<string, string>
+    } | null
+    initialText?: string | null
+    initialBlocks?: ContentBlock[] | null
+    /** Remap the workspace tab as soon as the real session exists (before send). */
+    adoptSession?: (fromSessionId: SessionId, toSessionId: SessionId) => void
+  }) => Promise<SessionId>
+  /** Apply launcher pending model/mode/config selections to a live session. */
+  applyPendingLauncherOptions: (
+    sessionId: SessionId,
+    pending:
+      | {
+          modelId?: string
+          modeId?: string
+          configValues: Record<string, string>
+        }
+      | null
+      | undefined
+  ) => Promise<void>
+  /** Set the agent the warm-session pool targets (reactive driver for retarget + refill gate). */
+  setSelectedAgentConfigId: (configId: string | null) => void
+  /** Drain stale pooled sessions for `cwd` (other agents) and seed `configId`'s pool. */
+  retargetWarmPool: (configId: string, cwd: string, projectId: string) => void
 
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   deleteHistorySession: (id: string) => Promise<void>
+
+  // Actions — session discovery (gh-407)
+  /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
+  discoverSessions: (agentId: AgentId, cwd: string) => Promise<void>
+  /** Continue a discovered (non-mirror) session via load/resume, following the decideResume policy. */
+  openDiscoveredSession: (
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    projectId: string
+  ) => Promise<void>
 
   // Actions — MCP server registry (P6)
   loadMcpServers: () => Promise<void>
@@ -193,7 +395,16 @@ interface AcpState {
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
+  /** Send a prompt turn carrying structured content blocks (text + image/resource). */
+  sendPromptBlocks: (
+    sessionId: SessionId,
+    blocks: ContentBlock[],
+    options?: { skipUserAppend?: boolean }
+  ) => Promise<void>
   cancelPrompt: (sessionId: SessionId) => Promise<void>
+  removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
+  /** Cancel the active turn if needed, then send a queued prompt immediately. */
+  sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
 
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
@@ -213,15 +424,75 @@ interface AcpState {
   _onCommandsUpdate: (e: CommandsUpdateEvent) => void
   _onModeUpdate: (e: ModeUpdateEvent) => void
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
+  _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
+  _onUsageUpdate: (e: UsageUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
+  /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
+  _onAgentCrashed: (e: AgentCrashedEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
 }
 
 function newId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`
+}
+
+/**
+ * Monotonic arrival sequence for timeline ordering. Stamped on every message
+ * and tool call as it lands so the UI can interleave the two on one
+ * chronological timeline without relying on `Date.now()` (which ties within a
+ * millisecond when text and tool events arrive back-to-back).
+ */
+let seqCounter = 0
+function nextSeq(): number {
+  seqCounter += 1
+  return seqCounter
+}
+
+/**
+ * Monotonic counter for "Untitled Chat N" placeholder titles. Rebased from the
+ * persisted index on load (see `rebaseUntitledCounter`) so a restart continues
+ * from the highest persisted suffix instead of restarting at 1 and colliding
+ * with existing placeholders. Only freshly created sessions without a message
+ * consume a number.
+ */
+let untitledChatCounter = 0
+function nextUntitledTitle(): string {
+  untitledChatCounter += 1
+  return `Untitled Chat ${untitledChatCounter}`
+}
+
+/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
+const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+
+/**
+ * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
+ * found across the persisted index, so placeholders assigned after a restart
+ * never collide with ones already on disk.
+ */
+function rebaseUntitledCounter(entries: SessionIndexEntry[]): void {
+  let maxSuffix = untitledChatCounter
+  for (const entry of entries) {
+    const match = UNTITLED_CHAT_RE.exec(entry.title)
+    if (match) {
+      const n = Number.parseInt(match[1], 10)
+      if (Number.isFinite(n) && n > maxSuffix) maxSuffix = n
+    }
+  }
+  untitledChatCounter = maxSuffix
+}
+
+/**
+ * Rebase the process-wide seq counter so live events appended after a persisted
+ * session is reopened sort after the restored history. Without this, the
+ * counter (which starts at 0 on every app load) could let `nextSeq()` return a
+ * value smaller than an existing restored `seq`, and `buildTimeline` would
+ * interleave fresh chunks/tool calls ahead of older history.
+ */
+function rebaseSeqCounter(maxSeq: number): void {
+  if (maxSeq > seqCounter) seqCounter = maxSeq
 }
 
 /** Index of the last user message in a thread, or -1 if none. */
@@ -247,6 +518,16 @@ function hasActiveAssistantTail(messages: ChatMessage[], role: MessageRole): boo
   return messages.length - 1 > userIdx
 }
 
+/**
+ * True when a tool call landed after `message` (by seq). Marks the point where
+ * a new text run must start its own bubble instead of merging back into the
+ * pre-tool message.
+ */
+function toolIntervened(toolCalls: ToolCall[], message: ChatMessage): boolean {
+  if (message.seq == null) return false
+  return toolCalls.some((t) => typeof t.seq === 'number' && t.seq > message.seq!)
+}
+
 /** Whether a chunk may open a new message (not coalesced into the previous one). */
 function mayStartChunkMessage(
   session: AcpSession,
@@ -254,6 +535,10 @@ function mayStartChunkMessage(
   role: MessageRole
 ): boolean {
   if (session.openTurnId) return true
+  // A session/load replay re-streams the whole conversation (user and agent
+  // turns alike) outside any prompt turn; every replayed chunk may open a
+  // bubble.
+  if (session.replaying) return true
   const last = messages[messages.length - 1]
   if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
   return false
@@ -288,17 +573,22 @@ function noteForStopReason(reason: StopReason): string | null {
   }
 }
 
-/** Finalize the trailing streaming message for a session (mark non-streaming). */
+/**
+ * Finalize every streaming message for a session (mark non-streaming). A turn
+ * can leave several messages mid-stream (e.g. a thought followed by the agent
+ * reply); clearing only the trailing one strands earlier markers in their
+ * `streaming` state and leaves their shimmer animating forever.
+ */
 function finalizeStreaming(
   messages: Record<SessionId, ChatMessage[]>,
   sessionId: SessionId
 ): Record<SessionId, ChatMessage[]> {
   const list = messages[sessionId] ?? []
-  const last = list[list.length - 1]
-  if (last && last.streaming) {
-    return { ...messages, [sessionId]: [...list.slice(0, -1), { ...last, streaming: false }] }
+  if (!list.some((m) => m.streaming)) return messages
+  return {
+    ...messages,
+    [sessionId]: list.map((m) => (m.streaming ? { ...m, streaming: false } : m))
   }
-  return messages
 }
 
 /** Mark a reopened history session live after a successful load/resume IPC call. */
@@ -319,7 +609,28 @@ function withSessionResumeError(
 ): Record<SessionId, AcpSession> {
   const session = sessions[sessionId]
   if (!session) return sessions
-  return { ...sessions, [sessionId]: { ...session, lastError: `Resume failed: ${String(err)}` } }
+  return {
+    ...sessions,
+    [sessionId]: { ...session, replaying: null, lastError: `Resume failed: ${String(err)}` }
+  }
+}
+
+/**
+ * End a session/load replay after the macrotask queue drains, so replayed
+ * chunks that lose the IPC race against the `acp_load_session` response are
+ * still accepted (mirrors `scheduleTurnEnd`). Idempotent when already cleared.
+ */
+function scheduleReplayEnd(set: TurnEndSetter, sessionId: SessionId): void {
+  setTimeout(() => {
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.replaying) return {}
+      return {
+        messages: finalizeStreaming(s.messages, sessionId),
+        sessions: { ...s.sessions, [sessionId]: { ...current, replaying: null } }
+      }
+    })
+  }, 0)
 }
 
 /** Remove all pending permissions belonging to a session. */
@@ -331,6 +642,17 @@ function dropPermissionsForSession(
   for (const id of Object.keys(next)) {
     if (next[id].sessionId === sessionId) delete next[id]
   }
+  return next
+}
+
+/** Remove cached plan entries for a session (close or new prompt turn). */
+function dropPlanForSession(
+  plans: Record<SessionId, PlanEntry[]>,
+  sessionId: SessionId
+): Record<SessionId, PlanEntry[]> {
+  if (!(sessionId in plans)) return plans
+  const next = { ...plans }
+  delete next[sessionId]
   return next
 }
 
@@ -351,16 +673,161 @@ type TurnEndSetter = (
   replace?: false
 ) => void
 
+function nextQueueId(): string {
+  return newId('queue')
+}
+
+function dropRecordKey<T>(
+  record: Record<SessionId, T>,
+  sessionId: SessionId
+): Record<SessionId, T> {
+  if (!(sessionId in record)) return record
+  const next = { ...record }
+  delete next[sessionId]
+  return next
+}
+
+/**
+ * Free per-session transcript maps held in the WebView heap.
+ * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
+ * Call only after any needed `persistSession` so the last mirror is flushed.
+ */
+function dropSessionTranscriptState(
+  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
+  sessionId: SessionId
+): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
+  return {
+    messages: dropRecordKey(state.messages, sessionId),
+    toolCalls: dropRecordKey(state.toolCalls, sessionId),
+    commands: dropRecordKey(state.commands, sessionId),
+    sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
+    plans: dropRecordKey(state.plans, sessionId)
+  }
+}
+
+/** True when live (or mid-replay) session updates may mutate transcript maps. */
+function acceptsSessionTranscriptEvents(session: AcpSession | undefined): session is AcpSession {
+  return Boolean(session && (session.status !== 'closed' || session.replaying))
+}
+
+/** Move a failed optimistic send into the queue when the backend is still busy. */
+function recoverPromptToQueue(
+  set: TurnEndSetter,
+  sessionId: SessionId,
+  userMessage: ChatMessage,
+  blocks: ContentBlock[],
+  previousOpenTurnId: string | null,
+  attemptedTurnId: string,
+  queuedOrigin?: QueuedPrompt
+): void {
+  set((s) => {
+    const patch = buildRecoverPromptToQueuePatch(s, {
+      sessionId,
+      userMessage,
+      blocks,
+      previousOpenTurnId,
+      attemptedTurnId,
+      createQueueId: nextQueueId,
+      queuedOrigin
+    })
+    return {
+      messages: patch.messages as AcpState['messages'],
+      promptQueues: patch.promptQueues,
+      sessions: patch.sessions as AcpState['sessions']
+    }
+  })
+}
+
+/** Send the next queued prompt after the current turn closes. */
+function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
+  const state = useAcpStore.getState()
+  if (state.suppressQueueFlush[sessionId]) return
+  const session = state.sessions[sessionId]
+  if (!session || session.status === 'closed' || sessionTurnBusy(session)) return
+
+  const queue = state.promptQueues[sessionId] ?? []
+  if (queue.length === 0) return
+
+  const [next, ...rest] = queue
+  set((s) => ({
+    promptQueues: { ...s.promptQueues, [sessionId]: rest }
+  }))
+
+  void runPromptTurn(
+    set,
+    () => useAcpStore.getState(),
+    sessionId,
+    next.blocks,
+    (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks),
+    next
+  ).catch((err) => {
+    // Busy recovery is handled inside runPromptTurn (FIFO restore via queuedOrigin).
+    if (isPromptTurnInProgressError(err)) return
+    toast.error(`Failed to send queued message: ${String(err)}`)
+  })
+}
+
 /**
  * End the current turn after the macrotask queue drains so streamed
  * `acp:message_chunk` events delivered after `acp_send_prompt` / `acp:prompt_complete`
  * are still accepted. Idempotent when the turn is already closed.
+ *
+ * `expectedTurnId` guards against duplicate end signals (dispatch resolve +
+ * `acp:prompt_complete` both schedule end) clearing a newer turn — e.g. a
+ * queued prompt flushed immediately after the previous turn closed.
+ *
+ * When there is no turn id but `activeTurn` is still set (defensive activeTurn-only
+ * state), clear the busy flags and flush the queue so send-now / completion can
+ * make progress.
  */
-function scheduleTurnEnd(set: TurnEndSetter, sessionId: SessionId, stopReason?: StopReason): void {
+function scheduleTurnEnd(
+  set: TurnEndSetter,
+  sessionId: SessionId,
+  stopReason?: StopReason,
+  expectedTurnId?: string | null
+): void {
+  const session = useAcpStore.getState().sessions[sessionId]
+  const turnId = expectedTurnId ?? session?.openTurnId ?? null
+  if (!turnId) {
+    if (!session?.activeTurn) return
+    setTimeout(() => {
+      let closedTurn = false
+      set((s) => {
+        const current = s.sessions[sessionId]
+        // Only clear activeTurn-only sessions; if an openTurnId appeared, leave it.
+        if (!current?.activeTurn || current.openTurnId) return {}
+        closedTurn = true
+        const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
+        return {
+          messages: finalizeStreaming(s.messages, sessionId),
+          sessions: {
+            ...s.sessions,
+            [sessionId]: {
+              ...current,
+              openTurnId: null,
+              activeTurn: false,
+              lastError: note ?? current.lastError
+            }
+          }
+        }
+      })
+      if (closedTurn) {
+        const state = useAcpStore.getState()
+        if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
+          persistSession(state, sessionId, (entries) => set({ sessionIndex: entries }))
+        }
+        flushNextQueuedPrompt(set, sessionId)
+      }
+    }, 0)
+    return
+  }
+
   setTimeout(() => {
+    let closedTurn = false
     set((s) => {
       const current = s.sessions[sessionId]
-      if (!current?.openTurnId) return {}
+      if (!current?.openTurnId || current.openTurnId !== turnId) return {}
+      closedTurn = true
       const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
       return {
         messages: finalizeStreaming(s.messages, sessionId),
@@ -375,6 +842,17 @@ function scheduleTurnEnd(set: TurnEndSetter, sessionId: SessionId, stopReason?: 
         }
       }
     })
+    // Re-mirror after the turn actually closed: chunks that lost the IPC race
+    // and landed inside this deferred window are in memory but were missed by
+    // the persist in `_onPromptComplete`. Guarded against deleted sessions so
+    // the write can't resurrect a removed index entry.
+    if (closedTurn) {
+      const state = useAcpStore.getState()
+      if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
+        persistSession(state, sessionId, (entries) => set({ sessionIndex: entries }))
+      }
+      flushNextQueuedPrompt(set, sessionId)
+    }
   }, 0)
 }
 
@@ -395,17 +873,35 @@ function persistSession(
 ): void {
   const session = state.sessions[sessionId]
   if (!session) return
-  const messages = state.messages[sessionId] ?? []
+  // Never mirror a mid-replay transcript: while `session/load` is replaying,
+  // `messages` holds a partial reconstruction, and persisting it (e.g. via a
+  // title update streamed as part of the replay) would truncate the on-disk
+  // history if the app quits before the next full persist.
+  if (session.replaying) return
+  // After WebView transcript eviction the map key is absent. Never rewrite
+  // disk with `[]` from a second close / late prompt-complete / title event.
+  if (!(sessionId in state.messages)) return
+  // `streaming` is transient UI state; persisting it would restore a message
+  // stuck in its shimmer state after a restart.
+  const messages = (state.messages[sessionId] ?? []).map((m) =>
+    m.streaming ? { ...m, streaming: false } : m
+  )
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
   const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+  const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
+  // Keep a placeholder stable once assigned: reuse the existing index title
+  // (including a prior `Untitled Chat N`) instead of regenerating one on every
+  // persist. `rebaseUntitledCounter` keeps fresh numbers from colliding.
+  const fallbackTitle = existingEntry?.title ?? nextUntitledTitle()
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(messages, session.agentId),
+    title: session.title ?? deriveTitle(messages, fallbackTitle),
     cwd: session.cwd,
+    projectId: session.projectId,
     createdAt: session.createdAt,
     lastActivityAt: Date.now(),
     messageCount: messages.length,
@@ -414,9 +910,15 @@ function persistSession(
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
   const payload: SessionPayload = { metadata: entry, messages }
-  void saveSessionIndexToDisk(nextIndex).catch((e) =>
-    console.error('[acp] failed to persist session index', e)
-  )
+  // Track the index write so the close path (closeAppWithPersistenceFlush)
+  // can await it before window.destroy(). trackPendingIndexWrite takes a
+  // factory so the write does not start until prior tracked writes finish —
+  // this serializes overlapping persist/delete writes to the same Tauri Store
+  // key and prevents a stale write from landing last. Errors are logged inside
+  // the tracker. The payload write below uses writeDebounced() and is covered
+  // by flushPendingWrites(); the index write uses write() (non-debounced) and
+  // is NOT covered, hence the explicit tracking.
+  void trackPendingIndexWrite(() => saveSessionIndexToDisk(nextIndex))
   void saveSessionPayload(sessionId, payload).catch((e) =>
     console.error('[acp] failed to persist session payload', e)
   )
@@ -458,6 +960,34 @@ export function configIdFromReuseKey(key: string): string {
   return nul === -1 ? key : key.slice(0, nul)
 }
 
+/**
+ * Normalize a filesystem path for keying/comparison: forward slashes and no
+ * trailing slash. Case-folds only Windows-style paths (drive-letter or
+ * backslash-bearing), which are case-insensitive; POSIX paths keep their case
+ * since `/Work` and `/work` are distinct directories there.
+ */
+export function normalizeCwd(cwd: string): string {
+  const trimmed = cwd.trim()
+  if (trimmed === '') return ''
+  const isWindowsPath = /^[a-zA-Z]:/.test(trimmed) || trimmed.includes('\\')
+  let slashed = trimmed.replace(/\\/g, '/').replace(/\/+$/, '')
+  // Preserve roots: stripping trailing slashes must not collapse a root like
+  // "/" (POSIX) or "C:/" (Windows drive) into "" / "C:", which would alias the
+  // no-cwd key or lose the drive root.
+  if (slashed === '') slashed = '/'
+  else if (/^[a-zA-Z]:$/.test(slashed)) slashed = `${slashed}/`
+  return isWindowsPath ? slashed.toLowerCase() : slashed
+}
+
+/**
+ * Stable key for a discovery result/in-flight slot, scoped per (agent, cwd) so
+ * switching cwd never clobbers another cwd's results and a slow in-flight
+ * discovery can't overwrite a newer cwd's results. cwd is normalized.
+ */
+export function discoveryKey(agentId: AgentId, cwd: string): string {
+  return `${agentId}\0${normalizeCwd(cwd)}`
+}
+
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
 export function prepareChatKey(
   configId: string,
@@ -474,10 +1004,247 @@ export function prepareChatKey(
 /** In-flight `session/new` for a prepare key. */
 const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
 
+/** Test-only: clear module-level prepare dedupe maps between tests. */
+export function _resetInFlightPreparedForTesting(): void {
+  inFlightPrepared.clear()
+}
+
+/**
+ * Identity fingerprint for options-cache invalidation: cmd / args / env /
+ * allowTerminal (path and install identity are reflected in `command` + `args`).
+ * Env keys are sorted so insertion-order differences do not spuriously invalidate.
+ */
+export function agentConfigIdentityKey(
+  config: Pick<StoredAgentConfig, 'command' | 'args' | 'env' | 'allowTerminal'>
+): string {
+  const envKeys = Object.keys(config.env).sort()
+  const env: Record<string, string> = {}
+  for (const key of envKeys) {
+    env[key] = config.env[key]
+  }
+  return JSON.stringify({
+    command: config.command,
+    args: config.args,
+    env,
+    allowTerminal: Boolean(config.allowTerminal)
+  })
+}
+
+export function agentConfigIdentityChanged(
+  prev: StoredAgentConfig | undefined,
+  next: StoredAgentConfig
+): boolean {
+  if (!prev) return false
+  return agentConfigIdentityKey(prev) !== agentConfigIdentityKey(next)
+}
+
+type AcpSet = (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+type AcpGet = () => AcpState
+
+function configIdForAgentId(state: AcpState, agentId: AgentId): string | null {
+  for (const [key, id] of Object.entries(state.configToLiveAgent)) {
+    if (id === agentId) return configIdFromReuseKey(key)
+  }
+  return null
+}
+
+function writeAgentOptionsCache(
+  set: AcpSet,
+  configId: string,
+  patch: {
+    models?: SessionModelState | null
+    modes?: SessionModeState | null
+    configOptions?: SessionConfigOption[]
+  }
+): void {
+  set((s) => {
+    const prev = s.agentOptionsCache[configId]
+    const next: AgentOptionsCacheEntry = {
+      models: patch.models !== undefined ? patch.models : (prev?.models ?? null),
+      modes: patch.modes !== undefined ? patch.modes : (prev?.modes ?? null),
+      configOptions:
+        patch.configOptions !== undefined ? patch.configOptions : (prev?.configOptions ?? []),
+      updatedAt: Date.now()
+    }
+    // Avoid writing empty shells that would look like a real cache hit.
+    const hasContent =
+      next.models != null ||
+      next.modes != null ||
+      (next.configOptions != null && next.configOptions.length > 0)
+    if (!hasContent) {
+      if (!prev) return s
+      const agentOptionsCache = { ...s.agentOptionsCache }
+      delete agentOptionsCache[configId]
+      return { agentOptionsCache }
+    }
+    return {
+      agentOptionsCache: { ...s.agentOptionsCache, [configId]: next }
+    }
+  })
+}
+
+function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
+  set((s) => {
+    if (!(configId in s.agentOptionsCache)) return s
+    const agentOptionsCache = { ...s.agentOptionsCache }
+    delete agentOptionsCache[configId]
+    return { agentOptionsCache }
+  })
+}
+
+function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId): void {
+  const state = get()
+  const session = state.sessions[sessionId]
+  if (!session) return
+  const configId = configIdForAgentId(state, session.agentId)
+  if (!configId) return
+  writeAgentOptionsCache(set, configId, {
+    models: session.models ?? null,
+    modes: session.modes ?? null,
+    configOptions: session.configOptions ?? []
+  })
+}
+
+/** Best-effort tear-down for a session created by a cancelled/stale prepare. */
+function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
+  // createSession may have set activeSessionId as a side effect; that must not
+  // block reaping a session that never became a published preparedSessions entry.
+  set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
+  void get()
+    .closeSession(sessionId)
+    .catch(() => {
+      /* best-effort: backend may already be gone */
+    })
+    .finally(() => {
+      void get().deleteHistorySession(sessionId)
+    })
+}
+
+/** True when cache has model-relevant content (native models or model config option). */
+export function hasModelRelevantOptionsCache(
+  entry: AgentOptionsCacheEntry | null | undefined
+): boolean {
+  if (!entry) return false
+  if (entry.models && entry.models.availableModels.length > 0) return true
+  return entry.configOptions.some(
+    (option) => option.category === 'model' && option.options.length > 0
+  )
+}
+
+/**
+ * Session ids created via `createSession({ ephemeral: true })` (warm-pool seeds)
+ * that have NOT yet been promoted to a real chat by `startChat`. Tracked so the
+ * disconnect/close handlers can DROP an un-promoted pooled session (never
+ * persisted) instead of persisting an orphan "Untitled Chat" to the history
+ * index. Removed on promotion (`promotePreparedSession`) and on drop
+ * (disconnect/close/liveness-check).
+ */
+const ephemeralSessionIds = new Set<string>()
+
+/** Test-only: clear the ephemeral-session tracking set between tests. */
+export function _resetEphemeralSessionIdsForTesting(): void {
+  ephemeralSessionIds.clear()
+}
+
+/**
+ * In-flight `openHistorySession` calls keyed by session id, so the sidebar
+ * click and the restored-tab rehydrate (which can race at startup) coalesce
+ * into one open instead of double-loading/spawning. Held outside reactive
+ * state (promises don't belong in the store); the reactive
+ * `openingHistoryIds` map mirrors membership for UI loading states.
+ */
+const inFlightHistoryOpens = new Map<string, Promise<void>>()
+
+/** Test-only: clear the module-level open dedupe map between tests. */
+export function _resetInFlightHistoryOpensForTesting(): void {
+  inFlightHistoryOpens.clear()
+}
+
+type EnsureLiveAgentOptions = {
+  /** Mirror membership in `warmingConfigs` for the prewarm UI. */
+  registerWarmUi?: boolean
+  /** When true, spawn failures resolve to `null` instead of rejecting (prewarm). */
+  silentSpawnFailure?: boolean
+}
+
+/**
+ * Return a connected agent process for `configId + cwd`, spawning at most one
+ * in-flight process per reuse key. Registers `inFlightWarms` synchronously so
+ * concurrent `prewarmAgent`, `prepareChat`, and `startChat` cannot race a
+ * second spawn.
+ */
+function ensureLiveAgent(
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
+  configId: string,
+  cwd: string,
+  options: EnsureLiveAgentOptions = {}
+): Promise<AgentId | null> {
+  const trimmedCwd = cwd.trim()
+  if (trimmedCwd.length === 0) return Promise.resolve(null)
+  const config = get().agentConfigs.find((c) => c.id === configId)
+  if (!config) return Promise.resolve(null)
+
+  const reuseKey = agentReuseKey(configId, trimmedCwd)
+  const existing = get().configToLiveAgent[reuseKey]
+  if (existing && isReusableStatus(get().agentStatus[existing])) {
+    return Promise.resolve(existing)
+  }
+
+  const inFlight = inFlightWarms.get(reuseKey)
+  if (inFlight) return inFlight
+
+  if (options.registerWarmUi) {
+    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
+  }
+
+  const spawnPromise = (async (): Promise<AgentId | null> => {
+    try {
+      const agentId = await get().spawnAgent({
+        name: config.name,
+        command: config.command,
+        args: config.args,
+        env: config.env,
+        allowTerminal: config.allowTerminal
+      })
+      if (get().agentConfigs.some((c) => c.id === configId)) {
+        set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
+        return agentId
+      }
+      try {
+        await get().killAgent(agentId)
+      } catch {
+        /* best-effort cleanup */
+      }
+      return null
+    } catch (err) {
+      if (options.silentSpawnFailure) {
+        console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)
+        return null
+      }
+      throw err
+    } finally {
+      inFlightWarms.delete(reuseKey)
+      if (options.registerWarmUi) {
+        set((s) => {
+          const warming = { ...s.warmingConfigs }
+          delete warming[reuseKey]
+          return { warmingConfigs: warming }
+        })
+      }
+    }
+  })()
+
+  inFlightWarms.set(reuseKey, spawnPromise)
+  return spawnPromise
+}
+
 function cancelPreparedChatEntry(
   key: string,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
 ): void {
+  // Drop the in-flight promise identity so a stale task cannot write results
+  // or clear a newer prepare's preparingChatKeys in `finally`.
   inFlightPrepared.delete(key)
   set((s) => {
     if (
@@ -497,6 +1264,377 @@ function cancelPreparedChatEntry(
   })
 }
 
+/**
+ * Promote an ephemeral pooled session to a real (persisted) chat now that it is
+ * actually consumed by `startChat`. Persisting here (not at prepare time) is
+ * what keeps an unconsumed warm session from leaving an orphan "Untitled Chat"
+ * on disk. Also clears the warm-slot lookup and refills one warm session for the
+ * pool's target agent (default MCP only), so the next chat is instant too.
+ *
+ * Refill is gated by `selectedAgentConfigId` so callers that don't opt into the
+ * warm pool (and the GH-288 reuse assertion of a single `acp_new_session` invoke)
+ * never fire an extra session/new.
+ */
+function promotePreparedSession(
+  key: string,
+  sessionId: SessionId,
+  projectId: string,
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+): void {
+  // Promoted: no longer an un-promoted pooled session — remove from the
+  // ephemeral set so a later disconnect/close persists (not drops) it.
+  ephemeralSessionIds.delete(sessionId)
+  // Prepared keys exclude projectId; if projects share a cwd, the seed's
+  // projectId would be wrong for the consumer — stamp the consuming project.
+  set((s) => {
+    const session = s.sessions[sessionId]
+    if (!session) return {}
+    return { sessions: { ...s.sessions, [sessionId]: { ...session, projectId } } }
+  })
+  persistSession(get(), sessionId, (entries) => set(() => ({ sessionIndex: entries })))
+  cancelPreparedChatEntry(key, set)
+  const state = get()
+  const [kConfig, kCwd, kMcp] = key.split('\0')
+  if (kConfig === state.selectedAgentConfigId && !kMcp) {
+    void state.prepareChat(kConfig, kCwd, undefined, projectId, { silent: true })
+  }
+}
+
+/**
+ * Body of `openHistorySession` (deduped by the store action via
+ * `inFlightHistoryOpens`): load the persisted payload, remap to the current
+ * live agent for the chat's config+cwd, decide the reopen strategy, register
+ * the session with its local transcript, and run load/resume when the
+ * capability allows.
+ *
+ * 'load' semantics: the locally persisted transcript stays visible while
+ * `session/load` is in flight; the session is marked `replaying: 'pending'`
+ * so `_onMessageChunk` accepts the agent's replayed history (the session is
+ * still 'closed' until load resolves). The FIRST replayed chunk replaces the
+ * local transcript (avoids duplication); an agent that replays nothing leaves
+ * the local transcript in place.
+ */
+async function openHistorySessionInner(
+  get: () => AcpState,
+  set: TurnEndSetter,
+  id: string
+): Promise<void> {
+  // Snapshot before any await so a delete during cold-spawn / capability wait
+  // is still detected as a mid-open transition (not "never indexed").
+  const wasIndexed = get().sessionIndex.some((e) => e.id === id)
+  const deletedMidOpen = (): boolean => wasIndexed && !get().sessionIndex.some((e) => e.id === id)
+  const clearReplayIfPresent = (): void => {
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session?.replaying) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, replaying: null } } }
+    })
+  }
+
+  const payload = await loadSessionPayload(id)
+  if (!payload) throw new Error(`no persisted history for ${id}`)
+  const meta = payload.metadata
+
+  // Rebase the process-wide seq counter so live events appended after the
+  // restored transcript sort after it (nextSeq() returns > max restored seq).
+  let maxRestoredSeq = 0
+  for (const m of payload.messages) {
+    if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
+  }
+  rebaseSeqCounter(maxRestoredSeq)
+
+  // Register the session record + local transcript BEFORE any agent work, so
+  // the pane shows the conversation instantly; the (possibly ~30s cold-spawn)
+  // reconnect below then only upgrades the session in place. The persisted
+  // `meta.agentId` may be a stale per-process UUID — remapped after spawn.
+  set((s) => ({
+    sessions: {
+      ...s.sessions,
+      [id]: {
+        id,
+        agentId: meta.agentId,
+        cwd: meta.cwd,
+        projectId: meta.projectId,
+        status: 'closed',
+        title: meta.title,
+        activeTurn: false,
+        openTurnId: null,
+        modes: null,
+        models: null,
+        configOptions: [],
+        lastError: null,
+        createdAt: meta.createdAt,
+        replaying: null
+      }
+    },
+    messages: { ...s.messages, [id]: payload.messages }
+  }))
+
+  // Resolve the CURRENT live agent for this chat's config+cwd. Without this
+  // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
+  // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
+  let liveAgentId: AgentId = meta.agentId
+  // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
+  // and a missing/empty cwd can't map to a live agent anyway — fall through
+  // to read-only 'local' instead of throwing (spec: do not throw).
+  if (meta.agentConfigId && meta.cwd) {
+    const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
+      silentSpawnFailure: true
+    })
+    if (ensured) liveAgentId = ensured
+  }
+  // Capabilities arrive asynchronously via `acp:agent_spawned` for a freshly
+  // spawned agent. Wait briefly so `decideResume` sees them instead of racing
+  // to 'local'. A prewarmed agent already has them by this point.
+  if (get().agentStatus[liveAgentId] === 'connected' && !get().agents[liveAgentId]?.capabilities) {
+    await new Promise<void>((resolve) => {
+      if (get().agents[liveAgentId]?.capabilities) {
+        resolve()
+        return
+      }
+      const timeout = setTimeout(() => {
+        unsubscribe()
+        resolve()
+      }, 3000)
+      const unsubscribe = useAcpStore.subscribe((state) => {
+        if (state.agents[liveAgentId]?.capabilities) {
+          clearTimeout(timeout)
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+  }
+
+  // Deleted during spawn/capability wait — leave the closed record alone.
+  if (deletedMidOpen()) return
+
+  const connected = get().agentStatus[liveAgentId] === 'connected'
+  const capabilities = get().agents[liveAgentId]?.capabilities ?? null
+  const strategy = decideResume({ connected, capabilities })
+
+  // Point the record at the resolved live agent so streaming events from
+  // `session/load` route to this session, and (for 'load') open the replay
+  // window BEFORE the IPC is sent — replayed chunks stream in while the load
+  // request is still in flight and must be accepted, not dropped.
+  set((s) => {
+    const session = s.sessions[id]
+    if (!session) return {}
+    return {
+      sessions: {
+        ...s.sessions,
+        [id]: {
+          ...session,
+          agentId: liveAgentId,
+          replaying: strategy === 'load' ? ('pending' as const) : null
+        }
+      }
+    }
+  })
+
+  if (strategy === 'load') {
+    try {
+      await acpApi.loadSession(liveAgentId, id, meta.cwd)
+      if (deletedMidOpen()) {
+        clearReplayIfPresent()
+        return
+      }
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return { sessions: s.sessions }
+        // 'pending' after the response means the agent replayed nothing while
+        // the request was in flight: close the window immediately so a later
+        // live chunk can't replace the local transcript. An in-progress
+        // ('streaming') replay keeps its window one macrotask longer for
+        // chunks that lose the IPC race against the response.
+        return {
+          sessions: withSessionActive(
+            {
+              ...s.sessions,
+              [id]: session.replaying === 'pending' ? { ...session, replaying: null } : session
+            },
+            id
+          )
+        }
+      })
+      scheduleReplayEnd(set, id)
+    } catch (err) {
+      // Deleted mid-load: do not restore transcript or surface a resume error
+      // (delete already closed the session; a toast would be misleading).
+      if (deletedMidOpen()) {
+        clearReplayIfPresent()
+        return
+      }
+      // Load failed — restore the local transcript so the user still sees
+      // history (a partial replay may have replaced it).
+      set((s) => ({
+        messages: { ...s.messages, [id]: payload.messages },
+        sessions: withSessionResumeError(s.sessions, id, err)
+      }))
+      throw err
+    }
+  } else if (strategy === 'resume') {
+    try {
+      await acpApi.resumeSession(liveAgentId, id, meta.cwd)
+      if (deletedMidOpen()) return
+      set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+    } catch (err) {
+      if (deletedMidOpen()) return
+      set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
+      throw err
+    }
+  }
+  // 'local' → nothing more; the transcript is already shown.
+}
+
+/**
+ * Shared orchestration for a user-initiated prompt turn: stage the optimistic
+ * user message, mark the turn active, persist, then dispatch to the agent and
+ * schedule turn-end. On failure, finalize any streaming markers and record the
+ * error. `sendPrompt` and `sendPromptBlocks` differ only in the blocks they
+ * stage and which IPC they invoke — captured by `userBlocks` and `dispatch`.
+ *
+ * `queuedOrigin` marks a dequeue/send-now path: on `ACP_TURN_IN_PROGRESS` (or
+ * if the session is still busy at stage time), the original queue item is
+ * restored at the front with its existing id so FIFO order is preserved.
+ */
+async function runPromptTurn(
+  set: TurnEndSetter,
+  get: () => AcpState,
+  sessionId: SessionId,
+  userBlocks: ContentBlock[],
+  dispatch: (session: AcpSession) => Promise<StopReason>,
+  queuedOrigin?: QueuedPrompt,
+  options?: { skipUserAppend?: boolean }
+): Promise<void> {
+  const session = get().sessions[sessionId]
+  if (!session) throw new Error(`unknown session ${sessionId}`)
+  if (session.status === 'closed') throw new Error('session is closed')
+  if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
+
+  let enqueued = false
+  let userMessage: ChatMessage | null = null
+  let openTurnId = ''
+  const previousOpenTurnId = session.openTurnId
+  const skipUserAppend = Boolean(options?.skipUserAppend)
+
+  // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
+  set((s) => {
+    const current = s.sessions[sessionId]
+    if (!current || current.status === 'closed') return {}
+
+    // Launch handoff already painted the user message + active turn; don't re-queue.
+    if (sessionTurnBusy(current) && !skipUserAppend) {
+      enqueued = true
+      if (queuedOrigin) {
+        return {
+          promptQueues: {
+            ...s.promptQueues,
+            [sessionId]: [queuedOrigin, ...(s.promptQueues[sessionId] ?? [])]
+          }
+        }
+      }
+      return {
+        promptQueues: appendQueuedPrompt(s.promptQueues, sessionId, userBlocks, nextQueueId)
+      }
+    }
+
+    openTurnId = newId('turn')
+    if (skipUserAppend) {
+      userMessage =
+        [...(s.messages[sessionId] ?? [])].reverse().find((m) => m.role === 'user') ?? null
+      if (!userMessage) {
+        userMessage = {
+          id: newId('msg'),
+          role: 'user',
+          blocks: userBlocks,
+          streaming: false,
+          timestamp: Date.now(),
+          seq: nextSeq()
+        }
+        return {
+          messages: {
+            ...s.messages,
+            [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+          },
+          plans: dropPlanForSession(s.plans, sessionId),
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+          }
+        }
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+        }
+      }
+    }
+
+    userMessage = {
+      id: newId('msg'),
+      role: 'user',
+      blocks: userBlocks,
+      streaming: false,
+      timestamp: Date.now(),
+      seq: nextSeq()
+    }
+    return {
+      messages: {
+        ...s.messages,
+        [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+      },
+      plans: dropPlanForSession(s.plans, sessionId),
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+      }
+    }
+  })
+
+  if (enqueued) return
+  if (!userMessage || !openTurnId) throw new Error(`unknown session ${sessionId}`)
+
+  persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+  try {
+    // Command reply vs streamed chunks have no ordering guarantee; defer turn
+    // end to a macrotask so chunk listeners run first. Idempotent with
+    // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
+    const liveSession = get().sessions[sessionId]
+    if (!liveSession) throw new Error(`unknown session ${sessionId}`)
+    const stopReason = await dispatch(liveSession)
+    scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
+  } catch (err) {
+    if (isPromptTurnInProgressError(err)) {
+      recoverPromptToQueue(
+        set,
+        sessionId,
+        userMessage,
+        userBlocks,
+        previousOpenTurnId,
+        openTurnId,
+        queuedOrigin
+      )
+      return
+    }
+    set((s) => ({
+      messages: finalizeStreaming(s.messages, sessionId),
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          ...s.sessions[sessionId],
+          activeTurn: false,
+          openTurnId: null,
+          lastError: String(err)
+        }
+      }
+    }))
+    throw err
+  }
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -507,15 +1645,25 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   preparedSessions: {},
   preparingChatKeys: {},
   prepareChatErrors: {},
+  agentOptionsCache: {},
+  selectedAgentConfigId: null,
   sessionIndex: [],
+  openingHistoryIds: {},
+  launchingSessionIds: {},
+  discoveredSessions: {},
+  discoveringKeys: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
+  sessionUsage: {},
   messages: {},
   toolCalls: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
+  promptQueues: {},
+  suppressQueueFlush: {},
+  transportReconnecting: false,
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -528,8 +1676,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
         agentStatus[agentId] = 'connected'
+        // The backend emits `acp:agent_spawned` (carrying capabilities) BEFORE
+        // `acp_spawn_agent` returns, so `_onAgentSpawned` has usually already
+        // recorded them by the time this runs. Preserve that entry instead of
+        // resetting it to null: a clobbered `capabilities` makes the
+        // `openHistorySession` capability wait park on a `subscribe` that never
+        // fires again (the event is gone), time out, and fall back to read-only
+        // 'local' — which is why reopened chats could not be continued.
+        const existing = s.agents[agentId]
         return {
-          agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
+          agents: {
+            ...s.agents,
+            [agentId]: { id: agentId, capabilities: existing?.capabilities ?? null }
+          },
           agentStatus
         }
       })
@@ -557,7 +1716,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === agentId) {
-          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
+          sessions[id] = {
+            ...sessions[id],
+            status: 'closed',
+            activeTurn: false,
+            openTurnId: null,
+            replaying: null
+          }
         }
       }
       return {
@@ -570,7 +1735,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  createSession: async (agentId, cwd, mcpServers) => {
+  createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
     const sessionId = outcome.sessionId
     set((s) => {
@@ -584,6 +1749,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             id: sessionId,
             agentId,
             cwd,
+            projectId,
             status: existing?.status === 'closed' ? 'closed' : 'active',
             title: existing?.title ?? null,
             activeTurn: existing?.activeTurn ?? false,
@@ -592,16 +1758,33 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             models: outcome.models ?? existing?.models ?? null,
             configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
-            createdAt: existing?.createdAt ?? Date.now()
+            createdAt: existing?.createdAt ?? Date.now(),
+            replaying: null
           }
         },
         messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
-        activeSessionId: s.activeSessionId ?? sessionId
+        activeSessionId: opts?.ephemeral ? s.activeSessionId : (s.activeSessionId ?? sessionId)
       }
     })
-    // mirror to disk (index + payload)
-    const st = get()
-    persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
+    // Track un-promoted pooled sessions so disconnect/close can drop (not persist) them.
+    if (opts?.ephemeral) ephemeralSessionIds.add(sessionId)
+    // Mirror to disk (index + payload). Skipped for ephemeral (pooled) sessions,
+    // which are promoted to history only when `startChat` consumes them — so an
+    // unconsumed warm session never leaves an orphan "Untitled Chat" on disk.
+    if (!opts?.ephemeral) {
+      const st = get()
+      persistSession(st, sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    // Cache models/modes even for ephemeral prepares so the launcher can paint
+    // instantly from the warm pool.
+    const configId = configIdForAgentId(get(), agentId)
+    if (configId) {
+      writeAgentOptionsCache(set, configId, {
+        models: outcome.models ?? null,
+        modes: outcome.modes ?? null,
+        configOptions: outcome.configOptions ?? []
+      })
+    }
     return sessionId
   },
 
@@ -614,6 +1797,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // close may fail if the agent lacks the capability; mark closed locally regardless
       }
     }
+    // Reclaim app-owned temp files (pasted screenshots) staged for this session
+    // now that no further turns can read them.
+    void deleteSessionTempFiles(sessionId)
     set((s) => {
       const sessions = { ...s.sessions }
       if (sessions[sessionId]) {
@@ -621,14 +1807,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...sessions[sessionId],
           status: 'closed',
           activeTurn: false,
-          openTurnId: null
+          openTurnId: null,
+          replaying: null
         }
       }
       return {
         sessions,
-        pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId)
+        pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
+        promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
+        suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
     })
+    // Flush closed status + last transcript to disk while maps still hold it,
+    // then drop in-memory maps so WebView2 can reclaim heap. Ephemeral (warm
+    // pool) sessions are never mirrored.
+    if (!ephemeralSessionIds.has(sessionId) && get().sessions[sessionId]) {
+      persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    set((s) => dropSessionTranscriptState(s, sessionId))
   },
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
@@ -648,6 +1844,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   saveAgentConfig: async (config) => {
     const list = get().agentConfigs
     const idx = list.findIndex((c) => c.id === config.id)
+    const prev = idx === -1 ? undefined : list[idx]
     const next = idx === -1 ? [...list, config] : list.map((c) => (c.id === config.id ? config : c))
     set({ agentConfigs: next })
     try {
@@ -656,6 +1853,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // roll back the in-memory change on persistence failure
       set({ agentConfigs: list })
       throw err
+    }
+    // Invalidate options cache only on identity-changing fields (cmd/args/env).
+    // Do not kill warm agents here — that remains deleteAgentConfig's job.
+    if (agentConfigIdentityChanged(prev, config)) {
+      invalidateAgentOptionsCache(set, config.id)
     }
   },
 
@@ -711,62 +1913,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (configIdFromReuseKey(key) !== id) continue
       get().cancelPreparedChat(key)
     }
+    invalidateAgentOptionsCache(set, id)
   },
 
   prewarmAgent: async (configId, cwd) => {
-    const config = get().agentConfigs.find((c) => c.id === configId)
-    if (!config) return
-    const trimmedCwd = cwd.trim()
-    if (trimmedCwd.length === 0) return
-    const reuseKey = agentReuseKey(configId, trimmedCwd)
-    // Dedupe: a warm already in flight, or a live reusable agent (connected or
-    // awaiting auth) for this config+cwd, is a no-op. Re-spawning would orphan
-    // the original and overwrite the reuse entry — matching prepareChat/startChat.
-    const inFlight = inFlightWarms.get(reuseKey)
-    if (inFlight) {
-      await inFlight
-      return
-    }
-    const existing = get().configToLiveAgent[reuseKey]
-    if (existing && isReusableStatus(get().agentStatus[existing])) return
-
-    set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
-    const spawnPromise = (async (): Promise<AgentId | null> => {
-      try {
-        const agentId = await get().spawnAgent({
-          name: config.name,
-          command: config.command,
-          args: config.args,
-          env: config.env,
-          allowTerminal: config.allowTerminal
-        })
-        // Only register the warm agent if the config still exists (it may have
-        // been disabled mid-spawn); otherwise kill the orphan immediately.
-        if (get().agentConfigs.some((c) => c.id === configId)) {
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
-          return agentId
-        }
-        try {
-          await get().killAgent(agentId)
-        } catch {
-          /* best-effort cleanup */
-        }
-        return null
-      } catch (err) {
-        // Silent: chat will lazy-spawn on demand if warm-up failed.
-        console.warn('[acp] prewarm failed for', reuseKey, err)
-        return null
-      } finally {
-        inFlightWarms.delete(reuseKey)
-        set((s) => {
-          const warming = { ...s.warmingConfigs }
-          delete warming[reuseKey]
-          return { warmingConfigs: warming }
-        })
-      }
-    })()
-    inFlightWarms.set(reuseKey, spawnPromise)
-    await spawnPromise
+    await ensureLiveAgent(get, set, configId, cwd, {
+      registerWarmUi: true,
+      silentSpawnFailure: true
+    })
   },
 
   cancelPreparedChat: (key) => {
@@ -788,7 +1942,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
   },
 
-  prepareChat: (configId, cwd, mcpServers) => {
+  prepareChat: (configId, cwd, mcpServers, projectId, opts) => {
     const trimmedCwd = cwd.trim()
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
@@ -802,66 +1956,99 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })
 
-    const task = (async (): Promise<SessionId | null> => {
+    // Register the promise before any await so cancel/reopen can replace it
+    // atomically and stale tasks can detect they are no longer current.
+    let settle!: (value: SessionId | null) => void
+    const task = new Promise<SessionId | null>((resolve) => {
+      settle = resolve
+    })
+    inFlightPrepared.set(key, task)
+
+    void (async (): Promise<void> => {
       try {
-        const config = get().agentConfigs.find((c) => c.id === configId)
-        if (!config) return null
-        const reuseKey = agentReuseKey(configId, trimmedCwd)
-        const warming = inFlightWarms.get(reuseKey)
-        if (warming) await warming
-        const existing = get().configToLiveAgent[reuseKey]
-        const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
-        let agentId: AgentId
-        if (reuse) {
-          agentId = reuse
-        } else {
-          agentId = await get().spawnAgent({
-            name: config.name,
-            command: config.command,
-            args: config.args,
-            env: config.env,
-            allowTerminal: config.allowTerminal
-          })
-          if (!get().agentConfigs.some((c) => c.id === configId)) {
-            try {
-              await get().killAgent(agentId)
-            } catch {
-              /* best-effort */
-            }
-            return null
+        const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
+        if (inFlightPrepared.get(key) !== task) {
+          settle(null)
+          return
+        }
+        if (!agentId) {
+          if (inFlightPrepared.get(key) === task) {
+            const config = get().agentConfigs.find((c) => c.id === configId)
+            const message = formatAcpSpawnError(
+              new Error(`failed to spawn agent for config ${configId}`),
+              config
+            )
+            set((s) => ({
+              prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
+            }))
+            toast.error(message)
           }
-          set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
+          settle(null)
+          return
         }
-        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers)
+        const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId, {
+          ephemeral: true
+        })
+        // Disconnect race: if the agent died mid-prepare, don't register a dead
+        // session — drop it (createSession added it to `ephemeralSessionIds`) and
+        // bail so the pool re-seeds lazily on the next chat (re-spawn + refill).
+        if (get().agentStatus[agentId] !== 'connected') {
+          if (ephemeralSessionIds.has(sessionId)) {
+            ephemeralSessionIds.delete(sessionId)
+            set((s) => {
+              if (!s.sessions[sessionId]) return s
+              const sessions = { ...s.sessions }
+              delete sessions[sessionId]
+              return { sessions }
+            })
+          }
+          settle(null)
+          return
+        }
+        // Task-identity guard: cancel deletes the map entry; a newer prepare
+        // replaces it. Either way the stale task must not write results.
+        if (inFlightPrepared.get(key) !== task) {
+          reapOrphanPreparedSession(get, set, sessionId)
+          settle(null)
+          return
+        }
         if (prepareChatKey(configId, trimmedCwd, mcpServers) !== key) {
-          return null
-        }
-        if (!inFlightPrepared.has(key)) {
-          return null
+          reapOrphanPreparedSession(get, set, sessionId)
+          settle(null)
+          return
         }
         set((s) => ({
           preparedSessions: { ...s.preparedSessions, [key]: sessionId }
         }))
-        return sessionId
+        // createSession already wrote the options cache when possible; refresh
+        // from the live session in case events enriched modes/models.
+        cacheOptionsFromSession(set, get, sessionId)
+        settle(sessionId)
       } catch (err) {
         console.warn('[acp] prepareChat failed', configId, err)
-        if (inFlightPrepared.has(key)) {
-          const message = err instanceof Error ? err.message : String(err)
+        if (inFlightPrepared.get(key) === task) {
+          const config = get().agentConfigs.find((c) => c.id === configId)
+          const message = formatAcpSpawnError(err, config)
           set((s) => ({
             prepareChatErrors: { ...s.prepareChatErrors, [key]: message }
           }))
+          // Pool seeds are best-effort (silent): only surface a toast for
+          // user-initiated prepares so a failing agent doesn't spam on startup.
+          if (!opts?.silent) toast.error(message)
         }
-        return null
+        settle(null)
       } finally {
-        inFlightPrepared.delete(key)
-        set((s) => {
-          const preparingChatKeys = { ...s.preparingChatKeys }
-          delete preparingChatKeys[key]
-          return { preparingChatKeys }
-        })
+        // Only this task may clear preparing / in-flight state.
+        if (inFlightPrepared.get(key) === task) {
+          inFlightPrepared.delete(key)
+          set((s) => {
+            const preparingChatKeys = { ...s.preparingChatKeys }
+            delete preparingChatKeys[key]
+            return { preparingChatKeys }
+          })
+        }
       }
     })()
-    inFlightPrepared.set(key, task)
   },
 
   testConnection: async (config) => {
@@ -914,51 +2101,334 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  startChat: async (configId, cwd, mcpServers) => {
+  startChat: async (configId, cwd, mcpServers, projectId) => {
     const trimmedCwd = cwd.trim()
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) throw new Error(`unknown agent config ${configId}`)
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
-    const prepared = get().preparedSessions[key]
-    if (prepared) {
-      cancelPreparedChatEntry(key, set)
-      return prepared
-    }
-    const inFlight = inFlightPrepared.get(key)
-    if (inFlight) {
+    // Loop so a cancelled in-flight prepare that returns null can pick up a
+    // newer prepare that started during the await (cancel+reopen race).
+    for (;;) {
+      const prepared = get().preparedSessions[key]
+      if (prepared) {
+        promotePreparedSession(key, prepared, projectId, get, set)
+        return prepared
+      }
+      const inFlight = inFlightPrepared.get(key)
+      if (!inFlight) break
       const sessionId = await inFlight
       if (sessionId) {
-        cancelPreparedChatEntry(key, set)
+        promotePreparedSession(key, sessionId, projectId, get, set)
         return sessionId
       }
+      // null: cancelled or failed — re-check for a newer prepare before spawning.
     }
-    // If a background pre-warm is still spawning this config+cwd, wait for it
-    // instead of racing a second spawn (which would orphan one of the processes).
-    const reuseKey = agentReuseKey(configId, trimmedCwd)
-    const warming = inFlightWarms.get(reuseKey)
-    if (warming) await warming
-    // Reuse a live connected agent for this config+cwd; else spawn.
-    // Keyed per-cwd so the same agent in another project gets its own process.
-    const existing = get().configToLiveAgent[reuseKey]
-    const reuse = existing && isReusableStatus(get().agentStatus[existing]) ? existing : null
-    let agentId: AgentId
-    if (reuse) {
-      agentId = reuse
-    } else {
-      agentId = await get().spawnAgent({
-        name: config.name,
-        command: config.command,
-        args: config.args,
-        env: config.env,
-        allowTerminal: config.allowTerminal
+    const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
+    if (!agentId) throw new Error(`failed to spawn agent for config ${configId}`)
+    return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
+  },
+
+  claimPreparedChat: (key, projectId) => {
+    const sessionId = get().preparedSessions[key]
+    if (!sessionId) return null
+    promotePreparedSession(key, sessionId, projectId, get, set)
+    return sessionId
+  },
+
+  createLaunchPlaceholder: ({
+    cwd,
+    projectId,
+    models,
+    modes,
+    configOptions,
+    initialUserBlocks
+  }) => {
+    const sessionId = newId('launch')
+    const blocks = initialUserBlocks ?? []
+    const openTurnId = blocks.length > 0 ? newId('turn') : null
+    const userMessage: ChatMessage | null =
+      blocks.length > 0
+        ? {
+            id: newId('msg'),
+            role: 'user',
+            blocks,
+            streaming: false,
+            timestamp: Date.now(),
+            seq: nextSeq()
+          }
+        : null
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId: '',
+          cwd,
+          projectId,
+          status: 'initializing',
+          title: null,
+          activeTurn: Boolean(userMessage),
+          openTurnId,
+          modes: modes ?? null,
+          models: models ?? null,
+          configOptions: configOptions ?? [],
+          lastError: null,
+          createdAt: Date.now(),
+          replaying: null
+        }
+      },
+      messages: {
+        ...s.messages,
+        [sessionId]: userMessage ? [userMessage] : (s.messages[sessionId] ?? [])
+      },
+      launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+    }))
+    return sessionId
+  },
+
+  discardLaunchPlaceholder: (sessionId) => {
+    set((s) => {
+      if (!s.launchingSessionIds[sessionId] && !s.sessions[sessionId]) return s
+      const sessions = { ...s.sessions }
+      const messages = { ...s.messages }
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      delete sessions[sessionId]
+      delete messages[sessionId]
+      delete launchingSessionIds[sessionId]
+      return {
+        sessions,
+        messages,
+        launchingSessionIds,
+        activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId
+      }
+    })
+  },
+
+  seedLaunchUserMessage: (sessionId, blocks) => {
+    if (blocks.length === 0) return
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current || current.status === 'closed') return s
+      if ((s.messages[sessionId] ?? []).some((m) => m.role === 'user')) {
+        return {
+          launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true },
+          sessions: {
+            ...s.sessions,
+            [sessionId]: {
+              ...current,
+              activeTurn: true,
+              openTurnId: current.openTurnId ?? newId('turn'),
+              lastError: null
+            }
+          }
+        }
+      }
+      const userMessage: ChatMessage = {
+        id: newId('msg'),
+        role: 'user',
+        blocks,
+        streaming: false,
+        timestamp: Date.now(),
+        seq: nextSeq()
+      }
+      return {
+        messages: {
+          ...s.messages,
+          [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+        },
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            activeTurn: true,
+            openTurnId: newId('turn'),
+            lastError: null
+          }
+        },
+        launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+      }
+    })
+  },
+
+  clearLaunchingSession: (sessionId) => {
+    set((s) => {
+      if (!s.launchingSessionIds[sessionId]) return s
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      delete launchingSessionIds[sessionId]
+      return { launchingSessionIds }
+    })
+  },
+
+  applyPendingLauncherOptions: async (sessionId, pending) => {
+    if (!pending) return
+    const session = get().sessions[sessionId]
+    if (!session || session.status === 'closed') return
+    if (pending.modeId) {
+      await get().setMode(sessionId, pending.modeId)
+    }
+    if (pending.modelId) {
+      const hasNative =
+        session.models?.availableModels.some((m) => m.modelId === pending.modelId) ?? false
+      if (hasNative) {
+        await get().setModel(sessionId, pending.modelId)
+      } else {
+        const modelOpt = session.configOptions.find((o) => o.category === 'model')
+        if (modelOpt) {
+          await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+        }
+      }
+    }
+    for (const [configId, valueId] of Object.entries(pending.configValues)) {
+      await get().setConfigOption(sessionId, configId, valueId)
+    }
+  },
+
+  finalizeChatLaunch: async ({
+    placeholderId,
+    configId,
+    cwd,
+    projectId,
+    mcpServers,
+    pending,
+    initialText,
+    initialBlocks,
+    adoptSession
+  }) => {
+    try {
+      const sessionId = await get().startChat(configId, cwd, mcpServers, projectId)
+
+      // Move optimistic UI onto the real session, then remap the tab before send
+      // so the user stays on one chat (never a blank disconnected placeholder).
+      const hadOptimisticUser = (get().messages[placeholderId] ?? []).some((m) => m.role === 'user')
+      if (sessionId !== placeholderId) {
+        set((s) => {
+          const placeholder = s.sessions[placeholderId]
+          const real = s.sessions[sessionId]
+          if (!real) return s
+          const placeholderMessages = s.messages[placeholderId] ?? []
+          const realMessages = s.messages[sessionId] ?? []
+          const messages = { ...s.messages }
+          const sessions = { ...s.sessions }
+          const launchingSessionIds = { ...s.launchingSessionIds }
+          messages[sessionId] = realMessages.length > 0 ? realMessages : placeholderMessages
+          if (placeholder) {
+            sessions[sessionId] = {
+              ...real,
+              activeTurn: placeholder.activeTurn || real.activeTurn,
+              openTurnId: real.openTurnId ?? placeholder.openTurnId,
+              title: real.title ?? placeholder.title,
+              modes: real.modes ?? placeholder.modes,
+              models: real.models ?? placeholder.models,
+              configOptions:
+                real.configOptions.length > 0
+                  ? real.configOptions
+                  : (placeholder.configOptions ?? [])
+            }
+          }
+          delete sessions[placeholderId]
+          delete messages[placeholderId]
+          delete launchingSessionIds[placeholderId]
+          return {
+            sessions,
+            messages,
+            launchingSessionIds,
+            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId
+          }
+        })
+        adoptSession?.(placeholderId, sessionId)
+      } else {
+        set((s) => {
+          if (!s.launchingSessionIds[placeholderId]) return s
+          const launchingSessionIds = { ...s.launchingSessionIds }
+          delete launchingSessionIds[placeholderId]
+          return { launchingSessionIds }
+        })
+      }
+
+      await get().applyPendingLauncherOptions(sessionId, pending)
+
+      const blocks =
+        initialBlocks && initialBlocks.length > 0
+          ? initialBlocks
+          : initialText && initialText.trim().length > 0
+            ? ([{ type: 'text', text: initialText }] as ContentBlock[])
+            : null
+      if (blocks) {
+        await runPromptTurn(
+          set,
+          get,
+          sessionId,
+          blocks,
+          (session) => {
+            const only = blocks.length === 1 ? blocks[0] : null
+            if (only?.type === 'text' && typeof only.text === 'string') {
+              return acpApi.sendPrompt(session.agentId, sessionId, only.text)
+            }
+            return acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
+          },
+          undefined,
+          { skipUserAppend: hadOptimisticUser }
+        )
+      }
+      return sessionId
+    } catch (err) {
+      set((s) => {
+        const targetId = s.sessions[placeholderId]
+          ? placeholderId
+          : (s.activeSessionId ?? placeholderId)
+        const target = s.sessions[targetId]
+        if (!target) return s
+        return {
+          sessions: {
+            ...s.sessions,
+            [targetId]: {
+              ...target,
+              status: 'error',
+              activeTurn: false,
+              openTurnId: null,
+              lastError: err instanceof Error ? err.message : String(err)
+            }
+          },
+          launchingSessionIds: dropRecordKey(
+            dropRecordKey(s.launchingSessionIds, placeholderId),
+            targetId
+          )
+        }
       })
-      set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
+      throw err
     }
-    return get().createSession(agentId, trimmedCwd, mcpServers)
+  },
+
+  setSelectedAgentConfigId: (configId) => set({ selectedAgentConfigId: configId }),
+
+  retargetWarmPool: (configId, cwd, projectId) => {
+    const trimmedCwd = cwd.trim()
+    if (!configId || trimmedCwd.length === 0) return
+    // Agent-switch drain (single-target): close + drop pooled sessions for THIS
+    // cwd but a DIFFERENT agent. Sessions for other cwds stay warm so switching
+    // projects back is instant (per-cwd warm, like processes). Idempotent: a
+    // retarget to the same target drains nothing and `prepareChat` dedupes the seed.
+    const state = get()
+    const targetCwd = normalizeCwd(trimmedCwd)
+    for (const k of new Set([
+      ...Object.keys(state.preparedSessions),
+      ...Object.keys(state.preparingChatKeys)
+    ])) {
+      const [kConfig, kCwd] = k.split('\0')
+      if (kConfig !== configId && normalizeCwd(kCwd) === targetCwd) {
+        get().cancelPreparedChat(k)
+      }
+    }
+    // Seed the new target (fire-and-forget; prepareChat dedupes in-flight work
+    // and is silent on failure — chat still lazy-spawns if the warm-up fails).
+    void get().prepareChat(configId, trimmedCwd, undefined, projectId, { silent: true })
   },
 
   loadSessionIndex: async () => {
     const entries = await loadSessionIndexFromDisk()
+    // Continue the placeholder counter from the highest persisted suffix so a
+    // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
+    rebaseUntitledCounter(entries)
     set({ sessionIndex: entries })
   },
 
@@ -969,61 +2439,26 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // from persisted history via load/resume/local below.
     if (cached && cached.status !== 'closed') return
 
-    const payload = await loadSessionPayload(id)
-    if (!payload) throw new Error(`no persisted history for ${id}`)
-    const meta = payload.metadata
+    // Coalesce concurrent opens for the same chat (sidebar click + restored-tab
+    // rehydrate race at startup) into a single load/spawn.
+    const inFlight = inFlightHistoryOpens.get(id)
+    if (inFlight) return inFlight
 
-    const connected = get().agentStatus[meta.agentId] === 'connected'
-    const capabilities = get().agents[meta.agentId]?.capabilities ?? null
-    const strategy = decideResume({ connected, capabilities })
-
-    // Show the persisted transcript locally and register the session record so the
-    // pane has content regardless of strategy.
-    set((s) => ({
-      sessions: {
-        ...s.sessions,
-        [id]: {
-          id,
-          agentId: meta.agentId,
-          cwd: meta.cwd,
-          status: 'closed',
-          title: meta.title,
-          activeTurn: false,
-          openTurnId: null,
-          modes: null,
-          models: null,
-          configOptions: [],
-          lastError: null,
-          createdAt: meta.createdAt
-        }
-      },
-      messages: { ...s.messages, [id]: payload.messages }
-    }))
-
-    if (strategy === 'load') {
-      // Agent replays history via session/update; clear local copy to avoid dupes.
-      set((s) => ({ messages: { ...s.messages, [id]: [] } }))
+    const task = (async () => {
       try {
-        await acpApi.loadSession(meta.agentId, id, meta.cwd)
-        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
-      } catch (err) {
-        // Load failed — restore the local transcript so the user still sees history.
-        set((s) => ({
-          messages: { ...s.messages, [id]: payload.messages },
-          sessions: withSessionResumeError(s.sessions, id, err)
-        }))
-        throw err
+        await openHistorySessionInner(get, set, id)
+      } finally {
+        inFlightHistoryOpens.delete(id)
+        set((s) => {
+          const openingHistoryIds = { ...s.openingHistoryIds }
+          delete openingHistoryIds[id]
+          return { openingHistoryIds }
+        })
       }
-    } else if (strategy === 'resume') {
-      try {
-        await acpApi.resumeSession(meta.agentId, id, meta.cwd)
-        set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
-      } catch (err) {
-        set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
-        throw err
-      }
-    }
-    // 'local' → nothing more; the transcript is already shown.
+    })()
+    inFlightHistoryOpens.set(id, task)
+    set((s) => ({ openingHistoryIds: { ...s.openingHistoryIds, [id]: true } }))
+    return task
   },
 
   deleteHistorySession: async (id) => {
@@ -1033,15 +2468,190 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // reflects the deletion instead of showing stale content.
       const sessions = { ...s.sessions }
       if (sessions[id]) {
-        sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
+        sessions[id] = {
+          ...sessions[id],
+          status: 'closed',
+          activeTurn: false,
+          openTurnId: null,
+          replaying: null
+        }
       }
-      return { sessionIndex: next, sessions }
+      return {
+        sessionIndex: next,
+        sessions,
+        ...dropSessionTranscriptState(s, id)
+      }
     })
+    // Reclaim any app-owned temp files staged for this session.
+    void deleteSessionTempFiles(id)
     try {
-      await saveSessionIndexToDisk(next)
+      // Await the tracked index write (serialized with other index writes) so
+      // the index reflects the deletion before the payload is removed. The
+      // tracker swallows/logs index-write errors, so this await resolves even
+      // on failure; deleteSessionPayload failures are caught below.
+      await trackPendingIndexWrite(() => saveSessionIndexToDisk(next))
       await deleteSessionPayload(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)
+    }
+  },
+
+  // --- Session discovery (gh-407) -------------------------------------------
+
+  discoverSessions: async (agentId, cwd) => {
+    // Gate on sessionCapabilities.list — never call session/list without it.
+    const agent = get().agents[agentId]
+    if (!agent?.capabilities) {
+      console.info('[acp] discoverSessions: no capabilities for agent', agentId)
+      return
+    }
+    if (!agent.capabilities.sessionCapabilities?.list) {
+      console.info(
+        '[acp] discoverSessions: agent does not advertise sessionCapabilities.list, skipping',
+        agentId,
+        agent.capabilities.sessionCapabilities
+      )
+      return
+    }
+
+    // Scope the result + in-flight slot per (agent, cwd) so switching cwd never
+    // clobbers another cwd's results, and a slow in-flight discovery for one cwd
+    // can't overwrite a newer cwd's results.
+    const key = discoveryKey(agentId, cwd)
+
+    // Prevent duplicate concurrent discovery for the same (agent, cwd).
+    if (get().discoveringKeys[key]) return
+    // Gate on a LIVE connection, not just capability presence: _onAgentDisconnected
+    // leaves the agent in `agents` (status 'error') but it can no longer service
+    // session/list. Skip stale agents up front.
+    if (get().agentStatus[agentId] !== 'connected') return
+    set((s) => ({ discoveringKeys: { ...s.discoveringKeys, [key]: true } }))
+
+    try {
+      const all: SessionInfo[] = []
+      const seen = new Set<string>()
+      let cursor: string | undefined
+      // Safety cap: 10 pages max.
+      for (let i = 0; i < 10; i++) {
+        const res = await acpApi.listSessions(agentId, cwd || undefined, cursor)
+        if (Array.isArray(res.sessions)) {
+          // De-dupe by sessionId across pages (an agent may repeat an entry
+          // when paginating) so the sidebar never renders the same chat twice.
+          for (const info of res.sessions) {
+            if (seen.has(info.sessionId)) continue
+            seen.add(info.sessionId)
+            all.push(info)
+          }
+        }
+        // Treat the cursor as opaque: only stop when it is absent (nullish).
+        // An empty-string cursor is a valid token and must NOT end pagination.
+        if (res.nextCursor == null) break
+        cursor = res.nextCursor
+      }
+      // Drop the result if the agent disconnected while the request was in
+      // flight, so a slow response can't repopulate state after teardown.
+      if (get().agentStatus[agentId] !== 'connected') return
+      // Log only counts + context — never session metadata (titles/ids/cwd can
+      // be sensitive). Detailed payloads stay out of the console.
+      console.info(`[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s)`)
+      set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
+    } catch (e) {
+      // Best-effort: log warning, don't toast (discovery is opportunistic).
+      console.warn('[acp] session/list failed for agent', agentId, e)
+      // Clear any stale discovered entries for this (agent, cwd).
+      set((s) => {
+        const next = { ...s.discoveredSessions }
+        delete next[key]
+        return { discoveredSessions: next }
+      })
+    } finally {
+      set((s) => {
+        const next = { ...s.discoveringKeys }
+        delete next[key]
+        return { discoveringKeys: next }
+      })
+    }
+  },
+
+  openDiscoveredSession: async (agentId, sessionId, cwd, projectId) => {
+    const connected = get().agentStatus[agentId] === 'connected'
+    const capabilities = get().agents[agentId]?.capabilities ?? null
+    const strategy = decideResume({ connected, capabilities })
+
+    if (strategy === 'local') {
+      throw new Error(
+        'agent does not support loading or resuming sessions (no loadSession or sessionCapabilities.resume)'
+      )
+    }
+
+    // Create a minimal session record so streaming events (session/update)
+    // during replay have a session to attach to, mirroring openHistorySession.
+    // For the 'load' strategy the session is marked replaying so replayed
+    // chunks are accepted while the session is still 'closed' (load in flight).
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId,
+          cwd,
+          projectId,
+          status: 'closed',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: Date.now(),
+          replaying: strategy === 'load' ? 'pending' : null
+        }
+      },
+      messages: { ...s.messages, [sessionId]: [] }
+    }))
+
+    if (strategy === 'load') {
+      // Agent replays history via session/update into the empty transcript.
+      try {
+        await acpApi.loadSession(agentId, sessionId, cwd)
+        set((s) => {
+          const session = s.sessions[sessionId]
+          if (!session) return { sessions: s.sessions }
+          // 'pending' after the response = no replay arrived; close the window
+          // now so a later live chunk can't replace the transcript. See
+          // openHistorySessionInner for the same rule.
+          return {
+            sessions: withSessionActive(
+              {
+                ...s.sessions,
+                [sessionId]:
+                  session.replaying === 'pending' ? { ...session, replaying: null } : session
+              },
+              sessionId
+            )
+          }
+        })
+        // Deferred so replayed chunks that lose the IPC race still land.
+        scheduleReplayEnd(set, sessionId)
+      } catch (err) {
+        // Drop any partially replayed content so the pane doesn't show a
+        // half-loaded transcript under the error (there is no local mirror to
+        // restore for a discovered session).
+        set((s) => ({
+          messages: { ...s.messages, [sessionId]: [] },
+          sessions: withSessionResumeError(s.sessions, sessionId, err)
+        }))
+        throw err
+      }
+    } else if (strategy === 'resume') {
+      try {
+        await acpApi.resumeSession(agentId, sessionId, cwd)
+        set((s) => ({ sessions: withSessionActive(s.sessions, sessionId) }))
+      } catch (err) {
+        set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+        throw err
+      }
     }
   },
 
@@ -1075,61 +2685,81 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  sendPrompt: async (sessionId, text) => {
-    const session = get().sessions[sessionId]
-    if (!session) throw new Error(`unknown session ${sessionId}`)
-    if (session.status === 'closed') throw new Error('session is closed')
-    if (session.openTurnId) throw new Error('a prompt turn is already in progress')
-    const openTurnId = newId('turn')
-    // optimistic user message + mark turn active
-    const userMessage: ChatMessage = {
-      id: newId('msg'),
-      role: 'user',
-      blocks: [{ type: 'text', text }],
-      streaming: false,
-      timestamp: Date.now()
-    }
-    set((s) => ({
-      messages: { ...s.messages, [sessionId]: [...(s.messages[sessionId] ?? []), userMessage] },
-      sessions: {
-        ...s.sessions,
-        [sessionId]: {
-          ...s.sessions[sessionId],
-          activeTurn: true,
-          openTurnId,
-          lastError: null
-        }
-      }
-    }))
-    persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
-    try {
-      const stopReason = await acpApi.sendPrompt(session.agentId, sessionId, text)
-      // Command reply vs streamed chunks have no ordering guarantee; defer turn
-      // end to a macrotask so chunk listeners run first. Idempotent with
-      // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
-      scheduleTurnEnd(set, sessionId, stopReason)
-    } catch (err) {
-      set((s) => ({
-        messages: finalizeStreaming(s.messages, sessionId),
-        sessions: {
-          ...s.sessions,
-          [sessionId]: {
-            ...s.sessions[sessionId],
-            activeTurn: false,
-            openTurnId: null,
-            lastError: String(err)
-          }
-        }
-      }))
-      throw err
-    }
-  },
+  sendPrompt: (sessionId, text) =>
+    runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session) =>
+      acpApi.sendPrompt(session.agentId, sessionId, text)
+    ),
+
+  sendPromptBlocks: (sessionId, blocks, options) =>
+    runPromptTurn(
+      set,
+      get,
+      sessionId,
+      blocks,
+      (session) => acpApi.sendPromptBlocks(session.agentId, sessionId, blocks),
+      undefined,
+      options
+    ),
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
-    if (!session || !session.activeTurn) return
+    if (!session?.activeTurn) return
     await acpApi.cancelPrompt(session.agentId, sessionId)
     // turn cleared by _onPromptComplete (cancelled) or by sendPrompt's resolution
+  },
+
+  removeQueuedPrompt: (sessionId, queueId) => {
+    set((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        [sessionId]: (s.promptQueues[sessionId] ?? []).filter((item) => item.id !== queueId)
+      }
+    }))
+  },
+
+  sendQueuedPromptNow: async (sessionId, queueId) => {
+    const queue = get().promptQueues[sessionId] ?? []
+    const item = queue.find((q) => q.id === queueId)
+    if (!item) throw new Error('queued prompt not found')
+
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    if (session.status === 'closed') throw new Error('session is closed')
+
+    set((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        [sessionId]: (s.promptQueues[sessionId] ?? []).filter((q) => q.id !== queueId)
+      },
+      suppressQueueFlush: { ...s.suppressQueueFlush, [sessionId]: true }
+    }))
+
+    try {
+      if (sessionTurnBusy(session)) {
+        await acpApi.cancelPrompt(session.agentId, sessionId)
+        await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
+      }
+      await runPromptTurn(
+        set,
+        get,
+        sessionId,
+        item.blocks,
+        (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks),
+        item
+      )
+    } catch (err) {
+      set((s) => ({
+        promptQueues: {
+          ...s.promptQueues,
+          [sessionId]: [item, ...(s.promptQueues[sessionId] ?? [])]
+        }
+      }))
+      throw err
+    } finally {
+      set((s) => ({
+        suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
+      }))
+    }
   },
 
   setConfigOption: async (sessionId, configId, valueId) => {
@@ -1139,6 +2769,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => ({
       sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
     }))
+    const agentConfigId = configIdForAgentId(get(), session.agentId)
+    if (agentConfigId) {
+      writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
+    }
   },
 
   setMode: async (sessionId, modeId) => {
@@ -1158,6 +2792,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    cacheOptionsFromSession(set, get, sessionId)
   },
 
   setModel: async (sessionId, modelId) => {
@@ -1177,6 +2812,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    cacheOptionsFromSession(set, get, sessionId)
   },
 
   respondPermission: async (requestId, optionId) => {
@@ -1209,7 +2845,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })),
 
-  _onSessionCreated: (e) =>
+  _onSessionCreated: (e) => {
     set((s) => {
       if (s.sessions[e.sessionId]) {
         // already created via createSession(); enrich with capability data
@@ -1232,6 +2868,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             id: e.sessionId,
             agentId: e.agentId,
             cwd: '',
+            projectId: '',
             status: 'active',
             title: null,
             activeTurn: false,
@@ -1240,24 +2877,65 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             models: e.models ?? null,
             configOptions: e.configOptions ?? [],
             lastError: null,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            replaying: null
           }
         },
         messages: { ...s.messages, [e.sessionId]: s.messages[e.sessionId] ?? [] }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
 
   _onMessageChunk: (e) =>
     set((s) => {
       const session = s.sessions[e.sessionId]
-      // Drop chunks for unknown or already-closed sessions (no orphan state).
-      if (!session || session.status === 'closed') return {}
+      // Drop chunks for unknown or already-closed sessions (no orphan state) —
+      // unless a session/load replay is in flight: the session stays 'closed'
+      // until the load IPC resolves, but its replayed chunks must land.
+      if (!session || (session.status === 'closed' && !session.replaying)) return {}
+      const role = e.role as MessageRole
+      // First replayed chunk: the agent is re-streaming the full conversation,
+      // which supersedes the locally persisted mirror. Replace the transcript
+      // (avoids duplicating history) and let later chunks append after it.
+      // Stale tool calls from a previous live period are dropped too — the
+      // replay re-delivers the conversation's tool calls, and keeping the old
+      // list would render each of them twice.
+      if (session.replaying === 'pending') {
+        // A whitespace-only first chunk must not count as "real replay
+        // content" — replacing the mirror with it would blank the chat.
+        if (e.content.type === 'text' && !(e.content.text ?? '').trim().length) return {}
+        const message: ChatMessage = {
+          id: newId('msg'),
+          role,
+          blocks: [e.content],
+          streaming: true,
+          timestamp: Date.now(),
+          seq: nextSeq()
+        }
+        return {
+          messages: { ...s.messages, [e.sessionId]: [message] },
+          toolCalls: { ...s.toolCalls, [e.sessionId]: [] },
+          sessions: {
+            ...s.sessions,
+            [e.sessionId]: { ...session, replaying: 'streaming' }
+          }
+        }
+      }
       const list = s.messages[e.sessionId] ?? []
       const last = list[list.length - 1]
-      const role = e.role as MessageRole
       // Attach to the trailing assistant/user message for this turn (including
-      // chunks that arrive after streaming was finalized but IPC lagged).
-      if (last && last.role === role && (last.streaming || hasActiveAssistantTail(list, role))) {
+      // chunks that arrive after streaming was finalized but IPC lagged) —
+      // UNLESS a tool call landed after that message. Coalescing across a tool
+      // boundary would fold a post-tool text run back into the pre-tool bubble,
+      // collapsing the real `text → tool → text` order into one position.
+      const tools = s.toolCalls[e.sessionId] ?? []
+      if (
+        last &&
+        last.role === role &&
+        (last.streaming || hasActiveAssistantTail(list, role)) &&
+        !toolIntervened(tools, last)
+      ) {
         const updated: ChatMessage = {
           ...last,
           blocks: appendBlocks(last.blocks, e.content),
@@ -1273,19 +2951,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         role,
         blocks: [e.content],
         streaming: true,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        seq: nextSeq()
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
     }),
 
   _onToolCall: (e) =>
     set((s) => {
-      // Stamp arrival time (unless already present) so the UI can interleave
-      // tool calls with messages on a single chronological timeline.
-      const stamped =
-        typeof e.toolCall.timestamp === 'number'
-          ? e.toolCall
-          : { ...e.toolCall, timestamp: Date.now() }
+      // Same guard as message chunks: never grow maps for unknown/closed sessions.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      // Stamp arrival time + monotonic seq (unless already present) so the UI
+      // can interleave tool calls with messages on one chronological timeline.
+      const stamped: ToolCall = {
+        ...e.toolCall,
+        timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+      }
       return {
         toolCalls: {
           ...s.toolCalls,
@@ -1296,6 +2978,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCallUpdate: (e) =>
     set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
@@ -1306,12 +2989,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onPlanUpdate: (e) =>
-    set((s) => ({ plans: { ...s.plans, [e.sessionId]: e.plan.entries ?? [] } })),
+    set((s) => {
+      const entries = e.plan.entries ?? []
+      if (entries.length === 0) {
+        return { plans: dropPlanForSession(s.plans, e.sessionId) }
+      }
+      // Do not re-grow plan cache for closed/unknown sessions after eviction.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      return { plans: { ...s.plans, [e.sessionId]: entries } }
+    }),
 
   _onCommandsUpdate: (e) =>
-    set((s) => ({ commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } })),
+    set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      return { commands: { ...s.commands, [e.sessionId]: e.availableCommands ?? [] } }
+    }),
 
-  _onModeUpdate: (e) =>
+  _onModeUpdate: (e) => {
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -1328,16 +3022,69 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
         }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
 
-  _onConfigOptionsUpdate: (e) =>
+  _onConfigOptionsUpdate: (e) => {
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
       return {
         sessions: { ...s.sessions, [e.sessionId]: { ...session, configOptions: e.configOptions } }
       }
-    }),
+    })
+    cacheOptionsFromSession(set, get, e.sessionId)
+  },
+
+  _onSessionInfoUpdate: (e) => {
+    // `title` is `undefined` when the field is absent (no change), `null` when
+    // the agent explicitly cleared it, or a string when set. An omitted title
+    // must leave the existing title (and the persisted index) untouched.
+    if (e.title === undefined) return
+    const nextTitle = e.title
+    set((s) => {
+      const session = s.sessions[e.sessionId]
+      if (!session) return {}
+      return {
+        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
+      }
+    })
+    // Gate on sessionIndex membership so an un-promoted (ephemeral) pooled
+    // session is never persisted by an event before `startChat` promotes it
+    // (matches the prompt/error reducers).
+    if (
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
+
+  _onUsageUpdate: (e) => {
+    if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
+      return
+    }
+    set((s) => {
+      // Closed shells remain in `sessions` after eviction — still reject usage.
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      const prev = s.sessionUsage[e.sessionId]
+      const baselineUsed = prev?.baselineUsed ?? e.used
+      const next: SessionUsage = {
+        used: e.used,
+        size: e.size,
+        baselineUsed,
+        updatedAt: Date.now(),
+        source: 'reported'
+      }
+      if (e.cost && Number.isFinite(e.cost.amount) && e.cost.amount > 0 && e.cost.currency) {
+        next.cost = { amount: e.cost.amount, currency: e.cost.currency }
+      }
+      return {
+        sessionUsage: { ...s.sessionUsage, [e.sessionId]: next }
+      }
+    })
+  },
 
   _onPermissionRequest: (e) =>
     set((s) => {
@@ -1378,19 +3125,38 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
-    scheduleTurnEnd(set, e.sessionId, e.stopReason)
+    // Mirror the finished turn (including the agent's reply) to disk. Without
+    // this, only user sends persist and a restart loses the last reply. Skip
+    // sessions no longer in the index — persisting would resurrect a chat the
+    // user deleted while the turn was in flight.
+    if (
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+    scheduleTurnEnd(set, e.sessionId, e.stopReason, get().sessions[e.sessionId]?.openTurnId ?? null)
   },
 
-  _onAgentError: (e) =>
+  _onAgentError: (e) => {
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
-      if (e.sessionId && s.sessions[e.sessionId]) {
+      if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,
+          // Finalize streaming markers: the turn is over (errored), and the
+          // persist below must not capture a message mid-shimmer.
+          messages: finalizeStreaming(s.messages, e.sessionId),
           sessions: {
             ...s.sessions,
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
+              // Story 1.9 NFR7: a turn-scoped error (incl. the bounded turn
+              // timeout) sets `status: 'error'` so the UI shows the Error state
+              // (the agent may be wedged — the user should see an error, not
+              // a perpetually-active turn). The `_onAgentDisconnected` reducer
+              // now preserves the 'error' status (it skips 'error' sessions).
+              status: 'error' as SessionStatus,
               lastError: e.message,
               activeTurn: false,
               openTurnId: null
@@ -1410,48 +3176,195 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
       return { agentStatus, sessions }
-    }),
+    })
+    // A turn that errored still produced transcript content (partial reply);
+    // mirror it to disk so a restart doesn't lose it. Skip sessions that are
+    // no longer in the index — persisting would resurrect a deleted chat.
+    if (
+      e.sessionId &&
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
+
+  // Story 1.9 FR26: the agent subprocess crashed mid-turn. Mirrors
+  // `_onAgentError` (sets `agentStatus[agentId]='error'`, finalizes streaming,
+  // sets `lastError`, persists) but is the typed crash event emitted BEFORE
+  // `agent_error` + `agent_disconnected`. The UI shows a manual-restart action
+  // (no silent respawn, honoring ADR-003).
+  _onAgentCrashed: (e) => {
+    set((s) => {
+      const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // Story 1.9 review: don't resurrect a closed session to 'error' (a late
+      // crash event for an already-closed session should not overwrite its
+      // terminal status).
+      if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
+        return {
+          agentStatus,
+          messages: finalizeStreaming(s.messages, e.sessionId),
+          sessions: {
+            ...s.sessions,
+            [e.sessionId]: {
+              ...s.sessions[e.sessionId],
+              status: 'error' as SessionStatus,
+              lastError: e.message,
+              activeTurn: false,
+              openTurnId: null
+            }
+          }
+        }
+      }
+      const sessions = { ...s.sessions }
+      for (const id of Object.keys(sessions)) {
+        if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
+          sessions[id] = {
+            ...sessions[id],
+            status: 'error' as SessionStatus,
+            lastError: e.message,
+            activeTurn: false,
+            openTurnId: null
+          }
+        }
+      }
+      return { agentStatus, sessions }
+    })
+    if (
+      e.sessionId &&
+      get().sessions[e.sessionId] &&
+      get().sessionIndex.some((entry) => entry.id === e.sessionId)
+    ) {
+      persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
+    }
+  },
 
   _onAgentDisconnected: (e) => {
     const affected: SessionId[] = []
+    const dropTranscriptIds: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
-          sessions[id] = { ...sessions[id], status: 'closed', activeTurn: false, openTurnId: null }
-          affected.push(id)
+          if (ephemeralSessionIds.has(id)) {
+            // Un-promoted pooled session (never persisted): drop it entirely
+            // instead of marking closed + persisting, so no orphan "Untitled
+            // Chat" survives in the history index on agent disconnect.
+            delete sessions[id]
+            ephemeralSessionIds.delete(id)
+            dropTranscriptIds.push(id)
+          } else if (sessions[id].status !== 'error') {
+            // Story 1.9 review: a session already in 'error' status (set by the
+            // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
+            // — the crash's distinguishing Error state must survive the always-
+            // following disconnect event so the UI can show a manual-restart action.
+            sessions[id] = {
+              ...sessions[id],
+              status: 'closed',
+              activeTurn: false,
+              openTurnId: null,
+              replaying: null
+            }
+            affected.push(id)
+            dropTranscriptIds.push(id)
+          }
         }
+      }
+      const discoveredSessions = { ...s.discoveredSessions }
+      // Keys are `discoveryKey(agentId, cwd)`; drop every cwd slot for this agent.
+      const prefix = `${e.agentId}\0`
+      for (const k of Object.keys(discoveredSessions)) {
+        if (k.startsWith(prefix)) delete discoveredSessions[k]
+      }
+      // Drop pooled (ephemeral) prepared sessions whose backend just died so a
+      // later `startChat` does not try to promote a closed session. Uses the
+      // original state (s.sessions) so it is independent of the ephemeral-session
+      // deletions in the loop above; the pool re-seeds lazily on the next chat.
+      const preparedSessions = { ...s.preparedSessions }
+      for (const [k, sid] of Object.entries(preparedSessions)) {
+        const sess = s.sessions[sid]
+        if (sess && sess.agentId === e.agentId) delete preparedSessions[k]
       }
       return {
         agentStatus,
         sessions,
-        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId)
+        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
+        discoveredSessions,
+        preparedSessions
       }
     })
-    // Persist the closed status for each session the disconnect affected, so the
-    // history index reflects it across restarts (mirrors _onSessionClosed).
+    // Persist closed status + transcript while maps still hold content, then
+    // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
       persistSession(get(), id, (entries) => set({ sessionIndex: entries }))
+    }
+    if (dropTranscriptIds.length > 0) {
+      set((s) => {
+        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> =
+          s
+        for (const id of dropTranscriptIds) {
+          next = dropSessionTranscriptState(next, id)
+        }
+        return next
+      })
     }
   },
 
   _onSessionClosed: (e) => {
+    // Reclaim app-owned temp files staged for this session (e.g. agent
+    // disconnected) so they do not linger in the OS temp dir.
+    void deleteSessionTempFiles(e.sessionId)
+    if (ephemeralSessionIds.has(e.sessionId)) {
+      // Un-promoted pooled session closed by the backend: drop it entirely
+      // (never persisted) so no orphan "Untitled Chat" survives in the index.
+      ephemeralSessionIds.delete(e.sessionId)
+      set((s) => {
+        const sessions = { ...s.sessions }
+        delete sessions[e.sessionId]
+        // Also drop any warm-slot lookup pointing at this session so the UI
+        // stops reporting "Session ready" and startChat can't promote a dead id.
+        const preparedSessions = { ...s.preparedSessions }
+        for (const [k, sid] of Object.entries(preparedSessions)) {
+          if (sid === e.sessionId) delete preparedSessions[k]
+        }
+        return {
+          sessions,
+          preparedSessions,
+          pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
+          ...dropSessionTranscriptState(s, e.sessionId)
+        }
+      })
+      return
+    }
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-      if (!session) return { pendingPermissions }
+      if (!session) {
+        return {
+          pendingPermissions,
+          ...dropSessionTranscriptState(s, e.sessionId)
+        }
+      }
       return {
         pendingPermissions,
         sessions: {
           ...s.sessions,
-          [e.sessionId]: { ...session, status: 'closed', activeTurn: false, openTurnId: null }
+          [e.sessionId]: {
+            ...session,
+            status: 'closed',
+            activeTurn: false,
+            openTurnId: null,
+            replaying: null
+          }
         }
       }
     })
+    // Persist while transcript maps still hold content, then free WebView heap.
     if (get().sessions[e.sessionId]) {
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
+    set((s) => dropSessionTranscriptState(s, e.sessionId))
   }
 }))
 
@@ -1472,6 +3385,19 @@ export function initAcpEventListeners(): () => void {
     }
   }
   listenersInitialized = true
+  // Story 5.3 (AC3): register the WS reconnect listener so the store's
+  // `transportReconnecting` flag flips when the WS transport drops/reconnects.
+  // The flag drives the non-blocking `AgentConnectionLamp` overlay in
+  // `AgentChatPanel`. On Tauri desktop, the transport is IPC-based (no
+  // `setReconnectListener` method), so this is a no-op there — the flag stays
+  // `false`. The listener is idempotent: re-registration overwrites the
+  // previous callback.
+  const transport = getAcpTransport()
+  if (typeof transport.setReconnectListener === 'function') {
+    transport.setReconnectListener((reconnecting) => {
+      useAcpStore.setState({ transportReconnecting: reconnecting })
+    })
+  }
   teardown = [
     acpApi.onEvent<AgentSpawnedEvent>(ACP_EVENTS.agentSpawned, (e) =>
       useAcpStore.getState()._onAgentSpawned(e)
@@ -1500,12 +3426,22 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<ConfigOptionsUpdateEvent>(ACP_EVENTS.configOptionsUpdate, (e) =>
       useAcpStore.getState()._onConfigOptionsUpdate(e)
     ),
+    acpApi.onEvent<SessionInfoUpdateEvent>(ACP_EVENTS.sessionInfoUpdate, (e) =>
+      useAcpStore.getState()._onSessionInfoUpdate(e)
+    ),
+    acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
+      useAcpStore.getState()._onUsageUpdate(e)
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)
     ),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e) =>
       useAcpStore.getState()._onPromptComplete(e)
     ),
+    acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
+      useAcpStore.getState()._onAgentCrashed(e)
+      toast.error(e.message || 'Agent crashed')
+    }),
     acpApi.onEvent<AgentErrorEvent>(ACP_EVENTS.agentError, (e) => {
       useAcpStore.getState()._onAgentError(e)
       toast.error(e.message || 'Agent error')
@@ -1534,6 +3470,16 @@ export const useAcpSession = (sessionId: SessionId | null): AcpSession | null =>
 export const useAcpMessages = (sessionId: SessionId | null): ChatMessage[] =>
   useAcpStore((s) => (sessionId ? (s.messages[sessionId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES))
 
+const EMPTY_PROMPT_QUEUE: QueuedPrompt[] = []
+
+export const usePromptQueue = (sessionId: SessionId | null): QueuedPrompt[] =>
+  useAcpStore((s) =>
+    sessionId ? (s.promptQueues[sessionId] ?? EMPTY_PROMPT_QUEUE) : EMPTY_PROMPT_QUEUE
+  )
+
+export const useSessionUsage = (sessionId: SessionId | null): SessionUsage | null =>
+  useAcpStore((s) => (sessionId ? (s.sessionUsage[sessionId] ?? null) : null))
+
 const EMPTY_MESSAGES: ChatMessage[] = []
 
 export interface AgentIdentity {
@@ -1561,12 +3507,49 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
 
+/**
+ * Resolve an agent's template id by `agentConfigId` (from a history entry) when
+ * the agent isn't live. Falls back to `useAgentIdentity` for live sessions.
+ */
+export function useAgentTemplateId(agentId: AgentId | null, agentConfigId?: string): string | null {
+  return useAcpStore(
+    useShallow((s) => {
+      if (agentConfigId) {
+        const config = s.agentConfigs.find((c) => c.id === agentConfigId)
+        if (config?.templateId) return config.templateId
+      }
+      return selectAgentIdentity(s, agentId).templateId
+    })
+  )
+}
+
+/** Project IDs with at least one open agent-chat session in an active turn. */
+export function collectProjectsWithActiveAgentChat(
+  sessions: Record<SessionId, AcpSession>
+): string[] {
+  const ids = new Set<string>()
+  for (const session of Object.values(sessions)) {
+    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
+      ids.add(session.projectId)
+    }
+  }
+  return Array.from(ids).sort()
+}
+
+export function useProjectsWithActiveAgentChat(): string[] {
+  return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
+}
+
 /** Aggregate warm state for a config across all of its per-project processes. */
 export interface ConfigWarmState {
   /** A live process for this config is connected (in any project/cwd). */
   connected: boolean
   /** A background warm spawn for this config is in flight (any cwd). */
   warming: boolean
+  /** A warm `session/new` for this config is ready (pooled, any cwd). */
+  sessionReady: boolean
+  /** A warm `session/new` for this config is in flight (any cwd). */
+  warmingSession: boolean
 }
 
 /**
@@ -1583,7 +3566,13 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
   const warming = Object.keys(state.warmingConfigs).some(
     (key) => configIdFromReuseKey(key) === configId
   )
-  return { connected, warming }
+  const sessionReady = Object.keys(state.preparedSessions).some(
+    (key) => configIdFromReuseKey(key) === configId
+  )
+  const warmingSession = Object.keys(state.preparingChatKeys).some(
+    (key) => configIdFromReuseKey(key) === configId
+  )
+  return { connected, warming, sessionReady, warmingSession }
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

@@ -9,19 +9,29 @@
 //! wiring in `manager.rs` so they can be unit-tested in isolation.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::{
-    ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest, ReadTextFileResponse,
+    ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse,
     SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
-use tauri::AppHandle;
 
 use crate::acp::config::AgentId;
 use crate::acp::events::{
     self, ChunkRole, CommandsUpdateEvent, ConfigOptionsUpdateEvent, MessageChunkEvent,
-    ModeUpdateEvent, PlanUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
+    ModeUpdateEvent, PlanUpdateEvent, SessionInfoUpdateEvent, ToolCallEvent, ToolCallUpdateEvent,
+    UsageCostEvent, UsageUpdateEvent,
 };
+use crate::web::EventSink;
+
+/// Cursor ACP extension: when present on `clientCapabilities._meta`, Cursor
+/// exposes Fast / thought-level as separate session `configOptions` instead of
+/// collapsing each model to a single default variant.
+///
+/// Not part of the ACP spec; advertised via the standard `_meta` extensibility
+/// hook. Unknown agents ignore unrecognized `_meta` keys.
+const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
@@ -29,13 +39,22 @@ use crate::acp::events::{
 /// capability is advertised ONLY when the agent's config opted in
 /// (`allow_terminal`). Terminal access is arbitrary command execution, so it is
 /// off by default (M6) and enabled per trusted agent.
+///
+/// Always advertise Cursor's `parameterizedModelPicker` `_meta` flag so Cursor
+/// ACP sessions can surface Fast / reasoning controls through standard
+/// `configOptions`. Harmless for agents that ignore unknown `_meta` keys.
 #[must_use]
 pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
+    let meta = Meta::from_iter([(
+        PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
+        serde_json::Value::Bool(true),
+    )]);
     ClientCapabilities::new()
         .fs(FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(allow_terminal)
+        .meta(meta)
 }
 
 /// Resolve an agent-supplied absolute path against a session's workspace root,
@@ -182,24 +201,32 @@ pub async fn handle_write_text_file(
 }
 
 /// Translate an inbound `session/update` notification into the matching
-/// `acp:*` Tauri event and emit it.
+/// `acp:*` event and fan it out through the dispatcher's sinks.
 ///
 /// Unknown / unhandled update variants are ignored (the enum is
 /// `#[non_exhaustive]`, so a catch-all is required).
-pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: SessionNotification) {
+///
+/// Every event here is session-scoped, so `sid` is `Some(session_id)`. The
+/// payload struct is built first and then borrowed, so `session_id` moves into
+/// the struct once and the `sid` borrows from it — no extra clone, no borrow
+/// conflict (serialize-once-fan-out-N is preserved by [`events::fan_out`]).
+pub fn emit_session_update(
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    notification: SessionNotification,
+) {
     let session_id = crate::acp::config::SessionId::from(notification.session_id);
 
     match notification.update {
-        SessionUpdate::UserMessageChunk(chunk) => events::emit(
-            app,
-            events::EVENT_MESSAGE_CHUNK,
-            MessageChunkEvent {
+        SessionUpdate::UserMessageChunk(chunk) => {
+            let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::User,
                 content: chunk.content,
-            },
-        ),
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
+        }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let preview = match &chunk.content {
                 agent_client_protocol::schema::ContentBlock::Text(text) => {
@@ -213,89 +240,118 @@ pub fn emit_session_update(app: &AppHandle, agent_id: &AgentId, notification: Se
                 }
                 other => format!("{other:?}"),
             };
-            log::info!(
+            log::debug!(
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
                 session_id.0
             );
-            events::emit(
-                app,
-                events::EVENT_MESSAGE_CHUNK,
-                MessageChunkEvent {
-                    agent_id: agent_id.clone(),
-                    session_id,
-                    role: ChunkRole::Agent,
-                    content: chunk.content,
-                },
-            )
+            let event = MessageChunkEvent {
+                agent_id: agent_id.clone(),
+                session_id,
+                role: ChunkRole::Agent,
+                content: chunk.content,
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
         }
-        SessionUpdate::AgentThoughtChunk(chunk) => events::emit(
-            app,
-            events::EVENT_MESSAGE_CHUNK,
-            MessageChunkEvent {
+        SessionUpdate::AgentThoughtChunk(chunk) => {
+            let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Thought,
                 content: chunk.content,
-            },
-        ),
-        SessionUpdate::ToolCall(tool_call) => events::emit(
-            app,
-            events::EVENT_TOOL_CALL,
-            ToolCallEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
+        }
+        SessionUpdate::ToolCall(tool_call) => {
+            let event = ToolCallEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 tool_call,
-            },
-        ),
-        SessionUpdate::ToolCallUpdate(update) => events::emit(
-            app,
-            events::EVENT_TOOL_CALL_UPDATE,
-            ToolCallUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL, &event);
+        }
+        SessionUpdate::ToolCallUpdate(update) => {
+            let event = ToolCallUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 update,
-            },
-        ),
-        SessionUpdate::Plan(plan) => events::emit(
-            app,
-            events::EVENT_PLAN_UPDATE,
-            PlanUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL_UPDATE, &event);
+        }
+        SessionUpdate::Plan(plan) => {
+            // ACP agent-plan: each update is a full replace; forward verbatim.
+            // https://agentclientprotocol.com/protocol/v1/agent-plan
+            let event = PlanUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 plan,
-            },
-        ),
-        SessionUpdate::AvailableCommandsUpdate(update) => events::emit(
-            app,
-            events::EVENT_COMMANDS_UPDATE,
-            CommandsUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_PLAN_UPDATE, &event);
+        }
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            let event = CommandsUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 available_commands: update.available_commands,
-            },
-        ),
-        SessionUpdate::CurrentModeUpdate(update) => events::emit(
-            app,
-            events::EVENT_MODE_UPDATE,
-            ModeUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_COMMANDS_UPDATE, &event);
+        }
+        SessionUpdate::CurrentModeUpdate(update) => {
+            let event = ModeUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 current_mode_id: update.current_mode_id,
                 available_modes: Vec::new(),
-            },
-        ),
-        SessionUpdate::ConfigOptionUpdate(update) => events::emit(
-            app,
-            events::EVENT_CONFIG_OPTIONS_UPDATE,
-            ConfigOptionsUpdateEvent {
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MODE_UPDATE, &event);
+        }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            let event = ConfigOptionsUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 config_options: update.config_options,
-            },
-        ),
-        // SessionInfoUpdate and any future (non_exhaustive) variants have no
-        // dedicated P0 event; ignore them — but log so a silently-dropped
-        // update can be diagnosed instead of vanishing.
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_CONFIG_OPTIONS_UPDATE, &event);
+        }
+        SessionUpdate::SessionInfoUpdate(update) => {
+            // `title` is `MaybeUndefined<String>`: Undefined = not sent (skip),
+            // Null = explicitly cleared (emit None), Value = set (emit Some).
+            match update.title.as_opt_ref() {
+                None => {} // Undefined — no title field sent, skip
+                Some(None) => {
+                    let event = SessionInfoUpdateEvent {
+                        agent_id: agent_id.clone(),
+                        session_id,
+                        title: None,
+                    };
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
+                }
+                Some(Some(t)) => {
+                    let event = SessionInfoUpdateEvent {
+                        agent_id: agent_id.clone(),
+                        session_id,
+                        title: Some(t.clone()),
+                    };
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
+                }
+            }
+        }
+        SessionUpdate::UsageUpdate(update) => {
+            let cost = update.cost.map(|c| UsageCostEvent {
+                amount: c.amount,
+                currency: c.currency,
+            });
+            let event = UsageUpdateEvent {
+                agent_id: agent_id.clone(),
+                session_id,
+                used: update.used,
+                size: update.size,
+                cost,
+            };
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_USAGE_UPDATE, &event);
+        }
+        // Any future (non_exhaustive) variants have no dedicated event;
+        // ignore them — but log so a silently-dropped update can be diagnosed
+        // instead of vanishing.
         ref other => {
             log::debug!(
                 "[acp] agent {agent_id} sent an unhandled session/update variant: {other:?}"
@@ -318,6 +374,16 @@ mod tests {
         let denied = client_capabilities(false);
         assert!(denied.fs.read_text_file);
         assert!(!denied.terminal);
+    }
+
+    #[test]
+    fn client_capabilities_advertise_parameterized_model_picker_meta() {
+        let caps = client_capabilities(false);
+        let meta = caps.meta.expect("expected client capabilities _meta");
+        assert_eq!(
+            meta.get(PARAMETERIZED_MODEL_PICKER_META_KEY),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     #[tokio::test]

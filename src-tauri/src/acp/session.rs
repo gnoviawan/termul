@@ -14,9 +14,9 @@
 //! handler closures require; in practice all access happens on the one driver
 //! thread, so the lock is uncontended.
 
-use agent_client_protocol::Responder;
 use agent_client_protocol::schema::RequestPermissionResponse;
-use std::collections::HashMap;
+use agent_client_protocol::Responder;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
@@ -42,6 +42,11 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// Sessions associated with each tool call id for this connection. ACP tool
+    /// call ids are session-scoped, so a set preserves collisions as ambiguous.
+    /// Bindings remain for the connection lifetime so delayed updates cannot be
+    /// reassigned to a different active turn after their original turn ends.
+    tool_call_sessions: HashMap<String, HashSet<String>>,
 }
 
 impl DriverState {
@@ -119,6 +124,14 @@ impl DriverState {
     /// disconnect to emit `acp:session_closed` for sessions that were active.
     pub(crate) fn active_session_ids(&self) -> Vec<String> {
         self.session_roots.keys().cloned().collect()
+    }
+
+    /// Associate a tool call with its authoritative enclosing session.
+    pub(crate) fn bind_tool_call(&mut self, tool_call_id: String, session_id: String) {
+        self.tool_call_sessions
+            .entry(tool_call_id)
+            .or_default()
+            .insert(session_id);
     }
 
     /// Attempt to begin a turn for a session. Returns `Some(receiver)` (a cancel
@@ -219,5 +232,14 @@ mod tests {
         state.remove_session_root("sess-1");
         assert!(state.session_root("sess-1").is_none());
         assert!(state.active_session_ids().is_empty());
+    }
+
+    #[test]
+    fn tool_call_binding_accepts_multiple_sessions_per_id() {
+        let mut state = DriverState::new();
+        state.bind_tool_call("call-1".to_string(), "sess-a".to_string());
+        state.bind_tool_call("call-1".to_string(), "sess-b".to_string());
+        // Collision is preserved as ambiguous — no routing helper consumes it.
+        let _ = state.try_begin_turn("sess-a");
     }
 }

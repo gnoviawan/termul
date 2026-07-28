@@ -1,5 +1,4 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -7,9 +6,13 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWindowState } from '@/hooks/use-window-state'
+import { getCurrentWindow } from '@/lib/tauri-window'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { WhatsNewModal } from './components/WhatsNewModal'
+import { useAcpAgents } from './hooks/use-acp-agents'
+import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
+import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -65,6 +68,9 @@ function AppEffects(): null {
   useTerminalExitNotification()
   useRemoteProjects()
   useAcpListeners()
+  useAcpAgents()
+  useAcpHistory()
+  useAcpMcp()
   usePreventFileDropNavigation()
 
   // Initialize desktop notification permissions once at app startup

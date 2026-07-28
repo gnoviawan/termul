@@ -4,8 +4,9 @@ import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import {
   buildSupportedAcpAgents,
   installedBinaryConfig,
-  registryConfigId,
-  SUPPORTED_ACP_AGENT_IDS
+  isSupportedAcpConfigId,
+  manualBinaryConfig,
+  registryConfigId
 } from '@/lib/agents/supported-acp-agents'
 
 function agent(id: string, distribution: RegistryAgent['distribution'], name = id): RegistryAgent {
@@ -25,15 +26,16 @@ function persisted(id: string, name = id): StoredAgentConfig {
 }
 
 describe('buildSupportedAcpAgents', () => {
-  it('returns only the fixed supported ACP ids in product order', () => {
+  it('returns every registry agent sorted by display name', () => {
     const registry = [
-      agent('extra', { npx: { package: 'extra' } }),
-      ...SUPPORTED_ACP_AGENT_IDS.map((id) => agent(id, { npx: { package: id } }))
+      agent('zebra-id', { npx: { package: 'zebra' } }, 'Zebra'),
+      agent('alpha-id', { npx: { package: 'alpha' } }, 'Alpha'),
+      agent('middle-id', { npx: { package: 'middle' } }, 'Middle')
     ]
 
     const entries = buildSupportedAcpAgents([], 'windows-x86_64', registry)
 
-    expect(entries.map((entry) => entry.id)).toEqual([...SUPPORTED_ACP_AGENT_IDS])
+    expect(entries.map((entry) => entry.id)).toEqual(['alpha-id', 'middle-id', 'zebra-id'])
     expect(entries.every((entry) => entry.status === 'ready')).toBe(true)
   })
 
@@ -73,6 +75,99 @@ describe('buildSupportedAcpAgents', () => {
         args: ['acp'],
         env: { OPENCODE: '1' }
       }
+    })
+  })
+
+  it('marks npx agents as needs-runtime when npx is missing', () => {
+    const entries = buildSupportedAcpAgents(
+      [],
+      'windows-x86_64',
+      [agent('claude-acp', { npx: { package: 'claude-default' } })],
+      { npx: false, uvx: true }
+    )
+
+    expect(entries[0]).toMatchObject({
+      id: 'claude-acp',
+      status: 'needs-runtime',
+      runtimeLauncher: 'npx',
+      config: null
+    })
+  })
+
+  it('marks uvx agents as needs-runtime when uvx is missing', () => {
+    const entries = buildSupportedAcpAgents(
+      [],
+      'windows-x86_64',
+      [agent('fast-agent', { uvx: { package: 'fast-agent-acp' } })],
+      { npx: true, uvx: false }
+    )
+
+    expect(entries[0]).toMatchObject({
+      id: 'fast-agent',
+      status: 'needs-runtime',
+      runtimeLauncher: 'uvx'
+    })
+  })
+
+  it('keeps npx agents ready while runtime probe is still pending', () => {
+    const entries = buildSupportedAcpAgents(
+      [],
+      'windows-x86_64',
+      [agent('claude-acp', { npx: { package: 'claude-default' } })],
+      null
+    )
+
+    expect(entries[0]?.status).toBe('ready')
+  })
+
+  it('marks binary agents without archives as manual-install', () => {
+    const entries = buildSupportedAcpAgents([], 'windows-x86_64', [
+      agent('legacy', {
+        binary: {
+          'windows-x86_64': {
+            cmd: './legacy.exe',
+            args: ['acp']
+          }
+        }
+      })
+    ])
+
+    expect(entries[0]).toMatchObject({
+      id: 'legacy',
+      status: 'manual-install',
+      manualInstall: {
+        cmd: './legacy.exe',
+        args: ['acp'],
+        env: {}
+      }
+    })
+  })
+})
+
+describe('isSupportedAcpConfigId', () => {
+  it('accepts bundled registry ids with or without the acp-registry prefix', () => {
+    expect(isSupportedAcpConfigId('acp-registry:claude-acp')).toBe(true)
+    expect(isSupportedAcpConfigId('claude-acp')).toBe(true)
+    expect(isSupportedAcpConfigId('acp-registry:not-in-registry')).toBe(false)
+  })
+})
+
+describe('manualBinaryConfig', () => {
+  it('persists a user-provided binary path with registry args and env', () => {
+    const config = manualBinaryConfig(
+      agent('legacy', { binary: {} }, 'Legacy Agent'),
+      'C:/tools/legacy.exe',
+      { cmd: './legacy.exe', args: ['acp'], env: { LEGACY: '1' } }
+    )
+
+    expect(config).toEqual({
+      id: 'acp-registry:legacy',
+      templateId: 'legacy',
+      name: 'Legacy Agent',
+      command: 'C:/tools/legacy.exe',
+      args: ['acp'],
+      env: { LEGACY: '1' },
+      allowTerminal: false
     })
   })
 })

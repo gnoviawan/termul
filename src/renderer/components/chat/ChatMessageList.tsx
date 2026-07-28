@@ -1,81 +1,175 @@
-import { useCallback, useEffect, useRef } from 'react'
-import type { AgentId } from '@/lib/acp-api'
-import { AgentBadge } from './AgentBadge'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { useEffect, useMemo, useRef } from 'react'
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller
+} from '@/components/ui/message-scroller'
+import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
+import type { AgentId, SessionId } from '@/lib/acp-api'
+import { cn } from '@/lib/utils'
+import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
-import type { TimelineItem } from './chat-timeline'
+import { CHAT_GUTTER_X } from './chat-layout'
+import { agentTurnMeta, type TimelineItem } from './chat-timeline'
+import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
+
+/** Reports the live item count to the scroller so the jump button can badge unread. */
+function ItemCountReporter({ count }: { count: number }): null {
+  const { setItemCount } = useMessageScroller()
+  useEffect(() => {
+    setItemCount(count)
+  }, [count, setItemCount])
+  return null
+}
 
 interface ChatMessageListProps {
   items: TimelineItem[]
+  /** Active session — resets enter-animation baseline on switch. */
+  sessionId: SessionId
   /** Agent behind this session (drives the agent name/icon on replies). */
   agentId: AgentId
-  /** True while a turn is in flight but no agent text has streamed yet. */
-  showTyping: boolean
+  /** True for the complete duration of an in-flight agent turn. */
+  showRunningIndicator: boolean
+  /** Seed the composer with a user message's text (edit affordance). */
+  onEditMessage?: (text: string) => void
+  /** Re-run the latest user turn (regenerate affordance on agent replies). */
+  onRetry?: () => void
+}
+
+/** Hide the agent header when the previous timeline entry is also an agent reply. */
+function isGroupedReply(items: TimelineItem[], index: number): boolean {
+  const it = items[index]
+  if (it.kind !== 'message' || it.message.role !== 'agent') return false
+  const prev = items[index - 1]
+  return prev?.kind === 'message' && prev.message.role === 'agent'
+}
+
+/** Index of the last message item in the timeline (skips trailing tool cards). */
+function lastMessageIndex(items: TimelineItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'message') return i
+  }
+  return -1
+}
+
+/** Stable id for animate-enter tracking across message, tool, and thought rows. */
+function timelineItemId(it: TimelineItem): string {
+  if (it.kind === 'message') return it.message.id
+  if (it.kind === 'tool') return it.tool.toolCallId
+  return it.key
 }
 
 /**
- * Scrollable message thread. Auto-scrolls to the bottom on new content only
- * when the user is already pinned near the bottom, so reading scrollback isn't
- * interrupted by streaming chunks.
+ * Returns true for timeline items that arrived after the list's first paint
+ * (or after a session switch). History loaded on open does not re-enter.
+ */
+function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: string) => boolean {
+  const sessionRef = useRef(sessionId)
+  const initialIdsRef = useRef<Set<string> | null>(null)
+
+  useEffect(() => {
+    if (sessionRef.current !== sessionId) {
+      sessionRef.current = sessionId
+      initialIdsRef.current = null
+    }
+  }, [sessionId])
+
+  if (initialIdsRef.current === null) {
+    initialIdsRef.current = new Set(items.map(timelineItemId))
+  }
+
+  return (id: string) => !initialIdsRef.current!.has(id)
+}
+
+/**
+ * Scrollable message thread built on the MessageScroller engine. Auto-follows
+ * the live edge only while the reader is pinned to the bottom; a jump-to-latest
+ * control appears otherwise. New user turns anchor the scroll position.
  */
 export function ChatMessageList({
   items,
+  sessionId,
   agentId,
-  showTyping
+  showRunningIndicator,
+  onEditMessage,
+  onRetry
 }: ChatMessageListProps): React.JSX.Element {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const pinnedToBottomRef = useRef(true)
+  const turnMeta = useMemo(() => agentTurnMeta(items), [items])
+  const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
+  const shouldAnimateEnter = useAnimateEnter(sessionId, items)
 
-  const handleScroll = useCallback(() => {
-    const el = containerRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    pinnedToBottomRef.current = distanceFromBottom < 48
-  }, [])
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: items/showTyping are intentional re-scroll triggers even though they are not read in the body.
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el || !pinnedToBottomRef.current) return
-    el.scrollTop = el.scrollHeight
-  }, [items, showTyping])
-
-  if (items.length === 0 && !showTyping) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        No messages yet. Say something to get started.
-      </div>
-    )
+  if (items.length === 0 && !showRunningIndicator) {
+    return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
 
   return (
-    <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-5 py-4">
-      <div className="mx-auto w-full max-w-3xl">
-        {items.map((it) =>
-          it.kind === 'tool' ? (
-            <ToolCallCard key={it.key} toolCall={it.tool} />
-          ) : (
-            <ChatMessage key={it.key} message={it.message} agentId={agentId} />
-          )
-        )}
-        {showTyping && <TypingIndicator agentId={agentId} />}
-      </div>
+    <div className="relative min-h-0 flex-1">
+      {/* Edge fades: content dissolves into the header/composer instead of hard-cutting. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-background to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-background to-transparent" />
+      <MessageScrollerProvider autoScroll>
+        <ItemCountReporter count={items.length} />
+        <MessageScroller>
+          <MessageScrollerViewport className={cn(CHAT_GUTTER_X, 'py-4')}>
+            <MessageScrollerContent className="mx-auto w-full max-w-3xl">
+              {items.map((it, i) => (
+                <MessageScrollerItem
+                  key={it.key}
+                  messageId={it.key}
+                  scrollAnchor={it.kind === 'message' && it.message.role === 'user'}
+                >
+                  {it.kind === 'tool' ? (
+                    <ToolCallCard
+                      toolCall={it.tool}
+                      animateEnter={shouldAnimateEnter(it.tool.toolCallId)}
+                    />
+                  ) : it.kind === 'thought-group' ? (
+                    <ThoughtGroup messages={it.messages} isLiveTail={i === items.length - 1} />
+                  ) : (
+                    <ChatMessage
+                      message={it.message}
+                      showHeader={!isGroupedReply(items, i)}
+                      isLast={i === items.length - 1}
+                      isTurnTail={turnMeta.tail.has(it.message.id)}
+                      turnText={turnMeta.text.get(it.message.id)}
+                      actionsPinned={i === lastMsgIndex}
+                      animateEnter={shouldAnimateEnter(it.message.id)}
+                      onEdit={onEditMessage}
+                      onRetry={onRetry}
+                    />
+                  )}
+                </MessageScrollerItem>
+              ))}
+              <AnimatePresence initial={false}>
+                {showRunningIndicator && <TurnRunningIndicator key="running" />}
+              </AnimatePresence>
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+        </MessageScroller>
+      </MessageScrollerProvider>
     </div>
   )
 }
 
-/** "Agent is typing" placeholder shown before the first text chunk streams. */
-function TypingIndicator({ agentId }: { agentId: AgentId }): React.JSX.Element {
+/** Persistent turn-running cue — gradient matrix spin (no visible text label). */
+function TurnRunningIndicator(): React.JSX.Element {
+  const reduced = useReducedMotion() ?? false
   return (
-    <div className="px-4 py-3">
-      <div className="mb-2 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
-        <AgentBadge agentId={agentId} iconSize={12} />
-      </div>
-      <output className="flex items-center gap-1" aria-label="Agent is typing">
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.3s] motion-reduce:animate-none" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.15s] motion-reduce:animate-none" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 motion-reduce:animate-none" />
-      </output>
-    </div>
+    <motion.div
+      className="min-w-0 shrink-0 px-1 py-2"
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 6 }}
+      animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <MonochromeSpinner pattern="diagonal" label="Agent is working" />
+    </motion.div>
   )
 }

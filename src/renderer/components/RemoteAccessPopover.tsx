@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
-import { openerApi, remoteServerApi } from '@/lib/api'
+import { toProjectSummaries } from '@/hooks/use-projects-persistence'
+import { openerApi, remoteServerApi, syncProjects } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 import { REMOTE_BIND_MODE_OPTIONS, type RemoteBindMode } from '@/types/settings'
 
@@ -35,6 +37,22 @@ export function RemoteAccessPopover(): React.JSX.Element {
         : await remoteServerApi.stop()
       if (result.success) {
         useRemoteStatusStore.getState().setStatus(result.data)
+        // Epic-4 bridge: seed the in-memory project registry so the web/remote
+        // client sees the desktop's project list immediately (the live-push
+        // path in `useProjectsAutoSave` keeps it in sync on later mutations).
+        // No env-var values cross the wire — redact-by-omission.
+        if (enable) {
+          const { projects, activeProjectId } = useProjectStore.getState()
+          // Await + inspect: a failed seed leaves the web client without a
+          // project list until the next desktop mutation re-syncs — surface it.
+          const syncResult = await syncProjects(
+            toProjectSummaries(projects, activeProjectId),
+            activeProjectId || null
+          )
+          if (!syncResult.success) {
+            toast.error(`Failed to seed remote project list: ${syncResult.error}`)
+          }
+        }
       } else {
         setRemoteError(result.error)
       }
@@ -82,9 +100,9 @@ export function RemoteAccessPopover(): React.JSX.Element {
       <PopoverContent side="top" align="end" className="w-96 p-4">
         <div className="space-y-4">
           <div>
-            <h4 className="font-medium text-sm text-foreground">Remote Terminal Access</h4>
+            <h4 className="font-medium text-sm text-foreground">Remote Agent Access</h4>
             <p className="text-xs text-muted-foreground mt-1">
-              Access your active terminals from a web browser over HTTP + WebSocket.
+              Share your live agent sessions with a browser or phone over HTTP + WebSocket.
             </p>
           </div>
 
@@ -139,12 +157,13 @@ export function RemoteAccessPopover(): React.JSX.Element {
               <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
                 <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
                 <span>
-                  Anyone who can reach this address can run commands on this machine. There is no
-                  auth token — only same-origin browser checks apply.{' '}
+                  Anyone who can reach this address can drive your live agent sessions. There is no
+                  auth token yet — full auth + TLS land in a later release.{' '}
                   {remoteStatus?.bindMode === 'all' ? (
                     <>
                       The server listens on <strong>all interfaces</strong>; devices on your LAN can
-                      connect using this machine&apos;s IP and the port below.
+                      connect using this machine&apos;s IP and the port below. Exposing it on the
+                      LAN before auth ships is your explicit decision.
                     </>
                   ) : (
                     <>
@@ -217,7 +236,8 @@ export function RemoteAccessPopover(): React.JSX.Element {
                 </button>
                 {openError && <p className="text-xs text-destructive mt-1">{openError}</p>}
                 <p className="text-xs text-muted-foreground mt-1">
-                  Open this URL in a browser to see your projects and terminals. No token required.
+                  Open this URL in a browser to follow your live agent sessions. No token required
+                  yet.
                 </p>
               </div>
             </div>

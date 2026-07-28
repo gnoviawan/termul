@@ -16,11 +16,12 @@
 //! sending [`AcpCommand`] variants (each carrying a `tokio::sync::oneshot`
 //! reply sender) over a `tokio::sync::mpsc` channel, then `.await` the `Send`
 //! oneshot reply. Streaming `session/update` notifications and inbound agent
-//! requests (permission, fs) are re-emitted to the renderer as Tauri events via
-//! a cloned `AppHandle`.
+//! requests (permission, fs) are fanned out to the renderer (and, in Story 1.4,
+//! the WS relay) through a cloned `Vec<Arc<dyn EventSink>>` — NOT via a Tauri
+//! `AppHandle` directly (Story 1.1 / architecture D2 decoupling).
 //!
 //! This mirrors how `PtyManager` isolates per-PTY I/O on its own threads and
-//! emits to the renderer through the `AppHandle`.
+//! emits to the renderer through its own sink fan-out.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,28 +40,120 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
-use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent, ConfigOptionsUpdateEvent,
-    PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
+    self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
+    ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
 };
 use crate::acp::session::DriverState;
+use crate::web::EventSink;
 
 /// How long to wait for the agent to answer `initialize` before treating the
 /// spawn as failed (and tearing the child down).
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait for `session/new` before returning an error to the caller.
-const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 60s accommodates agents whose `session/new` handler fetches a model list
+/// from a remote service on a cold start (e.g. `pi-acp`, which can exceed the
+/// former 30s budget on first launch). Overridable for diagnostics via
+/// [`session_new_timeout`].
+const SESSION_NEW_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long to wait for `session/load` / `session/resume` before returning an
+/// error to the caller. Without a bound, a wedged agent parks the renderer's
+/// "reconnecting" state forever (the reopened chat can never recover). 60s
+/// matches the `session/new` budget: a load replays the full conversation and
+/// can legitimately take a while on large histories.
+const SESSION_REOPEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Story 1.9 NFR7: the bounded per-turn timeout. A wedged agent that neither
+/// replies nor crashes parks `send_prompt`'s oneshot forever without this.
+/// 10 min accommodates long agent turns (coding agents can run minutes) while
+/// still bounding the wait so a truly wedged turn fails → Error state.
+/// Distinct from 1.7's 60s permission sub-timeout (`permissions.rs:47`) — this
+/// bounds the WHOLE turn (`send_prompt` → `prompt_complete`), not the
+/// permission-rendezvous window. Overridable via `TERMUL_ACP_TURN_TIMEOUT_SECS`.
+const TURN_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// `session/new` timeout, overridable for diagnostics via
+/// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
+/// [`SESSION_NEW_TIMEOUT`]. Useful when an agent needs longer to fetch its
+/// model list on a cold start; the default stays strict so a wedged agent
+/// still fails fast in normal use.
+fn session_new_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(SESSION_NEW_TIMEOUT)
+}
+
+/// `session/load` / `session/resume` timeout, overridable via
+/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (seconds, must be > 0). Defaults
+/// to [`SESSION_REOPEN_TIMEOUT`]. A load replays the full conversation before
+/// responding, so very large histories may need a longer budget.
+fn session_reopen_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(SESSION_REOPEN_TIMEOUT)
+}
+
+/// Story 1.9 NFR7: per-turn timeout, overridable via
+/// `TERMUL_ACP_TURN_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
+/// [`TURN_TIMEOUT`]. Bounds a wedged agent turn so `send_prompt`'s oneshot
+/// fails with a typed timeout error → Error state (not parked forever).
+fn turn_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(TURN_TIMEOUT)
+}
+
+/// Timed `session/load` / `session/resume`: map agent errors and timeouts to
+/// `Result<(), String>`, and record the session root on success.
+async fn run_session_reopen<Fut, T, E>(
+    op: &str,
+    session_id: &str,
+    cwd: &str,
+    req_state: &Mutex<DriverState>,
+    request: Fut,
+) -> Result<(), String>
+where
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: ToString,
+{
+    let timeout = session_reopen_timeout();
+    let outcome = tokio::time::timeout(timeout, request).await;
+    let result = match outcome {
+        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+        Err(_) => {
+            log::warn!(
+                "[acp] session {session_id} {op} timed out after {timeout:?}; \
+                 check agent stderr in RUST_LOG=debug"
+            );
+            Err(format!("{op} timed out after {timeout:?}"))
+        }
+    };
+    if result.is_ok() {
+        req_state
+            .lock()
+            .set_session_root(session_id.to_string(), PathBuf::from(cwd));
+    }
+    result
+}
 
 /// Outcome of creating a new session, returned to the command caller.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -101,11 +194,17 @@ enum AcpCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
     ListSessions {
+        cwd: Option<String>,
+        cursor: Option<String>,
         reply: oneshot::Sender<Result<ListSessionsResponse, String>>,
     },
     SendPrompt {
         session_id: SessionId,
         content: Vec<ContentBlock>,
+        /// Story 1.8 T3.2: optional client turn-id (echoed back on
+        /// `prompt_complete` for the renderer's `seenTurnIds` idempotent dedup —
+        /// FR11). `None` for desktop/older clients (dedup is a no-op).
+        turn_id: Option<String>,
         reply: oneshot::Sender<Result<StopReason, String>>,
     },
     CancelPrompt {
@@ -160,17 +259,38 @@ struct AgentEntry {
 }
 
 /// Manages all ACP agents, mirroring the `PtyManager` ownership pattern.
+///
+/// # AppHandle coupling (Story 1.1 / architecture D2)
+///
+/// `AcpManager` is **transport-neutral**: it holds `Vec<Arc<dyn EventSink>>`
+/// and fans every `acp:*` event out through them. It does NOT hold a Tauri
+/// `AppHandle`. The desktop app constructs it with
+/// `vec![Arc::new(TauriEventSink::new(handle))]` (see `lib.rs`); the standalone
+/// `termul-server` binary (Story 1.2) will construct it with a
+/// `WsRelaySink`-backed sink list and NO `AppHandle` at all.
+///
+/// The ONLY `AppHandle` reference in the ACP stack lives inside
+/// `crate::web::TauriEventSink::emit` (the desktop's sink — intentionally
+/// Tauri-aware). No code under `src-tauri/src/acp/` may call `app.emit("acp:..")`
+/// directly (AC7); all emission goes through [`events::fan_out`] against
+/// `self.sinks`.
 pub struct AcpManager {
-    app_handle: AppHandle,
+    sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
 }
 
 impl AcpManager {
-    /// Create a new manager bound to the given Tauri app handle.
+    /// Create a new manager that fans `acp:*` events out to the given sinks.
+    ///
+    /// Pass `vec![Arc::new(TauriEventSink::new(handle))]` for the desktop app
+    /// (byte-for-byte preserves today's Tauri event flow), or a
+    /// `WsRelaySink`-backed list for the headless `termul-server` binary
+    /// (Story 1.2). An empty `vec![]` is legal (used by unit tests that only
+    /// exercise the command channel) — `fan_out` over zero sinks is a no-op.
     #[must_use]
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(sinks: Vec<Arc<dyn EventSink>>) -> Self {
         Self {
-            app_handle,
+            sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -196,7 +316,7 @@ impl AcpManager {
         // can surface it instead of a generic "did not initialize" message.
         let start_error = Arc::new(Mutex::new(None::<String>));
 
-        let app = self.app_handle.clone();
+        let sinks = self.sinks.clone();
         let thread_agent_id = agent_id.clone();
         let thread_config = config.clone();
         let thread_agents = self.agents.clone();
@@ -209,7 +329,7 @@ impl AcpManager {
             .spawn(move || {
                 run_agent(
                     thread_config,
-                    app,
+                    sinks,
                     thread_agent_id,
                     command_rx,
                     init_tx,
@@ -267,14 +387,12 @@ impl AcpManager {
             );
         }
 
-        events::emit(
-            &self.app_handle,
-            events::EVENT_AGENT_SPAWNED,
-            AgentSpawnedEvent {
-                agent_id: agent_id.clone(),
-                capabilities,
-            },
-        );
+        let event = AgentSpawnedEvent {
+            agent_id: agent_id.clone(),
+            capabilities,
+        };
+        // `agent_spawned` is agent-level (no session yet) → sid = None.
+        events::fan_out(&self.sinks, None, events::EVENT_AGENT_SPAWNED, &event);
 
         Ok(agent_id)
     }
@@ -367,22 +485,39 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await
     }
 
-    /// List sessions on the given agent.
+    /// List sessions on the given agent. Gated on the agent's
+    /// `sessionCapabilities.list`. Pass `cwd` to filter by working directory;
+    /// pass `cursor` for pagination (opaque token from a prior response).
     pub async fn list_sessions(
         &self,
         agent_id: &AgentId,
+        cwd: Option<String>,
+        cursor: Option<String>,
     ) -> Result<ListSessionsResponse, String> {
+        let caps = self.capabilities(agent_id)?;
+        gate_list_sessions(&caps)?;
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::ListSessions { reply }).await
+        send_command(&tx, |reply| AcpCommand::ListSessions {
+            cwd,
+            cursor,
+            reply,
+        })
+        .await
     }
 
     /// Send a prompt and await the turn's stop reason. Streaming updates arrive
     /// as `acp:*` events; the turn ends with `acp:prompt_complete`.
+    ///
+    /// `turn_id` (Story 1.8 T3.2): optional client turn-id, echoed back on the
+    /// `prompt_complete` event for the renderer's `seenTurnIds` idempotent dedup
+    /// (FR11 — "no duplicate completion on reconnect replay"). `None` for the
+    /// desktop path + older clients (dedup is a no-op).
     pub async fn send_prompt(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         content: Vec<ContentBlock>,
+        turn_id: Option<String>,
     ) -> Result<StopReason, String> {
         if content.is_empty() {
             return Err("prompt content must not be empty".to_string());
@@ -391,6 +526,7 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::SendPrompt {
             session_id,
             content,
+            turn_id,
             reply,
         })
         .await
@@ -579,6 +715,17 @@ fn gate_close_session(caps: &AgentCapabilities) -> Result<(), String> {
     }
 }
 
+/// Capability gate for `session/list`: requires `sessionCapabilities.list`.
+/// Per the ACP spec: "If `sessionCapabilities.list` is not present … Clients
+/// MUST NOT attempt to call `session/list`."
+fn gate_list_sessions(caps: &AgentCapabilities) -> Result<(), String> {
+    if caps.session_capabilities.list.is_some() {
+        Ok(())
+    } else {
+        Err("agent does not support session/list (sessionCapabilities.list)".to_string())
+    }
+}
+
 /// Send a command to a driver thread and await its `Send` oneshot reply.
 async fn send_command<T>(
     command_tx: &mpsc::UnboundedSender<AcpCommand>,
@@ -618,7 +765,7 @@ async fn join_thread_bounded(handle: JoinHandle<()>) {
 #[allow(clippy::too_many_arguments)]
 fn run_agent(
     config: AgentConfig,
-    app: AppHandle,
+    sinks: Vec<Arc<dyn EventSink>>,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
@@ -651,7 +798,7 @@ fn run_agent(
 
     let result = runtime.block_on(drive_connection(
         config,
-        app.clone(),
+        sinks.clone(),
         agent_id.clone(),
         command_rx,
         init_tx,
@@ -706,33 +853,37 @@ fn run_agent(
 
     if was_spawned && !intentional_kill {
         for session in active_sessions {
-            events::emit(
-                &app,
-                events::EVENT_SESSION_CLOSED,
-                SessionClosedEvent {
-                    agent_id: agent_id.clone(),
-                    session_id: SessionId::new(session),
-                },
-            );
+            let event = SessionClosedEvent {
+                agent_id: agent_id.clone(),
+                session_id: SessionId::new(session),
+            };
+            events::fan_out(&sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_CLOSED, &event);
         }
 
         if let Err(message) = result {
-            events::emit(
-                &app,
-                events::EVENT_AGENT_ERROR,
-                AgentErrorEvent {
-                    agent_id: agent_id.clone(),
-                    session_id: None,
-                    message,
-                },
-            );
+            // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
+            // `agent_error` (back-compat) + `agent_disconnected`. The renderer
+            // distinguishes "crash" (→ `status: 'error'` + manual restart) from
+            // a clean disconnect. Outstanding turn oneshots fail with this.
+            let crashed = AgentCrashedEvent {
+                agent_id: agent_id.clone(),
+                session_id: None,
+                message: message.clone(),
+            };
+            events::fan_out(&sinks, None, events::EVENT_AGENT_CRASHED, &crashed);
+
+            let event = AgentErrorEvent {
+                agent_id: agent_id.clone(),
+                session_id: None,
+                message,
+            };
+            // Teardown error is agent-level (no session) → sid = None.
+            events::fan_out(&sinks, None, events::EVENT_AGENT_ERROR, &event);
         }
 
-        events::emit(
-            &app,
-            events::EVENT_AGENT_DISCONNECTED,
-            AgentDisconnectedEvent { agent_id },
-        );
+        let event = AgentDisconnectedEvent { agent_id };
+        // Agent-level lifecycle event → sid = None.
+        events::fan_out(&sinks, None, events::EVENT_AGENT_DISCONNECTED, &event);
     }
 }
 
@@ -740,7 +891,7 @@ fn run_agent(
 #[allow(clippy::too_many_arguments)]
 async fn drive_connection(
     config: AgentConfig,
-    app: AppHandle,
+    sinks: Vec<Arc<dyn EventSink>>,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
@@ -784,9 +935,13 @@ async fn drive_connection(
     );
 
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
-    let notif_app = app.clone();
+    // Each handler gets its own clone of the sink fan-out; `Arc` clones are
+    // cheap and `Vec::clone` is N Arc clones (N is tiny: 1 sink in desktop mode
+    // today, 2 once Story 1.10 adds the shared-live WS sink).
+    let notif_sinks = sinks.clone();
     let notif_agent_id = agent_id.clone();
-    let perm_app = app.clone();
+    let notif_state = driver_state.clone();
+    let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
     let read_state = driver_state.clone();
@@ -808,7 +963,7 @@ async fn drive_connection(
     let loop_terminals = terminals.clone();
 
     // Clones moved into the command loop (`main_fn`).
-    let loop_app = app.clone();
+    let loop_sinks = sinks.clone();
     let loop_agent_id = agent_id.clone();
     let loop_state = driver_state.clone();
     let loop_spawned = spawned.clone();
@@ -818,7 +973,20 @@ async fn drive_connection(
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::SessionNotification, _cx| {
-                client::emit_session_update(&notif_app, &notif_agent_id, notification);
+                let session_id = notification.session_id.0.to_string();
+                let tool_call_id = match &notification.update {
+                    agent_client_protocol::schema::SessionUpdate::ToolCall(tool_call) => {
+                        Some(tool_call.tool_call_id.0.to_string())
+                    }
+                    agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update) => {
+                        Some(update.tool_call_id.0.to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(tool_call_id) = tool_call_id {
+                    notif_state.lock().bind_tool_call(tool_call_id, session_id);
+                }
+                client::emit_session_update(&notif_sinks, &notif_agent_id, notification);
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -836,18 +1004,24 @@ async fn drive_connection(
                 let session_string = session_id.0.to_string();
                 let request_id = {
                     let mut state = perm_state.lock();
+                    state.bind_tool_call(
+                        tool_call.tool_call_id.0.to_string(),
+                        session_string.clone(),
+                    );
                     state.register_permission(session_string.clone(), responder)
                 };
-                events::emit(
-                    &perm_app,
+                let event = events::PermissionRequestEvent {
+                    agent_id: perm_agent_id.clone(),
+                    session_id: SessionId::new(session_string),
+                    request_id,
+                    tool_call,
+                    options,
+                };
+                events::fan_out(
+                    &perm_sinks,
+                    Some(event.session_id.0.as_str()),
                     events::EVENT_PERMISSION_REQUEST,
-                    events::PermissionRequestEvent {
-                        agent_id: perm_agent_id.clone(),
-                        session_id: SessionId::new(session_string),
-                        request_id,
-                        tool_call,
-                        options,
-                    },
+                    &event,
                 );
                 Ok(())
             },
@@ -1018,7 +1192,7 @@ async fn drive_connection(
                 cx,
                 command_rx,
                 init_tx,
-                loop_app,
+                loop_sinks,
                 loop_agent_id,
                 loop_state,
                 loop_spawned,
@@ -1042,7 +1216,7 @@ async fn run_command_loop(
     cx: ConnectionTo<Agent>,
     mut command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
-    app: AppHandle,
+    sinks: Vec<Arc<dyn EventSink>>,
     agent_id: AgentId,
     driver_state: Arc<Mutex<DriverState>>,
     spawned: Arc<AtomicBool>,
@@ -1060,11 +1234,16 @@ async fn run_command_loop(
         Ok(Ok(response)) => {
             let auth_method_ids: Vec<String> =
                 response.auth_methods.iter().map(|m| m.id().to_string()).collect();
+            let session_caps = &response.agent_capabilities.session_capabilities;
             log::info!(
-                "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} loadSession={}",
+                "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
+                 loadSession={} sessionCapabilities.list={} resume={} close={}",
                 response.protocol_version,
                 auth_method_ids,
                 response.agent_capabilities.load_session,
+                session_caps.list.is_some(),
+                session_caps.resume.is_some(),
+                session_caps.close.is_some(),
             );
 
             spawned.store(true, Ordering::Release);
@@ -1106,13 +1285,17 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
-                let req_app = app.clone();
+                let req_sinks = sinks.clone();
                 let req_agent_id = agent_id.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let timeout = session_new_timeout();
+                    log::debug!(
+                        "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
+                    );
                     match tokio::time::timeout(
-                        SESSION_NEW_TIMEOUT,
+                        timeout,
                         req_cx.send_request(request).block_task(),
                     )
                     .await
@@ -1124,16 +1307,18 @@ async fn run_command_loop(
                             req_state
                                 .lock()
                                 .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                            events::emit(
-                                &req_app,
+                            let event = SessionCreatedEvent {
+                                agent_id: req_agent_id,
+                                session_id: session_id.clone(),
+                                modes: response.modes.clone(),
+                                models: response.models.clone(),
+                                config_options: response.config_options.clone(),
+                            };
+                            events::fan_out(
+                                &req_sinks,
+                                Some(event.session_id.0.as_str()),
                                 events::EVENT_SESSION_CREATED,
-                                SessionCreatedEvent {
-                                    agent_id: req_agent_id,
-                                    session_id: session_id.clone(),
-                                    modes: response.modes.clone(),
-                                    models: response.models.clone(),
-                                    config_options: response.config_options.clone(),
-                                },
+                                &event,
                             );
                             send_reply(
                                 &task_slot,
@@ -1146,12 +1331,16 @@ async fn run_command_loop(
                             );
                         }
                         Ok(Err(e)) => send_reply(&task_slot, Err(e.to_string())),
-                        Err(_) => send_reply(
-                            &task_slot,
-                            Err(format!(
-                                "session/new timed out after {SESSION_NEW_TIMEOUT:?}"
-                            )),
-                        ),
+                        Err(_) => {
+                            log::warn!(
+                                "[acp] {req_agent_id} session/new timed out after {timeout:?}; \
+                                 check agent stderr in RUST_LOG=debug"
+                            );
+                            send_reply(
+                                &task_slot,
+                                Err(format!("session/new timed out after {timeout:?}")),
+                            )
+                        }
                     }
                 });
             }
@@ -1166,14 +1355,19 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
+                    // Bounded like session/new: a wedged agent must not park the
+                    // renderer's reconnect forever (the reply sender would be
+                    // held indefinitely).
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let result = run_session_reopen(
+                        "session/load",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1188,13 +1382,15 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
-                    let result = req_cx.send_request(request).block_task().await;
-                    if result.is_ok() {
-                        req_state
-                            .lock()
-                            .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
-                    }
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let result = run_session_reopen(
+                        "session/resume",
+                        &session_id.0,
+                        &cwd,
+                        &req_state,
+                        req_cx.send_request(request).block_task(),
+                    )
+                    .await;
+                    send_reply(&task_slot, result);
                 });
             }
 
@@ -1226,12 +1422,22 @@ async fn run_command_loop(
                 });
             }
 
-            AcpCommand::ListSessions { reply } => {
+            AcpCommand::ListSessions {
+                cwd,
+                cursor,
+                reply,
+            } => {
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = agent_client_protocol::schema::ListSessionsRequest::new();
+                    let mut request = agent_client_protocol::schema::ListSessionsRequest::new();
+                    if let Some(cwd) = cwd {
+                        request = request.cwd(std::path::PathBuf::from(cwd));
+                    }
+                    if let Some(cursor) = cursor {
+                        request = request.cursor(cursor);
+                    }
                     let result = req_cx.send_request(request).block_task().await;
                     send_reply(&task_slot, result.map_err(|e| e.to_string()));
                 });
@@ -1240,6 +1446,7 @@ async fn run_command_loop(
             AcpCommand::SendPrompt {
                 session_id,
                 content,
+                turn_id,
                 reply,
             } => {
                 // Single-flight per session: reject a second prompt while a turn
@@ -1247,8 +1454,9 @@ async fn run_command_loop(
                 // receiver when the turn may proceed.
                 let cancel_rx = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(cancel_rx) = cancel_rx else {
+                    // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
                     let _ = reply.send(Err(format!(
-                        "a prompt turn is already in progress for session {}",
+                        "ACP_TURN_IN_PROGRESS: session {}",
                         session_id.0
                     )));
                     continue;
@@ -1257,20 +1465,27 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let turn_cx = cx.clone();
-                let turn_app = app.clone();
+                let turn_sinks = sinks.clone();
                 let turn_agent_id = agent_id.clone();
                 let turn_state = driver_state.clone();
                 let turn_session = session_id.clone();
                 let log_session = session_id.clone();
+                // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
+                let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
                     let request = PromptRequest::new(&session_id, content);
                     let prompt = turn_cx.send_request(request).block_task();
                     tokio::pin!(prompt);
 
-                    // Race the turn against a cancel signal bounded by
-                    // CANCEL_GRACE: a misbehaving agent that ignores
-                    // `session/cancel` must not park `acp_send_prompt`
-                    // forever holding the reply sender (M5).
+                    // Story 1.9 NFR7: race the turn against (a) completion,
+                    // (b) a cancel signal bounded by CANCEL_GRACE (M5), AND
+                    // (c) a bounded turn timeout (a wedged agent that neither
+                    // replies nor crashes must not park `send_prompt`'s
+                    // oneshot forever). On timeout, signal cancel + await the
+                    // CANCEL_GRACE race, then fail with a typed timeout error
+                    // → the `send_prompt` reply surfaces it; `acp-store` sets
+                    // `status: 'error'`.
+                    let turn_deadline = turn_timeout();
                     let outcome: Result<StopReason, String> = tokio::select! {
                         result = &mut prompt => {
                             result.map(|r| r.stop_reason).map_err(|e| e.to_string())
@@ -1281,6 +1496,21 @@ async fn run_command_loop(
                                     result.map(|r| r.stop_reason).map_err(|e| e.to_string())
                                 }
                                 Err(_) => Ok(StopReason::Cancelled),
+                            }
+                        }
+                        _ = tokio::time::sleep(turn_deadline) => {
+                            // Turn timed out — signal cancel (so the agent's
+                            // in-flight session/prompt is cancelled too) + give
+                            // it CANCEL_GRACE to wind down, then fail.
+                            turn_state.lock().signal_cancel(&session_id.0);
+                            match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                                Ok(result) => {
+                                    result.map(|r| r.stop_reason).map_err(|e| e.to_string())
+                                }
+                                Err(_) => Err(format!(
+                                    "turn timeout: session {} exceeded {:?}",
+                                    session_id.0, turn_deadline
+                                )),
                             }
                         }
                     };
@@ -1308,26 +1538,32 @@ async fn run_command_loop(
 
                     match outcome {
                         Ok(stop_reason) => {
-                            events::emit(
-                                &turn_app,
+                            let event = PromptCompleteEvent {
+                                agent_id: turn_agent_id,
+                                session_id,
+                                stop_reason,
+                                turn_id: turn_turn_id.clone(),
+                            };
+                            events::fan_out(
+                                &turn_sinks,
+                                Some(event.session_id.0.as_str()),
                                 events::EVENT_PROMPT_COMPLETE,
-                                PromptCompleteEvent {
-                                    agent_id: turn_agent_id,
-                                    session_id,
-                                    stop_reason,
-                                },
+                                &event,
                             );
                             send_reply(&task_slot, Ok(stop_reason));
                         }
                         Err(message) => {
-                            events::emit(
-                                &turn_app,
+                            let event = AgentErrorEvent {
+                                agent_id: turn_agent_id,
+                                session_id: Some(session_id),
+                                message: message.clone(),
+                            };
+                            // Turn-scoped error → sid is the session id.
+                            events::fan_out(
+                                &turn_sinks,
+                                event.session_id.as_ref().map(|s| s.0.as_str()),
                                 events::EVENT_AGENT_ERROR,
-                                AgentErrorEvent {
-                                    agent_id: turn_agent_id,
-                                    session_id: Some(session_id),
-                                    message: message.clone(),
-                                },
+                                &event,
                             );
                             send_reply(&task_slot, Err(message));
                         }
@@ -1398,21 +1634,23 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
-                let req_app = app.clone();
+                let req_sinks = sinks.clone();
                 let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     let request =
                         SetSessionConfigOptionRequest::new(&session_id, config_id, value_id);
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
-                            events::emit(
-                                &req_app,
+                            let event = ConfigOptionsUpdateEvent {
+                                agent_id: req_agent_id,
+                                session_id,
+                                config_options: response.config_options.clone(),
+                            };
+                            events::fan_out(
+                                &req_sinks,
+                                Some(event.session_id.0.as_str()),
                                 events::EVENT_CONFIG_OPTIONS_UPDATE,
-                                ConfigOptionsUpdateEvent {
-                                    agent_id: req_agent_id,
-                                    session_id,
-                                    config_options: response.config_options.clone(),
-                                },
+                                &event,
                             );
                             send_reply(&task_slot, Ok(response.config_options));
                         }
@@ -1528,6 +1766,10 @@ mod tests {
             gate_resume_session(&caps).is_err(),
             "default agent must not advertise resume"
         );
+        assert!(
+            gate_list_sessions(&caps).is_err(),
+            "default agent must not advertise session/list"
+        );
     }
 
     /// The rejection path must NOT enqueue any command (agent never contacted).
@@ -1623,9 +1865,42 @@ mod tests {
         );
     }
 
+    /// Shape test (like `cancel_grace_forcibly_resolves_a_stuck_turn`): mirrors
+    /// the timeout-around-request pattern of the `LoadSession`/`ResumeSession`
+    /// arms against a never-resolving future, using a short local bound so the
+    /// is fast. The arms themselves need a live connection + sink fan-out and
+    /// are not driven here; this covers the match shape plus the production
+    /// timeout resolution below.
+    #[tokio::test]
+    async fn session_reopen_times_out_instead_of_hanging() {
+        const TEST_TIMEOUT: Duration = Duration::from_millis(50);
+        let request = std::future::pending::<Result<(), String>>();
+        let outcome = tokio::time::timeout(TEST_TIMEOUT, request).await;
+        let result: Result<(), String> = match outcome {
+            Ok(result) => result,
+            Err(_) => Err(format!("session/load timed out after {TEST_TIMEOUT:?}")),
+        };
+        assert!(
+            result.is_err_and(|e| e.contains("timed out")),
+            "a hung reopen must resolve to a timeout error"
+        );
+    }
+
+    /// The production reopen budget resolves to the 60s default and honors the
+    /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` diagnostic override contract
+    /// (mirrors `session_new_timeout`). Only the default path is asserted —
+    /// mutating process env in a test would race other tests.
+    #[test]
+    fn session_reopen_timeout_defaults_to_constant() {
+        if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_err() {
+            assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
+        }
+        assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
+    }
+
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).
     /// `send_prompt`'s guard is a pure pre-check; assert its predicate here
-    /// (the manager method needs an AppHandle, but the guard runs first).
+    /// (the manager method needs a sink fan-out, but the guard runs first).
     #[test]
     fn empty_prompt_content_is_rejected_by_guard() {
         let content: Vec<ContentBlock> = Vec::new();

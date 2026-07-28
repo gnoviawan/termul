@@ -5,7 +5,8 @@ import type {
   FileContent,
   FileInfo,
   FilesystemApi,
-  IpcResult
+  IpcResult,
+  SearchFileHit
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -23,6 +24,7 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+import { webServerFilesystem } from './web-server-api'
 
 // Names that are commonly git-ignored. Entries matching these are still shown in
 // the file tree but rendered dimmed (and skipped during recursive walks for perf).
@@ -188,6 +190,11 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
 export function createTauriFilesystemApi(): FilesystemApi {
   return {
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
+      // Web/remote mode: route through the same-origin server (Story: Web/
+      // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
+      if (!isTauriContext()) {
+        return webServerFilesystem.readDirectory(dirPath)
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
@@ -484,12 +491,21 @@ export function createTauriFilesystemApi(): FilesystemApi {
       searchId: string,
       scopeRoot: string,
       rootPath: string,
-      query: string
+      query: string,
+      includeIgnored?: boolean
     ) {
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_stream',
-          { request: { searchId, scopeRoot, rootPath, query } }
+          {
+            request: {
+              searchId,
+              scopeRoot,
+              rootPath,
+              query,
+              ...(includeIgnored ? { includeIgnored } : {})
+            }
+          }
         )
         if (!response?.success) {
           return {
@@ -532,12 +548,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onSearchFileNamesBatch(
-      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+      callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
     ) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
+        unlisten = listen<{ searchId: string; files: SearchFileHit[]; truncated?: boolean }>(
           'search-file-names-batch',
           ({ payload }) => callback(payload)
         )
@@ -599,6 +615,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -608,6 +628,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createDirectory(dirPath)
+      }
       try {
         await mkdir(dirPath, { recursive: true })
         return { success: true, data: undefined }

@@ -6,6 +6,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()
 }))
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => true),
+  cleanupTauriListener: vi.fn()
+}))
 vi.mock('@/lib/acp-agents-persistence', async (orig) => {
   const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
   return {
@@ -35,9 +39,15 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import { _resetAcpTransportForTests } from '@/lib/acp-transport'
 import {
+  _resetEphemeralSessionIdsForTesting,
+  _resetInFlightHistoryOpensForTesting,
+  _resetInFlightPreparedForTesting,
   agentReuseKey,
+  collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
+  discoveryKey,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -53,15 +63,24 @@ const FRESH = {
   preparedSessions: {},
   preparingChatKeys: {},
   prepareChatErrors: {},
+  agentOptionsCache: {},
   sessionIndex: [],
+  openingHistoryIds: {},
+  launchingSessionIds: {},
+  discoveredSessions: {},
+  discoveringKeys: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
+  sessionUsage: {},
   messages: {},
   toolCalls: {},
   plans: {},
   commands: {},
-  pendingPermissions: {}
+  pendingPermissions: {},
+  promptQueues: {},
+  suppressQueueFlush: {},
+  transportReconnecting: false
 }
 
 /**
@@ -81,6 +100,7 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
         id: sessionId,
         agentId,
         cwd: '/work',
+        projectId: 'p1',
         status: 'active',
         title: null,
         activeTurn,
@@ -96,15 +116,83 @@ function seedSession(sessionId: string, agentId: string, activeTurn = true): voi
   })
 }
 
+describe('collectProjectsWithActiveAgentChat', () => {
+  beforeEach(() => {
+    useAcpStore.setState(FRESH)
+  })
+
+  it('returns project ids with an open active turn', () => {
+    seedSession('s1', 'agent-1', true)
+    expect(collectProjectsWithActiveAgentChat(useAcpStore.getState().sessions)).toEqual(['p1'])
+  })
+
+  it('excludes closed sessions and idle turns', () => {
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: 'turn-1',
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s2: {
+          id: 's2',
+          agentId: 'agent-2',
+          cwd: '/work',
+          projectId: 'p2',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s3: {
+          id: 's3',
+          agentId: 'agent-3',
+          cwd: '/work',
+          projectId: 'p3',
+          status: 'closed',
+          title: null,
+          activeTurn: true,
+          openTurnId: 'turn-3',
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    })
+    expect(collectProjectsWithActiveAgentChat(useAcpStore.getState().sessions)).toEqual(['p1'])
+  })
+})
+
 describe('acp-store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetInFlightPreparedForTesting()
     useAcpStore.setState(FRESH)
   })
 
   it('createSession records sessionId -> agentId and activates it', async () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1' })
-    const id = await useAcpStore.getState().createSession('agent-1', '/work')
+    const id = await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(id).toBe('s1')
     const session = useAcpStore.getState().sessions['s1']
     expect(session.agentId).toBe('agent-1')
@@ -123,7 +211,7 @@ describe('acp-store', () => {
       }
     })
 
-    await useAcpStore.getState().createSession('agent-1', '/work')
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
 
     expect(useAcpStore.getState().sessions['s1'].models).toEqual({
       currentModelId: 'kiro/claude-opus-4-8',
@@ -186,6 +274,7 @@ describe('acp-store', () => {
           agentId: 'agent-09d39730',
           title: 'Agent 09d39730',
           cwd: '/work',
+          projectId: 'p1',
           createdAt: 1,
           lastActivityAt: 1,
           messageCount: 0,
@@ -211,11 +300,230 @@ describe('acp-store', () => {
     )
   })
 
-  it('rejects a second prompt while a turn is active', async () => {
+  it('enqueues a second prompt while a turn is active', async () => {
     seedSession('s1', 'agent-1') // active by default
-    await expect(useAcpStore.getState().sendPrompt('s1', 'again')).rejects.toThrow(
-      /already in progress/
+    await useAcpStore.getState().sendPrompt('s1', 'follow up')
+    const queue = useAcpStore.getState().promptQueues['s1']
+    expect(queue).toHaveLength(1)
+    expect(queue[0].blocks).toEqual([{ type: 'text', text: 'follow up' }])
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
+  })
+
+  it('enqueues when activeTurn is set without openTurnId', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: null }
+      }
+    }))
+    await useAcpStore.getState().sendPrompt('s1', 'follow up')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
+  })
+
+  it('queues a prompt when the backend rejects a concurrent turn', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('ACP_TURN_IN_PROGRESS: session s1')
     )
+    await useAcpStore.getState().sendPrompt('s1', 'queued after race')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().promptQueues['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'queued after race' }
+    ])
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
+  })
+
+  it('flushes the next queued prompt when the turn ends', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued one')
+    await useAcpStore.getState().sendPrompt('s1', 'queued two')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(2)
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'queued one' }
+    ])
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+  })
+
+  it('preserves FIFO order when a flushed prompt hits ACP_TURN_IN_PROGRESS', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued A')
+    await useAcpStore.getState().sendPrompt('s1', 'queued B')
+    const before = useAcpStore.getState().promptQueues['s1']
+    expect(before).toHaveLength(2)
+    const idA = before[0].id
+    const idB = before[1].id
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('ACP_TURN_IN_PROGRESS: session s1')
+    )
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    // Allow the flush's runPromptTurn rejection path to settle.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const after = useAcpStore.getState().promptQueues['s1']
+    expect(after.map((q) => q.id)).toEqual([idA, idB])
+    expect(after[0].blocks).toEqual([{ type: 'text', text: 'queued A' }])
+    expect(after[1].blocks).toEqual([{ type: 'text', text: 'queued B' }])
+  })
+
+  it('ignores duplicate turn-end signals so a flushed queued turn keeps running', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued next')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+
+    // Mirrors dispatch resolve + acp:prompt_complete scheduling end twice.
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await flushTurnEnd()
+
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'queued next' }
+    ])
+  })
+
+  it('sendQueuedPromptNow cancels an active turn and sends the queued message', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued now')
+    const queueId = useAcpStore.getState().promptQueues['s1'][0].id
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_cancel_prompt') {
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 's1',
+          stopReason: 'cancelled'
+        })
+        return undefined
+      }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    await useAcpStore.getState().sendQueuedPromptNow('s1', queueId)
+    await flushTurnEnd()
+
+    expect(invoke).toHaveBeenCalledWith('acp_cancel_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'queued now' }
+    ])
+  })
+
+  it('sendQueuedPromptNow cancels when activeTurn is set without openTurnId', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: null }
+      },
+      promptQueues: {
+        s1: [
+          {
+            id: 'q-now',
+            blocks: [{ type: 'text', text: 'send now activeTurn-only' }],
+            createdAt: Date.now()
+          }
+        ]
+      }
+    }))
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_cancel_prompt') {
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 's1',
+          stopReason: 'cancelled'
+        })
+        return undefined
+      }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    await useAcpStore.getState().sendQueuedPromptNow('s1', 'q-now')
+    await flushTurnEnd()
+
+    expect(invoke).toHaveBeenCalledWith('acp_cancel_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'send now activeTurn-only' }
+    ])
+  })
+
+  it('prompt_complete clears activeTurn-only sessions and flushes the queue', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: null }
+      },
+      promptQueues: {
+        s1: [
+          {
+            id: 'q-flush',
+            blocks: [{ type: 'text', text: 'after activeTurn-only' }],
+            createdAt: Date.now()
+          }
+        ]
+      }
+    }))
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    expect(useAcpStore.getState().sessions['s1'].openTurnId).not.toBeNull()
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'after activeTurn-only' }
+    ])
   })
 
   it('coalesces agent message_chunk events into one streaming message', () => {
@@ -292,6 +600,64 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/refused/i)
   })
 
+  it('prompt_complete mirrors the transcript to disk so agent replies survive a restart', async () => {
+    // Only user sends used to persist; a reply followed by an app quit was lost.
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          title: 'T',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'the answer' }
+    })
+    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    expect(saveSessionPayload).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        messages: [expect.objectContaining({ role: 'agent', streaming: false })]
+      })
+    )
+  })
+
+  it('prompt_complete does not resurrect a chat deleted while the turn was in flight', async () => {
+    // deleteHistorySession removed the index entry mid-turn; the turn-end
+    // persist must not write it back.
+    seedSession('s1', 'agent-1')
+    // No sessionIndex entry for s1 (deleted).
+    const { saveSessionPayload, saveSessionIndex } = await import('@/lib/acp-history-persistence')
+    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    ;(saveSessionIndex as ReturnType<typeof vi.fn>).mockClear()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    expect(saveSessionPayload).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().sessionIndex).toEqual([])
+  })
+
   it('agent_disconnected marks the agent error and closes its sessions', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
@@ -310,6 +676,7 @@ describe('acp-store', () => {
           id: 's1',
           agentId: 'agent-1',
           cwd: '/work',
+          projectId: 'p1',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -323,6 +690,7 @@ describe('acp-store', () => {
           id: 's2',
           agentId: 'agent-1',
           cwd: '/work',
+          projectId: 'p1',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -398,6 +766,101 @@ describe('acp-store', () => {
     })
     store._onAgentDisconnected({ agentId: 'agent-1' })
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
+  })
+
+  it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: 'Implement auth'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Implement auth')
+  })
+
+  it('_onSessionInfoUpdate reverts title to null when agent clears it', () => {
+    seedSession('s1', 'agent-1')
+    // Set a title first
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Old title' } }
+    }))
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      title: null
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBeNull()
+  })
+
+  it('_onSessionInfoUpdate is a no-op for unknown sessions', () => {
+    useAcpStore.setState(FRESH)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 'unknown',
+      title: 'Whatever'
+    })
+    expect(useAcpStore.getState().sessions['unknown']).toBeUndefined()
+  })
+
+  it('_onSessionInfoUpdate leaves the title untouched when the field is omitted', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Keep me' } }
+    }))
+    // title field absent => undefined => no change (must not clear to null)
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Keep me')
+  })
+
+  it('_onUsageUpdate stores agent-reported context window usage', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 53_000,
+      size: 200_000,
+      cost: { amount: 0.045, currency: 'USD' }
+    })
+    const usage = useAcpStore.getState().sessionUsage['s1']
+    expect(usage?.used).toBe(53_000)
+    expect(usage?.size).toBe(200_000)
+    expect(usage?.baselineUsed).toBe(53_000)
+    expect(usage?.cost).toEqual({ amount: 0.045, currency: 'USD' })
+    expect(usage?.source).toBe('reported')
+  })
+
+  it('_onUsageUpdate ignores zero cost placeholders', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 22_961,
+      size: 200_000,
+      cost: { amount: 0, currency: 'USD' }
+    })
+    expect(useAcpStore.getState().sessionUsage['s1']?.cost).toBeUndefined()
+    expect(useAcpStore.getState().sessionUsage['s1']?.baselineUsed).toBe(22_961)
+  })
+
+  it('_onUsageUpdate ignores invalid or unknown sessions', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 'missing',
+      used: 1,
+      size: 100
+    })
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 0,
+      size: 100
+    })
+    expect(useAcpStore.getState().sessionUsage['s1']).toBeUndefined()
+    expect(useAcpStore.getState().sessionUsage['missing']).toBeUndefined()
   })
 
   it('respondPermission is re-entrancy safe (W3): second call is a no-op', async () => {
@@ -622,6 +1085,7 @@ describe('acp-store', () => {
           id: 's1',
           agentId: 'agent-1',
           cwd: '/work',
+          projectId: 'p1',
           status: 'active',
           title: null,
           activeTurn: true,
@@ -634,7 +1098,7 @@ describe('acp-store', () => {
       }
     })
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1' })
-    await useAcpStore.getState().createSession('agent-1', '/work')
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     const session = useAcpStore.getState().sessions['s1']
     expect(session.lastError).toBe('early error')
     expect(session.activeTurn).toBe(true)
@@ -841,6 +1305,36 @@ describe('acp-store', () => {
     )
   })
 
+  it('concurrent prewarmAgent + prepareChat for the same cwd spawn only one process', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-w', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    let resolveSpawn!: (id: string) => void
+    const spawnGate = new Promise<string>((r) => {
+      resolveSpawn = r
+    })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(spawnGate)
+      .mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    const warm = useAcpStore.getState().prewarmAgent('cfg-w', '/work')
+    useAcpStore.getState().prepareChat('cfg-w', '/work', undefined, 'p1')
+    resolveSpawn('agent-warm')
+    await warm
+    await vi.waitFor(() => {
+      expect(Object.values(useAcpStore.getState().preparedSessions).includes('sess-prep')).toBe(
+        true
+      )
+    })
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(1)
+    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-w', '/work')]).toBe(
+      'agent-warm'
+    )
+    expect(useAcpStore.getState().sessions['sess-prep'].agentId).toBe('agent-warm')
+  })
+
   it('startChat awaits an in-flight warm instead of re-spawning (GH-288 C3)', async () => {
     await useAcpStore
       .getState()
@@ -853,7 +1347,7 @@ describe('acp-store', () => {
       .mockReturnValueOnce(spawnGate) // acp_spawn_agent (warm)
       .mockResolvedValueOnce({ sessionId: 'sess-warm' }) // acp_new_session (reuse)
     const warm = useAcpStore.getState().prewarmAgent('cfg-w', '/work')
-    const chat = useAcpStore.getState().startChat('cfg-w', '/work')
+    const chat = useAcpStore.getState().startChat('cfg-w', '/work', undefined, 'p1')
     resolveSpawn('agent-warm')
     const [, sessionId] = await Promise.all([warm, chat])
     expect(sessionId).toBe('sess-warm')
@@ -871,7 +1365,7 @@ describe('acp-store', () => {
     ;(invoke as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce('agent-9')
       .mockResolvedValueOnce({ sessionId: 'sess-9' })
-    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-9')
     expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
     expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/work')]).toBe(
@@ -889,13 +1383,13 @@ describe('acp-store', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-prep' })
-    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     await vi.waitFor(() => {
       expect(Object.values(useAcpStore.getState().preparedSessions).includes('sess-prep')).toBe(
         true
       )
     })
-    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-prep')
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
@@ -916,7 +1410,7 @@ describe('acp-store', () => {
     }))
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('session/new timed out after 30s')
 
-    useAcpStore.getState().prepareChat('cfg-1', '/work')
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     const key = prepareChatKey('cfg-1', '/work', undefined)
     await vi.waitFor(() => {
       expect(useAcpStore.getState().prepareChatErrors[key]).toBe('session/new timed out after 30s')
@@ -926,6 +1420,449 @@ describe('acp-store', () => {
 
     useAcpStore.getState().cancelPreparedChat(key)
     expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
+  })
+
+  it('prepareChat caches models/modes/configOptions for the agent config id', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      sessionId: 'sess-cache',
+      models: {
+        currentModelId: 'm1',
+        availableModels: [{ modelId: 'm1', name: 'Model One' }]
+      },
+      modes: {
+        currentModeId: 'agent',
+        availableModes: [{ id: 'agent', name: 'Agent' }]
+      },
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm1',
+          options: [{ value: 'm1', name: 'Model One' }]
+        }
+      ]
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(
+        useAcpStore.getState().preparedSessions[prepareChatKey('cfg-1', '/work', undefined)]
+      ).toBe('sess-cache')
+    })
+    const cached = useAcpStore.getState().agentOptionsCache['cfg-1']
+    expect(cached?.models?.currentModelId).toBe('m1')
+    expect(cached?.modes?.currentModeId).toBe('agent')
+    expect(cached?.configOptions[0]?.currentValue).toBe('m1')
+  })
+
+  it('cancelPreparedChat + reopen does not let a stale prepare clobber the newer one', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const sessionResults: unknown[] = []
+    let resolveFirst!: (value: unknown) => void
+    const firstGate = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    sessionResults.push(firstGate, { sessionId: 'sess-second' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        const next = sessionResults.shift()
+        return next instanceof Promise ? next : Promise.resolve(next)
+      }
+      if (cmd === 'acp_close_session' || cmd === 'acp_kill_agent') return Promise.resolve(undefined)
+      return undefined
+    })
+
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBe(true)
+    // Wait until the first prepare has actually entered session/new (consumed the gate).
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    })
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
+
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBe(true)
+
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-second')
+    })
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
+
+    // Stale first prepare resolves after the newer one finished — must not clobber,
+    // and the orphan session from the stale create must be reaped.
+    resolveFirst({ sessionId: 'sess-stale' })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-second')
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('acp_close_session', {
+        agentId: 'agent-9',
+        sessionId: 'sess-stale'
+      })
+    })
+    expect(useAcpStore.getState().sessions['sess-stale']?.status).toBe('closed')
+  })
+
+  it('stale prepare resolving while newer is still in flight keeps preparingChatKeys', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let resolveFirst!: (value: unknown) => void
+    let resolveSecond!: (value: unknown) => void
+    const firstGate = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondGate = new Promise((resolve) => {
+      resolveSecond = resolve
+    })
+    const sessionResults: unknown[] = [firstGate, secondGate]
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        const next = sessionResults.shift()
+        return next instanceof Promise ? next : Promise.resolve(next)
+      }
+      if (cmd === 'acp_close_session') return Promise.resolve(undefined)
+      return undefined
+    })
+
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    })
+    useAcpStore.getState().cancelPreparedChat(key)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBe(true)
+
+    // Stale create completes while newer prepare is still awaiting session/new.
+    resolveFirst({ sessionId: 'sess-stale' })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBe(true)
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+
+    resolveSecond({ sessionId: 'sess-second' })
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-second')
+    })
+    expect(useAcpStore.getState().preparingChatKeys[key]).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('acp_close_session', {
+        agentId: 'agent-9',
+        sessionId: 'sess-stale'
+      })
+    })
+  })
+
+  it('startChat after cancel+reopen reuses the newer prepare instead of duplicating', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let resolveFirst!: (value: unknown) => void
+    const firstGate = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const sessionResults: unknown[] = [firstGate, { sessionId: 'sess-reopen' }]
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        const next = sessionResults.shift()
+        return next instanceof Promise ? next : Promise.resolve(next)
+      }
+      if (cmd === 'acp_close_session') return Promise.resolve(undefined)
+      return undefined
+    })
+
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    })
+    // startChat awaits the first (about-to-be-cancelled) prepare…
+    const started = useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    useAcpStore.getState().cancelPreparedChat(key)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    // …which returns null; startChat must pick up the newer prepare.
+    resolveFirst({ sessionId: 'sess-stale' })
+    await expect(started).resolves.toBe('sess-reopen')
+    const newSessionCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'acp_new_session'
+    )
+    expect(newSessionCalls).toHaveLength(2)
+  })
+
+  it('startChat awaits an in-flight prepare (send-while-cold)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let resolveSession!: (value: unknown) => void
+    const sessionGate = new Promise((resolve) => {
+      resolveSession = resolve
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'acp_new_session') return sessionGate
+      return undefined
+    })
+
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const started = useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    resolveSession({ sessionId: 'sess-cold' })
+    await expect(started).resolves.toBe('sess-cold')
+  })
+
+  it('invalidates options cache when agent cmd/args/env identity changes', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState({
+      agents: { 'agent-warm': { id: 'agent-warm', capabilities: null } },
+      agentStatus: { 'agent-warm': 'connected' },
+      configToLiveAgent: { [agentReuseKey('cfg-1', '/work')]: 'agent-warm' },
+      agentOptionsCache: {
+        'cfg-1': {
+          models: {
+            currentModelId: 'old',
+            availableModels: [{ modelId: 'old', name: 'Old' }]
+          },
+          modes: null,
+          configOptions: [],
+          updatedAt: 1
+        }
+      }
+    })
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini',
+      command: 'gemini',
+      args: ['--new'],
+      env: {}
+    })
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']).toBeUndefined()
+    // Warm process is not killed solely for options-cache invalidation.
+    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/work')]).toBe(
+      'agent-warm'
+    )
+    expect(invoke).not.toHaveBeenCalledWith('acp_kill_agent', expect.anything())
+  })
+
+  it('invalidates options cache on command-only identity change', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState({
+      agentOptionsCache: {
+        'cfg-1': {
+          models: null,
+          modes: { currentModeId: 'agent', availableModes: [{ id: 'agent', name: 'Agent' }] },
+          configOptions: [],
+          updatedAt: 1
+        }
+      }
+    })
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini',
+      command: '/usr/local/bin/gemini',
+      args: [],
+      env: {}
+    })
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']).toBeUndefined()
+  })
+
+  it('invalidates options cache on env-only identity change', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini',
+      command: 'gemini',
+      args: [],
+      env: { B: '2', A: '1' }
+    })
+    useAcpStore.setState({
+      agentOptionsCache: {
+        'cfg-1': {
+          models: null,
+          modes: null,
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'm1',
+              options: [{ value: 'm1', name: 'M1' }]
+            }
+          ],
+          updatedAt: 1
+        }
+      }
+    })
+    // Same keys different order must NOT invalidate (canonicalized).
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini',
+      command: 'gemini',
+      args: [],
+      env: { A: '1', B: '2' }
+    })
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']).toBeDefined()
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini',
+      command: 'gemini',
+      args: [],
+      env: { A: '1', B: 'changed' }
+    })
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']).toBeUndefined()
+  })
+
+  it('does not invalidate options cache on name-only agent config edits', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState({
+      agentOptionsCache: {
+        'cfg-1': {
+          models: null,
+          modes: { currentModeId: 'agent', availableModes: [{ id: 'agent', name: 'Agent' }] },
+          configOptions: [],
+          updatedAt: 1
+        }
+      }
+    })
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'cfg-1',
+      name: 'Gemini Renamed',
+      command: 'gemini',
+      args: [],
+      env: {}
+    })
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.modes?.currentModeId).toBe('agent')
+  })
+
+  it('deleteAgentConfig clears agentOptionsCache for that config', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    useAcpStore.setState({
+      agentOptionsCache: {
+        'cfg-1': {
+          models: null,
+          modes: { currentModeId: 'agent', availableModes: [{ id: 'agent', name: 'Agent' }] },
+          configOptions: [],
+          updatedAt: 1
+        },
+        'cfg-other': {
+          models: null,
+          modes: null,
+          configOptions: [],
+          updatedAt: 1
+        }
+      }
+    })
+    await useAcpStore.getState().deleteAgentConfig('cfg-1')
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']).toBeUndefined()
+    expect(useAcpStore.getState().agentOptionsCache['cfg-other']).toBeDefined()
+  })
+
+  it('setModel/setMode/setConfigOption refresh agentOptionsCache when agent is mapped', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-live', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-live': {
+          ...s.sessions['sess-live'],
+          modes: {
+            currentModeId: 'agent',
+            availableModes: [
+              { id: 'agent', name: 'Agent' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          },
+          models: {
+            currentModelId: 'm1',
+            availableModels: [
+              { modelId: 'm1', name: 'Model One' },
+              { modelId: 'm2', name: 'Model Two' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'm1',
+              options: [
+                { value: 'm1', name: 'Model One' },
+                { value: 'm2', name: 'Model Two' }
+              ]
+            }
+          ]
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined) // set_model
+      .mockResolvedValueOnce(undefined) // set_mode
+      .mockResolvedValueOnce([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm2',
+          options: [
+            { value: 'm1', name: 'Model One' },
+            { value: 'm2', name: 'Model Two' }
+          ]
+        }
+      ])
+
+    await useAcpStore.getState().setModel('sess-live', 'm2')
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.models?.currentModelId).toBe('m2')
+
+    await useAcpStore.getState().setMode('sess-live', 'plan')
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.modes?.currentModeId).toBe('plan')
+
+    await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
+    expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.configOptions[0]?.currentValue).toBe(
+      'm2'
+    )
   })
 
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
@@ -938,7 +1875,7 @@ describe('acp-store', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-2' })
-    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work')
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-2')
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
@@ -1039,6 +1976,7 @@ describe('acp-store', () => {
           id: 's-closed',
           agentId: 'agent-1',
           cwd: '/w',
+          projectId: 'p1',
           status: 'closed',
           title: 'Was open',
           activeTurn: false,
@@ -1058,6 +1996,7 @@ describe('acp-store', () => {
         agentId: 'agent-1',
         title: 'Was open',
         cwd: '/w',
+        projectId: 'p1',
         createdAt: 1,
         lastActivityAt: 2,
         messageCount: 1,
@@ -1081,8 +2020,11 @@ describe('acp-store', () => {
       sessionId: 's-closed',
       cwd: '/w'
     })
-    // load strategy clears then agent replays; with no replay, messages stay empty
-    expect(useAcpStore.getState().messages['s-closed']).toEqual([])
+    // The local transcript stays visible while (and after) the load: an agent
+    // that replays nothing must not blank the chat. A real replay replaces it
+    // (covered by the replay tests below).
+    expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s-closed'][0].id).toBe('m1')
     expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
   })
 
@@ -1101,6 +2043,7 @@ describe('acp-store', () => {
           id: 's-closed',
           agentId: 'agent-1',
           cwd: '/w',
+          projectId: 'p1',
           status: 'closed',
           title: 'Was open',
           activeTurn: false,
@@ -1120,6 +2063,7 @@ describe('acp-store', () => {
         agentId: 'agent-1',
         title: 'Was open',
         cwd: '/w',
+        projectId: 'p1',
         createdAt: 1,
         lastActivityAt: 2,
         messageCount: 1,
@@ -1176,12 +2120,669 @@ describe('acp-store', () => {
         }
       ]
     })
-    // acp_load_session rejects
-    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce('load boom')
+    // The agent streams a PARTIAL replay (replacing the mirror), then the load
+    // rejects — the restore path must bring the full local transcript back.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in load-failure test: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-load',
+        role: 'user',
+        content: { type: 'text', text: 'partial replay' }
+      })
+      throw new Error('load boom')
+    })
     await expect(useAcpStore.getState().openHistorySession('s-load')).rejects.toBeDefined()
-    // transcript was restored (not left empty) and the error surfaced
-    expect(useAcpStore.getState().messages['s-load']).toHaveLength(1)
-    expect(useAcpStore.getState().sessions['s-load'].lastError).toMatch(/Resume failed/)
+    // transcript was restored (not the partial replay) and the error surfaced
+    const messages = useAcpStore.getState().messages['s-load']
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe('m1')
+    const session = useAcpStore.getState().sessions['s-load']
+    expect(session.lastError).toMatch(/Resume failed/)
+    expect(session.status).toBe('closed')
+    expect(session.replaying).toBeNull()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession does not activate a chat deleted during load', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-del-ok',
+          agentId: 'agent-1',
+          title: 'Doomed',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-del-ok',
+        agentId: 'agent-1',
+        title: 'Doomed',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command: ${cmd}`)
+      }
+      await useAcpStore.getState().deleteHistorySession('s-del-ok')
+    })
+    await useAcpStore.getState().openHistorySession('s-del-ok')
+    const session = useAcpStore.getState().sessions['s-del-ok']
+    expect(session.status).toBe('closed')
+    expect(session.replaying).toBeNull()
+    expect(session.lastError).toBeNull()
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === 's-del-ok')).toBe(false)
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession does not restore or error a chat deleted during a failed load', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-del-fail',
+          agentId: 'agent-1',
+          title: 'Doomed',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-del-fail',
+        agentId: 'agent-1',
+        title: 'Doomed',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-del-fail',
+        role: 'user',
+        content: { type: 'text', text: 'partial replay' }
+      })
+      await useAcpStore.getState().deleteHistorySession('s-del-fail')
+      throw new Error('load boom')
+    })
+    // Must resolve (not reject) so callers do not toast after an intentional delete.
+    await expect(useAcpStore.getState().openHistorySession('s-del-fail')).resolves.toBeUndefined()
+    const session = useAcpStore.getState().sessions['s-del-fail']
+    expect(session.status).toBe('closed')
+    expect(session.lastError).toBeNull()
+    expect(session.replaying).toBeNull()
+    // Delete frees transcript maps; the failure path must not resurrect them
+    // or leave a partial mid-load replay resident in the WebView heap.
+    expect(useAcpStore.getState().messages['s-del-fail']).toBeUndefined()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession reuses the current live agent when the persisted agentId is stale after restart', async () => {
+    // After an app restart the persisted `agentId` is a dead per-process UUID,
+    // but `agentConfigId`+cwd maps to a freshly spawned (prewarmed) live agent.
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        { id: 'cfg-1', name: 'Agent1', command: 'agent', args: [], env: {} },
+        ...s.agentConfigs
+      ],
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-1', '/w')]: 'fresh-agent'
+      },
+      agents: {
+        ...s.agents,
+        'fresh-agent': { id: 'fresh-agent', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'fresh-agent': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-reopen',
+        agentId: 'stale-dead-uuid',
+        agentConfigId: 'cfg-1',
+        title: 'Reopen me',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('s-reopen')
+    // load targets the FRESH live agent (not the stale persisted UUID) and the
+    // session becomes active so the user can continue the conversation.
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'fresh-agent',
+      sessionId: 's-reopen',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-reopen'].agentId).toBe('fresh-agent')
+    expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
+  })
+
+  it('spawnAgent keeps capabilities delivered by acp:agent_spawned during its own await', async () => {
+    // Real backend ordering: `acp:agent_spawned` (carrying capabilities) is
+    // emitted BEFORE `acp_spawn_agent` returns, so `_onAgentSpawned` runs while
+    // `spawnAgent` is still awaiting. Resetting the entry to
+    // `capabilities: null` here stranded `openHistorySession` in a capability
+    // wait whose event had already fired -> 3s timeout -> read-only 'local'.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        useAcpStore
+          .getState()
+          ._onAgentSpawned({ agentId: 'agent-caps', capabilities: { loadSession: true } })
+        return 'agent-caps'
+      }
+      throw new Error(`unexpected invoke command in spawn-capabilities test: ${cmd}`)
+    })
+
+    await useAcpStore.getState().spawnAgent({ name: 'Caps', command: 'caps', args: [], env: {} })
+
+    expect(useAcpStore.getState().agents['agent-caps']?.capabilities).toEqual({
+      loadSession: true
+    })
+    expect(useAcpStore.getState().agentStatus['agent-caps']).toBe('connected')
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession waits for spawned-agent capabilities before resuming', async () => {
+    // No prewarmed agent for cfg-spawn+/w -> ensureLiveAgent spawns one. Its
+    // capabilities arrive asynchronously via _onAgentSpawned; the session must
+    // resume on the spawned agent only after the wait/subscribe path resolves.
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        { id: 'cfg-spawn', name: 'Spawn', command: 'spawn', args: [], env: {} },
+        ...s.agentConfigs
+      ]
+    }))
+    // Route by command name (not call order) so any unexpected invoke call fails
+    // loudly instead of silently consuming a queued result.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') return 'spawned-1'
+      if (cmd === 'acp_load_session') return undefined
+      throw new Error(`unexpected invoke command in spawn-wait test: ${cmd}`)
+    })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-spawn',
+        agentId: 'stale-spawn-uuid',
+        agentConfigId: 'cfg-spawn',
+        title: 'Spawn',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    const p = useAcpStore.getState().openHistorySession('s-spawn')
+    await flushTurnEnd()
+    // Spawn completed: the new agent is connected but capabilities are still
+    // null, so openHistorySession is parked in the capability wait (no load yet).
+    expect(useAcpStore.getState().agentStatus['spawned-1']).toBe('connected')
+    expect(useAcpStore.getState().agents['spawned-1']?.capabilities).toBeNull()
+    expect(invoke).not.toHaveBeenCalledWith('acp_load_session', expect.anything())
+    // Capabilities arrive async -> subscribe resolves the wait -> session resumes.
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'spawned-1', capabilities: { loadSession: true } })
+    await p
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'spawned-1',
+      sessionId: 's-spawn',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
+    expect(useAcpStore.getState().sessions['s-spawn'].status).toBe('active')
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession opens read-only when agentConfigId is missing', async () => {
+    // Legacy persisted entries lack `agentConfigId`; we can't remap to a live
+    // agent, so the chat opens read-only (current behavior) instead of throwing.
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-legacy',
+        agentId: 'old-uuid',
+        title: 'Legacy',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'old' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('s-legacy')
+    // No live agent resolvable -> 'local' strategy: transcript shown, no IPC.
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().messages['s-legacy']).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['s-legacy'].status).toBe('closed')
+  })
+
+  it('openHistorySession renders replayed session/load history instead of dropping it', async () => {
+    // The core "empty reopened chat" bug: replayed session/update chunks arrive
+    // while the load IPC is in flight (session still 'closed'). They must be
+    // accepted, and the FIRST replayed chunk replaces the local mirror so the
+    // conversation is not duplicated.
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-replay',
+        agentId: 'agent-1',
+        title: 'Replayed',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'mirror-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'stale local copy' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    // The agent streams the replay BEFORE responding to session/load.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in replay test: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-replay',
+        role: 'user',
+        content: { type: 'text', text: 'replayed question' }
+      })
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-replay',
+        role: 'agent',
+        content: { type: 'text', text: 'replayed answer' }
+      })
+      return undefined
+    })
+    await useAcpStore.getState().openHistorySession('s-replay')
+    const messages = useAcpStore.getState().messages['s-replay']
+    expect(messages).toHaveLength(2)
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'replayed question' }])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'replayed answer' }])
+    expect(useAcpStore.getState().sessions['s-replay'].status).toBe('active')
+    // The replay window closes on a deferred macrotask (straggler tolerance).
+    expect(useAcpStore.getState().sessions['s-replay'].replaying).toBe('streaming')
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions['s-replay'].replaying).toBeNull()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession accepts straggler chunks of an in-progress replay after load resolves', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-straggle',
+        agentId: 'agent-1',
+        title: 'Straggler',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    // The replay STARTS while the load is in flight (streaming), so its window
+    // stays open one macrotask past the response for chunks that lose the IPC
+    // race.
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in straggler test: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-straggle',
+        role: 'user',
+        content: { type: 'text', text: 'replayed question' }
+      })
+      return undefined
+    })
+    await useAcpStore.getState().openHistorySession('s-straggle')
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's-straggle',
+      role: 'agent',
+      content: { type: 'text', text: 'late replay tail' }
+    })
+    expect(useAcpStore.getState().messages['s-straggle']).toHaveLength(2)
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions['s-straggle'].replaying).toBeNull()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession keeps the local transcript when the agent replays nothing', async () => {
+    // 'pending' must close as soon as the load response arrives with no replay:
+    // a live chunk landing afterwards (e.g. an agent-initiated status message)
+    // must APPEND-or-drop, never replace the restored conversation.
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-noreplay',
+        agentId: 'agent-1',
+        title: 'No replay',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'question' }],
+          streaming: false,
+          timestamp: 0
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'answer' }],
+          streaming: false,
+          timestamp: 1
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('s-noreplay')
+    expect(useAcpStore.getState().sessions['s-noreplay'].replaying).toBeNull()
+    // A live chunk after the empty replay must not wipe the mirror.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's-noreplay',
+      role: 'agent',
+      content: { type: 'text', text: 'greeting' }
+    })
+    const messages = useAcpStore.getState().messages['s-noreplay']
+    expect(messages.length).toBeGreaterThanOrEqual(2)
+    expect(messages[0].id).toBe('m1')
+    expect(messages[1].id).toBe('m2')
+  })
+
+  it('openHistorySession replay drops stale tool calls from a previous live period', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      toolCalls: { 's-tools': [{ toolCallId: 'stale-1', seq: 1 }] }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-tools',
+        agentId: 'agent-1',
+        title: 'Tools',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in tool-replay test: ${cmd}`)
+      }
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-tools',
+        role: 'user',
+        content: { type: 'text', text: 'replayed' }
+      })
+      return undefined
+    })
+    await useAcpStore.getState().openHistorySession('s-tools')
+    // The replay replaced the transcript; the stale tool calls went with it.
+    expect(useAcpStore.getState().toolCalls['s-tools']).toEqual([])
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('a follow-up prompt can be sent after a replayed reopen (AC1)', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-followup',
+        agentId: 'agent-1',
+        title: 'Follow up',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_load_session') {
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 's-followup',
+          role: 'agent',
+          content: { type: 'text', text: 'replayed answer' }
+        })
+        return undefined
+      }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command in follow-up test: ${cmd}`)
+    })
+    await useAcpStore.getState().openHistorySession('s-followup')
+    await flushTurnEnd()
+    await useAcpStore.getState().sendPrompt('s-followup', 'continue please')
+    await flushTurnEnd()
+    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's-followup',
+      text: 'continue please'
+    })
+    const messages = useAcpStore.getState().messages['s-followup']
+    expect(messages.some((m) => m.role === 'user')).toBe(true)
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('a title update streamed mid-replay does not persist the partial transcript', async () => {
+    // _onSessionInfoUpdate persists — but a mid-replay persist would truncate
+    // the on-disk history to whatever has replayed so far.
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-midpersist',
+          agentId: 'agent-1',
+          title: 'Old',
+          cwd: '/w',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 5,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload, saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-midpersist',
+        agentId: 'agent-1',
+        title: 'Old',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 5,
+        status: 'closed'
+      },
+      messages: []
+    })
+    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in mid-persist test: ${cmd}`)
+      }
+      // Replay starts, then the agent streams a title update mid-replay.
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-midpersist',
+        role: 'user',
+        content: { type: 'text', text: 'partial replay' }
+      })
+      useAcpStore.getState()._onSessionInfoUpdate({
+        agentId: 'agent-1',
+        sessionId: 's-midpersist',
+        title: 'New title'
+      })
+      return undefined
+    })
+    await useAcpStore.getState().openHistorySession('s-midpersist')
+    expect(saveSessionPayload).not.toHaveBeenCalled()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('openHistorySession coalesces concurrent opens for the same chat', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    // Only ONE disk read is budgeted: if dedupe fails, the second call falls
+    // through to the default (null payload) and rejects the test loudly.
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-race',
+        agentId: 'agent-1',
+        title: 'Race',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    // Sidebar click + restored-tab rehydrate race at startup.
+    await Promise.all([
+      useAcpStore.getState().openHistorySession('s-race'),
+      useAcpStore.getState().openHistorySession('s-race')
+    ])
+    const loadCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')
+    expect(loadCalls).toHaveLength(1)
+    expect(loadSessionPayload).toHaveBeenCalledTimes(1)
+    expect(useAcpStore.getState().openingHistoryIds['s-race']).toBeUndefined()
   })
 
   it('deleteHistorySession removes the index entry (P5)', async () => {
@@ -1192,6 +2793,7 @@ describe('acp-store', () => {
           agentId: 'a',
           title: 'T',
           cwd: '',
+          projectId: 'p1',
           createdAt: 0,
           lastActivityAt: 0,
           messageCount: 0,
@@ -1225,18 +2827,37 @@ describe('acp-store', () => {
       .mockResolvedValueOnce('agent-9')
       .mockResolvedValueOnce({ sessionId: 'sess-9' })
     const servers = [{ type: 'stdio' as const, name: 'fs', command: 'npx' }]
-    await useAcpStore.getState().startChat('cfg-1', '/work', servers)
+    await useAcpStore.getState().startChat('cfg-1', '/work', servers, 'p1')
     expect(invoke).toHaveBeenNthCalledWith(2, 'acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
       mcpServers: servers
     })
   })
+
+  // Story 5.3 (AC3): transportReconnecting flag is additive state — verify
+  // it starts false and can be flipped via setState (the store init wires the
+  // WS transport listener to call setState; here we just verify the state
+  // shape and the setter contract, not the listener wiring which needs the
+  // real WsAcpTransport — covered in acp-transport.test.ts).
+  it('initializes transportReconnecting to false', () => {
+    expect(useAcpStore.getState().transportReconnecting).toBe(false)
+  })
+
+  it('flips transportReconnecting true/false via setState (additive, no AgentStatus change)', () => {
+    useAcpStore.setState({ transportReconnecting: true })
+    expect(useAcpStore.getState().transportReconnecting).toBe(true)
+    // AgentStatus enum is unchanged — transportReconnecting is a separate flag.
+    expect(useAcpStore.getState().agentStatus).toEqual({})
+    useAcpStore.setState({ transportReconnecting: false })
+    expect(useAcpStore.getState().transportReconnecting).toBe(false)
+  })
 })
 
 describe('acp-store multi-project isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _resetAcpTransportForTests(null)
     useAcpStore.setState(FRESH)
   })
 
@@ -1260,7 +2881,7 @@ describe('acp-store multi-project isolation', () => {
     ;(invoke as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce('agent-b')
       .mockResolvedValueOnce({ sessionId: 'sess-b' })
-    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/b')
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/b', undefined, 'p1')
     expect(sessionId).toBe('sess-b')
     expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/a')]).toBe('agent-a')
     expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/b')]).toBe('agent-b')
@@ -1277,6 +2898,7 @@ describe('acp-store multi-project isolation', () => {
       id,
       agentId,
       cwd,
+      projectId: 'p1',
       status: 'active' as const,
       title: null,
       activeTurn: false,
@@ -1337,6 +2959,124 @@ describe('acp-store multi-project isolation', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  // Story 1.9 FR26: the typed AgentCrashed event → status: 'error' + lastError.
+  it('agent_crashed with session_id sets status error + lastError on that session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'child exited: signal 11'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited: signal 11')
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('agent_crashed with session_id None sets status error on all sessions for that agent', () => {
+    seedSession('s1', 'agent-1')
+    seedSession('s2', 'agent-1')
+    useAcpStore.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        },
+        s2: {
+          id: 's2',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: true,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    })
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'process crashed'
+    })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('process crashed')
+    expect(useAcpStore.getState().sessions['s2'].status).toBe('error')
+  })
+
+  // Story 1.9 review (HIGH fix): the triple-event crash sequence (crashed →
+  // error → disconnected) must leave status='error', NOT 'closed' — the
+  // always-following agent_disconnected must NOT overwrite the crash's 'error'.
+  it('agent_crashed then agent_disconnected preserves status error (the triple-event sequence)', () => {
+    seedSession('s1', 'agent-1')
+    // 1. Crash event → status: 'error'
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'child exited'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    // 2. Error event (same message) — doesn't change status
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: undefined,
+      message: 'child exited'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    // 3. Disconnect event — must NOT overwrite 'error' to 'closed'
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited')
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
+  })
+
+  // Story 1.9 review: a turn-scoped agent_error (e.g. the bounded turn
+  // timeout) sets status='error' (NFR7 — the wedged turn → Error state).
+  it('agent_error with session_id sets status error (turn-timeout path)', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn timeout: session s1 exceeded 600s'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe(
+      'turn timeout: session s1 exceeded 600s'
+    )
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  // Story 1.9 review (EC #8): a crash event for an already-closed session
+  // must NOT resurrect it to 'error'.
+  it('agent_crashed does not resurrect a closed session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'late crash'
+    })
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
   it('agent_error with session_id None sets lastError on all sessions for that agent', () => {
     seedSession('s1', 'agent-1')
     seedSession('s2', 'agent-1')
@@ -1347,6 +3087,7 @@ describe('acp-store multi-project isolation', () => {
           id: 's1',
           agentId: 'agent-1',
           cwd: '/work',
+          projectId: 'p1',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -1360,6 +3101,7 @@ describe('acp-store multi-project isolation', () => {
           id: 's2',
           agentId: 'agent-1',
           cwd: '/work',
+          projectId: 'p1',
           status: 'active',
           title: null,
           activeTurn: false,
@@ -1429,11 +3171,595 @@ describe('acp-store multi-project isolation', () => {
       warmingConfigs: { ...s.warmingConfigs, [agentReuseKey('cfg-1', '/c')]: true }
     }))
     const state = selectConfigWarmState(useAcpStore.getState(), 'cfg-1')
-    expect(state).toEqual({ connected: true, warming: true })
+    expect(state).toMatchObject({ connected: true, warming: true })
     // A different config sees nothing.
-    expect(selectConfigWarmState(useAcpStore.getState(), 'cfg-other')).toEqual({
+    expect(selectConfigWarmState(useAcpStore.getState(), 'cfg-other')).toMatchObject({
       connected: false,
       warming: false
     })
+  })
+})
+
+describe('session discovery (gh-407)', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+    useAcpStore.setState({
+      ...FRESH,
+      agents: {},
+      agentStatus: {},
+      discoveredSessions: {},
+      discoveringKeys: {}
+    })
+  })
+
+  it('discoverSessions skips agents without sessionCapabilities.list', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    // invoke should not have been called for acp_list_sessions
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    // No discovered sessions stored.
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('discoverSessions skips agents that are not connected (stale after disconnect)', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      // _onAgentDisconnected leaves the agent present but flips status to 'error'.
+      agentStatus: { 'agent-1': 'error' }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(0)
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('discoverSessions treats an empty-string cursor as a valid page token', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        // Opaque empty-string cursor must NOT end pagination.
+        return { sessions: [{ sessionId: 'sess-1', cwd: '/work' }], nextCursor: '' }
+      }
+      return { sessions: [{ sessionId: 'sess-2', cwd: '/work' }], nextCursor: null }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(2)
+    expect(listCalls[1]![1]).toMatchObject({ cursor: '' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    expect(discovered).toHaveLength(2)
+  })
+
+  it('discoverSessions calls acp_list_sessions when list capability is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue({
+      sessions: [{ sessionId: 'sess-1', cwd: '/work', title: 'Test Session' }],
+      nextCursor: null
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(1)
+    expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    expect(discovered).toHaveLength(1)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+  })
+
+  it('discoverSessions paginates, forwards the cursor, and de-dupes by sessionId', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let callCount = 0
+    vi.mocked(invoke).mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          sessions: [{ sessionId: 'sess-1', cwd: '/work' }],
+          nextCursor: 'cursor-1'
+        }
+      }
+      return {
+        // sess-1 repeated across pages must be de-duped; sess-2 is new.
+        sessions: [
+          { sessionId: 'sess-1', cwd: '/work' },
+          { sessionId: 'sess-2', cwd: '/work' }
+        ],
+        nextCursor: null
+      }
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    const listCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_list_sessions')
+    expect(listCalls).toHaveLength(2)
+    // First request carries no cursor; second forwards the first response's nextCursor.
+    expect(listCalls[0]![1]).toMatchObject({ agentId: 'agent-1', cwd: '/work' })
+    expect(listCalls[0]![1]).not.toHaveProperty('cursor', 'cursor-1')
+    expect(listCalls[1]![1]).toMatchObject({ cursor: 'cursor-1' })
+    const discovered = useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    // De-duped: sess-1 (twice) + sess-2 → 2 entries, order preserved.
+    expect(discovered).toHaveLength(2)
+    expect(discovered![0]!.sessionId).toBe('sess-1')
+    expect(discovered![1]!.sessionId).toBe('sess-2')
+  })
+
+  it('discoverSessions clears discovered entries on failure', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      discoveredSessions: {
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'old', cwd: '/work' }]
+      }
+    })
+    vi.mocked(invoke).mockRejectedValue(new Error('agent error'))
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+  })
+
+  it('_onAgentDisconnected clears discovered sessions for that agent', () => {
+    useAcpStore.setState({
+      discoveredSessions: {
+        [discoveryKey('agent-1', '/work')]: [{ sessionId: 'sess-1', cwd: '/work' }],
+        [discoveryKey('agent-2', '/work')]: [{ sessionId: 'sess-2', cwd: '/work' }]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
+    ).toBeUndefined()
+    expect(
+      useAcpStore.getState().discoveredSessions[discoveryKey('agent-2', '/work')]
+    ).toBeDefined()
+  })
+
+  it('openDiscoveredSession throws when agent has neither load nor resume', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: false } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    ).rejects.toThrow(/does not support loading or resuming/)
+  })
+
+  it('openDiscoveredSession calls acp_load_session with the exact args when loadSession is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    const loadCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')
+    expect(loadCalls).toHaveLength(1)
+    // Forwarded payload: agentId, sessionId, cwd (no resume call on this path).
+    expect(loadCalls[0]![1]).toMatchObject({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      cwd: '/work'
+    })
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    ).toHaveLength(0)
+  })
+
+  it('openDiscoveredSession uses the resume branch when only resume is advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-2', '/work', 'p1')
+    const resumeCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    expect(resumeCalls).toHaveLength(1)
+    expect(resumeCalls[0]![1]).toMatchObject({
+      agentId: 'agent-1',
+      sessionId: 'sess-2',
+      cwd: '/work'
+    })
+    // load must NOT be called when loadSession is absent.
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')).toHaveLength(
+      0
+    )
+  })
+})
+
+describe('ACP agent plan store', () => {
+  beforeEach(() => {
+    useAcpStore.setState(FRESH)
+  })
+
+  it('_onPlanUpdate replaces entries and empty update clears plan', () => {
+    seedSession('sess-1', 'agent-1', false)
+    useAcpStore.getState()._onPlanUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      plan: {
+        entries: [{ content: 'step one', status: 'pending', priority: 'high' }]
+      }
+    })
+    expect(useAcpStore.getState().plans['sess-1']).toHaveLength(1)
+
+    useAcpStore.getState()._onPlanUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      plan: { entries: [] }
+    })
+    expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+
+  it('closeSession clears cached plan for the session', async () => {
+    seedSession('sess-1', 'agent-1', false)
+    useAcpStore.setState({
+      plans: {
+        'sess-1': [{ content: 'old plan', status: 'completed' }]
+      }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-1')
+    expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+
+  it('_onSessionClosed clears cached plan for the session', () => {
+    seedSession('sess-1', 'agent-1', false)
+    useAcpStore.setState({
+      plans: {
+        'sess-1': [{ content: 'old plan', status: 'completed' }]
+      }
+    })
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-1' })
+    expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+})
+
+describe('acp-store transcript eviction (WebView memory)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAcpStore.setState(FRESH)
+  })
+
+  function seedTranscript(sessionId: string): void {
+    seedSession(sessionId, 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        [sessionId]: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello' }],
+            streaming: false,
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        [sessionId]: [{ toolCallId: 'tc-1', title: 'read', status: 'completed', seq: 1 }]
+      },
+      commands: { [sessionId]: [{ name: 'help', description: 'help' }] },
+      sessionUsage: {
+        [sessionId]: {
+          used: 10,
+          size: 100,
+          baselineUsed: 0,
+          updatedAt: 1,
+          source: 'reported'
+        }
+      }
+    })
+  }
+
+  it('closeSession drops messages/toolCalls/commands/sessionUsage', async () => {
+    seedTranscript('sess-mem')
+    useAcpStore.setState({
+      plans: { 'sess-mem': [{ content: 'plan', status: 'pending' }] }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-mem')
+    const st = useAcpStore.getState()
+    expect(st.sessions['sess-mem']?.status).toBe('closed')
+    expect(st.messages['sess-mem']).toBeUndefined()
+    expect(st.toolCalls['sess-mem']).toBeUndefined()
+    expect(st.commands['sess-mem']).toBeUndefined()
+    expect(st.sessionUsage['sess-mem']).toBeUndefined()
+    expect(st.plans['sess-mem']).toBeUndefined()
+  })
+
+  it('deleteHistorySession drops in-memory transcript maps', async () => {
+    seedTranscript('sess-del')
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 'sess-del',
+          agentId: 'agent-1',
+          title: 'T',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+    await useAcpStore.getState().deleteHistorySession('sess-del')
+    const st = useAcpStore.getState()
+    expect(st.messages['sess-del']).toBeUndefined()
+    expect(st.toolCalls['sess-del']).toBeUndefined()
+    expect(st.commands['sess-del']).toBeUndefined()
+    expect(st.sessionUsage['sess-del']).toBeUndefined()
+  })
+
+  it('_onSessionClosed drops transcript maps after persist', () => {
+    seedTranscript('sess-closed')
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-closed' })
+    const st = useAcpStore.getState()
+    expect(st.sessions['sess-closed']?.status).toBe('closed')
+    expect(st.messages['sess-closed']).toBeUndefined()
+    expect(st.toolCalls['sess-closed']).toBeUndefined()
+  })
+
+  it('late _onToolCall for closed session does not recreate toolCalls', async () => {
+    seedTranscript('sess-late')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-late')
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: 'sess-late',
+      toolCall: { toolCallId: 'late-1', title: 'write', status: 'pending' }
+    })
+    expect(useAcpStore.getState().toolCalls['sess-late']).toBeUndefined()
+  })
+
+  it('late commands/usage/plan updates do not recreate maps after close', async () => {
+    seedTranscript('sess-late-maps')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-late-maps')
+    useAcpStore.getState()._onCommandsUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      availableCommands: [{ name: 'x' }]
+    })
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      used: 50,
+      size: 100
+    })
+    useAcpStore.getState()._onPlanUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-late-maps',
+      plan: { entries: [{ content: 'step', status: 'pending' }] }
+    })
+    const st = useAcpStore.getState()
+    expect(st.commands['sess-late-maps']).toBeUndefined()
+    expect(st.sessionUsage['sess-late-maps']).toBeUndefined()
+    expect(st.plans['sess-late-maps']).toBeUndefined()
+  })
+
+  it('second close after eviction does not persist empty messages', async () => {
+    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    seedTranscript('sess-twice')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-twice')
+    vi.mocked(saveSessionPayload).mockClear()
+    await useAcpStore.getState().closeSession('sess-twice')
+    expect(saveSessionPayload).not.toHaveBeenCalled()
+  })
+
+  it('openHistorySession reloads messages after prior close eviction', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    seedTranscript('sess-reopen')
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-reopen')
+    expect(useAcpStore.getState().messages['sess-reopen']).toBeUndefined()
+
+    vi.mocked(loadSessionPayload).mockResolvedValueOnce({
+      metadata: {
+        id: 'sess-reopen',
+        agentId: 'agent-1',
+        title: 'Reopen',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-disk',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'from disk' }],
+          streaming: false,
+          timestamp: 1
+        }
+      ]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('sess-reopen')
+    expect(useAcpStore.getState().messages['sess-reopen']?.[0]?.id).toBe('m-disk')
+  })
+})
+
+describe('warm session pool', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    vi.mocked(invoke).mockReset()
+    useAcpStore.setState({
+      agents: {},
+      agentStatus: {},
+      agentConfigs: [],
+      configToLiveAgent: {},
+      warmingConfigs: {},
+      preparedSessions: {},
+      preparingChatKeys: {},
+      prepareChatErrors: {},
+      selectedAgentConfigId: null,
+      sessionIndex: [],
+      sessions: {},
+      activeSessionId: null,
+      messages: {},
+      pendingPermissions: {}
+    })
+    _resetInFlightHistoryOpensForTesting()
+    _resetEphemeralSessionIdsForTesting()
+  })
+
+  async function seedConnectedAgent(
+    configId: string,
+    agentId: string,
+    cwd = '/work'
+  ): Promise<void> {
+    await useAcpStore.getState().saveAgentConfig({
+      id: configId,
+      name: configId,
+      command: 'x',
+      args: [],
+      env: {}
+    })
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, [agentId]: { id: agentId, capabilities: null } },
+      agentStatus: { ...s.agentStatus, [agentId]: 'connected' },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey(configId, cwd)]: agentId }
+    }))
+  }
+
+  it('prepareChat creates an ephemeral session not mirrored to the history index', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep')
+    })
+    expect(useAcpStore.getState().sessions['sess-prep']).toBeDefined()
+    expect(useAcpStore.getState().sessions['sess-prep'].agentId).toBe('agent-9')
+    // Ephemeral: registered in-memory but NOT in the persisted history index (no orphan).
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeUndefined()
+  })
+
+  it('startChat promotes an ephemeral prepared session into the history index', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-prep')
+    // Promoted: now mirrored to the history index; warm-slot lookup cleared.
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeDefined()
+    })
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+  })
+
+  it('startChat refills a warm session for the pool target after consuming one', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    useAcpStore.getState().setSelectedAgentConfigId('cfg-1')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-1' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-1'))
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-2' })
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-1')
+    // Refill fired: a fresh session/new produced a new warm slot for the next chat.
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-2'))
+  })
+
+  it('retargetWarmPool drains another agent stale pooled session (same cwd) and seeds the new one', async () => {
+    await seedConnectedAgent('cfg-a', 'agent-a')
+    await seedConnectedAgent('cfg-b', 'agent-b')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-a' })
+    useAcpStore.getState().prepareChat('cfg-a', '/work', undefined, 'p1')
+    const keyA = prepareChatKey('cfg-a', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[keyA]).toBe('sess-a'))
+    // Retarget to cfg-b (same cwd): close sess-a (fire-and-forget) + seed cfg-b.
+    vi.mocked(invoke).mockResolvedValue({ sessionId: 'sess-b' })
+    useAcpStore.getState().retargetWarmPool('cfg-b', '/work', 'p1')
+    const keyB = prepareChatKey('cfg-b', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[keyB]).toBe('sess-b'))
+    // cfg-a's stale warm slot drained (single-target).
+    expect(useAcpStore.getState().preparedSessions[keyA]).toBeUndefined()
+  })
+
+  it('retargetWarmPool keeps pooled sessions for other cwds (project switch-back)', async () => {
+    await seedConnectedAgent('cfg-a', 'agent-a', '/work/proj-1')
+    await seedConnectedAgent('cfg-a', 'agent-a', '/work/proj-2')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-1' })
+    useAcpStore.getState().prepareChat('cfg-a', '/work/proj-1', undefined, 'p1')
+    const key1 = prepareChatKey('cfg-a', '/work/proj-1', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key1]).toBe('sess-1'))
+    // Retarget to a different cwd: must NOT drain the other cwd's warm slot.
+    vi.mocked(invoke).mockResolvedValue({ sessionId: 'sess-2' })
+    useAcpStore.getState().retargetWarmPool('cfg-a', '/work/proj-2', 'p2')
+    const key2 = prepareChatKey('cfg-a', '/work/proj-2', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key2]).toBe('sess-2'))
+    expect(useAcpStore.getState().preparedSessions[key1]).toBe('sess-1')
+  })
+
+  it('_onAgentDisconnected drops pooled sessions for the disconnected agent', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-9' })
+    // Pooled warm slot dropped so a later startChat does not promote a dead session.
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    // No orphan "Untitled Chat" is persisted to the history index on disconnect.
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeUndefined()
   })
 })

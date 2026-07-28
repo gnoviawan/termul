@@ -20,6 +20,7 @@ const {
   mockKeyboardOnShortcut,
   mockUpdatePanelVisibility,
   mockWaitForPendingAppSettingsPersistence,
+  mockWaitForPendingSessionIndexWrite,
   mockToastError
 } = vi.hoisted(() => ({
   activeProject: {
@@ -81,6 +82,7 @@ const {
   mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
+  mockWaitForPendingSessionIndexWrite: vi.fn(async () => undefined),
   mockToastError: vi.fn()
 }))
 
@@ -216,6 +218,10 @@ vi.mock('@/hooks/use-app-settings', () => ({
   useUpdateAppSettings: () => vi.fn(),
   useUpdatePanelVisibility: () => mockUpdatePanelVisibility,
   waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
+}))
+
+vi.mock('@/lib/acp-history-persistence', () => ({
+  waitForPendingSessionIndexWrite: mockWaitForPendingSessionIndexWrite
 }))
 
 vi.mock('@/hooks/use-file-watcher', () => ({
@@ -362,6 +368,7 @@ describe('WorkspaceLayout close persistence', () => {
     mockFlushPendingWrites.mockResolvedValue({ success: true, data: undefined })
     mockUpdatePanelVisibility.mockResolvedValue(undefined)
     mockWaitForPendingAppSettingsPersistence.mockResolvedValue(undefined)
+    mockWaitForPendingSessionIndexWrite.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
   })
 
@@ -376,6 +383,21 @@ describe('WorkspaceLayout close persistence', () => {
 
     await waitFor(() => {
       expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('awaits pending session index write before closing', async () => {
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockWaitForPendingSessionIndexWrite).toHaveBeenCalledTimes(1)
       expect(mockRespondToClose).toHaveBeenCalledWith('close')
     })
   })

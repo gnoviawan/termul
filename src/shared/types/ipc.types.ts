@@ -337,33 +337,11 @@ export interface RemoteStatus {
   bindHost: string | null
 }
 
-// One terminal entry within a remote project tree (mirrors Rust RemoteTerminal)
-export interface RemoteTerminalEntry {
-  ptyId: string
-  name: string
-  cwd?: string
-}
-
-// One project with its terminals (mirrors Rust RemoteProject)
-export interface RemoteProjectEntry {
-  id: string
-  name: string
-  terminals: RemoteTerminalEntry[]
-}
-
-// Full project tree published to the remote server (mirrors Rust ProjectTree)
-export interface RemoteProjectTree {
-  projects: RemoteProjectEntry[]
-  // Index signature to satisfy Tauri's InvokeArgs constraint
-  [key: string]: unknown
-}
-
 // Remote terminal server control API
 export interface RemoteServerApi {
   start: (options?: { bindMode?: RemoteBindMode }) => Promise<IpcResult<RemoteStatus>>
   stop: () => Promise<IpcResult<RemoteStatus>>
   status: () => Promise<IpcResult<RemoteStatus>>
-  publishProjects: (tree: RemoteProjectTree) => Promise<IpcResult<void>>
 }
 
 // Filesystem types re-exported for convenience
@@ -372,7 +350,8 @@ import type {
   FileChangeEvent,
   FileContent,
   FileInfo,
-  FileSearchResponse
+  FileSearchResponse,
+  SearchFileHit
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -424,11 +403,13 @@ export interface FilesystemApi {
     searchId: string,
     scopeRoot: string,
     rootPath: string,
-    query: string
+    query: string,
+    /** When true, surface ignored/hidden files with `ignored: true` (ADR 0003). */
+    includeIgnored?: boolean
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+    callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
@@ -461,7 +442,14 @@ export interface FilesystemApi {
   onFileDeleted: (callback: FileChangeCallback) => () => void
 }
 
-export type { DirectoryEntry, FileChangeEvent, FileContent, FileInfo, FileSearchResponse }
+export type {
+  DirectoryEntry,
+  FileChangeEvent,
+  FileContent,
+  FileInfo,
+  FileSearchResponse,
+  SearchFileHit
+}
 
 // ============================================================================
 // Session Persistence Types

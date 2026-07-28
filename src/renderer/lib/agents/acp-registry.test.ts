@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  compareRegistryVersions,
   currentPlatformArch,
   deriveAgentConfig,
   REGISTRY_AGENTS,
@@ -185,6 +186,33 @@ describe('deriveAgentConfig', () => {
     const r2 = deriveAgentConfig(a, 'windows-x86_64')
     if (r1.kind !== 'runnable' || r2.kind !== 'runnable') throw new Error('expected runnable')
     expect(r1.config.env).not.toBe(r2.config.env)
+  })
+})
+
+describe('compareRegistryVersions', () => {
+  function reg(id: string, version: string): RegistryAgent {
+    return { id, name: id, version, description: '', distribution: { npx: { package: 'p' } } }
+  }
+
+  it('reports 0 when bundled and remote are identical', () => {
+    expect(compareRegistryVersions([reg('a', '1')], [reg('a', '1')])).toEqual({
+      updatedCount: 0,
+      newAgentIds: []
+    })
+  })
+
+  it('counts new and version-changed agents', () => {
+    expect(compareRegistryVersions([reg('a', '1')], [reg('a', '2'), reg('b', '1')])).toEqual({
+      updatedCount: 2,
+      newAgentIds: ['b']
+    })
+  })
+
+  it('counts removed agents so "up to date" cannot hide a shrunk list', () => {
+    expect(compareRegistryVersions([reg('a', '1'), reg('b', '1')], [reg('a', '1')])).toEqual({
+      updatedCount: 1,
+      newAgentIds: []
+    })
   })
 })
 
