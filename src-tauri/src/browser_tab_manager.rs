@@ -538,11 +538,13 @@ impl BrowserTabManager {
 
         #[cfg(target_os = "linux")]
         {
-            let _ = webview.with_webview(move |child_platform| {
-                use gtk::prelude::*;
-                let child_widget = child_platform.inner();
-                child_widget.show();
-            });
+            webview
+                .with_webview(move |child_platform| {
+                    use gtk::prelude::*;
+                    let child_widget = child_platform.inner();
+                    child_widget.show();
+                })
+                .map_err(|e| format!("Show dispatch failed: {e}"))?;
         }
 
         webview
@@ -556,11 +558,13 @@ impl BrowserTabManager {
 
         #[cfg(target_os = "linux")]
         {
-            let _ = webview.with_webview(move |child_platform| {
-                use gtk::prelude::*;
-                let child_widget = child_platform.inner();
-                child_widget.hide();
-            });
+            webview
+                .with_webview(move |child_platform| {
+                    use gtk::prelude::*;
+                    let child_widget = child_platform.inner();
+                    child_widget.hide();
+                })
+                .map_err(|e| format!("Hide dispatch failed: {e}"))?;
         }
 
         webview
