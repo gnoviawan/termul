@@ -233,6 +233,91 @@ jobs:
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
+      - name: Verify macOS bundle library portability
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          bundle_dir="src-tauri/target/${RUST_TARGET}/release/bundle/macos"
+          app_bundles=("${bundle_dir}"/*.app)
+          if [[ ${#app_bundles[@]} -ne 1 ]]; then
+            printf 'Expected exactly one .app in %s, found %d\n' \
+              "$bundle_dir" "${#app_bundles[@]}" >&2
+            printf 'Found: %s\n' "${app_bundles[*]:-none}" >&2
+            exit 1
+          fi
+
+          app_bundle="${app_bundles[0]}"
+          info_plist="${app_bundle}/Contents/Info.plist"
+          executable_name="$(/usr/libexec/PlistBuddy \
+            -c 'Print :CFBundleExecutable' "$info_plist")"
+          if [[ -z "$executable_name" || "$executable_name" == */* ]]; then
+            printf 'Invalid CFBundleExecutable in %s: %s\n' \
+              "$info_plist" "${executable_name:-empty}" >&2
+            exit 1
+          fi
+
+          executable="${app_bundle}/Contents/MacOS/${executable_name}"
+          if [[ ! -f "$executable" || ! -x "$executable" ]]; then
+            printf 'Declared bundle executable is missing or not executable: %s\n' \
+              "$executable" >&2
+            exit 1
+          fi
+
+          dependencies="$(otool -L "$executable")"
+          rpaths="$(otool -l "$executable" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+          ')"
+          printf '%s\n' "$dependencies"
+          printf 'LC_RPATH entries:\n%s\n' "${rpaths:-  (none)}"
+
+          forbidden=()
+          while IFS= read -r dependency; do
+            [[ -z "$dependency" ]] && continue
+            case "$dependency" in
+              /System/Library/*|/usr/lib/*|@rpath/*|@loader_path/*|@executable_path/*)
+                ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$dependency (Homebrew/local prefix)")
+                ;;
+              /*)
+                forbidden+=("$dependency (runner-local absolute path)")
+                ;;
+              *)
+                forbidden+=("$dependency (unexpected relative load path)")
+                ;;
+            esac
+          done < <(
+            printf '%s\n' "$dependencies" |
+              tail -n +2 |
+              sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/'
+          )
+
+          while IFS= read -r rpath; do
+            [[ -z "$rpath" ]] && continue
+            case "$rpath" in
+              /System/Library/*|/usr/lib/*|@loader_path/*|@executable_path/*)
+                ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$rpath (Homebrew/local LC_RPATH)")
+                ;;
+              *)
+                forbidden+=("$rpath (non-portable LC_RPATH)")
+                ;;
+            esac
+          done <<< "$rpaths"
+
+          if [[ ${#forbidden[@]} -ne 0 ]]; then
+            printf 'Forbidden Mach-O paths in %s:\n' "$executable" >&2
+            printf '  %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+
   # Standalone headless server for VPS deploy (Story 1.2 scaffold).
   # Build sequencing: bun run build:web MUST run before the cargo release
   # build so rust-embed embeds dist-web/ into the binary (Story 1.11 — a

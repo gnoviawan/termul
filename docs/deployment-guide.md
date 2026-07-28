@@ -156,6 +156,8 @@ Release workflow currently targets:
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 
+For these targets, the SSH dependency vendors OpenSSL so the packaged app does not require Homebrew OpenSSL on user systems. After each macOS bundle is built, the release workflow requires exactly one `.app`, resolves its declared `CFBundleExecutable`, prints that executable's `otool -L` dependencies and `LC_RPATH` entries, and fails on Homebrew, unexpected relative, or other non-portable build-runner paths.
+
 Repository scripts also support Intel macOS builds locally.
 
 ## Additional Distribution Workflow
@@ -182,8 +184,9 @@ The repository also contains `.github/workflows/publish-aur.yml`, which updates 
 3. Confirm version parity in all three version files
 4. Confirm signing secrets are available in GitHub
 5. Push release tag
-6. Verify draft release assets include installers, `.sig`, and `latest.json`
-7. Publish the release
+6. For both macOS targets, confirm the bundle portability gate reports only system or dyld-relative dependencies and portable system/bundle-relative `LC_RPATH` entries
+7. Verify draft release assets include installers, `.sig`, and `latest.json`
+8. Publish the release
 
 ## Related Files
 
