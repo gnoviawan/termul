@@ -308,11 +308,11 @@
   {
     "id": "dimcode",
     "name": "DimCode",
-    "version": "0.2.37",
+    "version": "0.2.38",
     "description": "A coding agent that puts leading models at your command.",
     "distribution": {
       "npx": {
-        "package": "dimcode@0.2.37",
+        "package": "dimcode@0.2.38",
         "args": ["acp"]
       }
     }
@@ -641,38 +641,38 @@
   {
     "id": "opencode",
     "name": "OpenCode",
-    "version": "1.18.7",
+    "version": "1.18.8",
     "description": "The open source coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-darwin-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-darwin-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-linux-arm64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-linux-x64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-windows-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-windows-arm64.zip",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./opencode.exe",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.7/opencode-windows-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-windows-x64.zip",
           "args": ["acp"]
         }
       }
@@ -756,20 +756,20 @@
   {
     "id": "sigit",
     "name": "siGit Code",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "description": "Local-first coding agent. Runs entirely on your machine with optional on-device LLM inference via Onde.",
     "distribution": {
       "npx": {
-        "package": "@smbcloud/sigit@1.5.0"
+        "package": "@smbcloud/sigit@1.5.1"
       },
       "binary": {
         "darwin-aarch64": {
           "cmd": "./sigit",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.0/sigit-macos-arm64.tar.gz"
+          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.1/sigit-macos-arm64.tar.gz"
         },
         "darwin-x86_64": {
           "cmd": "./sigit",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.0/sigit-macos-amd64.tar.gz"
+          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.1/sigit-macos-amd64.tar.gz"
         },
         "linux-aarch64": {
           "cmd": "./sigit-linux-arm64"
