@@ -58,8 +58,8 @@ pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::AcpManager;
-    use crate::web::project_registry::{ProjectRegistry, ProjectSummary};
+    use crate::acp::{AcpManager, FileProjectRegistry};
+    use crate::web::project_registry::{ProjectRegistry, ProjectSummary, seed_from_file};
     use crate::web::sink::WsRelaySink;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -157,5 +157,144 @@ mod tests {
             serde_json::from_slice(&body).expect("parse body");
         assert!(parsed.success);
         assert!(parsed.data.unwrap().projects.is_empty());
+    }
+
+    /// Minimal std-only temp dir (reuses `web::config`'s pid+nanos pattern —
+    /// no `tempfile` dev-dep). Caller must `cleanup` it.
+    fn tempdir_like(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let p = std::env::temp_dir().join(format!(
+            "termul-projects-api-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&p).expect("create tempdir");
+        p
+    }
+
+    fn cleanup(p: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    // T5.9(a) — VPS mode: the standalone binary loads the file-backed
+    // registry and seeds the in-memory registry from it. GET /projects
+    // returns the file's VFS roots; switch_project resolves the cwd from the
+    // seeded registry via the SAME in-memory read-path (handle_switch_project
+    // calls registry.find_path — see web/ws.rs:894). FileProjectRegistry IS
+    // constructed here; the mode difference vs desktop is the SEED source.
+    #[tokio::test]
+    async fn vps_mode_seeds_from_file_then_lists_and_resolves_cwd() {
+        let dir = tempdir_like("vps-mode");
+        let root_a = dir.join("proj-a");
+        std::fs::create_dir_all(&root_a).expect("mkdir root-a");
+        let file = dir.join("projects.json");
+        std::fs::write(
+            &file,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeProjectId": "p-1",
+                "projects": [
+                    { "id": "p-1", "name": "Project p-1", "path": root_a, "color": "blue", "isArchived": false },
+                    { "id": "p-old", "name": "Project p-old", "path": root_a, "color": "green", "isArchived": true },
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write registry json");
+
+        // VPS load path.
+        let file_reg = FileProjectRegistry::load(&file).expect("load ok");
+        assert_eq!(file_reg.roots().len(), 2);
+        let registry = Arc::new(ProjectRegistry::new());
+        seed_from_file(&registry, &file_reg);
+
+        // GET /projects returns the file's VFS roots (list() = snapshot()).
+        let app = axum::Router::new()
+            .route("/projects", axum::routing::get(list))
+            .with_state(state_with(Arc::clone(&registry)));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<ProjectListPayload> =
+            serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success);
+        let data = parsed.data.expect("data");
+        assert_eq!(data.projects.len(), 2, "file's VFS roots");
+        assert_eq!(data.active_project_id.as_deref(), Some("p-1"));
+        assert_eq!(data.projects[0].id, "p-1");
+        assert!(data.projects[0].is_active, "active flag derived from active_project_id");
+        assert!(data.projects[1].is_archived);
+
+        // switch_project resolves the cwd from the seeded registry via the
+        // shared in-memory read-path (find_path). The active root's path is
+        // the canonicalized VFS root.
+        let expected_cwd = root_a
+            .canonicalize()
+            .expect("canonicalize")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            registry.find_path("p-1").as_deref(),
+            Some(expected_cwd.as_str()),
+            "switch_project (handle_switch_project) resolves the cwd via find_path"
+        );
+        cleanup(&dir);
+    }
+
+    // T5.9(b) — Desktop-hosted mode: the renderer feeds the in-memory registry
+    // via remote_sync_projects (here a direct set, the same call the command
+    // makes). GET /projects returns the renderer list; switch_project resolves
+    // the cwd. FileProjectRegistry is NOT constructed in the desktop path.
+    #[tokio::test]
+    async fn desktop_mode_seeds_from_renderer_then_lists_and_resolves_cwd() {
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![
+                summary("d-1", Some("/renderer/cwd-a"), false, true),
+                summary("d-2", Some("/renderer/cwd-b"), false, false),
+            ],
+            Some("d-1".to_string()),
+        );
+
+        let app = axum::Router::new()
+            .route("/projects", axum::routing::get(list))
+            .with_state(state_with(Arc::clone(&registry)));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<ProjectListPayload> =
+            serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success);
+        let data = parsed.data.expect("data");
+        assert_eq!(data.projects.len(), 2, "renderer-fed list");
+        assert_eq!(data.active_project_id.as_deref(), Some("d-1"));
+        assert_eq!(data.projects[0].id, "d-1");
+        assert!(data.projects[0].is_active);
+
+        // switch_project resolves the cwd from the renderer-fed registry.
+        assert_eq!(registry.find_path("d-1").as_deref(), Some("/renderer/cwd-a"));
+        assert_eq!(registry.find_path("d-2").as_deref(), Some("/renderer/cwd-b"));
     }
 }

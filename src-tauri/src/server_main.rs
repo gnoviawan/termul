@@ -16,8 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use termul_manager_lib::web::config::ParseCliError;
-use termul_manager_lib::web::{serve, PermissionRendezvous, ServerConfig, WsRelaySink};
-use termul_manager_lib::AcpManager;
+use termul_manager_lib::web::{
+    serve, PermissionRendezvous, ProjectRegistry, ServerConfig, WsRelaySink, seed_from_file,
+};
+use termul_manager_lib::{AcpManager, FileProjectRegistry};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
@@ -68,8 +71,37 @@ fn main() -> ExitCode {
             Duration::from_secs(cfg.permission_timeout_secs),
         ));
         ws_relay.set_rendezvous(rendezvous);
+        // Story 4.1: the in-memory project registry. In VPS mode the
+        // standalone binary is the source of truth — it seeds the registry
+        // from the file-backed `FileProjectRegistry` at startup (when
+        // --projects-file / $TERMUL_PROJECTS_FILE is configured). A missing
+        // file is not fatal (loads as empty, so `/projects` returns empty);
+        // a corrupt/invalid file IS fatal (abort startup so a misconfigured
+        // VPS is obvious). Desktop-hosted mode never reaches here (it calls
+        // `serve_router` directly with a renderer-fed registry).
+        let registry = Arc::new(ProjectRegistry::new());
+        if let Some(ref projects_file) = cfg.projects_file {
+            match FileProjectRegistry::load(projects_file) {
+                Ok(file_reg) => {
+                    let n = file_reg.roots().len();
+                    info!(
+                        "loaded {} project root(s) from '{}'",
+                        n,
+                        projects_file.display()
+                    );
+                    seed_from_file(&registry, &file_reg);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "termul-server: failed to load projects file '{}': {e}",
+                        projects_file.display()
+                    );
+                    return ExitCode::from(1);
+                }
+            }
+        }
         // `serve` always kill_all()s after Axum returns (ok or err).
-        match serve(acp, ws_relay, cfg).await {
+        match serve(acp, ws_relay, registry, cfg).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("termul-server failed: {e}");
@@ -80,12 +112,13 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH] [--projects-file PATH]\n\n\
      Options:\n\
        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
        --port PORT                 Bind port (default: 8080)\n\
        --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
+       --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
        -h, --help                  Show this help"
 }

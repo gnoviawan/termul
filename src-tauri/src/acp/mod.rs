@@ -13,6 +13,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod manager;
+pub mod project_registry;
 pub mod session;
 pub mod terminal;
 
@@ -23,6 +24,7 @@ pub mod terminal;
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 pub use manager::AcpManager;
+pub use project_registry::{FileProjectRegistry, VfsRoot};
 
 #[cfg(test)]
 mod tests;

@@ -132,6 +132,15 @@ pub struct ServerConfig {
     /// `..` components). Defaults to the user's home directory when unset
     /// (see [`default_project_root`]).
     pub project_root: PathBuf,
+    /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
+    /// standalone `termul-server` binary loads this at startup and seeds the
+    /// in-memory [`crate::web::project_registry::ProjectRegistry`] from it;
+    /// `None` (the default) means the binary serves an empty project list.
+    /// The file need not exist at parse time — a missing file loads as an
+    /// empty registry, not a fatal error (only a corrupt/present file or an
+    /// invalid root is). Desktop-hosted shared-live mode leaves this `None`
+    /// (it queries the live `AcpManager`, not a registry file).
+    pub projects_file: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -167,6 +176,11 @@ impl ServerConfig {
         // fails fast at startup rather than leaking through to the
         // boundary check.
         let mut project_root: Option<PathBuf> = None;
+        // Story 4.1: the VFS-roots registry file. Parsed but NOT validated
+        // against the filesystem here (a missing file loads as an empty
+        // registry at load, not a fatal error). Defaults to None; an
+        // optional $TERMUL_PROJECTS_FILE env var is honored after the loop.
+        let mut projects_file: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -255,6 +269,22 @@ impl ServerConfig {
                         .map_err(ParseCliError::Message)?;
                     project_root = Some(validated);
                 }
+                "--projects-file" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --projects-file".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --projects-file '': must be a non-empty path".into(),
+                        ));
+                    }
+                    // Do NOT resolve_and_validate_project_root here — the
+                    // registry file need not exist at parse time (a missing
+                    // file loads as an empty registry, not a fatal error).
+                    // Validation of each root's path happens at load.
+                    projects_file = Some(PathBuf::from(trimmed));
+                }
                 other if other.starts_with('-') => {
                     return Err(ParseCliError::Message(format!("unknown option '{other}'")));
                 }
@@ -285,12 +315,27 @@ impl ServerConfig {
             }
         };
 
+        // Story 4.1: optional $TERMUL_PROJECTS_FILE env default when
+        // --projects-file is absent (mirrors default_project_root's env
+        // pattern). An unset/empty env var means "no registry configured"
+        // — the binary serves an empty project list, which is valid (not
+        // fatal). The file is NOT validated against the filesystem here; a
+        // missing file loads as an empty registry at load time.
+        let projects_file = match projects_file {
+            Some(p) => Some(p),
+            None => std::env::var("TERMUL_PROJECTS_FILE").ok().and_then(|v| {
+                let t = v.trim();
+                (!t.is_empty()).then(|| PathBuf::from(t))
+            }),
+        };
+
         Ok(Self {
             host,
             port,
             event_log_capacity,
             permission_timeout_secs,
             project_root,
+            projects_file,
         })
     }
 }
@@ -411,6 +456,7 @@ mod tests {
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
             project_root: PathBuf::from("/tmp"),
+            projects_file: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -423,6 +469,7 @@ mod tests {
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
             project_root: PathBuf::from("/tmp"),
+            projects_file: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }

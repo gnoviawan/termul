@@ -245,6 +245,11 @@ impl RemoteServerState {
                 .map(|r| r.timeout().as_secs())
                 .unwrap_or(60),
             project_root,
+            // Desktop-hosted shared-live mode queries the live desktop
+            // `AcpManager` via the in-memory renderer-fed registry, NOT a
+            // server-owned file (AC2 / architecture Gap #3). The
+            // file-backed `acp::project_registry` is VPS-mode-only.
+            projects_file: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

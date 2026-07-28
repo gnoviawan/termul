@@ -26,7 +26,9 @@ pub mod ws;
 
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
-pub use project_registry::{ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload};
+pub use project_registry::{
+    ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload, seed_from_file,
+};
 pub use sink::{broadcast_projects_changed, EventSink, TauriEventSink, WsRelaySink, fan_out};
 pub use ws::{AppState, ReliabilityTier, SequencedEvent, WsErrorCode};
 
@@ -48,18 +50,26 @@ use crate::acp::AcpManager;
 /// agent subprocesses via [`AcpManager::kill_all`]. Bind failures are returned
 /// to the caller. On serve error, agents are still killed before returning.
 ///
+/// `registry` is the in-memory [`ProjectRegistry`] the router reads for
+/// `GET /projects` + `switch_project` cwd resolution. The standalone binary
+/// seeds it from the file-backed [`crate::acp::project_registry::FileProjectRegistry`]
+/// at startup (VPS mode); the desktop host seeds it via `remote_sync_projects`
+/// and calls [`serve_router`] directly (it never reaches this `serve`
+/// wrapper).
+///
 /// The standalone binary owns its agent lifetime end-to-end, so it kills agents
 /// on exit. The desktop-hosted shared-live path calls [`serve_router`] directly
 /// and must NOT kill the desktop's live agents — see [`serve_router`].
 pub async fn serve(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
+    registry: Arc<crate::web::project_registry::ProjectRegistry>,
     cfg: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
         ws_relay,
-        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry,
         cfg,
         shutdown_signal_future(),
     )

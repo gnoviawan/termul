@@ -25,6 +25,8 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::acp::{FileProjectRegistry, VfsRoot};
+
 /// A single project's summary as exposed to the web/remote client.
 ///
 /// Mirrors `src/shared/types/web-projects.types.ts` `ProjectSummary` one-to-one
@@ -151,6 +153,53 @@ impl ProjectRegistry {
     }
 }
 
+/// Map a file-backed VFS root to the wire [`ProjectSummary`] (VPS-mode seed).
+///
+/// The `web -> acp` direction is already established (`web` depends on
+/// `acp::AcpManager`), so this mapping lives here — NOT in `acp` (which must
+/// not import `web`, the no-cycle invariant). `is_active` is left `false`
+/// per-entry; the caller ([`seed_from_file`]) derives the active flag from
+/// `active_project_id` after the full list is built.
+impl From<VfsRoot> for ProjectSummary {
+    fn from(root: VfsRoot) -> Self {
+        Self {
+            id: root.id,
+            name: root.name,
+            color: root.color,
+            // ProjectSummary.path is Option<String>; surface the root's
+            // canonical path only when non-empty (a canonicalized root is
+            // always non-empty, but the guard mirrors find_path's skip).
+            path: (!root.path.as_os_str().is_empty())
+                .then(|| root.path.to_string_lossy().into_owned()),
+            is_archived: root.is_archived,
+            is_active: false,
+        }
+    }
+}
+
+/// Seed an in-memory [`ProjectRegistry`] from a file-backed
+/// [`FileProjectRegistry`] (the VPS-mode load path). Maps each VFS root to a
+/// [`ProjectSummary`], marks the active one, and calls [`ProjectRegistry::set`].
+/// The standalone `termul-server` binary calls this after `load`; the
+/// desktop-hosted path seeds via `remote_sync_projects` instead (it never
+/// constructs a `FileProjectRegistry`).
+pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry) {
+    let active_id = file_reg.active_project_id().map(str::to_string);
+    let mut summaries: Vec<ProjectSummary> = file_reg
+        .roots()
+        .iter()
+        .map(|r| ProjectSummary::from(r.clone()))
+        .collect();
+    if let Some(ref id) = active_id {
+        for s in &mut summaries {
+            if s.id == *id {
+                s.is_active = true;
+            }
+        }
+    }
+    registry.set(summaries, active_id);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +301,44 @@ mod tests {
         let p2 = ProjectsChangedPayload { active_project_id: Some("p-3".to_string()) };
         let v2 = serde_json::to_value(&p2).unwrap();
         assert_eq!(v2["activeProjectId"], "p-3");
+    }
+
+    // T5.8 — VfsRoot -> ProjectSummary mapping round-trips identity/display
+    // fields and redacts-by-omission (no env-var field on ProjectSummary).
+    #[test]
+    fn vfs_root_maps_to_project_summary_redacting_env() {
+        use crate::acp::VfsRoot;
+        use std::path::PathBuf;
+
+        let root = VfsRoot {
+            id: "p-1".to_string(),
+            name: "Project p-1".to_string(),
+            path: PathBuf::from("/some/cwd"),
+            color: "blue".to_string(),
+            is_archived: false,
+        };
+        let summary: ProjectSummary = root.into();
+        assert_eq!(summary.id, "p-1");
+        assert_eq!(summary.name, "Project p-1");
+        assert_eq!(summary.color, "blue");
+        assert_eq!(summary.path.as_deref(), Some("/some/cwd"));
+        assert!(!summary.is_archived);
+        // is_active is left false per-entry; seed_from_file derives it.
+        assert!(!summary.is_active);
+
+        // Redact-by-omission: the wire shape carries NO env-var field.
+        let v = serde_json::to_value(&summary).unwrap();
+        assert!(v.get("envVars").is_none(), "ProjectSummary must not carry env-var values");
+
+        // An empty-path VfsRoot surfaces path: None (mirrors find_path's skip).
+        let empty_root = VfsRoot {
+            id: "p-empty".to_string(),
+            name: "Empty".to_string(),
+            path: PathBuf::new(),
+            color: "blue".to_string(),
+            is_archived: false,
+        };
+        let s: ProjectSummary = empty_root.into();
+        assert!(s.path.is_none(), "empty VfsRoot path => ProjectSummary.path None");
     }
 }

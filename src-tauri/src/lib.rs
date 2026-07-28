@@ -116,7 +116,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
-pub use acp::AcpManager;
+pub use acp::{AcpManager, FileProjectRegistry};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 // Re-export for `web::fs_api` so the project-root boundary check can reuse
