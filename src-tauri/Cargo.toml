@@ -146,6 +146,7 @@ ssh2 = "0.9"
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
