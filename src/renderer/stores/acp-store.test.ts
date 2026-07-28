@@ -93,6 +93,20 @@ async function flushTurnEnd(): Promise<void> {
   })
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function seedSession(sessionId: string, agentId: string, activeTurn = true): void {
   useAcpStore.setState({
     sessions: {
@@ -2028,6 +2042,143 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
   })
 
+  it('openHistorySession preserves cached controls when reopen omits fields and clears explicit configOptions', async () => {
+    const cachedModes = {
+      currentModeId: 'cached-mode',
+      availableModes: [{ id: 'cached-mode', name: 'Cached Mode' }]
+    }
+    const cachedModels = {
+      currentModelId: 'cached-model',
+      availableModels: [{ modelId: 'cached-model', name: 'Cached Model' }]
+    }
+    const cachedConfig = [
+      {
+        id: 'thinking',
+        name: 'Thinking',
+        type: 'select',
+        currentValue: 'high',
+        options: [{ value: 'high', name: 'High' }]
+      }
+    ]
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessions: {
+        ...s.sessions,
+        's-preserve': {
+          id: 's-preserve',
+          agentId: 'agent-1',
+          cwd: '/w',
+          projectId: 'p1',
+          status: 'closed',
+          title: 'Cached controls',
+          activeTurn: false,
+          openTurnId: null,
+          modes: cachedModes,
+          models: cachedModels,
+          configOptions: cachedConfig,
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-preserve',
+        agentId: 'agent-1',
+        title: 'Cached controls',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    vi.mocked(invoke).mockResolvedValueOnce({ configOptions: [] })
+
+    await useAcpStore.getState().openHistorySession('s-preserve')
+
+    const session = useAcpStore.getState().sessions['s-preserve']
+    expect(session.modes).toBe(cachedModes)
+    expect(session.models).toBe(cachedModels)
+    expect(session.configOptions).toEqual([])
+  })
+
+  it('openHistorySession load keeps in-flight live mode/config updates authoritative', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-controls',
+        agentId: 'agent-1',
+        title: 'Controls',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'from disk' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    const reopen = deferred<unknown>()
+    vi.mocked(invoke).mockReturnValueOnce(reopen.promise)
+
+    const opening = useAcpStore.getState().openHistorySession('s-controls')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_load_session', expect.anything())
+    )
+    useAcpStore.getState()._onModeUpdate({
+      agentId: 'agent-1',
+      sessionId: 's-controls',
+      currentModeId: 'live',
+      availableModes: [{ id: 'live', name: 'Live' }]
+    })
+    const liveConfig = [
+      {
+        id: 'thinking',
+        name: 'Thinking',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'live',
+        options: [{ value: 'live', name: 'Live' }]
+      }
+    ]
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      agentId: 'agent-1',
+      sessionId: 's-controls',
+      configOptions: liveConfig
+    })
+    reopen.resolve({
+      modes: { currentModeId: 'stale', availableModes: [{ id: 'stale', name: 'Stale' }] },
+      models: {
+        currentModelId: 'model-a',
+        availableModels: [{ modelId: 'model-a', name: 'Model A' }]
+      },
+      configOptions: []
+    })
+    await opening
+
+    const session = useAcpStore.getState().sessions['s-controls']
+    expect(session.modes?.currentModeId).toBe('live')
+    expect(session.models?.currentModelId).toBe('model-a')
+    expect(session.configOptions).toEqual(liveConfig)
+  })
+
   it('openHistorySession resumes when session is cached but closed (P5)', async () => {
     useAcpStore.setState((s) => ({
       agents: {
@@ -2079,8 +2230,40 @@ describe('acp-store', () => {
         }
       ]
     })
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
-    await useAcpStore.getState().openHistorySession('s-closed')
+    const reopen = deferred<unknown>()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValueOnce(reopen.promise)
+    const opening = useAcpStore.getState().openHistorySession('s-closed')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
+    )
+    useAcpStore.getState()._onModeUpdate({
+      agentId: 'agent-1',
+      sessionId: 's-closed',
+      currentModeId: 'live',
+      availableModes: [{ id: 'live', name: 'Live' }]
+    })
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      agentId: 'agent-1',
+      sessionId: 's-closed',
+      configOptions: []
+    })
+    reopen.resolve({
+      modes: { currentModeId: 'code', availableModes: [{ id: 'code', name: 'Code' }] },
+      models: {
+        currentModelId: 'model-resume',
+        availableModels: [{ modelId: 'model-resume', name: 'Resume Model' }]
+      },
+      configOptions: [
+        {
+          id: 'thinking',
+          name: 'Thinking',
+          type: 'select',
+          currentValue: 'stale',
+          options: [{ value: 'stale', name: 'Stale' }]
+        }
+      ]
+    })
+    await opening
     expect(loadSessionPayload).toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
       agentId: 'agent-1',
@@ -2089,6 +2272,9 @@ describe('acp-store', () => {
     })
     expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
     expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
+    expect(useAcpStore.getState().sessions['s-closed'].modes?.currentModeId).toBe('live')
+    expect(useAcpStore.getState().sessions['s-closed'].models?.currentModelId).toBe('model-resume')
+    expect(useAcpStore.getState().sessions['s-closed'].configOptions).toEqual([])
   })
 
   it('openHistorySession restores the local transcript if load fails (P5)', async () => {
@@ -3368,15 +3554,206 @@ describe('session discovery (gh-407)', () => {
     ).rejects.toThrow(/does not support loading or resuming/)
   })
 
-  it('openDiscoveredSession calls acp_load_session with the exact args when loadSession is advertised', async () => {
+  it('openDiscoveredSession preserves existing controls when reopen omits fields', async () => {
+    const existingModes = {
+      currentModeId: 'existing-mode',
+      availableModes: [{ id: 'existing-mode', name: 'Existing Mode' }]
+    }
+    const existingModels = {
+      currentModelId: 'existing-model',
+      availableModels: [{ modelId: 'existing-model', name: 'Existing Model' }]
+    }
+    const existingConfig = [
+      {
+        id: 'thinking',
+        name: 'Thinking',
+        type: 'select',
+        currentValue: 'medium',
+        options: [{ value: 'medium', name: 'Medium' }]
+      }
+    ]
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      sessions: {
+        'sess-existing': {
+          id: 'sess-existing',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'closed',
+          title: 'Existing',
+          activeTurn: false,
+          openTurnId: null,
+          modes: existingModes,
+          models: existingModels,
+          configOptions: existingConfig,
+          lastError: null,
+          createdAt: 1
+        }
+      }
+    })
+    vi.mocked(invoke).mockResolvedValueOnce({})
+
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-existing', '/work', 'p1')
+
+    const session = useAcpStore.getState().sessions['sess-existing']
+    expect(session.modes).toBe(existingModes)
+    expect(session.models).toBe(existingModels)
+    expect(session.configOptions).toBe(existingConfig)
+  })
+
+  it('openDiscoveredSession coalesces concurrent opens for the same session', async () => {
     useAcpStore.setState({
       agents: {
         'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
       },
       agentStatus: { 'agent-1': 'connected' }
     })
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    const reopen = deferred<unknown>()
+    vi.mocked(invoke).mockReturnValueOnce(reopen.promise)
+
+    const firstOpen = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-overlap', '/work', 'p1')
+    const secondOpen = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-overlap', '/work', 'p1')
+
+    expect(secondOpen).toBe(firstOpen)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'agent-1',
+      sessionId: 'sess-overlap',
+      cwd: '/work'
+    })
+
+    reopen.resolve({
+      modes: { currentModeId: 'loaded', availableModes: [{ id: 'loaded', name: 'Loaded' }] },
+      configOptions: []
+    })
+    await expect(Promise.all([firstOpen, secondOpen])).resolves.toEqual([undefined, undefined])
+
+    const session = useAcpStore.getState().sessions['sess-overlap']
+    expect(session.status).toBe('active')
+    expect(session.modes?.currentModeId).toBe('loaded')
+  })
+
+  it('openDiscoveredSession starts a new reopen after delete/recreate and isolates in-flight cleanup', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 'sess-recreated',
+          agentId: 'agent-1',
+          title: 'Old',
+          cwd: '/old',
+          projectId: 'p-old',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    })
+    const oldReopen = deferred<unknown>()
+    const newReopen = deferred<unknown>()
+    vi.mocked(invoke).mockReturnValueOnce(oldReopen.promise).mockReturnValueOnce(newReopen.promise)
+
+    const oldOpening = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-recreated', '/old', 'p-old')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    await useAcpStore.getState().deleteHistorySession('sess-recreated')
+    seedSession('sess-recreated', 'agent-1', false)
+
+    const newOpening = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-recreated', '/work', 'p1')
+    expect(newOpening).not.toBe(oldOpening)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2))
+    expect(invoke).toHaveBeenLastCalledWith('acp_load_session', {
+      agentId: 'agent-1',
+      sessionId: 'sess-recreated',
+      cwd: '/work'
+    })
+
+    oldReopen.resolve({
+      modes: { currentModeId: 'stale', availableModes: [{ id: 'stale', name: 'Stale' }] },
+      configOptions: []
+    })
+    await oldOpening
+
+    const coalescedNewOpening = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-recreated', '/work', 'p1')
+    expect(coalescedNewOpening).toBe(newOpening)
+    expect(invoke).toHaveBeenCalledTimes(2)
+    expect(useAcpStore.getState().sessions['sess-recreated'].modes).toBeNull()
+
+    newReopen.resolve({
+      modes: { currentModeId: 'fresh', availableModes: [{ id: 'fresh', name: 'Fresh' }] },
+      configOptions: []
+    })
+    await expect(Promise.all([newOpening, coalescedNewOpening])).resolves.toEqual([
+      undefined,
+      undefined
+    ])
+
+    const session = useAcpStore.getState().sessions['sess-recreated']
+    expect(session.status).toBe('active')
+    expect(session.cwd).toBe('/work')
+    expect(session.modes?.currentModeId).toBe('fresh')
+  })
+
+  it('openDiscoveredSession load keeps in-flight live mode/config updates authoritative', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    const reopen = deferred<unknown>()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(reopen.promise)
+    const opening = useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_load_session', expect.anything())
+    )
+    useAcpStore.getState()._onModeUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      currentModeId: 'live',
+      availableModes: [{ id: 'live', name: 'Live' }]
+    })
+    const liveConfig = [
+      {
+        id: 'thinking',
+        name: 'Thinking',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'live',
+        options: [{ value: 'live', name: 'Live' }]
+      }
+    ]
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      configOptions: liveConfig
+    })
+    reopen.resolve({
+      modes: { currentModeId: 'stale', availableModes: [{ id: 'stale', name: 'Stale' }] },
+      models: {
+        currentModelId: 'model-a',
+        availableModels: [{ modelId: 'model-a', name: 'Model A' }]
+      },
+      configOptions: []
+    })
+    await opening
     const loadCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')
     expect(loadCalls).toHaveLength(1)
     // Forwarded payload: agentId, sessionId, cwd (no resume call on this path).
@@ -3388,6 +3765,10 @@ describe('session discovery (gh-407)', () => {
     expect(
       vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
     ).toHaveLength(0)
+    const session = useAcpStore.getState().sessions['sess-1']
+    expect(session.modes?.currentModeId).toBe('live')
+    expect(session.models?.currentModelId).toBe('model-a')
+    expect(session.configOptions).toEqual(liveConfig)
   })
 
   it('openDiscoveredSession uses the resume branch when only resume is advertised', async () => {
@@ -3400,8 +3781,40 @@ describe('session discovery (gh-407)', () => {
       },
       agentStatus: { 'agent-1': 'connected' }
     })
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-2', '/work', 'p1')
+    const reopen = deferred<unknown>()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(reopen.promise)
+    const opening = useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-2', '/work', 'p1')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
+    )
+    useAcpStore.getState()._onModeUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-2',
+      currentModeId: 'live',
+      availableModes: [{ id: 'live', name: 'Live' }]
+    })
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      agentId: 'agent-1',
+      sessionId: 'sess-2',
+      configOptions: []
+    })
+    reopen.resolve({
+      modes: { currentModeId: 'stale', availableModes: [{ id: 'stale', name: 'Stale' }] },
+      models: {
+        currentModelId: 'model-b',
+        availableModels: [{ modelId: 'model-b', name: 'Model B' }]
+      },
+      configOptions: [
+        {
+          id: 'thinking',
+          name: 'Thinking',
+          type: 'select',
+          currentValue: 'stale',
+          options: [{ value: 'stale', name: 'Stale' }]
+        }
+      ]
+    })
+    await opening
     const resumeCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
     expect(resumeCalls).toHaveLength(1)
     expect(resumeCalls[0]![1]).toMatchObject({
@@ -3413,6 +3826,10 @@ describe('session discovery (gh-407)', () => {
     expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')).toHaveLength(
       0
     )
+    const session = useAcpStore.getState().sessions['sess-2']
+    expect(session.modes?.currentModeId).toBe('live')
+    expect(session.models?.currentModelId).toBe('model-b')
+    expect(session.configOptions).toEqual([])
   })
 })
 

@@ -32,9 +32,10 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest, ContentBlock,
-    InitializeRequest, ListSessionsResponse, LoadSessionRequest, McpServer, ModelId,
-    NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome,
+    InitializeRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
+    ModelId, NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
+    RequestPermissionResponse, ResumeSessionRequest, ResumeSessionResponse,
+    SelectedPermissionOutcome,
     SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
     SetSessionModelRequest, StopReason,
 };
@@ -122,23 +123,62 @@ fn turn_timeout() -> Duration {
         .unwrap_or(TURN_TIMEOUT)
 }
 
-/// Timed `session/load` / `session/resume`: map agent errors and timeouts to
-/// `Result<(), String>`, and record the session root on success.
+/// Option snapshot returned by a successful `session/load` or `session/resume`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionReopenOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<SessionModelState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_options: Option<Vec<SessionConfigOption>>,
+}
+
+trait IntoSessionReopenOutcome {
+    fn into_session_reopen_outcome(self) -> SessionReopenOutcome;
+}
+
+impl IntoSessionReopenOutcome for LoadSessionResponse {
+    fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
+        SessionReopenOutcome {
+            modes: self.modes,
+            models: self.models,
+            config_options: self.config_options,
+        }
+    }
+}
+
+impl IntoSessionReopenOutcome for ResumeSessionResponse {
+    fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
+        SessionReopenOutcome {
+            modes: self.modes,
+            models: self.models,
+            config_options: self.config_options,
+        }
+    }
+}
+
+/// Timed `session/load` / `session/resume`: preserve the option snapshot and
+/// record the session root on success.
 async fn run_session_reopen<Fut, T, E>(
     op: &str,
     session_id: &str,
     cwd: &str,
     req_state: &Mutex<DriverState>,
     request: Fut,
-) -> Result<(), String>
+) -> Result<SessionReopenOutcome, String>
 where
     Fut: std::future::Future<Output = Result<T, E>>,
+    T: IntoSessionReopenOutcome,
     E: ToString,
 {
     let timeout = session_reopen_timeout();
     let outcome = tokio::time::timeout(timeout, request).await;
     let result = match outcome {
-        Ok(result) => result.map(|_| ()).map_err(|e| e.to_string()),
+        Ok(result) => result
+            .map(IntoSessionReopenOutcome::into_session_reopen_outcome)
+            .map_err(|e| e.to_string()),
         Err(_) => {
             log::warn!(
                 "[acp] session {session_id} {op} timed out after {timeout:?}; \
@@ -182,12 +222,12 @@ enum AcpCommand {
     LoadSession {
         session_id: SessionId,
         cwd: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     ResumeSession {
         session_id: SessionId,
         cwd: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     CloseSession {
         session_id: SessionId,
@@ -443,7 +483,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
-    ) -> Result<(), String> {
+    ) -> Result<SessionReopenOutcome, String> {
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -461,7 +501,7 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
-    ) -> Result<(), String> {
+    ) -> Result<SessionReopenOutcome, String> {
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -1896,6 +1936,53 @@ mod tests {
             assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
         }
         assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn session_load_reopen_preserves_optional_fields_and_records_root() {
+        let state = Mutex::new(DriverState::new());
+        let modes = agent_client_protocol::schema::SessionModeState::new("ask", vec![]);
+        let response = LoadSessionResponse::new()
+            .modes(modes.clone())
+            .config_options(Vec::<SessionConfigOption>::new());
+        let outcome = run_session_reopen(
+            "session/load",
+            "sess-load",
+            "/work",
+            &state,
+            async move { Ok::<_, String>(response) },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.modes, Some(modes));
+        assert_eq!(outcome.models, None);
+        assert_eq!(outcome.config_options, Some(vec![]));
+        assert_eq!(state.lock().session_root("sess-load"), Some(PathBuf::from("/work")));
+    }
+
+    #[tokio::test]
+    async fn session_resume_reopen_preserves_omitted_fields() {
+        let state = Mutex::new(DriverState::new());
+        let outcome = run_session_reopen(
+            "session/resume",
+            "sess-resume",
+            "/work",
+            &state,
+            async { Ok::<_, String>(ResumeSessionResponse::new()) },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            SessionReopenOutcome {
+                modes: None,
+                models: None,
+                config_options: None,
+            }
+        );
+        assert_eq!(serde_json::to_value(&outcome).unwrap(), serde_json::json!({}));
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).
