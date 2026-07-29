@@ -136,151 +136,162 @@ export function FrontmatterProperties({
   )
 
   return (
-    // Match BlockNote `.bn-editor { padding-inline: 54px }` so Properties align with body text.
-    <div className="border-b border-border px-[54px] py-3">
-      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Properties
-      </div>
+    <section className="frontmatter-properties border-b border-border/70" aria-label="Properties">
+      <div className="frontmatter-properties-inner py-5">
+        <div className="label-section mb-2.5 text-muted-foreground">Properties</div>
 
-      <div className="flex flex-col gap-1.5">
-        {entries.map(([key, value]) => {
-          const Icon = iconForKey(key)
-          return (
-            <div key={key} className="group flex items-start gap-2 rounded-md py-1">
-              <Icon className="mt-2 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <label
-                htmlFor={`${baseId}-${key}`}
-                className="mt-1.5 w-28 shrink-0 truncate text-xs text-muted-foreground"
-                title={key}
-              >
-                {key}
-              </label>
-              <div className="min-w-0 flex-1">
-                {isFrontmatterNested(value) ? (
-                  <div
-                    id={`${baseId}-${key}`}
-                    className="rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 font-mono text-xs text-muted-foreground"
-                    title="Nested value (read-only)"
-                  >
-                    {value.display}
-                  </div>
-                ) : Array.isArray(value) ? (
-                  <div className="flex flex-wrap items-center gap-1.5 py-0.5">
-                    {value.map((item, index) => (
-                      <Badge
-                        key={`${key}-${item}-${index}`}
-                        variant="secondary"
-                        className="gap-1 pr-1 font-normal"
-                      >
-                        <List className="size-3 opacity-60" aria-hidden="true" />
-                        <span>{item}</span>
-                        <button
-                          type="button"
-                          className="rounded-full p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          aria-label={`Remove ${item}`}
-                          onClick={() => removeArrayItem(key, index)}
+        <div className="frontmatter-properties-grid flex flex-col gap-1">
+          {entries.map(([key, value]) => {
+            const Icon = iconForKey(key)
+            const fieldId = `${baseId}-${key}`
+            const labelId = `${fieldId}-label`
+            return (
+              <div key={key} className="group flex min-w-0 items-start gap-2 rounded-md py-0.5">
+                <Icon className="mt-2 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <label
+                  id={labelId}
+                  htmlFor={isFrontmatterNested(value) || Array.isArray(value) ? undefined : fieldId}
+                  className="mt-1.5 w-24 shrink-0 truncate text-xs text-muted-foreground"
+                  title={key}
+                >
+                  {key}
+                </label>
+                <div className="min-w-0 flex-1">
+                  {isFrontmatterNested(value) ? (
+                    <div
+                      id={fieldId}
+                      role="group"
+                      aria-labelledby={labelId}
+                      className="min-w-0 max-w-full break-words rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                      title="Nested value (read-only)"
+                    >
+                      {value.display}
+                    </div>
+                  ) : Array.isArray(value) ? (
+                    <div
+                      id={fieldId}
+                      role="group"
+                      aria-labelledby={labelId}
+                      className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 py-0.5"
+                    >
+                      {value.map((item, index) => (
+                        <Badge
+                          key={`${key}-${item}-${index}`}
+                          variant="secondary"
+                          className="min-w-0 max-w-full gap-1 pr-1 font-normal"
                         >
-                          <X className="size-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                    {value.length === 0 && (
-                      <span className="text-xs text-muted-foreground">[]</span>
-                    )}
-                  </div>
-                ) : (
-                  <Input
-                    id={`${baseId}-${key}`}
-                    className="h-8 border-transparent bg-transparent px-2 shadow-none hover:border-input focus-visible:border-input"
-                    value={
-                      draftScalars[key] !== undefined
-                        ? draftScalars[key]
-                        : formatFrontmatterValue(value)
-                    }
-                    onFocus={() => {
-                      setDraftScalars((prev) => ({
-                        ...prev,
-                        [key]: formatFrontmatterValue(value)
-                      }))
-                    }}
-                    onChange={(event) => {
-                      const nextText = event.target.value
-                      setDraftScalars((prev) => ({ ...prev, [key]: nextText }))
-                    }}
-                    onBlur={() => commitScalar(key)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.currentTarget.blur()
+                          <List className="size-3 shrink-0 opacity-60" aria-hidden="true" />
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                            {item}
+                          </span>
+                          <button
+                            type="button"
+                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                            aria-label={`Remove ${item} from ${key}`}
+                            onClick={() => removeArrayItem(key, index)}
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                      {value.length === 0 && (
+                        <span className="text-xs text-muted-foreground">[]</span>
+                      )}
+                    </div>
+                  ) : (
+                    <Input
+                      id={fieldId}
+                      className="h-8 border-transparent bg-transparent px-2 shadow-none hover:border-input focus-visible:border-input"
+                      value={
+                        draftScalars[key] !== undefined
+                          ? draftScalars[key]
+                          : formatFrontmatterValue(value)
                       }
-                    }}
-                  />
-                )}
+                      onFocus={() => {
+                        setDraftScalars((prev) => ({
+                          ...prev,
+                          [key]: formatFrontmatterValue(value)
+                        }))
+                      }}
+                      onChange={(event) => {
+                        const nextText = event.target.value
+                        setDraftScalars((prev) => ({ ...prev, [key]: nextText }))
+                      }}
+                      onBlur={() => commitScalar(key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.currentTarget.blur()
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className={cn(
+                    'mt-1 shrink-0 text-muted-foreground transition-opacity',
+                    // Touch / no-hover: always visible. Fine pointer: reveal on row hover/focus.
+                    'opacity-50 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
+                    'focus-visible:opacity-100'
+                  )}
+                  aria-label={`Remove ${key}`}
+                  onClick={() => removeKey(key)}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                className={cn(
-                  'mt-1 shrink-0 text-muted-foreground transition-opacity',
-                  // Touch / no-hover: always visible. Fine pointer: reveal on row hover/focus.
-                  'opacity-50 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
-                  'focus-visible:opacity-100'
-                )}
-                aria-label={`Remove ${key}`}
-                onClick={() => removeKey(key)}
-              >
-                <Trash2 className="size-3.5" />
+            )
+          })}
+        </div>
+
+        {adding ? (
+          <div className="mt-2 flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <Input
+                className="h-8"
+                placeholder="Property key"
+                value={draftKey}
+                autoFocus
+                aria-invalid={draftError !== null}
+                onChange={(event) => {
+                  setDraftKey(event.target.value)
+                  setDraftError(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitAdd()
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    cancelAdd()
+                  }
+                }}
+              />
+              <Button type="button" size="xs" onClick={commitAdd}>
+                Add
+              </Button>
+              <Button type="button" size="xs" variant="ghost" onClick={cancelAdd}>
+                Cancel
               </Button>
             </div>
-          )
-        })}
-      </div>
-
-      {adding ? (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <Input
-              className="h-8"
-              placeholder="Property key"
-              value={draftKey}
-              autoFocus
-              aria-invalid={draftError !== null}
-              onChange={(event) => {
-                setDraftKey(event.target.value)
-                setDraftError(null)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  commitAdd()
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  cancelAdd()
-                }
-              }}
-            />
-            <Button type="button" size="xs" onClick={commitAdd}>
-              Add
-            </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={cancelAdd}>
-              Cancel
-            </Button>
+            {draftError && <p className="text-xs text-destructive">{draftError}</p>}
           </div>
-          {draftError && <p className="text-xs text-destructive">{draftError}</p>}
-        </div>
-      ) : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          className="mt-2 text-muted-foreground"
-          onClick={() => setAdding(true)}
-        >
-          <Plus className="size-3.5" />
-          Add property
-        </Button>
-      )}
-    </div>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="mt-2 text-muted-foreground"
+            onClick={() => setAdding(true)}
+          >
+            <Plus className="size-3.5" />
+            Add property
+          </Button>
+        )}
+      </div>
+    </section>
   )
 }

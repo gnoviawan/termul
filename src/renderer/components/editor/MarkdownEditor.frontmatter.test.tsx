@@ -5,7 +5,7 @@ import { flushEditorContent } from '@/lib/editor-content-flush'
 import { MarkdownEditor } from './MarkdownEditor'
 
 vi.mock('@blocknote/react', () => ({
-  BlockNoteViewRaw: () => null
+  BlockNoteViewRaw: () => <div data-testid="blocknote-view" />
 }))
 
 vi.mock('@/hooks/use-blocknote', () => ({
@@ -66,6 +66,21 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
         scrollToBlock: vi.fn()
       }
     })
+  })
+
+  it('keeps Properties and BlockNote inside the scoped document shell', () => {
+    const { getByLabelText, getByTestId } = render(
+      <MarkdownEditor filePath="/docs/spec.md" content={FM_CONTENT} isVisible onChange={vi.fn()} />
+    )
+
+    const scrollRoot = getByTestId('blocknote-view').closest('.markdown-editor')
+    const documentShell = getByTestId('blocknote-view').closest('.markdown-editor-document')
+
+    expect(scrollRoot).toBeTruthy()
+    expect(documentShell).toBeTruthy()
+    expect(documentShell?.classList.contains('flex')).toBe(true)
+    expect(documentShell?.classList.contains('flex-col')).toBe(true)
+    expect(documentShell?.contains(getByLabelText('Properties'))).toBe(true)
   })
 
   it('passes body-only into useBlockNote and rejoins FM on body onChange', () => {

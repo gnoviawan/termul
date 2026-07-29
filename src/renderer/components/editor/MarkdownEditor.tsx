@@ -283,22 +283,27 @@ export function MarkdownEditor({
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
           <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
-            <div ref={blockNoteScrollRootRef} className="flex h-full flex-col overflow-auto">
-              {hasFrontmatter && (
-                <FrontmatterProperties data={frontmatter} onChange={handleFrontmatterChange} />
-              )}
-              <div className="min-h-0 flex-1">
-                <BlockNoteViewRaw
-                  editor={editor}
-                  theme={isDark ? 'dark' : 'light'}
-                  formattingToolbar={false}
-                  linkToolbar={false}
-                  slashMenu={false}
-                  emojiPicker={false}
-                  sideMenu={false}
-                  filePanel={false}
-                  tableHandles={false}
-                />
+            <div
+              ref={blockNoteScrollRootRef}
+              className="markdown-editor flex h-full flex-col overflow-auto"
+            >
+              <div className="markdown-editor-document flex min-h-full w-full flex-col">
+                {hasFrontmatter && (
+                  <FrontmatterProperties data={frontmatter} onChange={handleFrontmatterChange} />
+                )}
+                <div className="min-h-0 flex-1">
+                  <BlockNoteViewRaw
+                    editor={editor}
+                    theme={isDark ? 'dark' : 'light'}
+                    formattingToolbar={false}
+                    linkToolbar={false}
+                    slashMenu={false}
+                    emojiPicker={false}
+                    sideMenu={false}
+                    filePanel={false}
+                    tableHandles={false}
+                  />
+                </div>
               </div>
             </div>
           </ResizablePanel>

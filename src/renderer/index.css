@@ -803,3 +803,252 @@
     text-align: left;
   }
 }
+
+/* BlockNote ships unlayered defaults, so these locally scoped overrides remain
+   unlayered as well. This prevents the markdown document theme from leaking to
+   chat or any future BlockNote surfaces. */
+.markdown-editor {
+  container-name: markdown-editor;
+  container-type: inline-size;
+  --markdown-document-width: 48rem;
+  --markdown-document-gutter: clamp(1.25rem, 5cqi, 3.5rem);
+}
+
+.markdown-editor-document {
+  min-width: 0;
+  padding-bottom: 5rem;
+}
+
+.markdown-editor .frontmatter-properties-inner,
+.markdown-editor .bn-editor {
+  width: min(100%, calc(var(--markdown-document-width) + 2 * var(--markdown-document-gutter)));
+  margin-inline: auto;
+  padding-inline: var(--markdown-document-gutter);
+}
+
+.markdown-editor .frontmatter-properties-grid {
+  max-width: 40rem;
+}
+
+.markdown-editor .bn-container,
+.markdown-editor .bn-editor {
+  min-width: 0;
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.markdown-editor .bn-editor {
+  padding-top: 2.25rem;
+  padding-bottom: 1rem;
+  border-radius: 0;
+}
+
+.markdown-editor .bn-default-styles {
+  font-family: "Inter Variable", "Inter", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.markdown-editor .bn-block-outer {
+  line-height: inherit;
+}
+
+.markdown-editor .bn-block-content {
+  min-width: 0;
+  padding-block: 0.16rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="paragraph"] {
+  padding-block: 0.32rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"],
+.markdown-editor .bn-block-outer[data-prev-type="heading"] > .bn-block > .bn-block-content {
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="2"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="2"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.5rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="3"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="3"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="4"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="5"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="6"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"]:is(
+    [data-prev-level="4"],
+    [data-prev-level="5"],
+    [data-prev-level="6"]
+  )
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1rem;
+}
+
+.markdown-editor .bn-block-outer:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 1.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.markdown-editor
+  .bn-block-group
+  > .bn-block-outer:first-child:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 0;
+}
+
+.markdown-editor
+  .bn-block-outer:has(
+    > .bn-block
+      > :is(
+        [data-content-type="bulletListItem"],
+        [data-content-type="numberedListItem"],
+        [data-content-type="checkListItem"]
+      )
+  ) {
+  margin-block: 0.08rem;
+}
+
+.markdown-editor
+  .bn-block-content:is(
+    [data-content-type="bulletListItem"],
+    [data-content-type="numberedListItem"],
+    [data-content-type="checkListItem"]
+  )::before {
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+
+.markdown-editor .bn-block-group .bn-block-group {
+  margin-left: 1.25rem;
+}
+
+.markdown-editor [data-content-type="quote"] blockquote {
+  margin-block: 0.45rem;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left-color: hsl(var(--primary) / 0.55);
+  color: hsl(var(--muted-foreground));
+}
+
+.markdown-editor [data-content-type="divider"] hr {
+  margin-block: 1.5rem;
+  border-top-color: hsl(var(--border) / 0.8);
+}
+
+.markdown-editor .bn-inline-content a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-editor .bn-inline-content code {
+  padding: 0.12em 0.38em;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: 0.3rem;
+  background: hsl(var(--muted) / 0.55);
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] {
+  margin-block: 0.7rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: calc(var(--radius) + 0.125rem);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  padding: 1.1rem 1.25rem;
+  line-height: 1.62;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88rem;
+}
+
+.markdown-editor [data-content-type="table"] .tableWrapper {
+  max-width: 100%;
+  margin-block: 0.8rem;
+  overflow-x: auto;
+  padding: 0;
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: var(--radius);
+}
+
+.markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  width: max-content !important;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th,
+.markdown-editor .bn-editor [data-content-type="table"] td {
+  padding: 0.55rem 0.75rem;
+  border-color: hsl(var(--border) / 0.65);
+  vertical-align: top;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th {
+  background: hsl(var(--muted) / 0.45);
+  font-weight: 600;
+}
+
+@container markdown-editor (max-width: 560px) {
+  .markdown-editor {
+    --markdown-document-gutter: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-inner {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-grid > div {
+    flex-wrap: wrap;
+  }
+
+  .markdown-editor .frontmatter-properties-grid label {
+    width: calc(100% - 3.5rem);
+  }
+
+  .markdown-editor .frontmatter-properties-grid label + div {
+    flex-basis: calc(100% - 1.375rem);
+    margin-left: 1.375rem;
+  }
+
+  .markdown-editor .bn-editor {
+    padding-top: 1.5rem;
+  }
+
+  .markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+  .markdown-editor
+    .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+    > .bn-block
+    > .bn-block-content {
+    font-size: 1.75rem;
+  }
+}
