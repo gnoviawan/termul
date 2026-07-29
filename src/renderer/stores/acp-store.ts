@@ -217,8 +217,14 @@ interface AcpState {
   // Persisted chat-history index (loaded on mount; payloads load lazily)
   sessionIndex: SessionIndexEntry[]
 
-  /** Session ids whose `openHistorySession` is in flight (drives UI loading states). */
+  /** Session ids whose `openHistorySession` is in flight (drives reconnect banners). */
   openingHistoryIds: Record<string, true>
+  /**
+   * Session ids whose newly focused chat tab should show the branded restore
+   * preload. This clears once usable content is ready, independently of a
+   * slower background reconnect.
+   */
+  restoringChatIds: Record<SessionId, true>
   /**
    * Placeholder session ids created for instant launcher→chat handoff while
    * `startChat` / first send still run in the background.
@@ -232,6 +238,8 @@ interface AcpState {
   discoveredSessions: Record<string, SessionInfo[]>
   /** discoveryKeys whose discovery is currently in flight (prevents duplicate requests). */
   discoveringKeys: Record<string, true>
+  /** Ephemeral retry metadata for failed agent-native session reopens. */
+  discoveredReopenContexts: Record<SessionId, DiscoveredReopenContext>
 
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
@@ -1159,11 +1167,22 @@ export function _resetEphemeralSessionIdsForTesting(): void {
  * state (promises don't belong in the store); the reactive
  * `openingHistoryIds` map mirrors membership for UI loading states.
  */
-const inFlightHistoryOpens = new Map<string, Promise<void>>()
+type InFlightHistoryOpen = {
+  generation: number
+  promise: Promise<void>
+}
+
+const inFlightHistoryOpens = new Map<SessionId, InFlightHistoryOpen>()
 
 type InFlightDiscoveredOpen = {
   generation: number
   promise: Promise<void>
+}
+
+export interface DiscoveredReopenContext {
+  agentId: AgentId
+  cwd: string
+  projectId: string
 }
 
 /** In-flight discovered-session reopens keyed by ACP session id. */
@@ -1174,6 +1193,54 @@ const inFlightDiscoveredOpens = new Map<SessionId, InFlightDiscoveredOpen>()
  * only update the session incarnation that started them.
  */
 const sessionReopenGenerations = new Map<SessionId, number>()
+
+const RESTORE_PRELOAD_MIN_MS = 400
+
+type RestorePreloadTracker = {
+  token: number
+  startedAt: number
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+const restorePreloadTrackers = new Map<SessionId, RestorePreloadTracker>()
+let nextRestorePreloadToken = 0
+
+function beginRestorePreload(set: TurnEndSetter, sessionId: SessionId): number {
+  const previous = restorePreloadTrackers.get(sessionId)
+  if (previous?.timer) clearTimeout(previous.timer)
+
+  const token = ++nextRestorePreloadToken
+  restorePreloadTrackers.set(sessionId, { token, startedAt: Date.now(), timer: null })
+  set((s) => ({ restoringChatIds: { ...s.restoringChatIds, [sessionId]: true } }))
+  return token
+}
+
+function scheduleRestorePreloadEnd(set: TurnEndSetter, sessionId: SessionId, token: number): void {
+  const tracker = restorePreloadTrackers.get(sessionId)
+  if (!tracker || tracker.token !== token) return
+  if (tracker.timer) clearTimeout(tracker.timer)
+
+  const clearIfCurrent = (): void => {
+    const current = restorePreloadTrackers.get(sessionId)
+    if (!current || current.token !== token) return
+    restorePreloadTrackers.delete(sessionId)
+    set((s) => ({ restoringChatIds: dropRecordKey(s.restoringChatIds, sessionId) }))
+  }
+  const remaining = Math.max(0, RESTORE_PRELOAD_MIN_MS - (Date.now() - tracker.startedAt))
+  if (remaining === 0) {
+    clearIfCurrent()
+    return
+  }
+
+  tracker.timer = setTimeout(clearIfCurrent, remaining)
+}
+
+function invalidateRestorePreload(set: TurnEndSetter, sessionId: SessionId): void {
+  const tracker = restorePreloadTrackers.get(sessionId)
+  if (tracker?.timer) clearTimeout(tracker.timer)
+  restorePreloadTrackers.delete(sessionId)
+  set((s) => ({ restoringChatIds: dropRecordKey(s.restoringChatIds, sessionId) }))
+}
 
 function beginSessionReopen(sessionId: SessionId): number {
   const generation = (sessionReopenGenerations.get(sessionId) ?? 0) + 1
@@ -1191,9 +1258,19 @@ function isCurrentSessionReopen(sessionId: SessionId, generation: number): boole
 
 /** Test-only: clear module-level reopen tracking between tests. */
 export function _resetInFlightHistoryOpensForTesting(): void {
+  for (const sessionId of new Set([
+    ...inFlightHistoryOpens.keys(),
+    ...inFlightDiscoveredOpens.keys(),
+    ...sessionReopenGenerations.keys()
+  ])) {
+    invalidateSessionReopen(sessionId)
+  }
   inFlightHistoryOpens.clear()
   inFlightDiscoveredOpens.clear()
-  sessionReopenGenerations.clear()
+  for (const tracker of restorePreloadTrackers.values()) {
+    if (tracker.timer) clearTimeout(tracker.timer)
+  }
+  restorePreloadTrackers.clear()
 }
 
 type EnsureLiveAgentOptions = {
@@ -1404,9 +1481,11 @@ function mergeReopenOutcomeIfUnchanged(
 async function openHistorySessionInner(
   get: () => AcpState,
   set: TurnEndSetter,
-  id: string
+  id: string,
+  onTranscriptInstalled: () => void,
+  reopenGeneration: number
 ): Promise<void> {
-  const reopenGeneration = beginSessionReopen(id)
+  sessionReopenGenerations.set(id, reopenGeneration)
   // Snapshot before any await so a delete during cold-spawn / capability wait
   // is still detected as a mid-open transition (not "never indexed").
   const wasIndexed = get().sessionIndex.some((e) => e.id === id)
@@ -1462,6 +1541,7 @@ async function openHistorySessionInner(
     },
     messages: { ...s.messages, [id]: payload.messages }
   }))
+  onTranscriptInstalled()
 
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
@@ -1746,9 +1826,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   selectedAgentConfigId: null,
   sessionIndex: [],
   openingHistoryIds: {},
+  restoringChatIds: {},
   launchingSessionIds: {},
   discoveredSessions: {},
   discoveringKeys: {},
+  discoveredReopenContexts: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -2534,34 +2616,55 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   openHistorySession: async (id) => {
     const cached = get().sessions[id]
     // Only skip reload for a genuinely live session (active/initializing/error).
-    // A cached `closed` entry (e.g. tab still open after delete) must still open
-    // from persisted history via load/resume/local below.
-    if (cached && cached.status !== 'closed') return
+    // Still show the click feedback briefly before revealing the already-usable
+    // chat, matching every other history-row open.
+    if (cached && cached.status !== 'closed') {
+      const restoreToken = beginRestorePreload(set, id)
+      scheduleRestorePreloadEnd(set, id, restoreToken)
+      return
+    }
 
-    // Coalesce concurrent opens for the same chat (sidebar click + restored-tab
-    // rehydrate race at startup) into a single load/spawn.
+    // Coalesce only with the current session incarnation. Delete/recreate bumps
+    // the generation and detaches the old task so a replacement can start.
+    const currentGeneration = sessionReopenGenerations.get(id) ?? 0
     const inFlight = inFlightHistoryOpens.get(id)
-    if (inFlight) return inFlight
+    if (inFlight?.generation === currentGeneration) return inFlight.promise
 
-    const task = (async () => {
+    const restoreToken = beginRestorePreload(set, id)
+    const reopenGeneration = currentGeneration + 1
+    let transcriptInstalled = false
+    let task!: Promise<void>
+    task = (async () => {
       try {
-        await openHistorySessionInner(get, set, id)
+        await openHistorySessionInner(
+          get,
+          set,
+          id,
+          () => {
+            transcriptInstalled = true
+            scheduleRestorePreloadEnd(set, id, restoreToken)
+          },
+          reopenGeneration
+        )
       } finally {
-        inFlightHistoryOpens.delete(id)
-        set((s) => {
-          const openingHistoryIds = { ...s.openingHistoryIds }
-          delete openingHistoryIds[id]
-          return { openingHistoryIds }
-        })
+        if (!transcriptInstalled) scheduleRestorePreloadEnd(set, id, restoreToken)
+        const current = inFlightHistoryOpens.get(id)
+        if (current?.generation === reopenGeneration && current.promise === task) {
+          inFlightHistoryOpens.delete(id)
+          set((s) => ({ openingHistoryIds: dropRecordKey(s.openingHistoryIds, id) }))
+        }
       }
     })()
-    inFlightHistoryOpens.set(id, task)
+    inFlightHistoryOpens.set(id, { generation: reopenGeneration, promise: task })
     set((s) => ({ openingHistoryIds: { ...s.openingHistoryIds, [id]: true } }))
     return task
   },
 
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
+    inFlightHistoryOpens.delete(id)
+    inFlightDiscoveredOpens.delete(id)
+    invalidateRestorePreload(set, id)
     const next = get().sessionIndex.filter((e) => e.id !== id)
     set((s) => {
       // If the chat is open in a pane, mark its live session closed so the pane
@@ -2579,6 +2682,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         sessionIndex: next,
         sessions,
+        openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
+        discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
         ...dropSessionTranscriptState(s, id)
       }
     })
@@ -2678,7 +2783,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const currentGeneration = sessionReopenGenerations.get(sessionId) ?? 0
     if (inFlight?.generation === currentGeneration) return inFlight.promise
 
+    const restoreToken = beginRestorePreload(set, sessionId)
     const reopenGeneration = beginSessionReopen(sessionId)
+    set((s) => ({
+      discoveredReopenContexts: {
+        ...s.discoveredReopenContexts,
+        [sessionId]: { agentId, cwd, projectId }
+      }
+    }))
     const task = (async () => {
       const connected = get().agentStatus[agentId] === 'connected'
       const capabilities = get().agents[agentId]?.capabilities ?? null
@@ -2744,7 +2856,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                     session.replaying === 'pending' ? { ...session, replaying: null } : session
                 },
                 sessionId
-              )
+              ),
+              discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
             }
           })
           // Deferred so replayed chunks that lose the IPC race still land.
@@ -2765,7 +2878,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           const outcome = (await acpApi.resumeSession(agentId, sessionId, cwd)) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
-          set((s) => ({ sessions: withSessionActive(s.sessions, sessionId) }))
+          set((s) => ({
+            sessions: withSessionActive(s.sessions, sessionId),
+            discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
+          }))
         } catch (err) {
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
@@ -2775,6 +2891,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })()
 
     const sharedTask = task.finally(() => {
+      scheduleRestorePreloadEnd(set, sessionId, restoreToken)
       const current = inFlightDiscoveredOpens.get(sessionId)
       if (current?.generation === reopenGeneration && current.promise === sharedTask) {
         inFlightDiscoveredOpens.delete(sessionId)

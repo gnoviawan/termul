@@ -66,9 +66,11 @@ const FRESH = {
   agentOptionsCache: {},
   sessionIndex: [],
   openingHistoryIds: {},
+  restoringChatIds: {},
   launchingSessionIds: {},
   discoveredSessions: {},
   discoveringKeys: {},
+  discoveredReopenContexts: {},
   mcpServers: [],
   sessions: {},
   activeSessionId: null,
@@ -1952,6 +1954,47 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-old'].status).toBe('closed')
   })
 
+  it('openHistorySession keeps the restore preload visible for a perceptible minimum', async () => {
+    vi.useFakeTimers()
+    try {
+      const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+      ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        metadata: {
+          id: 's-preload',
+          agentId: 'agent-x',
+          title: 'Quick chat',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        },
+        messages: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'ready' }],
+            streaming: false,
+            timestamp: 0
+          }
+        ]
+      })
+
+      const opening = useAcpStore.getState().openHistorySession('s-preload')
+      expect(useAcpStore.getState().restoringChatIds['s-preload']).toBe(true)
+      await opening
+      expect(useAcpStore.getState().messages['s-preload']).toHaveLength(1)
+      expect(useAcpStore.getState().restoringChatIds['s-preload']).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(399)
+      expect(useAcpStore.getState().restoringChatIds['s-preload']).toBe(true)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(useAcpStore.getState().restoringChatIds['s-preload']).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('openHistorySession leaves a live session untouched (P5)', async () => {
     // The session is already running in a pane with messages in memory; reopening
     // it from history must not reload or wipe the live transcript.
@@ -2971,6 +3014,97 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().openingHistoryIds['s-race']).toBeUndefined()
   })
 
+  it('delete/recreate starts a new local reopen and stale finally cannot clear its loading state', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-local-recreated',
+          agentId: 'agent-1',
+          title: 'Old',
+          cwd: '/old',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const oldPayload = deferred<{
+      metadata: SessionIndexEntry
+      messages: []
+    }>()
+    const newPayload = deferred<{
+      metadata: SessionIndexEntry
+      messages: []
+    }>()
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(oldPayload.promise)
+      .mockReturnValueOnce(newPayload.promise)
+
+    const oldOpening = useAcpStore.getState().openHistorySession('s-local-recreated')
+    expect(useAcpStore.getState().openingHistoryIds['s-local-recreated']).toBe(true)
+    await useAcpStore.getState().deleteHistorySession('s-local-recreated')
+    expect(useAcpStore.getState().openingHistoryIds['s-local-recreated']).toBeUndefined()
+
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's-local-recreated',
+          agentId: 'agent-1',
+          title: 'New',
+          cwd: '/new',
+          projectId: 'p1',
+          createdAt: 3,
+          lastActivityAt: 4,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    })
+    const newOpening = useAcpStore.getState().openHistorySession('s-local-recreated')
+    expect(newOpening).not.toBe(oldOpening)
+    expect(useAcpStore.getState().openingHistoryIds['s-local-recreated']).toBe(true)
+
+    oldPayload.resolve({
+      metadata: {
+        id: 's-local-recreated',
+        agentId: 'agent-1',
+        title: 'Old',
+        cwd: '/old',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    await oldOpening
+    expect(useAcpStore.getState().openingHistoryIds['s-local-recreated']).toBe(true)
+
+    newPayload.resolve({
+      metadata: {
+        id: 's-local-recreated',
+        agentId: 'agent-1',
+        title: 'New',
+        cwd: '/new',
+        projectId: 'p1',
+        createdAt: 3,
+        lastActivityAt: 4,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    await newOpening
+    expect(useAcpStore.getState().openingHistoryIds['s-local-recreated']).toBeUndefined()
+    expect(useAcpStore.getState().sessions['s-local-recreated']?.cwd).toBe('/new')
+  })
+
   it('deleteHistorySession removes the index entry (P5)', async () => {
     useAcpStore.setState({
       sessionIndex: [
@@ -3554,6 +3688,32 @@ describe('session discovery (gh-407)', () => {
     ).rejects.toThrow(/does not support loading or resuming/)
   })
 
+  it('keeps ephemeral retry context after a rejected discovered reopen and clears it after retry', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke)
+      .mockRejectedValueOnce(new Error('native load failed'))
+      .mockResolvedValueOnce({})
+
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-retry', '/work', 'p1')
+    ).rejects.toThrow('native load failed')
+    expect(useAcpStore.getState().sessions['sess-retry']?.lastError).toContain('native load failed')
+    expect(useAcpStore.getState().discoveredReopenContexts['sess-retry']).toEqual({
+      agentId: 'agent-1',
+      cwd: '/work',
+      projectId: 'p1'
+    })
+
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-retry', '/work', 'p1')
+    expect(useAcpStore.getState().sessions['sess-retry']?.status).toBe('active')
+    expect(useAcpStore.getState().discoveredReopenContexts['sess-retry']).toBeUndefined()
+  })
+
   it('openDiscoveredSession preserves existing controls when reopen omits fields', async () => {
     const existingModes = {
       currentModeId: 'existing-mode',
@@ -3603,6 +3763,31 @@ describe('session discovery (gh-407)', () => {
     expect(session.modes).toBe(existingModes)
     expect(session.models).toBe(existingModels)
     expect(session.configOptions).toBe(existingConfig)
+  })
+
+  it('openDiscoveredSession clears only the current restore marker after its minimum', async () => {
+    vi.useFakeTimers()
+    try {
+      useAcpStore.setState({
+        agents: {
+          'agent-1': { id: 'agent-1', capabilities: { loadSession: true } }
+        },
+        agentStatus: { 'agent-1': 'connected' }
+      })
+      vi.mocked(invoke).mockResolvedValueOnce({})
+
+      const opening = useAcpStore
+        .getState()
+        .openDiscoveredSession('agent-1', 'sess-preload', '/work', 'p1')
+      expect(useAcpStore.getState().restoringChatIds['sess-preload']).toBe(true)
+      await opening
+      expect(useAcpStore.getState().restoringChatIds['sess-preload']).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(400)
+      expect(useAcpStore.getState().restoringChatIds['sess-preload']).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('openDiscoveredSession coalesces concurrent opens for the same session', async () => {

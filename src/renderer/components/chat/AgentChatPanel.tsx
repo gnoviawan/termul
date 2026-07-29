@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
+import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -33,6 +34,29 @@ function messageText(blocks: ContentBlock[]): string {
 const EMPTY_COMMANDS: AvailableCommand[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
 const EMPTY_PLAN: PlanEntry[] = []
+
+function ChatRestorePreload(): React.JSX.Element {
+  return (
+    <div
+      className="flex h-full flex-col items-center justify-center gap-4 bg-background text-muted-foreground"
+      role="status"
+      aria-live="polite"
+      aria-label="Restoring chat"
+    >
+      <div className="relative flex size-16 items-center justify-center">
+        <div className="absolute inset-0 rounded-2xl bg-sky-500/15 blur-xl" aria-hidden="true" />
+        <TermulMark
+          size={52}
+          className="relative animate-pulse text-foreground drop-shadow-[0_0_18px_rgba(56,189,248,0.28)] motion-reduce:animate-none"
+        />
+      </div>
+      <div className="space-y-1 text-center">
+        <div className="text-sm font-medium text-foreground/90">Restoring chat</div>
+        <div className="text-xs text-muted-foreground">Loading your conversation…</div>
+      </div>
+    </div>
+  )
+}
 
 interface AgentChatPanelProps {
   sessionId: SessionId
@@ -132,8 +156,11 @@ export function AgentChatPanel({
   // record is missing, and history exists for the id, reopen it from history
   // (deduped store-side against a concurrent sidebar open).
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
+  const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
+  const discoveredReopenContext = useAcpStore((s) => s.discoveredReopenContexts[sessionId] ?? null)
   const hasHistoryEntry = useAcpStore((s) => s.sessionIndex.some((e) => e.id === sessionId))
   const isOpeningHistory = useAcpStore((s) => Boolean(s.openingHistoryIds[sessionId]))
+  const isRestoringChat = useAcpStore((s) => Boolean(s.restoringChatIds[sessionId]))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[sessionId]))
   const [rehydrateError, setRehydrateError] = useState<string | null>(null)
   useEffect(() => {
@@ -277,6 +304,8 @@ export function AgentChatPanel({
   // view (T2.2).
   const rootRef = useRef<HTMLDivElement>(null)
 
+  if (isRestoringChat) return <ChatRestorePreload />
+
   if (!session) {
     if (rehydrateError) {
       return (
@@ -288,14 +317,7 @@ export function AgentChatPanel({
         </div>
       )
     }
-    if (isOpeningHistory || hasHistoryEntry) {
-      return (
-        <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 size={14} className="animate-spin" />
-          Restoring chat…
-        </div>
-      )
-    }
+    if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         No active chat for this pane.
@@ -304,6 +326,18 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
+  const retryDiscoveredReopen = discoveredReopenContext
+    ? () => {
+        void openDiscoveredSession(
+          discoveredReopenContext.agentId,
+          sessionId,
+          discoveredReopenContext.cwd,
+          discoveredReopenContext.projectId
+        ).catch((err) => {
+          toast.error(`Failed to open chat: ${String(err)}`)
+        })
+      }
+    : undefined
   const activeError =
     session.lastError && session.lastError !== dismissedError ? session.lastError : null
 
@@ -339,22 +373,38 @@ export function AgentChatPanel({
           Reconnecting to agent…
         </div>
       )}
-      {isClosed && !isOpeningHistory && !isLaunchingSession && hasHistoryEntry && (
+      {isClosed && !isOpeningHistory && !isLaunchingSession && discoveredReopenContext && (
         <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <span>Chat disconnected.</span>
+          <span>Failed to restore agent chat.</span>
           <button
             type="button"
-            onClick={() => {
-              void openHistorySession(sessionId).catch((err) => {
-                toast.error(`Failed to reconnect chat: ${String(err)}`)
-              })
-            }}
+            onClick={retryDiscoveredReopen}
             className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
           >
-            Reconnect
+            Retry
           </button>
         </div>
       )}
+      {isClosed &&
+        !isOpeningHistory &&
+        !isLaunchingSession &&
+        hasHistoryEntry &&
+        !discoveredReopenContext && (
+          <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+            <span>Chat disconnected.</span>
+            <button
+              type="button"
+              onClick={() => {
+                void openHistorySession(sessionId).catch((err) => {
+                  toast.error(`Failed to reconnect chat: ${String(err)}`)
+                })
+              }}
+              className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
       {transportReconnecting && (
         // Story 5.3 (AC3, T5.3): transport-level reconnect overlay. This is
         // DISTINCT from the session-level "Reconnecting to agent…" banner
