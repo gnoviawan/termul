@@ -105,6 +105,7 @@ import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
   dropPromptQueueForSession,
+  isAgentDeadError,
   isPromptTurnInProgressError,
   type QueuedPrompt,
   sessionTurnBusy,
@@ -398,6 +399,10 @@ interface AcpState {
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   deleteHistorySession: (id: string) => Promise<void>
+  /** Restart the agent for a crashed chat and replay the last user prompt.
+   * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
+   * is still surfaced; respawn only happens on explicit user action). */
+  retryCrashedSession: (sessionId: SessionId) => Promise<void>
 
   // Actions — session discovery (gh-407)
   /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
@@ -791,6 +796,8 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
   ).catch((err) => {
     // Busy recovery is handled inside runPromptTurn (FIFO restore via queuedOrigin).
     if (isPromptTurnInProgressError(err)) return
+    // Agent-dead rejections are surfaced by the crash/disconnect events.
+    if (isAgentDeadError(err)) return
     toast.error(`Failed to send queued message: ${String(err)}`)
   })
 }
@@ -1810,18 +1817,28 @@ async function runPromptTurn(
       )
       return
     }
-    set((s) => ({
-      messages: finalizeStreaming(s.messages, sessionId),
-      sessions: {
-        ...s.sessions,
-        [sessionId]: {
-          ...s.sessions[sessionId],
-          activeTurn: false,
-          openTurnId: null,
-          lastError: String(err)
+    // An agent-dead rejection ("agent thread dropped the reply" / "is no longer
+    // running") means the driver tore down mid-turn; the `acp:agent_crashed` /
+    // `acp:agent_disconnected` events already drive `status: 'error'` +
+    // `lastError`. Don't clobber that crash message with the low-level IPC
+    // string, and leave the turn finalized so callers can suppress the toast.
+    const agentDead = isAgentDeadError(err)
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current) return { messages: finalizeStreaming(s.messages, sessionId) }
+      return {
+        messages: finalizeStreaming(s.messages, sessionId),
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            activeTurn: false,
+            openTurnId: null,
+            ...(agentDead ? {} : { lastError: String(err) })
+          }
         }
       }
-    }))
+    })
     throw err
   }
 }
@@ -2723,6 +2740,54 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     return task
   },
 
+  retryCrashedSession: async (sessionId) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    // Force the reopen path: mark closed so `openHistorySession` re-runs its
+    // reopen (re-launch a fresh agent via `ensureLiveAgent`, replay persisted
+    // history via `session/load`, restore the local transcript) instead of its
+    // "cached non-closed" early-return. The reopen preserves the same tab +
+    // history — it never blanks (transcript is installed before agent work).
+    set((s) => {
+      const cur = s.sessions[sessionId]
+      if (!cur) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...cur, status: 'closed', lastError: null }
+        }
+      }
+    })
+    await get().openHistorySession(sessionId)
+    // Reopen failed (still closed / no live agent): leave the recovered
+    // transcript + let the resume error show — do not blank.
+    const reopened = get().sessions[sessionId]
+    if (!reopened || reopened.status === 'closed') return
+    // Re-send the last user prompt to produce a fresh assistant turn (retry).
+    const msgs = get().messages[sessionId] ?? []
+    let lastUserBlocks: ContentBlock[] | null = null
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        lastUserBlocks = msgs[i].blocks
+        break
+      }
+    }
+    if (!lastUserBlocks || lastUserBlocks.length === 0) return
+    const only = lastUserBlocks.length === 1 ? lastUserBlocks[0] : null
+    await runPromptTurn(
+      set,
+      get,
+      sessionId,
+      lastUserBlocks,
+      (s) =>
+        only?.type === 'text' && typeof only.text === 'string'
+          ? acpApi.sendPrompt(s.agentId, sessionId, only.text)
+          : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!),
+      undefined,
+      { skipUserAppend: true }
+    )
+  },
+
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
     inFlightHistoryOpens.delete(id)
@@ -3588,27 +3653,37 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
-          if (ephemeralSessionIds.has(id)) {
-            // Un-promoted pooled session (never persisted): drop it entirely
-            // instead of marking closed + persisting, so no orphan "Untitled
-            // Chat" survives in the history index on agent disconnect.
+          // A session the user actually chatted in (non-empty transcript) must
+          // survive an agent disconnect: keep the record + in-memory transcript so
+          // the panel shows history + "disconnected" (recoverable) instead of
+          // blanking, and persist it so a later reopen can replay it. Only a
+          // truly-empty pooled (ephemeral) session is dropped to avoid orphan
+          // "Untitled Chat" entries.
+          const hasContent = (s.messages[id]?.length ?? 0) > 0
+          if (ephemeralSessionIds.has(id) && !hasContent) {
             delete sessions[id]
             ephemeralSessionIds.delete(id)
             dropTranscriptIds.push(id)
-          } else if (sessions[id].status !== 'error') {
+          } else {
+            if (ephemeralSessionIds.has(id)) ephemeralSessionIds.delete(id)
             // Story 1.9 review: a session already in 'error' status (set by the
             // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
             // — the crash's distinguishing Error state must survive the always-
-            // following disconnect event so the UI can show a manual-restart action.
-            sessions[id] = {
-              ...sessions[id],
-              status: 'closed',
-              activeTurn: false,
-              openTurnId: null,
-              replaying: null
+            // following disconnect event so the UI can show a manual-restart
+            // action.
+            if (sessions[id].status !== 'error') {
+              sessions[id] = {
+                ...sessions[id],
+                status: 'closed',
+                activeTurn: false,
+                openTurnId: null,
+                replaying: null
+              }
             }
             affected.push(id)
-            dropTranscriptIds.push(id)
+            // Keep the transcript in memory for content sessions (recoverable +
+            // visible); free WebView heap only for empty ones.
+            if (!hasContent) dropTranscriptIds.push(id)
           }
         }
       }
@@ -3658,26 +3733,33 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // disconnected) so they do not linger in the OS temp dir.
     void deleteSessionTempFiles(e.sessionId)
     if (ephemeralSessionIds.has(e.sessionId)) {
-      // Un-promoted pooled session closed by the backend: drop it entirely
-      // (never persisted) so no orphan "Untitled Chat" survives in the index.
+      const hasContent = (get().messages[e.sessionId]?.length ?? 0) > 0
+      if (!hasContent) {
+        // Un-promoted pooled session with no transcript, closed by the backend:
+        // drop it entirely (never persisted) so no orphan "Untitled Chat" survives.
+        ephemeralSessionIds.delete(e.sessionId)
+        set((s) => {
+          const sessions = { ...s.sessions }
+          delete sessions[e.sessionId]
+          // Also drop any warm-slot lookup pointing at this session so the UI
+          // stops reporting "Session ready" and startChat can't promote a dead id.
+          const preparedSessions = { ...s.preparedSessions }
+          for (const [k, sid] of Object.entries(preparedSessions)) {
+            if (sid === e.sessionId) delete preparedSessions[k]
+          }
+          return {
+            sessions,
+            preparedSessions,
+            pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
+            ...dropSessionTranscriptState(s, e.sessionId)
+          }
+        })
+        return
+      }
+      // A pooled session that accumulated a transcript is promoted (removed
+      // from the ephemeral pool) and falls through to the normal close path
+      // below so it is persisted + marked closed — never orphaned.
       ephemeralSessionIds.delete(e.sessionId)
-      set((s) => {
-        const sessions = { ...s.sessions }
-        delete sessions[e.sessionId]
-        // Also drop any warm-slot lookup pointing at this session so the UI
-        // stops reporting "Session ready" and startChat can't promote a dead id.
-        const preparedSessions = { ...s.preparedSessions }
-        for (const [k, sid] of Object.entries(preparedSessions)) {
-          if (sid === e.sessionId) delete preparedSessions[k]
-        }
-        return {
-          sessions,
-          preparedSessions,
-          pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
-          ...dropSessionTranscriptState(s, e.sessionId)
-        }
-      })
-      return
     }
     set((s) => {
       const session = s.sessions[e.sessionId]

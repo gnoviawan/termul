@@ -785,6 +785,51 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  it('agent_disconnected preserves a content session transcript instead of blanking', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 0
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    const state = useAcpStore.getState()
+    // The session record survives (not deleted) and its transcript is kept in
+    // memory so the pane shows history + "disconnected" — not a blank chat.
+    expect(state.sessions['s1']).toBeTruthy()
+    expect(state.sessions['s1'].status).toBe('closed')
+    expect(state.messages['s1']).toHaveLength(1)
+  })
+
+  it('sendPrompt agent-dead rejection does not surface the cryptic IPC string', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('agent thread dropped the reply')
+    )
+    await expect(useAcpStore.getState().sendPrompt('s1', 'retry me')).rejects.toThrow()
+    const session = useAcpStore.getState().sessions['s1']
+    expect(session.activeTurn).toBe(false)
+    // The low-level IPC string must NOT become the visible lastError — the
+    // crash/disconnect events drive the Error state instead. (Without the
+    // agent-dead guard, the catch would set lastError to this string.)
+    expect(String(session.lastError)).not.toContain('agent thread dropped the reply')
+  })
+
+  it('retryCrashedSession rejects for an unknown session', async () => {
+    await expect(useAcpStore.getState().retryCrashedSession('nope')).rejects.toThrow(
+      'unknown session'
+    )
+  })
+
   it('session_closed marks only that session closed', () => {
     seedSession('s1', 'agent-1')
     seedSession('s2', 'agent-1')

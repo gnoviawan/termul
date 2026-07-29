@@ -4,6 +4,7 @@ import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
   dropPromptQueueForSession,
+  isAgentDeadError,
   isPromptTurnInProgressError,
   sessionTurnBusy,
   waitForTurnClear
@@ -15,6 +16,14 @@ describe('prompt-queue-orchestration', () => {
       true
     )
     expect(isPromptTurnInProgressError(new Error('network failed'))).toBe(false)
+  })
+
+  it('classifies agent-dead rejections from the driver thread', () => {
+    expect(isAgentDeadError(new Error('agent thread dropped the reply'))).toBe(true)
+    expect(isAgentDeadError(new Error('agent thread is no longer running'))).toBe(true)
+    // A bounded turn timeout is NOT an agent-dead rejection (it has a typed reply).
+    expect(isAgentDeadError(new Error('turn timeout: session x exceeded 600s'))).toBe(false)
+    expect(isAgentDeadError(new Error('network failed'))).toBe(false)
   })
 
   it('treats openTurnId or activeTurn as busy', () => {

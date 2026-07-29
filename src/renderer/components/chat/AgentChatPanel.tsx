@@ -14,6 +14,7 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
@@ -111,6 +112,7 @@ export function AgentChatPanel({
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
+  const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
@@ -189,6 +191,7 @@ export function AgentChatPanel({
   const handleSendQueuedNow = useCallback(
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
+        if (isAgentDeadError(err)) return
         toast.error(`Failed to send queued message: ${String(err)}`)
       })
     },
@@ -198,6 +201,7 @@ export function AgentChatPanel({
   const handleSend = useCallback(
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
+        if (isAgentDeadError(err)) return
         toast.error(`Failed to send: ${String(err)}`)
       })
     },
@@ -207,6 +211,7 @@ export function AgentChatPanel({
   const handleSendBlocks = useCallback(
     (blocks: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks).catch((err) => {
+        if (isAgentDeadError(err)) return
         toast.error(`Failed to send: ${String(err)}`)
       })
     },
@@ -273,11 +278,22 @@ export function AgentChatPanel({
   const handleRetry = useCallback(() => {
     if (!lastUserBlocks || !canRetryLastUserTurn) return
     setDismissedError(session?.lastError ?? null)
+    // A crashed/disconnected chat can't re-send into the dead agent — restart
+    // the agent + replay history first (user-initiated Retry; honors ADR-003's
+    // no-silent-respawn: the crash is still surfaced, respawn is on click).
+    if (session?.status === 'error' || session?.status === 'closed') {
+      void retryCrashedSession(sessionId).catch((err) => {
+        if (isAgentDeadError(err)) return
+        toast.error(`Failed to retry: ${String(err)}`)
+      })
+      return
+    }
     const hasStructuredBlocks = lastUserBlocks.some((b) => b.type !== 'text')
     const task = hasStructuredBlocks
       ? sendPromptBlocks(sessionId, lastUserBlocks)
       : sendPrompt(sessionId, lastUserText.trim())
     void task.catch((err) => {
+      if (isAgentDeadError(err)) return
       toast.error(`Failed to send: ${String(err)}`)
     })
   }, [
@@ -286,7 +302,9 @@ export function AgentChatPanel({
     lastUserText,
     sendPrompt,
     sendPromptBlocks,
+    retryCrashedSession,
     sessionId,
+    session?.status,
     session?.lastError
   ])
 
