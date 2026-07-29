@@ -31,12 +31,12 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
         if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
             return Some(base.join("termul").join("sessions"));
         }
-        return std::env::var_os("HOME").map(PathBuf::from).map(|home| {
+        std::env::var_os("HOME").map(PathBuf::from).map(|home| {
             home.join(".local")
                 .join("state")
                 .join("termul")
                 .join("sessions")
-        });
+        })
     }
     #[cfg(windows)]
     {
