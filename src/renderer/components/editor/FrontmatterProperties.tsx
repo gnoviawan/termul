@@ -252,6 +252,7 @@ export function FrontmatterProperties({
               <Input
                 className="h-8"
                 placeholder="Property key"
+                aria-label="Property key"
                 value={draftKey}
                 autoFocus
                 aria-invalid={draftError !== null}

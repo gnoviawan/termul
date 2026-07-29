@@ -844,7 +844,7 @@
 }
 
 .markdown-editor .bn-default-styles {
-  font-family: "Inter Variable", "Inter", system-ui, sans-serif;
+  font-family: "Inter Variable", Inter, system-ui, sans-serif;
   font-size: 16px;
   line-height: 1.72;
 }
