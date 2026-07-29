@@ -39,7 +39,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools"] }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
@@ -52,6 +52,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -89,11 +90,8 @@ lazy_static = "1.4"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# SSH
-# Keep ssh2 on system OpenSSL for now. Enabling ssh2/vendored-openssl forces a
-# local OpenSSL source build that fails in common Windows/MSYS dev environments
-# without a full Perl module setup; see README SSH development notes.
-ssh2 = "0.9"
+# SSH linkage is selected per target below: macOS vendors OpenSSL for portable
+# app bundles, while Windows/Linux retain the system/default behavior.
 
 # Secure storage (OS keychain for secure credential storage).
 # IMPORTANT: keyring selects its backend at COMPILE TIME via cargo features.
@@ -134,15 +132,21 @@ tower = { version = "0.5", features = ["util"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
 
-# macOS Keychain
+# macOS Keychain and self-contained SSH/OpenSSL linkage for packaged apps
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+# Preserve the existing system/default SSH native dependency behavior outside
+# macOS. Global vendoring breaks common Windows/MSYS development environments.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ssh2 = "0.9"
 
 # Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
-
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

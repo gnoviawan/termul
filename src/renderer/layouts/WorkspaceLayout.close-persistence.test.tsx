@@ -21,7 +21,8 @@ const {
   mockUpdatePanelVisibility,
   mockWaitForPendingAppSettingsPersistence,
   mockWaitForPendingSessionIndexWrite,
-  mockToastError
+  mockToastError,
+  mockListen
 } = vi.hoisted(() => ({
   activeProject: {
     id: 'project-1',
@@ -83,7 +84,8 @@ const {
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
   mockWaitForPendingSessionIndexWrite: vi.fn(async () => undefined),
-  mockToastError: vi.fn()
+  mockToastError: vi.fn(),
+  mockListen: vi.fn(async () => vi.fn())
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -222,6 +224,10 @@ vi.mock('@/hooks/use-app-settings', () => ({
 
 vi.mock('@/lib/acp-history-persistence', () => ({
   waitForPendingSessionIndexWrite: mockWaitForPendingSessionIndexWrite
+}))
+
+vi.mock('@/lib/tauri-event', () => ({
+  listen: mockListen
 }))
 
 vi.mock('@/hooks/use-file-watcher', () => ({
@@ -370,6 +376,46 @@ describe('WorkspaceLayout close persistence', () => {
     mockWaitForPendingAppSettingsPersistence.mockResolvedValue(undefined)
     mockWaitForPendingSessionIndexWrite.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
+    mockListen.mockResolvedValue(vi.fn())
+  })
+
+  it('routes tray quit through the same persistence flush as a window quit', async () => {
+    renderLayout()
+
+    await waitFor(() => {
+      expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+    })
+    const trayQuitHandler = mockListen.mock.calls.find(
+      ([event]) => event === 'tray:quit-requested'
+    )?.[1] as (() => void) | undefined
+
+    await act(async () => {
+      trayQuitHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('routes tray quit through the unsaved-file prompt', async () => {
+    mockEditorStoreState.getDirtyFileCount.mockReturnValue(2)
+    renderLayout()
+
+    await waitFor(() => {
+      expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+    })
+    const trayQuitHandler = mockListen.mock.calls.find(
+      ([event]) => event === 'tray:quit-requested'
+    )?.[1] as (() => void) | undefined
+
+    await act(async () => {
+      trayQuitHandler?.()
+    })
+
+    expect(await screen.findByText('Unsaved Changes')).toBeInTheDocument()
+    expect(mockRespondToClose).not.toHaveBeenCalled()
   })
 
   it('flushes pending persistence writes before closing when there are no dirty files', async () => {

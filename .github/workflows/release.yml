@@ -41,20 +41,16 @@ jobs:
         id: version
         shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          if [[ -z "$VERSION" ]]; then
-            echo "Tag must include a version" >&2
-            exit 1
-          fi
+          source scripts/release/homebrew.sh
+          VERSION="$(normalize_release_version "$GITHUB_REF_NAME")"
           echo "normalized_version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check prerelease
         id: check
         shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          if [[ "$TAG" =~ (-[0-9A-Za-z]+|alpha|beta|rc) ]]; then
+          source scripts/release/homebrew.sh
+          if is_release_prerelease "$GITHUB_REF_NAME"; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
@@ -95,7 +91,6 @@ jobs:
                 repo: context.repo.repo,
                 tag: tagName,
               })
-
               release = await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -107,10 +102,7 @@ jobs:
                 prerelease,
               })
             } catch (error) {
-              if (error.status !== 404) {
-                throw error
-              }
-
+              if (error.status !== 404) throw error
               release = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -121,15 +113,12 @@ jobs:
                 prerelease,
               })
             }
-
             core.setOutput('releaseId', String(release.data.id))
 
   build:
     name: Build (${{ matrix.platform }})
-    needs: [changelog, create_release]
+    needs: changelog
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -138,22 +127,18 @@ jobs:
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc
-
           - platform: linux-x64
             runner: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu
-
           - platform: macos-aarch64
             runner: macos-latest
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-
           - platform: macos-x64
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
-
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'
@@ -165,6 +150,41 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Preflight Apple and updater credentials
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            TAURI_SIGNING_PUBLIC_KEY \
+            TAURI_SIGNING_PRIVATE_KEY \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -ne 0 ]]; then
+            printf 'Missing required macOS release credential categories:\n' >&2
+            printf '  - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
 
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
@@ -216,35 +236,154 @@ jobs:
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      - name: Build and publish release artifacts
+      - name: Build platform artifacts locally
+        id: tauri
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Termul Manager ${{ github.ref_name }}'
-          releaseBody: ${{ needs.changelog.outputs.changelog }}
-          releaseId: ${{ needs.create_release.outputs.release_id }}
-          releaseDraft: true
-          prerelease: ${{ needs.changelog.outputs.is_prerelease }}
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
+      - name: Persist Tauri artifact paths
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: printf '%s\n' "$ARTIFACT_PATHS" > tauri-artifact-paths.json
+
+      - name: Require updater signatures
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          node - <<'NODE'
+          const paths = JSON.parse(process.env.ARTIFACT_PATHS || '[]')
+          if (!Array.isArray(paths) || !paths.some((path) => path.endsWith('.sig'))) {
+            throw new Error('Tauri produced no updater signatures; check the updater signing secrets.')
+          }
+          NODE
+
+      - name: Verify macOS bundle library portability and signing
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          bundle_dir="src-tauri/target/$RUST_TARGET/release/bundle"
+          app_bundles=("$bundle_dir/macos"/*.app)
+          dmgs=("$bundle_dir/dmg"/*.dmg)
+          if [[ "${#app_bundles[@]}" -ne 1 || "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS app and one DMG before verification." >&2
+            exit 1
+          fi
+
+          app="${app_bundles[0]}"
+          dmg="${dmgs[0]}"
+          info_plist="$app/Contents/Info.plist"
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
+          if [[ -z "$executable_name" || "$executable_name" == */* ]]; then
+            echo "Invalid CFBundleExecutable in $info_plist: ${executable_name:-empty}" >&2
+            exit 1
+          fi
+          executable="$app/Contents/MacOS/$executable_name"
+          if [[ ! -f "$executable" || ! -x "$executable" ]]; then
+            echo "Declared bundle executable is missing or not executable: $executable" >&2
+            exit 1
+          fi
+
+          dependencies="$(otool -L "$executable")"
+          rpaths="$(otool -l "$executable" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+          ')"
+          printf '%s\n' "$dependencies"
+          printf 'LC_RPATH entries:\n%s\n' "${rpaths:-  (none)}"
+
+          forbidden=()
+          while IFS= read -r dependency; do
+            [[ -z "$dependency" ]] && continue
+            case "$dependency" in
+              /System/Library/*|/usr/lib/*|@rpath/*|@loader_path/*|@executable_path/*) ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$dependency (Homebrew/local prefix)") ;;
+              /*)
+                forbidden+=("$dependency (runner-local absolute path)") ;;
+              *)
+                forbidden+=("$dependency (unexpected relative load path)") ;;
+            esac
+          done < <(
+            printf '%s\n' "$dependencies" |
+              tail -n +2 |
+              sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/'
+          )
+
+          while IFS= read -r rpath; do
+            [[ -z "$rpath" ]] && continue
+            case "$rpath" in
+              /System/Library/*|/usr/lib/*|@loader_path/*|@executable_path/*) ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$rpath (Homebrew/local LC_RPATH)") ;;
+              *)
+                forbidden+=("$rpath (non-portable LC_RPATH)") ;;
+            esac
+          done <<< "$rpaths"
+
+          if [[ "${#forbidden[@]}" -ne 0 ]]; then
+            printf 'Forbidden Mach-O paths in %s:\n' "$executable" >&2
+            printf '  %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          codesign --verify --strict --verbose=2 "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          xcrun stapler validate "$dmg"
+
+      - name: Collect platform release assets and updater manifest
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release/prepare-platform-artifacts.mjs \
+            --platform "$PLATFORM" \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --artifacts tauri-artifact-paths.json \
+            --output collected
+
+      - name: Upload platform workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: release-${{ matrix.platform }}
+          path: collected/
+          if-no-files-found: error
+          retention-days: 1
+
   # Standalone headless server for VPS deploy (Story 1.2 scaffold).
   # Build sequencing: bun run build:web MUST run before the cargo release
-  # build so rust-embed embeds dist-web/ into the binary (Story 1.11 — a
+  # build so rust-embed embeds dist-web/ into the binary (Story 1.11 - a
   # missing/stale dist-web/ now fails the release build clearly via the
   # web_embed_missing compile_error in assets.rs; the ordering here keeps the
   # embed non-empty).
   standalone-server:
     name: Build termul-server (linux-x64)
-    needs: [changelog, create_release]
+    needs: changelog
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
@@ -257,7 +396,6 @@ jobs:
           persist-credentials: false
 
       - name: Install Linux dependencies
-        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -308,20 +446,13 @@ jobs:
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: termul-server-x86_64-unknown-linux-gnu
+          name: release-standalone-server
           path: src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
           if-no-files-found: error
-
-      - name: Attach termul-server to draft release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          gh release upload "${{ github.ref_name }}"
-          src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
-          --clobber
+          retention-days: 1
 
   publish_release:
-    name: Publish Release
+    name: Validate, upload, and publish release
     needs: [changelog, create_release, build, standalone-server]
     runs-on: ubuntu-latest
     permissions:
@@ -332,65 +463,70 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Verify updater assets before publish
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
-          RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const releaseId = Number(process.env.RELEASE_ID)
-            const isPrerelease = process.env.IS_PRERELEASE === 'true'
-            const stableManifestPath =
-              '/releases/latest/download/latest.json'
-            const channelPolicy = isPrerelease
-              ? 'stable clients intentionally ignore prerelease tags'
-              : 'stable clients consume the stable latest.json manifest'
+          persist-credentials: false
 
-            core.info(`Updater channel policy: ${channelPolicy}`)
+      - name: Download all platform workflow artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: release-*
+          path: release-inputs
 
-            const { data: assets } = await github.rest.repos.listReleaseAssets({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId,
-              per_page: 100,
-            })
+      - name: Validate and merge release inputs
+        env:
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
+        run: |
+          expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
+          manifests=()
+          mkdir -p release-assets
+          printf '%s' "$RELEASE_BODY" > release-notes.md
 
-            const assetNames = assets.map((asset) => asset.name)
-            core.info(`Draft release assets: ${assetNames.join(', ')}`)
+          for platform in "${expected[@]}"; do
+            root="release-inputs/release-$platform"
+            manifest="$root/platform-manifest.json"
+            if [[ ! -s "$manifest" || ! -d "$root/assets" ]]; then
+              echo "Missing collected release input for $platform" >&2
+              exit 1
+            fi
+            manifests+=("$manifest")
+            while IFS= read -r -d '' asset; do
+              name="$(basename "$asset")"
+              if [[ -e "release-assets/$name" ]] && ! cmp -s "$asset" "release-assets/$name"; then
+                echo "Conflicting duplicate release asset: $name" >&2
+                exit 1
+              fi
+              cp "$asset" "release-assets/$name"
+            done < <(find "$root/assets" -maxdepth 1 -type f -print0)
+          done
 
-            if (isPrerelease) {
-              core.notice(
-                [
-                  'This tag is marked as a prerelease.',
-                  'Stable clients intentionally ignore prerelease tags',
-                  `because they only check ${stableManifestPath}.`,
-                ].join(' ')
-              )
-              return
-            }
+          cp release-inputs/release-standalone-server/termul-server release-assets/termul-server
+          PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          node scripts/release/merge-updater-manifests.mjs \
+            latest.json "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
 
-            const hasLatestJson = assetNames.includes('latest.json')
-            const hasSigFiles = assetNames.some((name) => name.endsWith('.sig'))
+          release_file_count=0
+          while IFS= read -r -d '' _release_file; do
+            release_file_count=$((release_file_count + 1))
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+          if [[ "$release_file_count" -eq 0 ]]; then
+            echo "No validated release assets were collected." >&2
+            exit 1
+          fi
 
-            if (!hasLatestJson || !hasSigFiles) {
-              const publishedAssets = assetNames.join(', ')
-              core.setFailed(
-                [
-                  `Stable release is missing required updater assets.`,
-                  `  - latest.json present: ${hasLatestJson}`,
-                  `  - .sig files present: ${hasSigFiles}`,
-                  `Draft assets: ${publishedAssets}`,
-                  ``,
-                  `To fix this, ensure:`,
-                  `  1. 'bundle.createUpdaterArtifacts' is true in tauri.conf.json`,
-                  `  2. TAURI_SIGNING_PRIVATE_KEY is configured in GitHub secrets`,
-                  `  3. The tauri-action build step receives the signing env vars.`,
-                ].join('\n')
-              )
-              return
-            }
+      - name: Upload all validated release assets and updater manifest once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("$asset")
+          done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          assets+=(latest.json)
+          gh release upload "$TAG" "${assets[@]}" --clobber
 
       - name: Publish draft release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -401,19 +537,25 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const releaseId = Number(process.env.RELEASE_ID)
             const tagName = context.ref.replace('refs/tags/', '')
-            const releaseName = `Termul Manager ${tagName}`
-            const releaseBody = process.env.RELEASE_BODY || ''
-            const prerelease = process.env.IS_PRERELEASE === 'true'
-
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: releaseId,
+              release_id: Number(process.env.RELEASE_ID),
               tag_name: tagName,
-              name: releaseName,
-              body: releaseBody,
+              name: `Termul Manager ${tagName}`,
+              body: process.env.RELEASE_BODY || '',
               draft: false,
-              prerelease,
+              prerelease: process.env.IS_PRERELEASE === 'true',
             })
+
+  publish_homebrew:
+    name: Publish checksums and Homebrew metadata
+    needs: [changelog, publish_release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-homebrew.yml
+    with:
+      version: ${{ needs.changelog.outputs.normalized_version }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

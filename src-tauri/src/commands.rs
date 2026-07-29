@@ -788,7 +788,7 @@ pub async fn browser_tab_create(
     bounds: BrowserBounds,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<BrowserTabInfo>, String> {
-    match browser_manager.create(tab_id, url, bounds) {
+    match browser_manager.create(tab_id, url, bounds).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
     }

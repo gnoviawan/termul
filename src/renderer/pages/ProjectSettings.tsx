@@ -25,10 +25,15 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
-import { mergeEnvVars, parseEnvFile } from '@/lib/env-parser'
+import { mergeEnvVars, parseEnvFile, resolveProjectEnvPath } from '@/lib/env-parser'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
-import { useActiveProject, useActiveProjectId, useProjectActions } from '@/stores/project-store'
+import {
+  useActiveProject,
+  useActiveProjectId,
+  useProjectActions,
+  useProjectStore
+} from '@/stores/project-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
 
 const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
@@ -113,6 +118,8 @@ export default function ProjectSettings() {
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
   const [rootPath, setRootPath] = useState(activeProject?.path || '')
+  const rootPathRef = useRef(rootPath)
+  rootPathRef.current = rootPath
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
   const [hasChanges, setHasChanges] = useState(false)
@@ -153,6 +160,7 @@ export default function ProjectSettings() {
   // user — or the D5 auto-fill — has since changed.
   const symlinkInitProjectRef = useRef<string | null>(null)
   const autoFilledSymlinkRef = useRef<string | null>(null)
+  const envImportRequestRef = useRef(0)
 
   // Sync state when activeProject changes
   useEffect(() => {
@@ -169,8 +177,11 @@ export default function ProjectSettings() {
         setProjectName(activeProject.name)
         setSelectedColor(activeProject.color)
         setRootPath(activeProject.path || '')
+        envImportRequestRef.current += 1
         setEnvVars(activeProject.envVars || [])
         setSymlinkDirs(activeProject.symlinkDirs ?? [])
+        setImportError(null)
+        setImportWarnings(null)
         setHasChanges(false)
       }
     }
@@ -294,61 +305,80 @@ export default function ProjectSettings() {
   }
 
   const handleImportEnvFile = async () => {
-    // Capture the current project ID to detect concurrent project switches
+    // Capture enough form identity to reject stale and out-of-order reads.
     const projectIdAtStart = activeProjectId
+    const normalizedRoot = rootPath.trim()
+    const requestId = envImportRequestRef.current + 1
+    envImportRequestRef.current = requestId
 
     setImportError(null)
     setImportWarnings(null)
 
-    const fileResult = await dialogApi.selectFile({
-      filters: [{ name: 'Environment Files', extensions: ['env'] }],
-      title: 'Select .env File'
-    })
-
-    // Check if project switched during dialog
-    if (projectIdAtStart !== activeProjectId) {
+    if (normalizedRoot === '') {
+      setImportError('Project root is required to import .env.')
       return
     }
 
-    if (!fileResult.success) {
-      // User cancelled - not an error
-      return
-    }
+    const envPath = resolveProjectEnvPath(normalizedRoot)
 
-    const readResult = await filesystemApi.readFile(fileResult.data)
+    try {
+      const readResult = await filesystemApi.readFile(envPath)
 
-    // Check if project switched during file read
-    if (projectIdAtStart !== activeProjectId) {
-      return
-    }
+      // Read the store directly because this async callback retains values from
+      // the render in which it started. The request/root checks also reject
+      // overlapping reads and edits made while the adapter call is pending.
+      if (
+        requestId !== envImportRequestRef.current ||
+        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        normalizedRoot !== rootPathRef.current.trim()
+      ) {
+        return
+      }
 
-    if (!readResult.success) {
-      setImportError(`Failed to read file: ${readResult.error}`)
-      return
-    }
+      if (!readResult.success) {
+        setImportError(`Failed to read .env: ${readResult.error}`)
+        return
+      }
 
-    const parseResult = parseEnvFile(readResult.data.content)
+      const parseResult = parseEnvFile(readResult.data.content)
 
-    if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
-      setImportError('The .env file is empty.')
-      return
-    }
+      if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
+        setImportError('The .env file is empty.')
+        return
+      }
 
-    // Merge with existing env vars using functional update to avoid stale state
-    setEnvVars((prevEnvVars) => mergeEnvVars(prevEnvVars, parseResult.vars))
-    setHasChanges(true)
+      // Merge only when at least one variable parsed successfully. An invalid-only
+      // file should report its skipped lines without claiming unsaved changes.
+      if (parseResult.vars.length > 0) {
+        setEnvVars((prevEnvVars) => mergeEnvVars(prevEnvVars, parseResult.vars))
+        setHasChanges(true)
+      }
 
-    // Show warnings for invalid lines if any
-    if (parseResult.invalidLines.length > 0) {
-      const warningDetails = parseResult.invalidLines
-        .slice(0, 3)
-        .map((l) => `Line ${l.line}: ${l.content}`)
-        .join('\n')
-      const moreCount =
-        parseResult.invalidLines.length > 3 ? ` (+${parseResult.invalidLines.length - 3} more)` : ''
-      setImportWarnings(
-        `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
-      )
+      // Show warnings for invalid lines if any.
+      if (parseResult.invalidLines.length > 0) {
+        const warningDetails = parseResult.invalidLines
+          .slice(0, 3)
+          .map((l) => `Line ${l.line}: ${l.content}`)
+          .join('\n')
+        const moreCount =
+          parseResult.invalidLines.length > 3
+            ? ` (+${parseResult.invalidLines.length - 3} more)`
+            : ''
+        setImportWarnings(
+          `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
+        )
+      }
+    } catch (error) {
+      if (
+        requestId !== envImportRequestRef.current ||
+        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        normalizedRoot !== rootPathRef.current.trim()
+      ) {
+        return
+      }
+
+      const message = error instanceof Error ? error.message : String(error)
+      setImportError(`Failed to read .env: ${message}`)
     }
   }
 

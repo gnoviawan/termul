@@ -323,7 +323,8 @@ bun run tauri <command>  # Direct Tauri CLI access
 - Active SSH sessions may retain the relevant secret in process memory only to support automatic reconnect; use SSH agent authentication to avoid runtime secret retention.
 - Interactive SSH terminals use OpenSSH's default known-hosts file with `StrictHostKeyChecking=accept-new`; do not override `UserKnownHostsFile` to `/dev/null`/`NUL` because that disables persistent host-key verification.
 - Local port forwarding uses `ssh2` `channel_direct_tcpip` over the active SSH session; remote/reverse forwarding is not supported by the MVP command path yet.
-- `ssh2` intentionally stays on system OpenSSL for now. Enabling `vendored-openssl` forces a local OpenSSL source build that can fail in Windows/MSYS environments without a complete Perl module setup.
+- `ssh2` vendors OpenSSL only for macOS targets so packaged `.app` bundles do not depend on Homebrew or build-runner library paths.
+- Windows and Linux retain `ssh2`'s system/default OpenSSL behavior. Do not enable `vendored-openssl` globally: its local source build can fail in common Windows/MSYS environments without a complete Perl module setup.
 
 ## ⭐ Star History
 

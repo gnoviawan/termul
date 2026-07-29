@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import type { EnvVariable } from '@/types/project'
-import { mergeEnvVars, parseEnvFile, resolveEnvForSpawn } from './env-parser'
+import { mergeEnvVars, parseEnvFile, resolveEnvForSpawn, resolveProjectEnvPath } from './env-parser'
 
 describe('env-parser', () => {
+  describe('resolveProjectEnvPath', () => {
+    it.each([
+      ['/workspace/app', '/workspace/app/.env'],
+      ['/workspace/app/', '/workspace/app/.env'],
+      ['/workspace/app///', '/workspace/app/.env'],
+      ['C:\\workspace\\app', 'C:\\workspace\\app\\.env'],
+      ['C:\\workspace\\app\\', 'C:\\workspace\\app\\.env'],
+      ['C:/workspace/app/', 'C:/workspace/app/.env'],
+      ['\\\\server\\share\\app', '\\\\server\\share\\app\\.env'],
+      ['\\\\server\\share\\app\\\\', '\\\\server\\share\\app\\.env'],
+      ['/', '/.env'],
+      ['/workspace/project\\name', '/workspace/project\\name/.env'],
+      ['C:\\', 'C:\\.env']
+    ])('resolves %s to %s', (rootPath, expected) => {
+      expect(resolveProjectEnvPath(rootPath)).toBe(expected)
+    })
+  })
+
   describe('parseEnvFile', () => {
     it('should parse simple KEY=value pairs', () => {
       const content = 'NODE_ENV=development\nAPI_KEY=test123'

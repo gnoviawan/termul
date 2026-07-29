@@ -1,8 +1,8 @@
 // Module declarations
 mod acp;
 mod acp_binary_install;
-mod agent_registry;
 mod acp_registry_snapshot;
+mod agent_registry;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -50,6 +50,12 @@ const MENU_ID_EXPORT_LOG_DEFAULT: &str = "help-export-log-default";
 const MENU_ID_CLOSE_TAB: &str = "window-close-tab";
 const MENU_EVENT_CLOSE_TAB: &str = "menu:close-tab";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
+
+// Tray menu IDs
+const TRAY_ID: &str = "termul-tray";
+const TRAY_MENU_SHOW: &str = "tray-show";
+const TRAY_MENU_QUIT: &str = "tray-quit";
+const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
@@ -119,9 +125,10 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 pub use acp::{AcpManager, FileProjectRegistry, SessionPersistence};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
-// Re-export for `web::fs_api` so the project-root boundary check can reuse
-// the shared Windows verbatim-prefix stripper (PR-S4 nitpick) without
-// promoting the whole `path_validation` module to public visibility.
+// Re-export only where `web::fs_api` uses the Windows-specific boundary
+// normalization. On non-Windows targets the helper is unused, and keeping the
+// re-export enabled there fails the mandatory `-D warnings` clippy gate.
+#[cfg(windows)]
 pub(crate) use path_validation::strip_verbatim_prefix;
 
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -533,15 +540,8 @@ fn open_external_url(url: &str) -> Result<(), String> {
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
-    let file_menu = {
-        #[cfg(target_os = "macos")]
-        let builder = SubmenuBuilder::new(app, "File");
-
-        #[cfg(not(target_os = "macos"))]
-        let builder = SubmenuBuilder::new(app, "File").quit();
-
-        builder.build()?
-    };
+    #[cfg(not(target_os = "macos"))]
+    let file_menu = SubmenuBuilder::new(app, "File").quit().build()?;
 
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -633,7 +633,7 @@ fn build_app_menu<R: tauri::Runtime>(
         .build()?;
 
     #[cfg(target_os = "macos")]
-    let menu = {
+    {
         let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
             .about(None)
             .separator()
@@ -646,13 +646,18 @@ fn build_app_menu<R: tauri::Runtime>(
             .quit()
             .build()?;
 
-        MenuBuilder::new(app).item(&app_menu)
-    };
+        return MenuBuilder::new(app)
+            .item(&app_menu)
+            .item(&edit_menu)
+            .item(&view_menu)
+            .item(&window_menu)
+            .item(&help_menu)
+            .build();
+    }
 
     #[cfg(not(target_os = "macos"))]
-    let menu = MenuBuilder::new(app);
-
-    menu.item(&file_menu)
+    MenuBuilder::new(app)
+        .item(&file_menu)
         .item(&edit_menu)
         .item(&view_menu)
         .item(&window_menu)
@@ -907,6 +912,16 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     Ok(())
 }
 
+static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Claimed synchronously when we enter the async cleanup path and never reset.
+// Prevents a second ExitRequested (e.g. an OS exit signal, or the exit(0) we
+// call at the end of cleanup re-entering before the first task finishes) from
+// spawning a duplicate cleanup that races kill_all()/destroy_all()/exit(0).
+// CLEANUP_DONE still marks final completion so the trailing exit(0) re-entry
+// returns immediately via the check above.
+static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install the panic hook before anything can panic so Rust panics are
@@ -929,9 +944,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     let builder = builder.on_menu_event(handle_menu_event);
 
+    // Single-instance must be the first plugin: Tauri initializes plugins in
+    // registration order, so duplicate launches must be rejected before any
+    // other plugin performs setup or side effects. The plugin is desktop-only.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            // Unminimize before focus so the restored window is reliably
+            // foregrounded on every platform.
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
     let mut builder = builder
-        // Logging must be registered first so the global logger is installed
-        // before any other plugin or setup code emits a log line.
+        // Logging is first among the remaining plugins so the global logger is
+        // installed before their setup code emits log lines.
         .plugin(logging::build_log_plugin())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -1115,6 +1144,77 @@ pub fn run() {
                 return Err(anyhow::anyhow!(failure_message).into());
             }
 
+            // ── System Tray Icon ────────────────────────────────────────────
+            // Buat tray icon dengan menu klik kanan seperti Telegram.
+            // Klik icon → show/focus window.
+            // Close button (X) → minimize ke tray, bukan quit.
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Termul")
+                    .build(app)?;
+                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Termul")
+                    .build(app)?;
+                let separator = PredefinedMenuItem::separator(app)?;
+
+                let tray_menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .item(&separator)
+                    .item(&quit_item)
+                    .build()?;
+
+                let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                    .tooltip("Termul Manager")
+                    .icon(app.default_window_icon().cloned().unwrap())
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| match event.id().as_ref() {
+                            id if id == TRAY_MENU_SHOW => {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            id if id == TRAY_MENU_QUIT => {
+                                // Let the renderer run the existing dirty-file
+                                // prompt and persistence flush before it destroys
+                                // the window. Direct app.exit(0) would bypass it.
+                                let _ = app_handle.emit_to(
+                                    "main",
+                                    TRAY_QUIT_REQUESTED_EVENT,
+                                    (),
+                                );
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+
+            }
+            // ── End Tray ────────────────────────────────────────────────────
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1278,8 +1378,29 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
-            // Prevent the default exit behavior so we can cleanup first
+            // Cleanup already finished — let the app exit immediately.
+            if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            // Prevent every exit request while the single cleanup task runs.
+            // A re-entrant request must not bypass cleanup through Tauri's
+            // default exit behavior while CLEANUP_IN_PROGRESS is already true.
             api.prevent_exit();
+
+            // Atomically claim the cleanup path. If a previous ExitRequested
+            // already started the async cleanup (not yet done), short-circuit
+            // so we don't spawn a second task racing kill_all()/destroy_all().
+            if CLEANUP_IN_PROGRESS
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .is_err()
+            {
+                return;
+            }
 
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
@@ -1316,6 +1437,8 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    // Mark cleanup as done so the subsequent exit event isn't prevented
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // After cleanup completes, allow the app to exit with code 0
                     app_handle_clone.exit(0);
                 });
@@ -1326,6 +1449,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     app_handle_clone.exit(0);
                 });
             } else {
@@ -1340,6 +1464,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // No PTY or ACP manager, just exit
                     app_handle_clone.exit(0);
                 });
