@@ -210,7 +210,7 @@ function AgentProse({
   reduced: boolean
 }): React.JSX.Element {
   return (
-    <div className="chat-streamdown text-sm leading-relaxed text-foreground">
+    <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
       <Streamdown
         mode="streaming"
         isAnimating={streaming}

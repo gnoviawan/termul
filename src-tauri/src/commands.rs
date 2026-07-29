@@ -2996,6 +2996,7 @@ pub async fn remote_server_start(
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     // Default to localhost only when the caller omits the bind mode; an
@@ -3015,6 +3016,7 @@ pub async fn remote_server_start(
             acp_manager.inner().clone(),
             ws_relay.inner().clone(),
             project_registry.inner().clone(),
+            chat_history_cache.inner().clone(),
             bind_mode,
         )
         .await
@@ -3033,12 +3035,16 @@ pub async fn remote_server_start(
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     let result = remote_state.stop().await;
     // Clear the in-memory project mirror so a stale list does not linger after
     // the server is off (the registry is renderer-fed; it is repopulated on the
     // next server start via `remote_sync_projects`).
     project_registry.clear();
+    // Clear the chat-history cache too (mirrors the registry — it lives only
+    // while the server runs and is re-fed on the next start).
+    chat_history_cache.clear();
     match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
@@ -3074,6 +3080,61 @@ pub async fn remote_sync_projects(
 ) -> Result<IpcResult<()>, String> {
     project_registry.set(payload.projects, payload.active_project_id.clone());
     crate::web::broadcast_projects_changed(ws_relay.inner(), payload.active_project_id.as_deref());
+    Ok(IpcResult::success(()))
+}
+
+/// Push the desktop renderer's chat-history index + payloads into the
+/// in-memory `ChatHistoryCache` (Epic-4 bridge) and broadcast a
+/// `chat_history_changed` WS event so connected web clients refetch the
+/// session index. Called by the renderer on server-start success + on every
+/// session-index/payload mutation while the server runs. No secrets,
+/// permission tickets, or auth data cross the wire (redact-by-omission — the
+/// cache holds only transcript metadata + messages).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncChatHistoryPayload {
+    /// The full session index (wire `PersistedSessionSummary[]` shape).
+    /// `None` on a payload-only sync (the `useAcpHistorySync` hook owns the
+    /// index push; `persistSession` pushes only its payload to avoid a
+    /// double `set_index` + double broadcast per mutation).
+    #[serde(default)]
+    pub index: Option<Vec<crate::acp::SessionIndexEntry>>,
+    /// Monotonic revision stamped by the renderer on each index push
+    /// (`useAcpHistorySync` increments it; the seed in `RemoteAccessPopover`
+    /// omits it → `0`). `set_index` rejects a push whose revision is strictly
+    /// lower than the current one so a delayed older index cannot replace a
+    /// newer snapshot. Absent on a payload-only sync (unused).
+    #[serde(default)]
+    pub revision: Option<u64>,
+    /// Optional per-session payloads (`{ metadata, messages }`) — pushed lazily
+    /// (only sessions the renderer has in memory). Omitted on an index-only sync.
+    #[serde(default)]
+    pub payloads: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[tauri::command]
+pub async fn remote_sync_chat_history(
+    payload: SyncChatHistoryPayload,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+    remote_state: State<'_, Arc<remote::RemoteServerState>>,
+) -> Result<IpcResult<()>, String> {
+    // Defense in depth: the TS caller already gates on `running`, but the
+    // server may have just been stopped (`remote_server_stop` clears the
+    // cache). Early-return so a late push does not repopulate a cache that
+    // was just cleared.
+    if !remote_state.status().running {
+        return Ok(IpcResult::success(()));
+    }
+    if let Some(index) = payload.index {
+        chat_history_cache.set_index(payload.revision.unwrap_or(0), index);
+    }
+    if let Some(payloads) = payload.payloads {
+        for (id, p) in payloads {
+            chat_history_cache.set_payload(&id, p);
+        }
+    }
+    crate::web::broadcast_chat_history_changed(ws_relay.inner());
     Ok(IpcResult::success(()))
 }
 

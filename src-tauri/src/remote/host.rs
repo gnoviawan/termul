@@ -35,7 +35,7 @@ use tracing::{info, warn};
 
 use crate::acp::AcpManager;
 use crate::web::sink::WsRelaySink;
-use crate::web::{serve_router, ProjectRegistry, ServerConfig};
+use crate::web::{serve_router, ChatHistoryCache, ProjectRegistry, ServerConfig};
 
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +193,7 @@ impl RemoteServerState {
         acp: Arc<AcpManager>,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
+        chat_history_cache: Arc<ChatHistoryCache>,
         bind_mode: RemoteBindMode,
     ) -> Result<RemoteStatus, String> {
         {
@@ -258,9 +259,18 @@ impl RemoteServerState {
             info!("Shared-live web server shutting down…");
         };
 
-        let (addr, serve_handle) = serve_router(acp, ws_relay, registry, None, None, cfg, shutdown)
-            .await
-            .map_err(|e| format!("Failed to start remote server: {}", e))?;
+        let (addr, serve_handle) = serve_router(
+            acp,
+            ws_relay,
+            registry,
+            Some(chat_history_cache),
+            None,
+            None,
+            cfg,
+            shutdown,
+        )
+        .await
+        .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
         let status = RemoteStatus::running(addr, bind_mode);
         info!(
@@ -424,18 +434,19 @@ mod tests {
     /// A real `AcpManager` (zero sinks is legal) + a `WsRelaySink` for the
     /// shared-live host lifecycle tests. The serve task binds a real OS-assigned
     /// localhost socket — safe in tests.
-    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>) {
+    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>, Arc<ChatHistoryCache>) {
         let acp = Arc::new(AcpManager::new(vec![]));
         let relay = Arc::new(WsRelaySink::new());
         let registry = Arc::new(ProjectRegistry::new());
-        (acp, relay, registry)
+        let chat_history_cache = Arc::new(ChatHistoryCache::new());
+        (acp, relay, registry, chat_history_cache)
     }
 
     #[tokio::test]
     async fn remote_server_state_start_then_stop_lifecycle() {
         // The full start→status(running)→stop→status(stopped)→restart cycle
         // that T8.1 asked for and the old misnamed test never exercised.
-        let (acp, relay, registry) = lifecycle_fixtures();
+        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         assert!(!state.status().running);
 
@@ -444,6 +455,7 @@ mod tests {
                 acp.clone(),
                 relay.clone(),
                 registry.clone(),
+                chat_history_cache.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -473,6 +485,7 @@ mod tests {
                 acp.clone(),
                 relay.clone(),
                 registry.clone(),
+                chat_history_cache.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -486,13 +499,14 @@ mod tests {
         // The lose-race guard: a second start while the first is running returns
         // Err — and (per R1) does NOT orphan a second server (its shutdown_tx is
         // signaled before returning). The first server keeps running.
-        let (acp, relay, registry) = lifecycle_fixtures();
+        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _first = state
             .start(
                 acp.clone(),
                 relay.clone(),
                 registry.clone(),
+                chat_history_cache.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -503,6 +517,7 @@ mod tests {
                 acp.clone(),
                 relay.clone(),
                 registry.clone(),
+                chat_history_cache.clone(),
                 RemoteBindMode::Localhost,
             )
             .await;
@@ -524,13 +539,14 @@ mod tests {
         // disturbed. (AcpManager::new(vec![]) owns no agents, so there is
         // nothing to kill — this guards the path: start/stop complete without
         // touching kill_all, i.e. no panic, no error, clean drain.)
-        let (acp, relay, registry) = lifecycle_fixtures();
+        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
             .start(
                 acp.clone(),
                 relay.clone(),
                 registry.clone(),
+                chat_history_cache.clone(),
                 RemoteBindMode::Localhost,
             )
             .await

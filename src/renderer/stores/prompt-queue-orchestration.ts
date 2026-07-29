@@ -36,6 +36,24 @@ export function isPromptTurnInProgressError(err: unknown): boolean {
   return String(err).includes(ACP_TURN_IN_PROGRESS_CODE)
 }
 
+/**
+ * Errors from Rust `send_command` when the agent driver thread is gone or
+ * tore down mid-request (agent subprocess crashed/exited mid-turn). These are
+ * already surfaced to the UI by the `acp:agent_crashed` / `acp:agent_disconnected`
+ * events (which set `status: 'error'` + `lastError`), so the generic
+ * `send_prompt` rejection must NOT also fire a redundant toast or clobber the
+ * crash event's `lastError`.
+ */
+const AGENT_DEAD_MARKERS = [
+  'agent thread is no longer running',
+  'agent thread dropped the reply'
+] as const
+
+export function isAgentDeadError(err: unknown): boolean {
+  const message = String(err)
+  return AGENT_DEAD_MARKERS.some((marker) => message.includes(marker))
+}
+
 export function sessionTurnBusy(session: TurnBusySession | undefined): boolean {
   if (!session) return false
   return Boolean(session.openTurnId || session.activeTurn)

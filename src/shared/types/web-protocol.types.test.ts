@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 21 event types including durable user prompts', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(21)
+  it('exports exactly 22 event types including durable user prompts', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(22)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -51,12 +51,15 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('project_switch_completed')
     expect(WS_EVENT_TYPES).toContain('project_switch_failed')
     expect(WS_EVENT_TYPES).toContain('user_prompt')
+    // Epic-4 bridge: desktop chat-history live push (agent-level, seq 0).
+    expect(WS_EVENT_TYPES).toContain('chat_history_changed')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
+    expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 19 request types including persisted history list/open', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(19)
+  it('exports exactly 20 request types including persisted history list/open', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(20)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -76,7 +79,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'authenticate',
       'subscribe',
       'list_persisted_sessions',
-      'open_persisted_session'
+      'open_persisted_session',
+      'get_session_payload'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

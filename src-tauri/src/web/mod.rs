@@ -15,6 +15,7 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod chat_history_cache;
 pub mod config;
 pub mod fs_api;
 pub mod permissions;
@@ -24,12 +25,16 @@ pub mod router;
 pub mod sink;
 pub mod ws;
 
+pub use chat_history_cache::ChatHistoryCache;
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
 pub use project_registry::{
     seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload,
 };
-pub use sink::{broadcast_projects_changed, fan_out, EventSink, TauriEventSink, WsRelaySink};
+pub use sink::{
+    broadcast_chat_history_changed, broadcast_projects_changed, fan_out, EventSink,
+    TauriEventSink, WsRelaySink,
+};
 pub use ws::{AppState, HistoryMode, ReliabilityTier, SequencedEvent, WsErrorCode};
 
 use std::future::Future;
@@ -73,6 +78,10 @@ pub async fn serve(
         acp.clone(),
         ws_relay,
         registry,
+        // The standalone VPS binary has no renderer-fed cache; it relies on
+        // its file-backed `SessionPersistence` (Story 4.3). Desktop-hosted
+        // seeds the cache via `remote_sync_chat_history` instead.
+        None,
         registry_persistence,
         projects_file,
         cfg,
@@ -117,10 +126,12 @@ pub async fn serve(
 /// The standalone binary wraps this + adds `kill_all` in [`serve`]; the
 /// desktop-hosted shared-live server (`remote/host.rs`) calls this directly so
 /// toggling the server off never kills the desktop's live agents.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
+    chat_history_cache: Option<Arc<ChatHistoryCache>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
@@ -145,16 +156,24 @@ pub async fn serve_router(
         );
     }
 
+    // Advertise `Server` history mode when EITHER the renderer-fed cache is
+    // attached (desktop-hosted) OR the file-backed persistence is attached
+    // (standalone VPS, Story 4.3). Otherwise the web client negotiates
+    // `live_only` (no stored transcript mirror).
+    let history_mode = if chat_history_cache.is_some() || ws_relay.persistence().is_some() {
+        HistoryMode::Server
+    } else {
+        HistoryMode::LiveOnly
+    };
     let app = router::router(
         Arc::clone(&acp),
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
+        chat_history_cache,
         registry_persistence,
         projects_file,
         cfg.project_root.clone(),
-        ws_relay
-            .persistence()
-            .map_or(HistoryMode::LiveOnly, |_| HistoryMode::Server),
+        history_mode,
     );
 
     let handle = tokio::spawn(async move {

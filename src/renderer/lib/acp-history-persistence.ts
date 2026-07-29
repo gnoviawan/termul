@@ -9,6 +9,7 @@
  * debounced so streaming doesn't thrash the disk.
  */
 
+import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
@@ -42,6 +43,42 @@ export interface SessionIndexEntry {
 export interface SessionPayload {
   metadata: SessionIndexEntry
   messages: ChatMessage[]
+}
+
+/**
+ * Convert the renderer's local `SessionIndexEntry[]` to the wire
+ * `PersistedSessionSummary[]` shape for the `syncChatHistory` push (Epic-4
+ * bridge). The renderer is the source of truth; this fills the server-side-only
+ * fields (`storageKey`, `toolCount`, `lastSeq`) with sensible defaults and
+ * derives `resumeEligible` from the presence of a stable agent config id.
+ */
+export function toPersistedSessionSummaries(
+  entries: SessionIndexEntry[]
+): PersistedSessionSummary[] {
+  return entries.map((entry) => ({
+    storageKey: entry.id,
+    sessionId: entry.id,
+    stableAgentNamespace: entry.agentConfigId ? `config:${entry.agentConfigId}` : null,
+    runtimeAgentId: entry.agentId || undefined,
+    projectId: entry.projectId || undefined,
+    cwd: entry.cwd,
+    title: entry.title,
+    createdAt: entry.createdAt,
+    lastActivityAt: entry.lastActivityAt,
+    status: entry.status === 'initializing' ? 'active' : entry.status,
+    messageCount: entry.messageCount,
+    toolCount: 0,
+    lastSeq: 0,
+    // A session is a reopen CANDIDATE when it has a stable agent config id OR
+    // a runtime agent id (ad-hoc / `agent-safe:*` agents without a config).
+    // The actual capability check still gates the reopen in
+    // `openHistorySession`/`openDiscoveredSession`, and
+    // `try_reopen_session_for_switch` falls back to the unfiltered lookup when
+    // the current agent's namespace can't be resolved. `stableAgentNamespace`
+    // stays `config:<configId>` or `null` (the backend-computed `agent-safe:*`
+    // namespace sync is deferred — noted in the commit message, not here).
+    resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
+  }))
 }
 
 /** Derive a chat title from the first user message; fallback to the provided title. */
@@ -211,12 +248,11 @@ export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<vo
 
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
   const transport = getAcpTransport()
-  if (transport.historyMode?.() === 'server' && transport.openPersistedSession) {
-    const index = await loadSessionIndex()
-    const metadata = index.find((entry) => entry.id === id)
-    if (!metadata) return null
-    await transport.openPersistedSession(id, 0)
-    return { metadata, messages: [] }
+  if (transport.historyMode?.() === 'server' && transport.getSessionPayload) {
+    // Fetch the FULL stored transcript from the server cache (desktop-hosted) or
+    // the file-backed persistence (VPS, Story 4.3). Replaces the prior
+    // `messages: []` gap — the web client now renders the complete conversation.
+    return transport.getSessionPayload(id)
   }
   if (transport.historyMode?.() === 'live_only') return null
   const res = await persistenceApi.read<SessionPayload>(sessionPayloadKey(id))

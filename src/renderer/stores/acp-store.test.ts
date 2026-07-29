@@ -44,6 +44,27 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
   }
 })
 
+// Spies for the switch-back reopen branch (addAgentChatTab +
+// setTabFocusedSessionId). `useWorkspaceStore` is only referenced by the
+// reopen branch in acp-store, so this mock is transparent to every other
+// test. `getTabFocusedSessionId` returns null so switchProject falls back to
+// `activeSessionId` (matching the real behavior when no tab focus is set).
+const { addAgentChatTabSpy, setTabFocusedSessionIdSpy } = vi.hoisted(() => ({
+  addAgentChatTabSpy: vi.fn(),
+  setTabFocusedSessionIdSpy: vi.fn()
+}))
+
+vi.mock('@/stores/workspace-store', () => ({
+  useWorkspaceStore: {
+    getState: () => ({ addAgentChatTab: addAgentChatTabSpy })
+  }
+}))
+
+vi.mock('@/lib/web-tab-session', () => ({
+  setTabFocusedSessionId: setTabFocusedSessionIdSpy,
+  getTabFocusedSessionId: vi.fn(() => null)
+}))
+
 import { invoke } from '@tauri-apps/api/core'
 import {
   _resetAcpTransportForTests,
@@ -268,6 +289,71 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().activeSessionId).toBe('s-old')
     expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
     expect(useAcpStore.getState().queuedProjectSwitchId).toBe('p2')
+  })
+
+  it('switchProject reopens an existing session from the history index (REOPEN branch)', async () => {
+    seedSession('s-old', 'agent-1', false)
+    useAcpStore.setState({ activeSessionId: 's-old' })
+    // Seed the session index + a cached active session for the reopened id so
+    // the REOPEN branch is taken (the existing switchProject test uses 's-new'
+    // NOT in the index, exercising the blank path instead).
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's-reopen',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-1',
+          title: 'Reopened Chat',
+          cwd: '/work/p2',
+          projectId: 'p2',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 3,
+          status: 'active'
+        }
+      ],
+      sessions: {
+        ...useAcpStore.getState().sessions,
+        's-reopen': {
+          id: 's-reopen',
+          agentId: 'agent-1',
+          cwd: '/work/p2',
+          projectId: 'p2',
+          status: 'active',
+          title: 'Reopened Chat',
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      },
+      messages: { ...useAcpStore.getState().messages, 's-reopen': [] }
+    })
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-reopen',
+      cwd: '/work/p2',
+      mcpServerCount: 3
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    // The reopen branch fires addAgentChatTab + setTabFocusedSessionId +
+    // sets activeSessionId (parity with the new-session branch).
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-reopen')
+    expect(setTabFocusedSessionIdSpy).toHaveBeenCalledWith('s-reopen')
+    expect(useAcpStore.getState().activeSessionId).toBe('s-reopen')
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+    // The cached session is NOT overwritten by the blank-session path.
+    expect(useAcpStore.getState().sessions['s-reopen']).toMatchObject({
+      title: 'Reopened Chat',
+      projectId: 'p2'
+    })
   })
 
   it('queued project switch failure clears matching state and surfaces a toast', () => {
@@ -783,6 +869,51 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('agent_disconnected preserves a content session transcript instead of blanking', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 0
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    const state = useAcpStore.getState()
+    // The session record survives (not deleted) and its transcript is kept in
+    // memory so the pane shows history + "disconnected" — not a blank chat.
+    expect(state.sessions['s1']).toBeTruthy()
+    expect(state.sessions['s1'].status).toBe('closed')
+    expect(state.messages['s1']).toHaveLength(1)
+  })
+
+  it('sendPrompt agent-dead rejection does not surface the cryptic IPC string', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('agent thread dropped the reply')
+    )
+    await expect(useAcpStore.getState().sendPrompt('s1', 'retry me')).rejects.toThrow()
+    const session = useAcpStore.getState().sessions['s1']
+    expect(session.activeTurn).toBe(false)
+    // The low-level IPC string must NOT become the visible lastError — the
+    // crash/disconnect events drive the Error state instead. (Without the
+    // agent-dead guard, the catch would set lastError to this string.)
+    expect(String(session.lastError)).not.toContain('agent thread dropped the reply')
+  })
+
+  it('retryCrashedSession rejects for an unknown session', async () => {
+    await expect(useAcpStore.getState().retryCrashedSession('nope')).rejects.toThrow(
+      'unknown session'
+    )
   })
 
   it('session_closed marks only that session closed', () => {

@@ -29,6 +29,13 @@ describe('ToolCallCard', () => {
     expect(card).toHaveClass('tool-call-card-running')
     expect(card).toHaveAttribute('aria-busy', 'true')
     expect(container.querySelector('.animate-spin')).not.toBeInTheDocument()
+    for (const cls of [
+      'rounded-lg',
+      'bg-card/30',
+      'shadow-[0_1px_2px_hsl(var(--foreground)/0.04)]'
+    ]) {
+      expect(card).not.toHaveClass(cls)
+    }
 
     rerender(<ToolCallCard toolCall={toolCall('pending')} />)
     expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')

@@ -71,6 +71,7 @@ mod tests {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
             registry,
+            chat_history_cache: None,
             registry_persistence: None,
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,

@@ -34,6 +34,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpHistorySync } from './hooks/use-acp-history-sync'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
@@ -104,6 +105,7 @@ function AppEffects(): null {
   useAcpListeners()
   useAcpAgents()
   useAcpHistory()
+  useAcpHistorySync()
   useAcpMcp()
   useUpdateCheck()
   useUpdateToast()

@@ -79,12 +79,13 @@ const CANCEL_GRACE: Duration = Duration::from_secs(5);
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Story 1.9 NFR7: the bounded per-turn timeout. A wedged agent that neither
 /// replies nor crashes parks `send_prompt`'s oneshot forever without this.
-/// 10 min accommodates long agent turns (coding agents can run minutes) while
-/// still bounding the wait so a truly wedged turn fails → Error state.
-/// Distinct from 1.7's 60s permission sub-timeout (`permissions.rs:47`) — this
-/// bounds the WHOLE turn (`send_prompt` → `prompt_complete`), not the
-/// permission-rendezvous window. Overridable via `TERMUL_ACP_TURN_TIMEOUT_SECS`.
-const TURN_TIMEOUT: Duration = Duration::from_secs(600);
+/// 1 hour accommodates long-running agentic turns (some agents run tens of
+/// minutes on a single task) while still bounding the wait so a truly wedged
+/// turn fails → Error state. Distinct from 1.7's 60s permission sub-timeout
+/// (`permissions.rs:47`) — this bounds the WHOLE turn (`send_prompt` →
+/// `prompt_complete`), not the permission-rendezvous window. Overridable via
+/// `TERMUL_ACP_TURN_TIMEOUT_SECS`.
+const TURN_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// `session/new` timeout, overridable for diagnostics via
 /// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
@@ -500,6 +501,22 @@ impl AcpManager {
             .lock()
             .get(agent_id)
             .map(|entry| entry.capabilities.clone())
+            .ok_or_else(|| format!("unknown agent: {agent_id}"))
+    }
+
+    /// Resolve the stable agent namespace (config id or safe fallback) for a
+    /// live agent. Returns `Ok(Some(namespace))` when the agent has a stable
+    /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
+    /// unknown. Used by the switch-back reopen filter so only sessions owned
+    /// by the same agent namespace are candidates (patch #4).
+    pub fn stable_agent_namespace(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<Option<String>, String> {
+        self.agents
+            .lock()
+            .get(agent_id)
+            .map(|entry| entry.stable_namespace.clone())
             .ok_or_else(|| format!("unknown agent: {agent_id}"))
     }
 

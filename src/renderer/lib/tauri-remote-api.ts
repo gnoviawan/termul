@@ -5,6 +5,7 @@ import type {
   RemoteStatus
 } from '@shared/types/ipc.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
+import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
 import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
 /**
@@ -72,5 +73,36 @@ export async function syncProjects(
 ): Promise<IpcResult<void>> {
   return invokeIpc<void>('remote_sync_projects', {
     payload: { projects, activeProjectId }
+  })
+}
+
+/**
+ * Push the desktop renderer's chat-history index + payloads into the in-memory
+ * `ChatHistoryCache` (Epic-4 bridge) so the web/remote client can read them via
+ * `list_persisted_sessions` + `get_session_payload`. No secrets, permission
+ * tickets, or auth data cross the wire. Call on server-start success + on every
+ * session-index/payload mutation while the server runs (a no-op when the
+ * server is stopped just returns ok).
+ *
+ * `index` is optional: the `useAcpHistorySync` hook owns the index push (it
+ * reacts to every `sessionIndex` change); `persistSession` pushes ONLY its
+ * payload (index omitted) so the index reaches the server exactly once per
+ * mutation, not twice. When provided, `index` is the wire
+ * `PersistedSessionSummary[]` shape (convert the renderer's
+ * `SessionIndexEntry[]` via `toPersistedSessionSummaries` before pushing).
+ * `payloads` is optional — push lazily (only sessions the renderer has in
+ * memory); omitted on an index-only sync.
+ */
+export async function syncChatHistory(
+  index?: PersistedSessionSummary[],
+  payloads?: Record<string, unknown>,
+  revision?: number
+): Promise<IpcResult<void>> {
+  return invokeIpc<void>('remote_sync_chat_history', {
+    payload: {
+      index: index ?? null,
+      payloads: payloads ?? null,
+      revision: revision ?? null
+    }
   })
 }

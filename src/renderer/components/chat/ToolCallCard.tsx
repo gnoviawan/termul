@@ -226,7 +226,7 @@ function ToolCallCardComponent({
       aria-busy={inProgress || undefined}
       data-status={status}
       className={cn(
-        'group/tool relative my-1.5 w-full overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50',
+        'group/tool relative my-0.5 w-full overflow-hidden',
         inProgress && 'tool-call-card-running'
       )}
       initial={animateEnter ? enter.initial : false}
@@ -240,16 +240,16 @@ function ToolCallCardComponent({
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
             data-press-feedback="off"
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-card/60"
+            className="flex min-h-7 w-full items-center gap-2 px-1 py-1 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {row}
           </button>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-2 text-xs">{row}</div>
+          <div className="flex min-h-7 items-center gap-2 px-1 py-1 text-xs">{row}</div>
         )}
         {hasDetail && (
           <CollapseExpandMotion open={open}>
-            <div className="flex flex-col gap-1.5 border-t border-border/50 bg-background/30 px-2.5 pb-2.5 pt-2">
+            <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
               {hasContent
                 ? content.map((item, i) => renderContentItem(item, i))
                 : resultText && <ResultBlock text={resultText} />}

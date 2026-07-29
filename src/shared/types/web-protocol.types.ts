@@ -74,7 +74,11 @@ export const WS_EVENT_TYPES = [
   'project_switch_completed',
   'project_switch_failed',
   // Server-authored authoritative user input (durable/replayable).
-  'user_prompt'
+  'user_prompt',
+  // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
+  // Fired when the renderer-fed ChatHistoryCache mutates so connected web
+  // clients refetch the session index.
+  'chat_history_changed'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -115,7 +119,8 @@ export const WS_REQUEST_TYPES = [
   'authenticate',
   'subscribe',
   'list_persisted_sessions',
-  'open_persisted_session'
+  'open_persisted_session',
+  'get_session_payload'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -199,7 +204,8 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   projects_changed: WS_RELAY_TIERS.RELIABLE,
   project_switch_completed: WS_RELAY_TIERS.RELIABLE,
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
-  user_prompt: WS_RELAY_TIERS.RELIABLE
+  user_prompt: WS_RELAY_TIERS.RELIABLE,
+  chat_history_changed: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'
