@@ -3099,6 +3099,13 @@ pub struct SyncChatHistoryPayload {
     /// double `set_index` + double broadcast per mutation).
     #[serde(default)]
     pub index: Option<Vec<crate::acp::SessionIndexEntry>>,
+    /// Monotonic revision stamped by the renderer on each index push
+    /// (`useAcpHistorySync` increments it; the seed in `RemoteAccessPopover`
+    /// omits it → `0`). `set_index` rejects a push whose revision is strictly
+    /// lower than the current one so a delayed older index cannot replace a
+    /// newer snapshot. Absent on a payload-only sync (unused).
+    #[serde(default)]
+    pub revision: Option<u64>,
     /// Optional per-session payloads (`{ metadata, messages }`) — pushed lazily
     /// (only sessions the renderer has in memory). Omitted on an index-only sync.
     #[serde(default)]
@@ -3120,7 +3127,7 @@ pub async fn remote_sync_chat_history(
         return Ok(IpcResult::success(()));
     }
     if let Some(index) = payload.index {
-        chat_history_cache.set_index(index);
+        chat_history_cache.set_index(payload.revision.unwrap_or(0), index);
     }
     if let Some(payloads) = payload.payloads {
         for (id, p) in payloads {

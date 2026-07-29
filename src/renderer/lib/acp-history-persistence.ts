@@ -69,7 +69,15 @@ export function toPersistedSessionSummaries(
     messageCount: entry.messageCount,
     toolCount: 0,
     lastSeq: 0,
-    resumeEligible: Boolean(entry.agentConfigId)
+    // A session is a reopen CANDIDATE when it has a stable agent config id OR
+    // a runtime agent id (ad-hoc / `agent-safe:*` agents without a config).
+    // The actual capability check still gates the reopen in
+    // `openHistorySession`/`openDiscoveredSession`, and
+    // `try_reopen_session_for_switch` falls back to the unfiltered lookup when
+    // the current agent's namespace can't be resolved. `stableAgentNamespace`
+    // stays `config:<configId>` or `null` (the backend-computed `agent-safe:*`
+    // namespace sync is deferred — noted in the commit message, not here).
+    resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
   }))
 }
 

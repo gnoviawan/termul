@@ -6,6 +6,24 @@ import { useAcpStore } from '@/stores/acp-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 
 /**
+ * Monotonic revision stamped on each index push so `ChatHistoryCache::set_index`
+ * can reject a delayed older index that would otherwise replace a newer
+ * snapshot (CodeRabbit fix: stale-index replacement race). The seed in
+ * `RemoteAccessPopover` uses revision `0` (omitted); this counter pre-increments
+ * from `0` so every live index push carries a revision strictly greater than
+ * the seed and strictly greater than every prior live push (1, 2, 3, …). The
+ * counter is intentionally NOT reset on server stop — staying strictly
+ * increasing across server sessions means a delayed push from a prior session
+ * is still rejected as stale, and `clear()` resets the cache's own revision to
+ * `0` on stop so the next seed (revision `0`) is accepted.
+ */
+let chatHistoryRevision = 0
+function nextChatHistoryRevision(): number {
+  chatHistoryRevision += 1
+  return chatHistoryRevision
+}
+
+/**
  * Desktop-side live push of the chat-history index to the desktop-hosted
  * server's in-memory `ChatHistoryCache` (Epic-4 bridge). Mirrors
  * `useProjectsAutoSave`: subscribes to the acp store; on any `sessionIndex`
@@ -32,7 +50,12 @@ export function useAcpHistorySync(): void {
       if (state.sessionIndex === prevState.sessionIndex) return
 
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
-      syncChatHistory(toPersistedSessionSummaries(state.sessionIndex))
+      // Stamp an increasing revision so the server rejects a stale older index.
+      syncChatHistory(
+        toPersistedSessionSummaries(state.sessionIndex),
+        undefined,
+        nextChatHistoryRevision()
+      )
         .then((result) => {
           if (!result.success) {
             console.warn('[acp] remote history sync unsuccessful:', result.error)

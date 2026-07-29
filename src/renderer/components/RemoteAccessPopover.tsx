@@ -67,10 +67,17 @@ export function RemoteAccessPopover(): React.JSX.Element {
               payloads[entry.id] = { metadata: entry, messages: messages[entry.id] }
             }
           }
-          await syncChatHistory(
+          // Await + inspect (mirrors the projects seed above): a failed seed
+          // leaves the web sidebar empty until the live-push path in
+          // `useAcpHistorySync` + `persistSession` re-syncs — surface it.
+          // Remote access stays enabled; the live-push path recovers.
+          const chatResult = await syncChatHistory(
             toPersistedSessionSummaries(sessionIndex),
             Object.keys(payloads).length > 0 ? payloads : undefined
           )
+          if (!chatResult.success) {
+            toast.error(`Failed to seed remote chat history: ${chatResult.error}`)
+          }
         }
       } else {
         setRemoteError(result.error)

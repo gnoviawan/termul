@@ -3139,7 +3139,7 @@ mod tests {
         use crate::web::chat_history_cache::ChatHistoryCache;
 
         let cache = Arc::new(ChatHistoryCache::new());
-        cache.set_index(vec![SessionIndexEntry {
+        cache.set_index(0, vec![SessionIndexEntry {
             storage_key: "sk-1".to_string(),
             session_id: "s-1".to_string(),
             stable_agent_namespace: Some("config:claude".to_string()),
@@ -3171,9 +3171,27 @@ mod tests {
     /// `get_session_payload` returns the cached full transcript when present.
     #[test]
     fn get_session_payload_returns_cached_transcript() {
+        use crate::acp::{PersistedSessionStatus, SessionIndexEntry};
         use crate::web::chat_history_cache::ChatHistoryCache;
 
         let cache = Arc::new(ChatHistoryCache::new());
+        // Seed the index so the index-guard accepts s-9's payload.
+        cache.set_index(0, vec![SessionIndexEntry {
+            storage_key: "sk-9".to_string(),
+            session_id: "s-9".to_string(),
+            stable_agent_namespace: Some("config:claude".to_string()),
+            runtime_agent_id: None,
+            project_id: Some("p-1".to_string()),
+            cwd: "/a".to_string(),
+            title: Some("Chat".to_string()),
+            created_at: 1,
+            last_activity_at: 2,
+            status: PersistedSessionStatus::Closed,
+            message_count: 3,
+            tool_count: 0,
+            last_seq: 3,
+            resume_eligible: true,
+        }]);
         let payload = json!({ "metadata": { "id": "s-9" }, "messages": [{ "seq": 1 }] });
         cache.set_payload("s-9", payload.clone());
         let relay = Arc::new(WsRelaySink::new());
@@ -3258,7 +3276,7 @@ mod tests {
         use crate::web::chat_history_cache::ChatHistoryCache;
 
         let cache = Arc::new(ChatHistoryCache::new());
-        cache.set_index(vec![SessionIndexEntry {
+        cache.set_index(0, vec![SessionIndexEntry {
             storage_key: "sk-1".to_string(),
             session_id: "s-1".to_string(),
             stable_agent_namespace: Some("config:claude".to_string()),

@@ -540,4 +540,27 @@ describe('toPersistedSessionSummaries', () => {
     expect(summaries[0].stableAgentNamespace).toBeNull()
     expect(summaries[0].runtimeAgentId).toBeUndefined()
   })
+
+  it('marks a config-less agent with a runtime agentId as resumeEligible', () => {
+    // Ad-hoc / `agent-safe:*` agents have no `agentConfigId` but DO carry a
+    // runtime agentId — they must be reopen candidates (the capability check
+    // still gates the actual reopen). `stableAgentNamespace` stays null
+    // (the backend-computed namespace sync is deferred).
+    const summaries = toPersistedSessionSummaries([
+      {
+        id: 's-adhoc',
+        agentId: 'agent-runtime-1',
+        title: 'Ad-hoc',
+        cwd: '/c',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 0,
+        status: 'active'
+      }
+    ])
+    expect(summaries[0].resumeEligible).toBe(true)
+    expect(summaries[0].stableAgentNamespace).toBeNull()
+    expect(summaries[0].runtimeAgentId).toBe('agent-runtime-1')
+  })
 })

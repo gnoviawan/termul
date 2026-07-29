@@ -95,9 +95,14 @@ export async function syncProjects(
  */
 export async function syncChatHistory(
   index?: PersistedSessionSummary[],
-  payloads?: Record<string, unknown>
+  payloads?: Record<string, unknown>,
+  revision?: number
 ): Promise<IpcResult<void>> {
   return invokeIpc<void>('remote_sync_chat_history', {
-    payload: { index: index ?? null, payloads: payloads ?? null }
+    payload: {
+      index: index ?? null,
+      payloads: payloads ?? null,
+      revision: revision ?? null
+    }
   })
 }
