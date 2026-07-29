@@ -7,7 +7,9 @@ const { mockSwitchProject, queuedRef, failedRef, setFailedProjectSwitch, toastEr
     mockSwitchProject: vi.fn(),
     queuedRef: { current: null as string | null },
     failedRef: { current: null as string | null },
-    setFailedProjectSwitch: vi.fn(),
+    setFailedProjectSwitch: vi.fn((projectId: string | null) => {
+      failedRef.current = projectId
+    }),
     toastError: vi.fn()
   })
 )
@@ -209,7 +211,7 @@ describe('ProjectSwitcherDrawer', () => {
     await waitFor(() => expect(setFailedProjectSwitch).toHaveBeenCalledWith(null))
 
     // Store honored the clear → reopening shows no stale "Failed"/"Queued" badge.
-    failedRef.current = null
+    await waitFor(() => expect(failedRef.current).toBeNull())
     rerender(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
     expect(await screen.findByText('Gamma')).toBeInTheDocument()
     expect(screen.queryByText('Failed')).not.toBeInTheDocument()
