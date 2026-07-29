@@ -3,8 +3,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
 
-const { mockNavigate } = vi.hoisted(() => ({
-  mockNavigate: vi.fn()
+const { mockNavigate, tauriRef } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+  // Mutable so individual tests can flip the shell into web/remote mode
+  // (where the project-switcher button + drawer are mounted).
+  tauriRef: { current: true as boolean }
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -46,13 +49,35 @@ vi.mock('@/components/chat/ChatHistoryTab', () => ({
   )
 }))
 
+// Stub the drawer so the shell test focuses on the trigger wiring (button →
+// projectsOpen → drawer `open` prop → onOpenChange close). The drawer's own
+// open/close + state rendering is covered in ProjectSwitcherDrawer.test.tsx.
+vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
+  ProjectSwitcherDrawer: ({
+    open,
+    onOpenChange
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }) =>
+    open ? (
+      <div>
+        <span>project-drawer</span>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-drawer
+        </button>
+      </div>
+    ) : null
+}))
+
 vi.mock('@/lib/tauri-runtime', () => ({
-  isTauriContext: () => true
+  isTauriContext: () => tauriRef.current
 }))
 
 describe('MobileChatShell', () => {
   beforeEach(() => {
     mockNavigate.mockReset()
+    tauriRef.current = true
   })
 
   it('renders slim header with title and no desktop chrome markers', () => {
@@ -109,5 +134,42 @@ describe('MobileChatShell', () => {
 
     fireEvent.click(screen.getByLabelText('New chat'))
     expect(onNewChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the Switch project button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+    // Desktop never mounts the web/remote project drawer — the sidebar owns
+    // project switching there. The trigger must not leak into the mobile shell.
+    expect(screen.queryByLabelText('Switch project')).not.toBeInTheDocument()
+  })
+
+  it('mounts the project drawer trigger in web mode and toggles it open/closed', async () => {
+    tauriRef.current = false
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    const switchBtn = screen.getByLabelText('Switch project')
+    expect(switchBtn).toBeInTheDocument()
+    // Drawer starts closed.
+    expect(screen.queryByText('project-drawer')).not.toBeInTheDocument()
+
+    fireEvent.click(switchBtn)
+    expect(await screen.findByText('project-drawer')).toBeInTheDocument()
+
+    // Closing via the drawer's onOpenChange(false) unmounts its content.
+    fireEvent.click(screen.getByText('close-drawer'))
+    expect(screen.queryByText('project-drawer')).not.toBeInTheDocument()
   })
 })

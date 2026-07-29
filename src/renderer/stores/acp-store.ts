@@ -284,6 +284,8 @@ interface AcpState {
   transportReconnecting: boolean
   /** Target project waiting for the current turn to finish, if any. */
   queuedProjectSwitchId: string | null
+  /** Target project whose switch just failed (transient inline indicator). */
+  failedProjectSwitchId: string | null
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
@@ -298,6 +300,7 @@ interface AcpState {
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
   switchProject: (projectId: string) => Promise<SwitchProjectReply>
+  setFailedProjectSwitch: (projectId: string | null) => void
 
   // Actions — configured agents (P4)
   loadAgentConfigs: () => Promise<void>
@@ -1858,6 +1861,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   suppressQueueFlush: {},
   transportReconnecting: false,
   queuedProjectSwitchId: null,
+  failedProjectSwitchId: null,
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -1989,6 +1993,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!transport.switchProject) {
       throw new Error('Project switching is only available in web/remote mode')
     }
+    // Starting a new switch clears any prior transient failure indicator so a
+    // retry doesn't keep a stale "Failed" badge while the new attempt runs.
+    set({ failedProjectSwitchId: null })
     const focusedSessionId = getTabFocusedSessionId() ?? get().activeSessionId
     const currentSession = focusedSessionId ? get().sessions[focusedSessionId] : null
     const outcome = await transport.switchProject(projectId)
@@ -2002,6 +2009,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const existing = s.sessions[outcome.sessionId]
       return {
         queuedProjectSwitchId: null,
+        failedProjectSwitchId: null,
         activeSessionId: outcome.sessionId,
         sessions: {
           ...s.sessions,
@@ -2030,6 +2038,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     useProjectStore.getState().selectProject(outcome.projectId)
     return outcome
   },
+
+  setFailedProjectSwitch: (projectId) => set({ failedProjectSwitchId: projectId }),
 
   closeSession: async (sessionId) => {
     invalidateSessionReopen(sessionId)
@@ -3748,6 +3758,7 @@ export function initAcpEventListeners(): () => void {
       const existing = s.sessions[event.sessionId]
       return {
         queuedProjectSwitchId: null,
+        failedProjectSwitchId: null,
         activeSessionId: event.sessionId,
         sessions: {
           ...s.sessions,
@@ -3778,7 +3789,10 @@ export function initAcpEventListeners(): () => void {
   const applyFailedProjectSwitch = (event: ProjectSwitchFailedEvent): void => {
     const state = useAcpStore.getState()
     if (state.queuedProjectSwitchId !== event.projectId) return
-    useAcpStore.setState({ queuedProjectSwitchId: null })
+    useAcpStore.setState({
+      queuedProjectSwitchId: null,
+      failedProjectSwitchId: event.projectId
+    })
     toast.error(event.message || 'Project switch failed')
   }
   teardown = [

@@ -1,5 +1,5 @@
-import { Check, Clock3, FolderGit2, Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { AlertCircle, Check, Clock3, FolderGit2, Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -35,7 +35,16 @@ export function ProjectSwitcherDrawer({
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const switchProject = useAcpStore((s) => s.switchProject)
   const queuedProjectSwitchId = useAcpStore((s) => s.queuedProjectSwitchId)
+  const failedProjectSwitchId = useAcpStore((s) => s.failedProjectSwitchId)
+  const setFailedProjectSwitch = useAcpStore((s) => s.setFailedProjectSwitch)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
+
+  // The inline "Failed" badge is transient: dismiss it when the drawer closes
+  // so a stale red indicator doesn't reappear on the next open. A fresh switch
+  // attempt also clears it (see `switchProject`), so retrying self-heals.
+  useEffect(() => {
+    if (!open) setFailedProjectSwitch(null)
+  }, [open, setFailedProjectSwitch])
 
   async function handleSwitch(project: Project): Promise<void> {
     if (switchingId !== null) return
@@ -47,7 +56,9 @@ export function ProjectSwitcherDrawer({
       }
     } catch (err) {
       // `AcpTransportError.message` is the human string callers already toast
-      // (e.g. "no_agent" → "switch_project requires a live agent; …").
+      // (e.g. "no_agent" → "switch_project requires a live agent; …"). Surface
+      // the failure inline too — toasts are easy to miss on mobile.
+      setFailedProjectSwitch(project.id)
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setSwitchingId(null)
@@ -81,6 +92,7 @@ export function ProjectSwitcherDrawer({
                 const isActive = project.id === activeProjectId
                 const isSwitching = switchingId === project.id
                 const isQueued = queuedProjectSwitchId === project.id
+                const isFailed = failedProjectSwitchId === project.id
                 const disabled =
                   isArchived || isActive || switchingId !== null || queuedProjectSwitchId !== null
                 return (
@@ -116,6 +128,11 @@ export function ProjectSwitcherDrawer({
                         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 size={13} />
                           Queued
+                        </span>
+                      ) : isFailed ? (
+                        <span className="flex shrink-0 items-center gap-1 text-xs text-destructive">
+                          <AlertCircle size={13} />
+                          Failed
                         </span>
                       ) : isActive ? (
                         <Check size={14} className="shrink-0 text-primary" />
