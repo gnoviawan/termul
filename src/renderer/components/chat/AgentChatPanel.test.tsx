@@ -92,7 +92,7 @@ vi.mock('./chat-timeline', () => ({
 
 import { AgentChatPanel } from './AgentChatPanel'
 
-function seedLiveSession(id: string): void {
+function seedLiveSession(id: string, lastError: string | null = null): void {
   sessionRef.current = {
     id,
     agentId: 'agent-1',
@@ -105,7 +105,7 @@ function seedLiveSession(id: string): void {
     modes: null,
     models: null,
     configOptions: [],
-    lastError: null,
+    lastError,
     createdAt: 1
   } satisfies AcpSession
 }
@@ -196,8 +196,17 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     expect(screen.getByText(/Reconnecting to agent/)).toBeInTheDocument()
   })
 
-  it('offers Retry for a failed discovered reopen and retries with ephemeral context', () => {
+  it('keeps the failed discovered restore banner hidden while reopen is pending', () => {
     seedLiveSession('s1')
+    discoveredContextRef.current = {
+      s1: { agentId: 'agent-native', cwd: '/native', projectId: 'p-native' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByText('Failed to restore agent chat.')).not.toBeInTheDocument()
+  })
+
+  it('offers Retry for a failed discovered reopen and retries with ephemeral context', () => {
+    seedLiveSession('s1', 'native load failed')
     discoveredContextRef.current = {
       s1: { agentId: 'agent-native', cwd: '/native', projectId: 'p-native' }
     }

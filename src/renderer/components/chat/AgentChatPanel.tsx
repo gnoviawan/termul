@@ -373,18 +373,22 @@ export function AgentChatPanel({
           Reconnecting to agent…
         </div>
       )}
-      {isClosed && !isOpeningHistory && !isLaunchingSession && discoveredReopenContext && (
-        <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <span>Failed to restore agent chat.</span>
-          <button
-            type="button"
-            onClick={retryDiscoveredReopen}
-            className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
-          >
-            Retry
-          </button>
-        </div>
-      )}
+      {isClosed &&
+        !isOpeningHistory &&
+        !isLaunchingSession &&
+        discoveredReopenContext &&
+        session.lastError && (
+          <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+            <span>Failed to restore agent chat.</span>
+            <button
+              type="button"
+              onClick={retryDiscoveredReopen}
+              className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       {isClosed &&
         !isOpeningHistory &&
         !isLaunchingSession &&

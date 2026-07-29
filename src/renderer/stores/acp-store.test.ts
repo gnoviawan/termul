@@ -3686,6 +3686,7 @@ describe('session discovery (gh-407)', () => {
     await expect(
       useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-1', '/work', 'p1')
     ).rejects.toThrow(/does not support loading or resuming/)
+    expect(useAcpStore.getState().discoveredReopenContexts['sess-1']).toBeUndefined()
   })
 
   it('keeps ephemeral retry context after a rejected discovered reopen and clears it after retry', async () => {

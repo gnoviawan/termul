@@ -1485,7 +1485,6 @@ async function openHistorySessionInner(
   onTranscriptInstalled: () => void,
   reopenGeneration: number
 ): Promise<void> {
-  sessionReopenGenerations.set(id, reopenGeneration)
   // Snapshot before any await so a delete during cold-spawn / capability wait
   // is still detected as a mid-open transition (not "never indexed").
   const wasIndexed = get().sessionIndex.some((e) => e.id === id)
@@ -2631,7 +2630,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (inFlight?.generation === currentGeneration) return inFlight.promise
 
     const restoreToken = beginRestorePreload(set, id)
-    const reopenGeneration = currentGeneration + 1
+    const reopenGeneration = beginSessionReopen(id)
     let transcriptInstalled = false
     let task!: Promise<void>
     task = (async () => {
@@ -2797,6 +2796,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const strategy = decideResume({ connected, capabilities })
 
       if (strategy === 'local') {
+        set((s) => ({
+          discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
+        }))
         throw new Error(
           'agent does not support loading or resuming sessions (no loadSession or sessionCapabilities.resume)'
         )
