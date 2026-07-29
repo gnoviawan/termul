@@ -833,6 +833,23 @@ pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, active_project_id: O
     fan_out(&sinks, None, "acp:projects_changed", &payload);
 }
 
+/// Broadcast a `chat_history_changed` agent-level event to every connected
+/// client.
+///
+/// Called by the `remote_sync_chat_history` command after it updates the
+/// [`crate::web::chat_history_cache::ChatHistoryCache`]. The event is
+/// agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`] fans it out to
+/// ALL connected clients (the wire `type` is `chat_history_changed` — the
+/// `acp:` prefix is stripped by `emit`). The payload is empty `{}`; the web
+/// client refetches the session index (`list_persisted_sessions`) for the full
+/// list (the desktop is the source of truth).
+pub fn broadcast_chat_history_changed(relay: &Arc<WsRelaySink>) {
+    let payload = serde_json::json!({});
+    let relay_arc: Arc<WsRelaySink> = Arc::clone(relay);
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay_arc];
+    fan_out(&sinks, None, "acp:chat_history_changed", &payload);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1397,5 +1414,23 @@ mod tests {
             drained[0].payload.get("activeProjectId").is_none(),
             "activeProjectId must be omitted (not null) when None"
         );
+    }
+
+    /// `broadcast_chat_history_changed` fans an agent-level event (`sid: None`,
+    /// `seq: 0`) to every connected client so the web sidebar refetches the
+    /// session index. Mirrors `broadcast_projects_changed`.
+    #[tokio::test]
+    async fn broadcast_chat_history_changed_reaches_subscribed_client() {
+        let relay = Arc::new(WsRelaySink::new());
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
+
+        broadcast_chat_history_changed(&relay);
+
+        let drained = drain_rx(&mut rx);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].type_, "chat_history_changed");
+        assert_eq!(drained[0].seq, 0, "agent-level event: seq must be 0");
+        // The payload is empty `{}` — the web client refetches the index.
+        assert!(drained[0].payload.as_object().unwrap().is_empty());
     }
 }

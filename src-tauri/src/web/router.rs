@@ -17,6 +17,7 @@ use axum::{
 };
 
 use crate::acp::{AcpManager, FileProjectRegistry};
+use crate::web::chat_history_cache::ChatHistoryCache;
 use crate::web::fs_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
@@ -38,10 +39,12 @@ use super::assets;
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
 /// [`assets::static_fallback`].
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
+    chat_history_cache: Option<Arc<ChatHistoryCache>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     project_root: PathBuf,
@@ -75,6 +78,7 @@ pub fn router(
         acp,
         relay: ws_relay,
         registry,
+        chat_history_cache,
         registry_persistence,
         projects_file: projects_file.map(Arc::new),
         history_mode,
@@ -105,6 +109,7 @@ pub fn router_with_static(
             acp,
             relay: ws_relay,
             registry,
+            chat_history_cache: None,
             registry_persistence: None,
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,

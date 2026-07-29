@@ -136,7 +136,9 @@ pub(crate) use path_validation::strip_verbatim_prefix;
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
-use web::{PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink};
+use web::{
+    ChatHistoryCache, PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1077,6 +1079,14 @@ pub fn run() {
             let project_registry = Arc::new(ProjectRegistry::new());
             app.manage(project_registry);
 
+            // In-memory chat-history cache (Epic-4 bridge) — renderer-fed via
+            // `remote_sync_chat_history`; the source for `list_persisted_sessions`
+            // + `get_session_payload` + switch-back reopen on the shared-live
+            // web server. Lives only while the server runs; cleared on
+            // `remote_server_stop`.
+            let chat_history_cache = Arc::new(ChatHistoryCache::new());
+            app.manage(chat_history_cache);
+
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
             app.manage(ssh_manager);
@@ -1370,6 +1380,7 @@ pub fn run() {
             commands::remote_server_stop,
             commands::remote_server_status,
             commands::remote_sync_projects,
+            commands::remote_sync_chat_history,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])

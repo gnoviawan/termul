@@ -503,6 +503,22 @@ impl AcpManager {
             .ok_or_else(|| format!("unknown agent: {agent_id}"))
     }
 
+    /// Resolve the stable agent namespace (config id or safe fallback) for a
+    /// live agent. Returns `Ok(Some(namespace))` when the agent has a stable
+    /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
+    /// unknown. Used by the switch-back reopen filter so only sessions owned
+    /// by the same agent namespace are candidates (patch #4).
+    pub fn stable_agent_namespace(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<Option<String>, String> {
+        self.agents
+            .lock()
+            .get(agent_id)
+            .map(|entry| entry.stable_namespace.clone())
+            .ok_or_else(|| format!("unknown agent: {agent_id}"))
+    }
+
     /// Create a new session on the given agent.
     pub async fn new_session(
         &self,

@@ -98,9 +98,12 @@ import { decideResume } from '@/lib/acp-resume-policy'
 // only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
 import { getAcpTransport } from '@/lib/acp-transport'
 import { formatAcpSpawnError } from '@/lib/agents/acp-spawn-errors'
+import { syncChatHistory } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
+import { useRemoteStatusStore } from '@/stores/remote-status-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
@@ -950,6 +953,19 @@ function persistSession(
   void saveSessionPayload(sessionId, payload).catch((e) =>
     console.error('[acp] failed to persist session payload', e)
   )
+  // Epic-4 bridge: push ONLY this session's payload to the server cache when
+  // the shared-live server is running. The `useAcpHistorySync` hook owns the
+  // index push — it reacts to the `sessionIndex` change this `setIndex` call
+  // triggers, so the index reaches the server exactly once per mutation (not
+  // twice — previously this push also carried the index, causing a double
+  // `set_index` + double broadcast). Fire-and-forget — idempotent.
+  if (useRemoteStatusStore.getState().status?.running) {
+    void syncChatHistory(undefined, {
+      [sessionId]: payload
+    }).catch((err: unknown) => {
+      console.debug('[acp] remote history payload sync failed', err)
+    })
+  }
 }
 
 /**
@@ -1998,6 +2014,25 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     const agentId = currentSession?.agentId
     if (!agentId) throw new Error('Completed project switch has no tracked agent')
+
+    // Switch-back restore (Epic-4 bridge): if the server reopened an existing
+    // session (detected via the server history index), fetch its transcript via
+    // `openHistorySession` + focus the workspace tab (`addAgentChatTab`) —
+    // mirrors desktop's "restore the last tab." Else the server minted a new
+    // session → current blank-chat path below.
+    if (get().sessionIndex.some((e) => e.id === outcome.sessionId)) {
+      // Parity with the new-session branch: set activeSessionId + clear the
+      // queued id so the reopened session is the active chat (not just tab
+      // focus).
+      set({ queuedProjectSwitchId: null, activeSessionId: outcome.sessionId })
+      const opening = get().openHistorySession(outcome.sessionId)
+      useWorkspaceStore.getState().addAgentChatTab(outcome.sessionId)
+      setTabFocusedSessionId(outcome.sessionId)
+      useProjectStore.getState().selectProject(outcome.projectId)
+      await opening
+      return outcome
+    }
+
     set((s) => {
       const existing = s.sessions[outcome.sessionId]
       return {
@@ -3744,6 +3779,24 @@ export function initAcpEventListeners(): () => void {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]
     if (!previous) return
+    // Queued switch-back restore (parity with switchProject's immediate-reopen
+    // branch): if the server reopened an existing session (detected via the
+    // server history index), fetch its transcript via `openHistorySession` +
+    // focus the workspace tab (`addAgentChatTab`) instead of minting a blank
+    // session. The transcript load is fire-and-forget (the event handler is
+    // void) — the restore preload shows immediately. Else the blank path below.
+    if (state.sessionIndex.some((e) => e.id === event.sessionId)) {
+      const opening = state.openHistorySession(event.sessionId)
+      useWorkspaceStore.getState().addAgentChatTab(event.sessionId)
+      useAcpStore.setState({
+        queuedProjectSwitchId: null,
+        activeSessionId: event.sessionId
+      })
+      setTabFocusedSessionId(event.sessionId)
+      useProjectStore.getState().selectProject(event.projectId)
+      void opening
+      return
+    }
     useAcpStore.setState((s) => {
       const existing = s.sessions[event.sessionId]
       return {

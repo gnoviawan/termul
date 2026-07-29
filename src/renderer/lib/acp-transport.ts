@@ -95,6 +95,10 @@ export interface AcpTransport {
   historyMode?(): HistoryMode | 'tauri_store'
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>
+  /** Web/remote: fetch the full stored transcript for a session (server mode). */
+  getSessionPayload?(
+    sessionId: SessionId
+  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null>
   onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
@@ -416,6 +420,22 @@ export class WsAcpTransport implements AcpTransport {
     await this.connect()
     this.subscribed.add(sessionId)
     await this.request('open_persisted_session', { sessionId, lastSeq })
+  }
+
+  async getSessionPayload(
+    sessionId: SessionId
+  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null> {
+    try {
+      return await this.request<import('@/lib/acp-history-persistence').SessionPayload>(
+        'get_session_payload',
+        { sessionId }
+      )
+    } catch (err) {
+      // `not_found` → the session is absent from the cache (web shows "chat
+      // unavailable"); other errors propagate.
+      if (err instanceof AcpTransportError && err.code === 'not_found') return null
+      throw err
+    }
   }
 
   async spawnAgent(config: AgentConfig): Promise<AgentId> {
