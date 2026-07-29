@@ -54,7 +54,7 @@ vi.mock('@/stores/acp-store', () => {
     cancelPrompt: vi.fn(),
     removeQueuedPrompt: vi.fn(),
     sendQueuedPromptNow: vi.fn(),
-    retryCrashedSession: vi.fn(),
+    retryCrashedSession: vi.fn().mockResolvedValue(undefined),
     setConfigOption: vi.fn(),
     setMode: vi.fn(),
     setModel: vi.fn()

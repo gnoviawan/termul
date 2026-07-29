@@ -1215,6 +1215,10 @@ const inFlightDiscoveredOpens = new Map<SessionId, InFlightDiscoveredOpen>()
  */
 const sessionReopenGenerations = new Map<SessionId, number>()
 
+/** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
+ * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
+const inFlightCrashedRetries = new Set<SessionId>()
+
 const RESTORE_PRELOAD_MIN_MS = 400
 
 type RestorePreloadTracker = {
@@ -2741,51 +2745,58 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   retryCrashedSession: async (sessionId) => {
-    const session = get().sessions[sessionId]
-    if (!session) throw new Error(`unknown session ${sessionId}`)
-    // Force the reopen path: mark closed so `openHistorySession` re-runs its
-    // reopen (re-launch a fresh agent via `ensureLiveAgent`, replay persisted
-    // history via `session/load`, restore the local transcript) instead of its
-    // "cached non-closed" early-return. The reopen preserves the same tab +
-    // history — it never blanks (transcript is installed before agent work).
-    set((s) => {
-      const cur = s.sessions[sessionId]
-      if (!cur) return {}
-      return {
-        sessions: {
-          ...s.sessions,
-          [sessionId]: { ...cur, status: 'closed', lastError: null }
+    // Dedupe concurrent Retry clicks: only one relaunch+replay+resend per session.
+    if (inFlightCrashedRetries.has(sessionId)) return
+    inFlightCrashedRetries.add(sessionId)
+    try {
+      const session = get().sessions[sessionId]
+      if (!session) throw new Error(`unknown session ${sessionId}`)
+      // Force the reopen path: mark closed so `openHistorySession` re-runs its
+      // reopen (re-launch a fresh agent via `ensureLiveAgent`, replay persisted
+      // history via `session/load`, restore the local transcript) instead of its
+      // "cached non-closed" early-return. The reopen preserves the same tab +
+      // history — it never blanks (transcript is installed before agent work).
+      set((s) => {
+        const cur = s.sessions[sessionId]
+        if (!cur) return {}
+        return {
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...cur, status: 'closed', lastError: null }
+          }
+        }
+      })
+      await get().openHistorySession(sessionId)
+      // Reopen failed (still closed / no live agent): leave the recovered
+      // transcript + let the resume error show — do not blank.
+      const reopened = get().sessions[sessionId]
+      if (!reopened || reopened.status === 'closed') return
+      // Re-send the last user prompt to produce a fresh assistant turn (retry).
+      const msgs = get().messages[sessionId] ?? []
+      let lastUserBlocks: ContentBlock[] | null = null
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') {
+          lastUserBlocks = msgs[i].blocks
+          break
         }
       }
-    })
-    await get().openHistorySession(sessionId)
-    // Reopen failed (still closed / no live agent): leave the recovered
-    // transcript + let the resume error show — do not blank.
-    const reopened = get().sessions[sessionId]
-    if (!reopened || reopened.status === 'closed') return
-    // Re-send the last user prompt to produce a fresh assistant turn (retry).
-    const msgs = get().messages[sessionId] ?? []
-    let lastUserBlocks: ContentBlock[] | null = null
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'user') {
-        lastUserBlocks = msgs[i].blocks
-        break
-      }
+      if (!lastUserBlocks || lastUserBlocks.length === 0) return
+      const only = lastUserBlocks.length === 1 ? lastUserBlocks[0] : null
+      await runPromptTurn(
+        set,
+        get,
+        sessionId,
+        lastUserBlocks,
+        (s) =>
+          only?.type === 'text' && typeof only.text === 'string'
+            ? acpApi.sendPrompt(s.agentId, sessionId, only.text)
+            : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!),
+        undefined,
+        { skipUserAppend: true }
+      )
+    } finally {
+      inFlightCrashedRetries.delete(sessionId)
     }
-    if (!lastUserBlocks || lastUserBlocks.length === 0) return
-    const only = lastUserBlocks.length === 1 ? lastUserBlocks[0] : null
-    await runPromptTurn(
-      set,
-      get,
-      sessionId,
-      lastUserBlocks,
-      (s) =>
-        only?.type === 'text' && typeof only.text === 'string'
-          ? acpApi.sendPrompt(s.agentId, sessionId, only.text)
-          : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!),
-      undefined,
-      { skipUserAppend: true }
-    )
   },
 
   deleteHistorySession: async (id) => {
@@ -3776,7 +3787,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...s.sessions,
           [e.sessionId]: {
             ...session,
-            status: 'closed',
+            // Story 1.9 review: a session already in 'error' status (set by the
+            // preceding _onAgentCrashed event) must NOT be overwritten to 'closed'
+            // — keep the crash Error state visible (mirrors _onAgentDisconnected).
+            status: session.status === 'error' ? session.status : 'closed',
             activeTurn: false,
             openTurnId: null,
             replaying: null
