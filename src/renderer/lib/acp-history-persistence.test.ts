@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const mockTransport = {
+  historyMode: vi.fn(() => 'tauri_store' as const),
+  listPersistedSessions: vi.fn(),
+  openPersistedSession: vi.fn()
+}
+
+vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
+
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: vi.fn(),
@@ -80,7 +88,36 @@ describe('groupSessionsByRecency', () => {
 })
 
 describe('persistence I/O', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+  })
+
+  it('loads safe summaries from the standalone server provider', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    mockTransport.listPersistedSessions.mockResolvedValue([
+      {
+        storageKey: 'opaque',
+        sessionId: 's-server',
+        stableAgentNamespace: 'config:cfg-1',
+        runtimeAgentId: 'runtime-old',
+        projectId: 'p1',
+        cwd: '/srv/project',
+        title: 'Server chat',
+        createdAt: 1,
+        lastActivityAt: 2,
+        status: 'closed',
+        messageCount: 3,
+        toolCount: 1,
+        lastSeq: 7,
+        resumeEligible: true
+      }
+    ])
+    await expect(loadSessionIndex()).resolves.toEqual([
+      expect.objectContaining({ id: 's-server', agentConfigId: 'cfg-1', title: 'Server chat' })
+    ])
+    expect(persistenceApi.read).not.toHaveBeenCalled()
+  })
 
   it('loadSessionIndex returns [] on KEY_NOT_FOUND', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -136,7 +173,10 @@ describe('persistence I/O', () => {
 })
 
 describe('runHistoryWipeMigration', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+  })
 
   it('is a no-op when the v2 flag is already true', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -228,6 +268,7 @@ describe('runHistoryWipeMigration', () => {
 describe('trackPendingIndexWrite / waitForPendingSessionIndexWrite', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
     _resetPendingIndexWriteTrackerForTesting()
   })
 

@@ -12,6 +12,7 @@ export function useAcpHistory(): void {
   useEffect(() => {
     void (async () => {
       try {
+        // Desktop Tauri Store migration is a no-op for server/live-only providers.
         await runHistoryWipeMigration()
       } catch (err) {
         console.error('[acp] history wipe migration failed', err)

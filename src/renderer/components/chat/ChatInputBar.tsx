@@ -136,10 +136,10 @@ export function ChatInputBar({
   const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
-  // Story 1.8 AC1: read-only MCP badge. v1 shows the global MCP server count
-  // (per-session attach is surfaced via New Chat — the store does not yet track
-  // per-session MCP without a refactor, which D6 forbids).
-  const mcpCount = useAcpStore((s) => s.mcpServers.length)
+  // Prefer project/session-scoped MCP context. Older/local sessions without a
+  // recorded count retain the existing global-registry fallback.
+  const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
+  const mcpCount = session.mcpServerCount ?? globalMcpCount
   const [value, setValue] = useState('')
   const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [sending, setSending] = useState(false)

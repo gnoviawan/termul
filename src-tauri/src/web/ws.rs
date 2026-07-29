@@ -25,12 +25,13 @@
 //! optional `lastSeq` cursor replay. Other ACP request types still return
 //! `err.code: "not_implemented"` until Stories 1.7/1.8/Epic 4.
 
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -39,9 +40,10 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::acp::config::AgentConfig;
-use crate::acp::{AcpManager, AgentId, SessionId};
-use crate::web::project_registry::ProjectRegistry;
-use crate::web::sink::{ClientId, ReplayResult, WsRelaySink};
+use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
+use crate::web::permissions::TurnClaim;
+use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
+use crate::web::sink::{broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink};
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)
@@ -233,10 +235,9 @@ pub const HUMAN_RELAYED_CAPS: &[&str] = &["session_notification", "request_permi
 /// entries ending in `/*`). Enforced at the request-handling layer (AC8).
 #[must_use]
 pub fn is_os_fulfilled_cap(cap: &str) -> bool {
-    OS_FULFILLED_CAPS
-        .iter()
-        .copied()
-        .any(|entry| entry == cap || entry.ends_with("/*") && cap.starts_with(&entry[..entry.len() - 1]))
+    OS_FULFILLED_CAPS.iter().copied().any(|entry| {
+        entry == cap || entry.ends_with("/*") && cap.starts_with(&entry[..entry.len() - 1])
+    })
 }
 
 /// Whether `cap` matches a human-relayed cap entry (exact match).
@@ -279,12 +280,25 @@ pub struct AppState {
     /// In-memory, renderer-fed project registry — source for `GET /projects`
     /// + `switch_project` cwd resolution. Empty on the standalone path.
     pub registry: Arc<ProjectRegistry>,
+    /// Optional writable VPS file registry + configured path. Desktop shared-live
+    /// passes `None`, so switching there remains file-free.
+    pub registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    pub projects_file: Option<Arc<PathBuf>>,
+    /// Deployment history provider exposed to authenticated browser clients.
+    pub history_mode: HistoryMode,
     /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
     /// canonicalized target path resolves outside this root are refused with
     /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
     /// components). Resolved from `ServerConfig::project_root` at startup;
     /// defaults to the user's home directory when unset.
     pub project_root: Arc<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryMode {
+    Server,
+    LiveOnly,
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +383,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Epic-4 bridge: the in-memory project registry — source for `GET /projects`
     // (router) + `switch_project` cwd resolution (this handler).
     let registry = Arc::clone(&state.registry);
+    let registry_persistence = state.registry_persistence.clone();
+    let projects_file = state.projects_file.clone();
+    let history_mode = state.history_mode;
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
     // Per-connection tracking for `switch_project` (Ask-First resolution): the
@@ -378,13 +395,15 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // ready. Set by `spawn_agent` / `create_session` / `load_session` /
     // `resume_session` (the handlers that carry an agentId / create a session).
     let mut current_agent: Option<crate::acp::AgentId> = None;
-    let mut current_session: Option<crate::acp::SessionId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+    // Project identity is connection-local. The registry's active id may have
+    // been changed by another browser/desktop and cannot prove this socket's
+    // tracked session is already rooted at that project.
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
 
     // AC9: emit auth_required on the connection before anything else.
-    if out_tx
-        .send(Outbound::Event(auth_required_event()))
-        .is_err()
-    {
+    if out_tx.send(Outbound::Event(auth_required_event())).is_err() {
         return; // receiver dropped before we started — peer already gone.
     }
 
@@ -481,10 +500,15 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                         &acp,
                         &relay,
                         &registry,
+                        registry_persistence.as_ref(),
+                        projects_file.as_deref(),
                         &write_tx,
                         &mut subscribed_clients,
                         &mut current_agent,
-                        &mut current_session,
+                        &current_session,
+                        &current_project,
+                        &switch_queue,
+                        history_mode,
                     )
                     .await;
                     if write_tx.send(Outbound::Reply(handled)).is_err() {
@@ -573,10 +597,15 @@ async fn handle_request(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
     current_agent: &mut Option<AgentId>,
-    current_session: &mut Option<SessionId>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+    switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
+    history_mode: HistoryMode,
 ) -> WsReply {
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
@@ -596,7 +625,7 @@ async fn handle_request(
             // Placeholder (AC10): accept any token, mark authed. Epic 2 wires
             // the real cookie/token gate.
             *authed = true;
-            return WsReply::ok(id, Some(json!({})));
+            return WsReply::ok(id, Some(json!({ "historyMode": history_mode })));
         }
         return WsReply::err(
             id,
@@ -611,7 +640,19 @@ async fn handle_request(
             // Idempotent re-auth — accept and succeed.
             WsReply::ok(id, Some(json!({})))
         }
-        "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients),
+        "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients).await,
+        "list_persisted_sessions" => handle_list_persisted_sessions(id, relay, history_mode),
+        "open_persisted_session" => {
+            handle_open_persisted_session(
+                id,
+                &req.payload,
+                relay,
+                out_tx,
+                subscribed_clients,
+                history_mode,
+            )
+            .await
+        }
         // Story 1.7: `respond_permission` — route the browser's permission
         // decision through the server-side rendezvous (first-response-wins,
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
@@ -622,22 +663,71 @@ async fn handle_request(
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
         "create_session" => {
-            handle_create_session(id, &req.payload, acp, current_agent, current_session).await
+            handle_create_session(
+                id,
+                &req.payload,
+                acp,
+                current_agent,
+                current_session,
+                current_project,
+            )
+            .await
         }
         "load_session" => {
-            handle_load_session(id, &req.payload, acp, current_agent, current_session).await
+            handle_load_session(
+                id,
+                &req.payload,
+                acp,
+                current_agent,
+                current_session,
+                current_project,
+            )
+            .await
         }
         "resume_session" => {
-            handle_resume_session(id, &req.payload, acp, current_agent, current_session).await
+            handle_resume_session(
+                id,
+                &req.payload,
+                acp,
+                current_agent,
+                current_session,
+                current_project,
+            )
+            .await
         }
-        "close_session" => handle_close_session(id, &req.payload, acp).await,
+        "close_session" => {
+            handle_close_session(id, &req.payload, acp, current_session, current_project).await
+        }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
         "switch_project" => {
-            handle_switch_project(id, &req.payload, acp, registry, current_agent, current_session)
-                .await
+            handle_switch_project(
+                id,
+                &req.payload,
+                acp,
+                relay,
+                registry,
+                registry_persistence,
+                projects_file,
+                out_tx,
+                current_agent,
+                current_session,
+                current_project,
+                switch_queue,
+            )
+            .await
         }
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
-        "kill_agent" => handle_kill_agent(id, &req.payload, acp, current_agent, current_session).await,
+        "kill_agent" => {
+            handle_kill_agent(
+                id,
+                &req.payload,
+                acp,
+                current_agent,
+                current_session,
+                current_project,
+            )
+            .await
+        }
         "list_agents" => handle_list_agents(id, acp),
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
@@ -663,6 +753,46 @@ async fn handle_request(
             ),
         ),
     }
+}
+
+fn handle_list_persisted_sessions(
+    id: String,
+    relay: &Arc<WsRelaySink>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    match relay.persistence() {
+        Some(persistence) => ok_with_payload(id, &persistence.list_sessions()),
+        None => WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        ),
+    }
+}
+
+async fn handle_open_persisted_session(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    out_tx: &mpsc::UnboundedSender<Outbound>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    handle_subscribe(id, payload, relay, out_tx, subscribed_clients).await
 }
 
 /// Map an `AcpManager` `Err(String)` to a `WsReply` err. Story 1.8 review:
@@ -772,7 +902,8 @@ async fn handle_kill_agent(
     payload: &Value,
     acp: &Arc<AcpManager>,
     current_agent: &mut Option<AgentId>,
-    current_session: &mut Option<SessionId>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: KillAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -790,9 +921,13 @@ async fn handle_kill_agent(
             // tracking so a later `switch_project` does not reuse the dead id
             // (which would map `new_session`'s "unknown agent" to `not_found").
             // The web client must spawn/create a session again first.
-            if current_agent.as_ref().is_some_and(|a| *a == parsed.agent_id) {
+            if current_agent
+                .as_ref()
+                .is_some_and(|a| *a == parsed.agent_id)
+            {
                 *current_agent = None;
-                *current_session = None;
+                *current_session.lock() = None;
+                *current_project.lock() = None;
             }
             WsReply::ok(id, Some(json!({})))
         }
@@ -821,52 +956,350 @@ async fn handle_create_session(
     payload: &Value,
     acp: &Arc<AcpManager>,
     current_agent: &mut Option<crate::acp::AgentId>,
-    current_session: &mut Option<crate::acp::SessionId>,
+    current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: CreateSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed create_session payload (want agentId, cwd, mcpServers?): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed create_session payload (want agentId, cwd, mcpServers?): {e}"),
+            )
+        }
     };
     // Story 1.8 review (EC4): reject an empty cwd (the desktop store path
     // trims + rejects `cwd.length === 0`; the WS path must not diverge — an
     // empty cwd would give the agent subprocess undefined cwd semantics).
     if parsed.cwd.trim().is_empty() {
-        return WsReply::err(id, WsErrorCode::Unsupported, "create_session requires a non-empty `cwd`");
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "create_session requires a non-empty `cwd`",
+        );
     }
-    match acp.new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers).await {
+    match acp
+        .new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers)
+        .await
+    {
         Ok(outcome) => {
             // Track the agent + new session for `switch_project` cwd switching.
             *current_agent = Some(parsed.agent_id.clone());
-            *current_session = Some(outcome.session_id.clone());
+            *current_session.lock() = Some(outcome.session_id.clone());
+            // Generic session creation carries a cwd, not a registry-owned
+            // project id. Leave it unknown so the next switch is always real.
+            *current_project.lock() = None;
             ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
 
-/// `switch_project` → resolve `projectId` → cwd via the registry, then start a
-/// NEW `AcpManager` session at that cwd. Reuses the connection's last agent
-/// (Ask-First resolution: do NOT auto-spawn). A cold tab with no agent yet →
-/// `NO_AGENT`. The old web-focused session is closed server-side AFTER the
-/// new one is ready (best-effort — the agent may not support `close`). The
-/// desktop's own active project is NOT changed — the web client is a second
-/// viewer; only the web tab's focused session moves.
-///
-/// Reply payload = `{ sessionId }` (the new ACP session id at the project's
-/// cwd). The web client points its tab-focused session id at it + re-subscribes.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SwitchProjectPayload {
     project_id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+enum SwitchProjectOutcome {
+    Completed {
+        project_id: String,
+        session_id: SessionId,
+        cwd: String,
+        mcp_server_count: usize,
+    },
+    Queued {
+        project_id: String,
+        current_session_id: SessionId,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectSwitchCompletedPayload {
+    status: &'static str,
+    request_id: String,
+    project_id: String,
+    previous_session_id: SessionId,
+    session_id: SessionId,
+    cwd: String,
+    mcp_server_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectSwitchFailedPayload {
+    request_id: String,
+    project_id: String,
+    previous_session_id: SessionId,
+    message: String,
+}
+
+#[derive(Clone)]
+struct PendingProjectSwitch {
+    request_id: String,
+    target: ProjectSwitchContext,
+    previous_session_id: SessionId,
+}
+
+#[derive(Default)]
+struct ProjectSwitchQueue {
+    pending: Option<PendingProjectSwitch>,
+    worker_running: bool,
+}
+
+impl ProjectSwitchQueue {
+    /// Queue policy is latest-wins per connection. Returns the replaced request
+    /// so the caller can emit one correlated failure event for it.
+    fn replace_pending(&mut self, pending: PendingProjectSwitch) -> Option<PendingProjectSwitch> {
+        self.pending.replace(pending)
+    }
+}
+
+#[must_use]
+fn connection_already_on_project(
+    current_project_id: Option<&str>,
+    target_project_id: &str,
+) -> bool {
+    current_project_id == Some(target_project_id)
+}
+
+fn project_switch_failed_event(
+    request_id: String,
+    project_id: String,
+    previous_session_id: SessionId,
+    message: String,
+) -> SequencedEvent {
+    SequencedEvent::new(
+        Some(previous_session_id.0.clone()),
+        0,
+        "project_switch_failed",
+        serde_json::to_value(ProjectSwitchFailedPayload {
+            request_id,
+            project_id,
+            previous_session_id,
+            message,
+        })
+        .unwrap_or_else(|_| json!({})),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_project_switch(
+    agent_id: &AgentId,
+    target: ProjectSwitchContext,
+    previous_session_id: SessionId,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+) -> Result<SwitchProjectOutcome, String> {
+    if connection_already_on_project(current_project.lock().as_deref(), &target.project_id) {
+        return Ok(SwitchProjectOutcome::Completed {
+            project_id: target.project_id,
+            session_id: previous_session_id,
+            cwd: target.cwd,
+            mcp_server_count: target.mcp_servers.len(),
+        });
+    }
+
+    let mcp_server_count = target.mcp_servers.len();
+    let outcome = acp
+        .new_session_with_context(
+            agent_id,
+            target.cwd.clone(),
+            target.mcp_servers,
+            SessionCreationContext {
+                project_id: Some(target.project_id.clone()),
+            },
+        )
+        .await?;
+    let new_session = outcome.session_id;
+    let mut persisted_previous_active: Option<Option<String>> = None;
+
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_active = file_registry.active_project_id().map(str::to_string);
+            if let Err(error) = file_registry.set_active_project(&target.project_id) {
+                Err(error.to_string())
+            } else if let Err(error) = file_registry.save_atomic(path) {
+                file_registry.restore_active_project(old_active);
+                Err(error.to_string())
+            } else {
+                persisted_previous_active = Some(old_active);
+                Ok(())
+            }
+        };
+        if let Err(error) = persistence_result {
+            let _ = acp.close_session(agent_id, new_session.clone()).await;
+            return Err(format!("failed to persist active project: {error}"));
+        }
+    }
+
+    if !registry.set_active_project(&target.project_id) {
+        if let (Some(file_registry), Some(path), Some(old_active)) = (
+            registry_persistence,
+            projects_file,
+            persisted_previous_active,
+        ) {
+            let mut file_registry = file_registry.lock();
+            file_registry.restore_active_project(old_active);
+            if let Err(error) = file_registry.save_atomic(path) {
+                warn!("[ws] failed to persist active-project rollback: {error}");
+            }
+        }
+        let _ = acp.close_session(agent_id, new_session.clone()).await;
+        return Err("target project became unavailable before commit".to_string());
+    }
+    broadcast_projects_changed(relay, Some(&target.project_id));
+    *current_session.lock() = Some(new_session.clone());
+    *current_project.lock() = Some(target.project_id.clone());
+
+    if previous_session_id != new_session {
+        if let Err(error) = acp.close_session(agent_id, previous_session_id).await {
+            warn!("[ws] project switch committed but old session close failed: {error}");
+        }
+    }
+
+    Ok(SwitchProjectOutcome::Completed {
+        project_id: target.project_id,
+        session_id: new_session,
+        cwd: target.cwd,
+        mcp_server_count,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_switch_queue(
+    agent_id: AgentId,
+    acp: Arc<AcpManager>,
+    relay: Arc<WsRelaySink>,
+    registry: Arc<ProjectRegistry>,
+    registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<Arc<PathBuf>>,
+    out_tx: mpsc::UnboundedSender<Outbound>,
+    current_session: Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: Arc<parking_lot::Mutex<Option<String>>>,
+    switch_queue: Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
+) {
+    loop {
+        let pending = {
+            let queue = switch_queue.lock().await;
+            queue.pending.clone()
+        };
+        let Some(pending) = pending else {
+            switch_queue.lock().await.worker_running = false;
+            return;
+        };
+
+        if let Err(error) = acp
+            .wait_turn_idle(&agent_id, pending.previous_session_id.clone())
+            .await
+        {
+            let failed = {
+                let mut queue = switch_queue.lock().await;
+                queue.pending.take()
+            };
+            if let Some(failed) = failed {
+                let _ = out_tx.send(Outbound::Event(project_switch_failed_event(
+                    failed.request_id,
+                    failed.target.project_id,
+                    failed.previous_session_id,
+                    error,
+                )));
+            }
+            switch_queue.lock().await.worker_running = false;
+            return;
+        }
+
+        let pending = {
+            let mut queue = switch_queue.lock().await;
+            queue.pending.take()
+        };
+        let Some(pending) = pending else {
+            continue;
+        };
+        match execute_project_switch(
+            &agent_id,
+            pending.target.clone(),
+            pending.previous_session_id.clone(),
+            &acp,
+            &relay,
+            &registry,
+            registry_persistence.as_ref(),
+            projects_file.as_deref(),
+            &current_session,
+            &current_project,
+        )
+        .await
+        {
+            Ok(SwitchProjectOutcome::Completed {
+                project_id,
+                session_id,
+                cwd,
+                mcp_server_count,
+            }) => {
+                let event = SequencedEvent::new(
+                    Some(pending.previous_session_id.0.clone()),
+                    0,
+                    "project_switch_completed",
+                    serde_json::to_value(ProjectSwitchCompletedPayload {
+                        status: "completed",
+                        request_id: pending.request_id,
+                        project_id,
+                        previous_session_id: pending.previous_session_id,
+                        session_id,
+                        cwd,
+                        mcp_server_count,
+                    })
+                    .unwrap_or_else(|_| json!({})),
+                );
+                let _ = out_tx.send(Outbound::Event(event));
+            }
+            Ok(SwitchProjectOutcome::Queued { .. }) => {}
+            Err(error) => {
+                let _ = out_tx.send(Outbound::Event(project_switch_failed_event(
+                    pending.request_id,
+                    pending.target.project_id,
+                    pending.previous_session_id,
+                    error,
+                )));
+            }
+        }
+        let mut queue = switch_queue.lock().await;
+        if queue.pending.is_some() {
+            continue;
+        }
+        queue.worker_running = false;
+        return;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_switch_project(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    current_agent: &mut Option<crate::acp::AgentId>,
-    current_session: &mut Option<crate::acp::SessionId>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+    out_tx: &mpsc::UnboundedSender<Outbound>,
+    current_agent: &mut Option<AgentId>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+    switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
 ) -> WsReply {
     let parsed: SwitchProjectPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -878,10 +1311,8 @@ async fn handle_switch_project(
             )
         }
     };
-    // Ask-First resolution: reuse the connection's last agent; do NOT auto-spawn.
-    // A cold web tab (no session created / agent spawned yet) → NO_AGENT.
-    let agent_id = match current_agent {
-        Some(a) => a.clone(),
+    let agent_id = match current_agent.clone() {
+        Some(agent_id) => agent_id,
         None => {
             return WsReply::err(
                 id,
@@ -890,34 +1321,89 @@ async fn handle_switch_project(
             )
         }
     };
-    // Resolve projectId → cwd via the in-memory registry (renderer-fed).
-    let cwd = match registry.find_path(&parsed.project_id) {
-        Some(p) => p,
+    let previous_session_id = match current_session.lock().clone() {
+        Some(session_id) => session_id,
+        None => {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                "switch_project requires a tracked current session",
+            )
+        }
+    };
+    let target = match registry.switch_context(&parsed.project_id) {
+        Some(target) => target,
         None => {
             return WsReply::err(
                 id,
                 WsErrorCode::NotFound,
                 format!(
-                    "project '{}' not found or has no working directory",
+                    "project '{}' not found or not switchable",
                     parsed.project_id
                 ),
             )
         }
     };
-    // Start a NEW session at the project's cwd (NOT re-rooting a live agent).
-    let new_session = match acp.new_session(&agent_id, cwd, vec![]).await {
-        Ok(outcome) => outcome.session_id,
-        Err(e) => return acp_err_to_reply(id, e),
-    };
-    // Close the old web-focused session AFTER the new one is ready (best-effort
-    // — the agent may not support `close`; a failure must not strand the client).
-    if let Some(old) = current_session.take() {
-        if old != new_session {
-            let _ = acp.close_session(&agent_id, old).await;
+
+    match acp
+        .is_turn_active(&agent_id, previous_session_id.clone())
+        .await
+    {
+        Ok(false) => match execute_project_switch(
+            &agent_id,
+            target,
+            previous_session_id,
+            acp,
+            relay,
+            registry,
+            registry_persistence,
+            projects_file,
+            current_session,
+            current_project,
+        )
+        .await
+        {
+            Ok(outcome) => ok_with_payload(id, &outcome),
+            Err(error) => acp_err_to_reply(id, error),
+        },
+        Ok(true) => {
+            let outcome = SwitchProjectOutcome::Queued {
+                project_id: target.project_id.clone(),
+                current_session_id: previous_session_id.clone(),
+            };
+            let mut queue = switch_queue.lock().await;
+            let replaced = queue.replace_pending(PendingProjectSwitch {
+                request_id: id.clone(),
+                target,
+                previous_session_id,
+            });
+            if let Some(replaced) = replaced {
+                let _ = out_tx.send(Outbound::Event(project_switch_failed_event(
+                    replaced.request_id,
+                    replaced.target.project_id,
+                    replaced.previous_session_id,
+                    "queued project switch was replaced by a newer request".to_string(),
+                )));
+            }
+            if !queue.worker_running {
+                queue.worker_running = true;
+                tokio::spawn(run_switch_queue(
+                    agent_id,
+                    Arc::clone(acp),
+                    Arc::clone(relay),
+                    Arc::clone(registry),
+                    registry_persistence.cloned(),
+                    projects_file.cloned().map(Arc::new),
+                    out_tx.clone(),
+                    Arc::clone(current_session),
+                    Arc::clone(current_project),
+                    Arc::clone(switch_queue),
+                ));
+            }
+            ok_with_payload(id, &outcome)
         }
+        Err(error) => acp_err_to_reply(id, error),
     }
-    *current_session = Some(new_session.clone());
-    WsReply::ok(id, Some(json!({ "sessionId": new_session })))
 }
 
 /// `load_session` → `AcpManager::load_session(agent_id, session_id, cwd)`.
@@ -934,20 +1420,31 @@ async fn handle_load_session(
     payload: &Value,
     acp: &Arc<AcpManager>,
     current_agent: &mut Option<crate::acp::AgentId>,
-    current_session: &mut Option<crate::acp::SessionId>,
+    current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed load_session payload (want agentId, sessionId, cwd): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed load_session payload (want agentId, sessionId, cwd): {e}"),
+            )
+        }
     };
     // Clone the ids before the call moves `parsed.session_id` + `parsed.cwd`;
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp.load_session(&agent_id, parsed.session_id, parsed.cwd).await {
+    match acp
+        .load_session(&agent_id, parsed.session_id, parsed.cwd)
+        .await
+    {
         Ok(()) => {
             *current_agent = Some(agent_id);
-            *current_session = Some(session_id);
+            *current_session.lock() = Some(session_id);
+            *current_project.lock() = None;
             WsReply::ok(id, Some(json!({})))
         }
         Err(e) => acp_err_to_reply(id, e),
@@ -960,20 +1457,31 @@ async fn handle_resume_session(
     payload: &Value,
     acp: &Arc<AcpManager>,
     current_agent: &mut Option<crate::acp::AgentId>,
-    current_session: &mut Option<crate::acp::SessionId>,
+    current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed resume_session payload (want agentId, sessionId, cwd): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed resume_session payload (want agentId, sessionId, cwd): {e}"),
+            )
+        }
     };
     // Clone the ids before the call moves `parsed.session_id` + `parsed.cwd`;
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp.resume_session(&agent_id, parsed.session_id, parsed.cwd).await {
+    match acp
+        .resume_session(&agent_id, parsed.session_id, parsed.cwd)
+        .await
+    {
         Ok(()) => {
             *current_agent = Some(agent_id);
-            *current_session = Some(session_id);
+            *current_session.lock() = Some(session_id);
+            *current_project.lock() = None;
             WsReply::ok(id, Some(json!({})))
         }
         Err(e) => acp_err_to_reply(id, e),
@@ -988,13 +1496,32 @@ struct CloseSessionPayload {
     session_id: crate::acp::SessionId,
 }
 
-async fn handle_close_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+async fn handle_close_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+) -> WsReply {
     let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed close_session payload (want agentId, sessionId): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed close_session payload (want agentId, sessionId): {e}"),
+            )
+        }
     };
+    let closing_session_id = parsed.session_id.clone();
     match acp.close_session(&parsed.agent_id, parsed.session_id).await {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Ok(()) => {
+            if current_session.lock().as_ref() == Some(&closing_session_id) {
+                *current_session.lock() = None;
+                *current_project.lock() = None;
+            }
+            WsReply::ok(id, Some(json!({})))
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -1013,9 +1540,18 @@ struct ListSessionsPayload {
 async fn handle_list_sessions(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
     let parsed: ListSessionsPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed list_sessions payload (want agentId, cwd?, cursor?): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed list_sessions payload (want agentId, cwd?, cursor?): {e}"),
+            )
+        }
     };
-    match acp.list_sessions(&parsed.agent_id, parsed.cwd, parsed.cursor).await {
+    match acp
+        .list_sessions(&parsed.agent_id, parsed.cwd, parsed.cursor)
+        .await
+    {
         Ok(resp) => ok_with_payload(id, &resp),
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -1067,18 +1603,86 @@ async fn handle_send_prompt(
                 agent_client_protocol::schema::TextContent::new(text),
             )]
         }
-        _ => return WsReply::err(id, WsErrorCode::Unsupported, "send_prompt requires non-empty `text` or `content`"),
+        _ => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                "send_prompt requires non-empty `text` or `content`",
+            )
+        }
     };
 
-    // Story 1.8 T3.3: reject a stale turn the client already completed
-    // (FR13 last-completed-turn watermark). Best-effort — if no turnId, skip.
-    if let Some(turn_id) = &parsed.turn_id {
-        if relay.turn_watermark().is_completed(parsed.session_id.0.as_str(), turn_id) {
-            return WsReply::err(id, WsErrorCode::Stale, "this turn already completed (stale turn-id)");
+    // Ownership is authoritative driver state, not browser input. Reject a
+    // cross-agent session id before claiming a turn, assigning a relay seq, or
+    // writing any durable prompt record.
+    match acp
+        .owns_session(&parsed.agent_id, parsed.session_id.clone())
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                "session does not belong to the supplied live agent",
+            )
+        }
+        Err(error) => return acp_err_to_reply(id, error),
+    }
+
+    // Claim before persistence so duplicate/busy turns cannot create durable
+    // prompt records. The manager still enforces its driver-thread single-flight
+    // invariant; this closes the web persistence ordering gap.
+    match relay
+        .turn_watermark()
+        .claim_turn(parsed.session_id.0.as_str(), parsed.turn_id.as_deref())
+    {
+        TurnClaim::Claimed => {}
+        TurnClaim::Completed => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Stale,
+                "this turn already completed (stale turn-id)",
+            )
+        }
+        TurnClaim::DuplicateInFlight | TurnClaim::Busy => {
+            return WsReply::err(
+                id,
+                WsErrorCode::RateLimited,
+                "a prompt turn is already in progress",
+            )
         }
     }
 
-    match acp.send_prompt(&parsed.agent_id, parsed.session_id.clone(), content, parsed.turn_id.clone()).await {
+    let prompt_payload = json!({
+        "agentId": parsed.agent_id.clone(),
+        "sessionId": parsed.session_id.clone(),
+        "turnId": parsed.turn_id.clone(),
+        "content": content.clone(),
+    });
+    if let Err(error) = relay
+        .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
+        .await
+    {
+        relay
+            .turn_watermark()
+            .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+        return WsReply::err(
+            id,
+            WsErrorCode::NotImplemented,
+            format!("failed to persist accepted prompt: {error}"),
+        );
+    }
+
+    match acp
+        .send_prompt(
+            &parsed.agent_id,
+            parsed.session_id.clone(),
+            content,
+            parsed.turn_id.clone(),
+        )
+        .await
+    {
         Ok(stop_reason) => {
             // Story 1.8 T3.3: advance the watermark on completion so a stale
             // `send_prompt` for the same turn-id is rejected on reconnect
@@ -1095,7 +1699,12 @@ async fn handle_send_prompt(
             }
             ok_with_payload(id, &stop_reason)
         }
-        Err(e) => acp_err_to_reply(id, e),
+        Err(e) => {
+            relay
+                .turn_watermark()
+                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+            acp_err_to_reply(id, e)
+        }
     }
 }
 
@@ -1110,7 +1719,13 @@ struct SessionOnlyPayload {
 async fn handle_cancel_prompt(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
     let parsed: SessionOnlyPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed cancel_prompt payload (want agentId, sessionId): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed cancel_prompt payload (want agentId, sessionId): {e}"),
+            )
+        }
     };
     match acp.cancel_prompt(&parsed.agent_id, parsed.session_id).await {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
@@ -1130,9 +1745,18 @@ struct SetModePayload {
 async fn handle_set_mode(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
     let parsed: SetModePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_mode payload (want agentId, sessionId, modeId): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed set_mode payload (want agentId, sessionId, modeId): {e}"),
+            )
+        }
     };
-    match acp.set_mode(&parsed.agent_id, parsed.session_id, parsed.mode_id).await {
+    match acp
+        .set_mode(&parsed.agent_id, parsed.session_id, parsed.mode_id)
+        .await
+    {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -1150,9 +1774,18 @@ struct SetModelPayload {
 async fn handle_set_model(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
     let parsed: SetModelPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_model payload (want agentId, sessionId, modelId): {e}")),
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed set_model payload (want agentId, sessionId, modelId): {e}"),
+            )
+        }
     };
-    match acp.set_model(&parsed.agent_id, parsed.session_id, parsed.model_id).await {
+    match acp
+        .set_model(&parsed.agent_id, parsed.session_id, parsed.model_id)
+        .await
+    {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -1175,14 +1808,22 @@ async fn handle_set_config_option(id: String, payload: &Value, acp: &Arc<AcpMana
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_config_option payload (want agentId, sessionId, configId, valueId): {e}")),
     };
-    match acp.set_config_option(&parsed.agent_id, parsed.session_id, parsed.config_id, parsed.value_id).await {
+    match acp
+        .set_config_option(
+            &parsed.agent_id,
+            parsed.session_id,
+            parsed.config_id,
+            parsed.value_id,
+        )
+        .await
+    {
         Ok(options) => ok_with_payload(id, &options),
         Err(e) => acp_err_to_reply(id, e),
     }
 }
 
 /// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
-fn handle_subscribe(
+async fn handle_subscribe(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
@@ -1213,7 +1854,7 @@ fn handle_subscribe(
         }
     });
 
-    let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq);
+    let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
         ReplayResult::Stale => WsReply::err(
             id,
@@ -1292,7 +1933,11 @@ async fn handle_respond_permission(
     // Defense in depth: the payload's `agentId` must match the ticket's agent
     // (a client cannot resolve another agent's permission).
     let Some(ticket_agent) = rdz.agent_for_request(&parsed.request_id) else {
-        return WsReply::err(id, WsErrorCode::Stale, "no outstanding permission for this requestId");
+        return WsReply::err(
+            id,
+            WsErrorCode::Stale,
+            "no outstanding permission for this requestId",
+        );
     };
     if ticket_agent != parsed.agent_id {
         return WsReply::err(
@@ -1307,7 +1952,11 @@ async fn handle_respond_permission(
     // to one). Ownership check: the connection MUST be subscribed to the
     // permission's session (NFR5 — no cross-session permission resolution).
     let Some(session_id) = rdz.session_for_request(&parsed.request_id) else {
-        return WsReply::err(id, WsErrorCode::Stale, "no outstanding permission for this requestId");
+        return WsReply::err(
+            id,
+            WsErrorCode::Stale,
+            "no outstanding permission for this requestId",
+        );
     };
     let Some((_, client_id)) = subscribed_clients
         .iter()
@@ -1322,32 +1971,36 @@ async fn handle_respond_permission(
     let client_id = *client_id;
 
     let option_id = parsed.option_id.as_deref();
-    match rdz.try_respond(client_id, &parsed.request_id, option_id).await {
-        Ok(crate::web::permissions::RespondOutcome::Resolved) => {
-            WsReply::ok(id, Some(json!({})))
-        }
+    match rdz
+        .try_respond(client_id, &parsed.request_id, option_id)
+        .await
+    {
+        Ok(crate::web::permissions::RespondOutcome::Resolved) => WsReply::ok(id, Some(json!({}))),
         Err(err) => {
             // Map each rendezvous rejection to its stable `err.code` (mirrors
             // `RespondError::wire_code`, but goes through `WsErrorCode` so the
             // enum + TS const stay the single source of truth).
             let (code, msg) = match err {
-                crate::web::permissions::RespondError::NotFound => {
-                    (WsErrorCode::Stale, "no outstanding permission for this requestId")
-                }
+                crate::web::permissions::RespondError::NotFound => (
+                    WsErrorCode::Stale,
+                    "no outstanding permission for this requestId",
+                ),
                 crate::web::permissions::RespondError::AlreadyResolved => (
                     WsErrorCode::Stale,
                     "this permission was already resolved by another client (first-response-wins)",
                 ),
-                crate::web::permissions::RespondError::Duplicate => {
-                    (WsErrorCode::Duplicate, "this client already responded to this permission")
-                }
+                crate::web::permissions::RespondError::Duplicate => (
+                    WsErrorCode::Duplicate,
+                    "this client already responded to this permission",
+                ),
                 crate::web::permissions::RespondError::InvalidOption => (
                     WsErrorCode::PermissionDenied,
                     "optionId is not among the original permission options (TOCTOU defense)",
                 ),
-                crate::web::permissions::RespondError::NotSubscribed => {
-                    (WsErrorCode::NotFound, "not subscribed to the permission's session")
-                }
+                crate::web::permissions::RespondError::NotSubscribed => (
+                    WsErrorCode::NotFound,
+                    "not subscribed to the permission's session",
+                ),
             };
             WsReply::err(id, code, msg)
         }
@@ -1366,6 +2019,61 @@ async fn handle_respond_permission(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use std::collections::HashSet;
+
+    #[tokio::test]
+    async fn cross_agent_prompt_is_rejected_before_claim_or_persistence() {
+        let root = std::env::temp_dir().join(format!("termul-ws-ownership-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-a".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: Some("agent-a".to_string()),
+                project_id: None,
+                cwd,
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+        acp.install_test_agent_with_sessions(
+            crate::acp::AgentId("agent-b".to_string()),
+            HashSet::new(),
+        );
+
+        let reply = handle_send_prompt(
+            "request-1".to_string(),
+            &json!({
+                "agentId": "agent-b",
+                "sessionId": "session-a",
+                "text": "must not persist",
+                "turnId": "turn-cross-agent"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert_eq!(persistence.last_seq("session-a").unwrap(), 0);
+        assert!(persistence.replay_after("session-a", 0).unwrap().is_empty());
+        assert_eq!(
+            relay
+                .turn_watermark()
+                .claim_turn("session-a", Some("turn-cross-agent")),
+            TurnClaim::Claimed
+        );
+        relay
+            .turn_watermark()
+            .release_claim("session-a", Some("turn-cross-agent"));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn tier_of_maps_lossy_events() {
@@ -1437,9 +2145,14 @@ mod tests {
 
     #[test]
     fn sequenced_event_serializes_snake_case_envelope() {
-        let evt = SequencedEvent::new(Some("sess-1".to_string()), 7, "message_chunk", json!({
-            "agentId": "a1", "sessionId": "sess-1", "role": "agent"
-        }));
+        let evt = SequencedEvent::new(
+            Some("sess-1".to_string()),
+            7,
+            "message_chunk",
+            json!({
+                "agentId": "a1", "sessionId": "sess-1", "role": "agent"
+            }),
+        );
         let v = serde_json::to_value(&evt).expect("serialize");
         // Envelope fields are snake_case.
         assert_eq!(v["sid"], "sess-1");
@@ -1460,6 +2173,74 @@ mod tests {
     }
 
     #[test]
+    fn project_switch_outcomes_and_failure_event_serialize_camel_case() {
+        let completed = SwitchProjectOutcome::Completed {
+            project_id: "p-2".to_string(),
+            session_id: SessionId("s-new".to_string()),
+            cwd: "/work/p2".to_string(),
+            mcp_server_count: 2,
+        };
+        let completed = serde_json::to_value(completed).expect("completed serde");
+        assert_eq!(completed["status"], "completed");
+        assert_eq!(completed["projectId"], "p-2");
+        assert_eq!(completed["sessionId"], "s-new");
+        assert_eq!(completed["mcpServerCount"], 2);
+
+        let queued = SwitchProjectOutcome::Queued {
+            project_id: "p-3".to_string(),
+            current_session_id: SessionId("s-old".to_string()),
+        };
+        let queued = serde_json::to_value(queued).expect("queued serde");
+        assert_eq!(queued["status"], "queued");
+        assert_eq!(queued["projectId"], "p-3");
+        assert_eq!(queued["currentSessionId"], "s-old");
+
+        let failed = project_switch_failed_event(
+            "r-1".to_string(),
+            "p-3".to_string(),
+            SessionId("s-old".to_string()),
+            "persist failed".to_string(),
+        );
+        assert_eq!(failed.type_, "project_switch_failed");
+        assert_eq!(failed.sid.as_deref(), Some("s-old"));
+        assert_eq!(failed.seq, 0);
+        assert_eq!(failed.payload["requestId"], "r-1");
+        assert_eq!(failed.payload["projectId"], "p-3");
+        assert_eq!(failed.payload["previousSessionId"], "s-old");
+        assert_eq!(failed.payload["message"], "persist failed");
+    }
+
+    #[test]
+    fn connection_specific_no_op_requires_known_matching_project() {
+        assert!(!connection_already_on_project(None, "p-1"));
+        assert!(!connection_already_on_project(Some("p-2"), "p-1"));
+        assert!(connection_already_on_project(Some("p-1"), "p-1"));
+    }
+
+    #[test]
+    fn project_switch_queue_replacement_is_latest_wins() {
+        let pending = |request_id: &str, project_id: &str| PendingProjectSwitch {
+            request_id: request_id.to_string(),
+            target: ProjectSwitchContext {
+                project_id: project_id.to_string(),
+                cwd: format!("/work/{project_id}"),
+                mcp_servers: Vec::new(),
+                is_active: false,
+            },
+            previous_session_id: SessionId("s-old".to_string()),
+        };
+        let mut queue = ProjectSwitchQueue::default();
+        assert!(queue.replace_pending(pending("r-1", "p-1")).is_none());
+        let replaced = queue
+            .replace_pending(pending("r-2", "p-2"))
+            .expect("first request replaced");
+        assert_eq!(replaced.request_id, "r-1");
+        assert_eq!(replaced.target.project_id, "p-1");
+        assert_eq!(queue.pending.as_ref().unwrap().request_id, "r-2");
+        assert_eq!(queue.pending.as_ref().unwrap().target.project_id, "p-2");
+    }
+
+    #[test]
     fn ws_reply_ok_and_err_shape() {
         let ok = WsReply::ok("r1", Some(json!({"ok": true})));
         let v = serde_json::to_value(&ok).expect("serialize ok");
@@ -1474,7 +2255,10 @@ mod tests {
         assert_eq!(ve["ok"], false);
         assert_eq!(ve["err"]["code"], "unauthorized");
         assert_eq!(ve["err"]["message"], "nope");
-        assert!(ve.get("payload").is_none(), "payload must be omitted on failure");
+        assert!(
+            ve.get("payload").is_none(),
+            "payload must be omitted on failure"
+        );
     }
 
     fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
@@ -1492,7 +2276,9 @@ mod tests {
         // populated registry.
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<AgentId> = None;
-        let mut current_session: Option<SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1503,10 +2289,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ))
     }
 
@@ -1673,16 +2464,25 @@ mod tests {
     #[test]
     fn acp_err_to_reply_maps_recognizable_errors() {
         // ACP_TURN_IN_PROGRESS → rate_limited (via map_prompt_error_code).
-        let r = acp_err_to_reply("r1".to_string(), "ACP_TURN_IN_PROGRESS: session s1".to_string());
+        let r = acp_err_to_reply(
+            "r1".to_string(),
+            "ACP_TURN_IN_PROGRESS: session s1".to_string(),
+        );
         assert_eq!(r.err.unwrap().code, "rate_limited");
         // Unknown agent → not_found.
         let r = acp_err_to_reply("r2".to_string(), "unknown agent: a1".to_string());
         assert_eq!(r.err.unwrap().code, "not_found");
         // Capability gate → unsupported.
-        let r = acp_err_to_reply("r3".to_string(), "agent does not support session/load (loadSession capability)".to_string());
+        let r = acp_err_to_reply(
+            "r3".to_string(),
+            "agent does not support session/load (loadSession capability)".to_string(),
+        );
         assert_eq!(r.err.unwrap().code, "unsupported");
         // Unrecognized → not_implemented (fallback, message preserved).
-        let r = acp_err_to_reply("r4".to_string(), "agent initialize failed: boom".to_string());
+        let r = acp_err_to_reply(
+            "r4".to_string(),
+            "agent initialize failed: boom".to_string(),
+        );
         assert_eq!(r.err.unwrap().code, "not_implemented");
     }
 
@@ -1708,13 +2508,17 @@ mod tests {
         // Attach a rendezvous so we reach the payload-parse branch.
         let relay = Arc::new(WsRelaySink::new());
         let acp = Arc::new(AcpManager::new(vec![]));
-        relay.set_rendezvous(Arc::new(crate::web::permissions::PermissionRendezvous::default()));
+        relay.set_rendezvous(Arc::new(
+            crate::web::permissions::PermissionRendezvous::default(),
+        ));
         let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1725,10 +2529,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -1751,7 +2560,7 @@ mod tests {
         ));
         // Subscribe a client to the session (populates subscribed_clients via
         // the production subscribe path).
-        let (client_id, _rx, _replay) = relay.subscribe(session_id, None);
+        let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         // Emit a permission_request event through the sink (production path) so
         // the rendezvous snapshots a ticket.
@@ -1794,17 +2603,24 @@ mod tests {
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -1822,7 +2638,7 @@ mod tests {
         relay.set_rendezvous(Arc::new(
             crate::web::permissions::PermissionRendezvous::default(),
         ));
-        let (_other_client, _rx, _replay) = relay.subscribe("sess-B", None);
+        let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
             sid: Some("sess-A".to_string()),
@@ -1836,17 +2652,24 @@ mod tests {
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -1864,17 +2687,24 @@ mod tests {
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
         // Second frame for the same requestId → stale (ticket evicted).
@@ -1884,10 +2714,15 @@ mod tests {
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -1904,17 +2739,24 @@ mod tests {
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -1948,7 +2790,9 @@ mod tests {
         let mut authed = true;
         let registry = Arc::new(ProjectRegistry::new());
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1959,10 +2803,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "stale");
@@ -1979,10 +2828,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs2,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ));
         assert!(reply_ok.ok, "{:?}", reply_ok.err);
         assert_eq!(subs2.len(), 1);
@@ -1998,10 +2852,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs2,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ));
         assert!(reply_resub.ok, "{:?}", reply_resub.err);
         assert_eq!(subs2.len(), 1);
@@ -2018,10 +2877,15 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
+                None,
+                None,
                 &tx,
                 &mut subs3,
                 &mut current_agent,
-                &mut current_session,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
             ));
         assert!(reply_live.ok, "{:?}", reply_live.err);
 
@@ -2067,17 +2931,24 @@ mod tests {
         let mut subs = Vec::new();
         let mut authed = true;
         let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
-        let mut current_session: Option<crate::acp::SessionId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
             &acp,
             &relay,
             &registry,
+            None,
+            None,
             &tx,
             &mut subs,
             &mut current_agent,
-            &mut current_session,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");

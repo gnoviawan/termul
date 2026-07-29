@@ -106,7 +106,9 @@ pub async fn serve_embedded(uri: Uri) -> Response {
 /// e.g. `index-abc.js`, `style.css`, `font.woff2`). Used to distinguish a
 /// missing asset (404) from a client-side route (SPA `index.html`).
 fn last_segment_has_extension(path: &str) -> bool {
-    path.rsplit('/').next().is_some_and(|last| last.contains('.'))
+    path.rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains('.'))
 }
 
 /// Serve the embedded `index.html` (the SPA entry). `index.html` is the
@@ -139,11 +141,7 @@ fn embedded_index() -> Response {
 fn embedded_response(mime: &str, data: Cow<'static, [u8]>, _path: &str) -> Response {
     let mime_val = HeaderValue::from_str(mime)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
-    let mut resp = (
-        [(header::CONTENT_TYPE, mime_val)],
-        Body::from(data),
-    )
-        .into_response();
+    let mut resp = ([(header::CONTENT_TYPE, mime_val)], Body::from(data)).into_response();
     // Content-hashed assets are safe to cache immutably (the hash changes per
     // build, so a stale cache never collides with a new asset name).
     resp.headers_mut().insert(
@@ -246,7 +244,8 @@ mod tests {
             );
         } else {
             assert_eq!(
-                status, StatusCode::NOT_FOUND,
+                status,
+                StatusCode::NOT_FOUND,
                 "empty embed → root 404 (run `bun run build:web` to populate)"
             );
         }
@@ -267,7 +266,8 @@ mod tests {
         let (status, _, _, _) = fetch_embedded("/v1.2/home").await;
         if embed_present() {
             assert_eq!(
-                status, StatusCode::OK,
+                status,
+                StatusCode::OK,
                 "dotted client route → SPA index.html (last segment has no `.`)"
             );
         } else {

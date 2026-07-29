@@ -19,6 +19,35 @@ use std::path::{Path, PathBuf};
 ///
 /// `None` is returned only when no home directory is discoverable and the
 /// env var is unset; callers should treat that as a fatal startup error.
+pub fn default_sessions_dir() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("TERMUL_SESSIONS_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
+            return Some(base.join("termul").join("sessions"));
+        }
+        return std::env::var_os("HOME").map(PathBuf::from).map(|home| {
+            home.join(".local")
+                .join("state")
+                .join("termul")
+                .join("sessions")
+        });
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|base| base.join("Termul").join("sessions"))
+    }
+    #[cfg(not(any(unix, windows)))]
+    None
+}
+
 pub fn default_project_root() -> Option<PathBuf> {
     if let Ok(env_root) = std::env::var("TERMUL_PROJECT_ROOT") {
         let trimmed = env_root.trim();
@@ -58,12 +87,9 @@ pub fn default_project_root() -> Option<PathBuf> {
 pub fn resolve_and_validate_project_root(raw: &Path) -> Result<PathBuf, String> {
     // 1) Canonicalize: absolute path, symlinks resolved, and the path must
     //    exist for canonicalize to succeed.
-    let canonical = raw.canonicalize().map_err(|e| {
-        format!(
-            "project root '{}' is not accessible: {e}",
-            raw.display()
-        )
-    })?;
+    let canonical = raw
+        .canonicalize()
+        .map_err(|e| format!("project root '{}' is not accessible: {e}", raw.display()))?;
     // 2) Must be a directory. A file is a valid fs target for the
     //    boundary check, but it would make the fs_api routes useless
     //    (`mkdir` cannot create children inside a file, `ls`/`browse`
@@ -141,6 +167,8 @@ pub struct ServerConfig {
     /// invalid root is). Desktop-hosted shared-live mode leaves this `None`
     /// (it queries the live `AcpManager`, not a registry file).
     pub projects_file: Option<PathBuf>,
+    /// Standalone-only durable session root. Desktop shared-live uses `None`.
+    pub sessions_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -181,6 +209,7 @@ impl ServerConfig {
         // registry at load, not a fatal error). Defaults to None; an
         // optional $TERMUL_PROJECTS_FILE env var is honored after the loop.
         let mut projects_file: Option<PathBuf> = None;
+        let mut sessions_dir: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -269,6 +298,18 @@ impl ServerConfig {
                         .map_err(ParseCliError::Message)?;
                     project_root = Some(validated);
                 }
+                "--sessions-dir" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --sessions-dir".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --sessions-dir '': must be a non-empty path".into(),
+                        ));
+                    }
+                    sessions_dir = Some(PathBuf::from(trimmed));
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -329,6 +370,19 @@ impl ServerConfig {
             }),
         };
 
+        let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
+            ParseCliError::Message(
+                "could not determine sessions directory: set --sessions-dir or $TERMUL_SESSIONS_DIR"
+                    .into(),
+            )
+        })?;
+        if sessions_dir.exists() && !sessions_dir.is_dir() {
+            return Err(ParseCliError::Message(format!(
+                "sessions directory '{}' is not a directory",
+                sessions_dir.display()
+            )));
+        }
+
         Ok(Self {
             host,
             port,
@@ -336,6 +390,7 @@ impl ServerConfig {
             permission_timeout_secs,
             project_root,
             projects_file,
+            sessions_dir: Some(sessions_dir),
         })
     }
 }
@@ -457,6 +512,7 @@ mod tests {
             permission_timeout_secs: 60,
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
+            sessions_dir: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -470,6 +526,7 @@ mod tests {
             permission_timeout_secs: 60,
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
+            sessions_dir: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -479,7 +536,10 @@ mod tests {
         let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
-        assert_eq!(cfg.event_log_capacity, 4096, "default event-log-capacity is 4096 (AC4)");
+        assert_eq!(
+            cfg.event_log_capacity, 4096,
+            "default event-log-capacity is 4096 (AC4)"
+        );
         assert_eq!(
             cfg.permission_timeout_secs, 60,
             "default permission-timeout is 60s (Story 1.7 / FR14)"

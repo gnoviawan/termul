@@ -33,6 +33,7 @@ class FakeWebSocket {
   holdSendPrompt = false
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
+  switchProjectReply: unknown = null
 
   constructor(public url: string) {
     queueMicrotask(() => {
@@ -73,6 +74,10 @@ class FakeWebSocket {
         ok: true,
         payload: { sessionId: payload.sessionId, replayed: 0 }
       })
+      return
+    }
+    if (req.type === 'switch_project' && this.switchProjectReply) {
+      this.emitReply({ id: req.id, ok: true, payload: this.switchProjectReply })
       return
     }
     if (req.type === 'create_session') {
@@ -241,7 +246,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('switchProject sends a switch_project request with { projectId }', async () => {
+  it('switchProject maps completed replies and subscribes the new session', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -249,15 +254,93 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
 
-    // FakeWebSocket replies `not_implemented` for unknown request types — the
-    // point here is the request frame shape (type + payload), not the reply.
-    await expect(transport.switchProject('p-2')).rejects.toBeInstanceOf(AcpTransportError)
+    sock.switchProjectReply = {
+      status: 'completed',
+      projectId: 'p-2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 2
+    }
+    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
 
     const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
     const switchReq = sent.find((r) => r.type === 'switch_project')
     expect(switchReq).toBeTruthy()
     expect(switchReq?.payload).toEqual({ projectId: 'p-2' })
+    expect(sent).toContainEqual(
+      expect.objectContaining({ type: 'subscribe', payload: { sessionId: 's-new' } })
+    )
 
+    transport.dispose()
+  })
+
+  it('switchProject maps queued replies without subscribing early', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.switchProjectReply = {
+      status: 'queued',
+      projectId: 'p-2',
+      currentSessionId: 's-old'
+    }
+
+    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    expect(sent.filter((frame) => frame.type === 'subscribe')).toHaveLength(0)
+    transport.dispose()
+  })
+
+  it('subscribes before emitting queued project switch completion', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const completed: unknown[] = []
+    transport.onEvent('project_switch_completed', (payload) => completed.push(payload))
+    const payload = {
+      status: 'completed',
+      requestId: 'r-switch',
+      projectId: 'p-2',
+      previousSessionId: 's-old',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 1
+    }
+
+    sock.emit({ sid: 's-old', seq: 0, type: 'project_switch_completed', payload })
+    await vi.waitFor(() => expect(completed).toEqual([payload]))
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    expect(sent).toContainEqual(
+      expect.objectContaining({ type: 'subscribe', payload: { sessionId: 's-new' } })
+    )
+    transport.dispose()
+  })
+
+  it('delivers correlated queued project switch failure without subscribing', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const failed: unknown[] = []
+    transport.onEvent('project_switch_failed', (payload) => failed.push(payload))
+    const payload = {
+      requestId: 'r-switch',
+      projectId: 'p-2',
+      previousSessionId: 's-old',
+      message: 'target project became unavailable before commit'
+    }
+
+    sock.emit({ sid: 's-old', seq: 0, type: 'project_switch_failed', payload })
+    await vi.waitFor(() => expect(failed).toEqual([payload]))
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string })
+    expect(sent.filter((frame) => frame.type === 'subscribe')).toHaveLength(0)
     transport.dispose()
   })
 

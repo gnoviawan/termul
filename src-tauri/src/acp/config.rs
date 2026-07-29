@@ -73,6 +73,10 @@ impl From<&SessionId> for agent_client_protocol::schema::SessionId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
+    /// Stable renderer/config identity used for durable session matching. It is
+    /// never used as a filesystem component and may be absent for older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_id: Option<String>,
     /// Human-readable name for this agent (also used as the MCP server name in the
     /// underlying stdio transport config).
     pub name: String,
@@ -279,6 +283,7 @@ mod tests {
         let mut env = HashMap::new();
         env.insert("API_KEY".to_string(), "secret".to_string());
         let config = AgentConfig {
+            config_id: None,
             name: "test-agent".to_string(),
             command: "/usr/bin/agent".to_string(),
             args: vec!["--acp".to_string()],
@@ -322,6 +327,7 @@ mod tests {
         std::fs::write(&shim_path, shim_content).unwrap();
 
         let config = AgentConfig {
+            config_id: None,
             name: "gemini".to_string(),
             command: shim_path.to_string_lossy().to_string(),
             args: vec!["--experimental-acp".to_string()],

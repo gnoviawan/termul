@@ -39,6 +39,9 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::acp::session_persistence::{
+    now_millis, PersistedEventRecord, SessionPersistence, SESSION_SCHEMA_VERSION,
+};
 use crate::web::project_registry::ProjectsChangedPayload;
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
 
@@ -151,6 +154,11 @@ pub struct WsRelaySink {
     /// `prompt_complete` / `send_prompt` handlers read this via
     /// [`Self::turn_watermark`] to dedup agent turns by client turn-id.
     turn_watermark: crate::web::permissions::TurnWatermark,
+    /// Standalone durable history. Desktop/shared-live leave this disabled.
+    persistence: Option<Arc<SessionPersistence>>,
+    /// Serializes each session's durable replay/catch-up/register handoff.
+    /// Emits remain non-blocking and use the synchronous session state lock.
+    replay_gates: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Per-session seq + append-only bounded ring (held under [`WsRelaySink::sessions`]).
@@ -226,6 +234,8 @@ impl WsRelaySink {
             lossy_capacity: lossy_capacity.max(1),
             rendezvous: Mutex::new(None),
             turn_watermark: crate::web::permissions::TurnWatermark::new(),
+            persistence: None,
+            replay_gates: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -235,6 +245,27 @@ impl WsRelaySink {
     #[must_use]
     pub fn with_log_capacity(event_log_capacity: usize) -> Self {
         Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY)
+    }
+
+    #[must_use]
+    pub fn with_persistence(
+        event_log_capacity: usize,
+        persistence: Arc<SessionPersistence>,
+    ) -> Self {
+        let mut sink = Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY);
+        for entry in persistence.list_sessions() {
+            if let Ok(turn_ids) = persistence.completed_turn_ids(&entry.session_id) {
+                sink.turn_watermark
+                    .restore_completed(&entry.session_id, turn_ids);
+            }
+        }
+        sink.persistence = Some(persistence);
+        sink
+    }
+
+    #[must_use]
+    pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
+        self.persistence.clone()
     }
 
     /// The configured per-session event-log capacity (AC4).
@@ -283,11 +314,18 @@ impl WsRelaySink {
     /// Assign seq + append under the sessions lock (atomic w.r.t. concurrent emits).
     fn assign_and_append(&self, sid: &str, type_: &str, payload: Value) -> SequencedEvent {
         let mut sessions = self.sessions.lock();
-        let state = sessions.entry(sid.to_string()).or_insert_with(|| SessionState {
-            last_seq: 0,
-            events: VecDeque::new(),
-            base_seq: 1,
-        });
+        let durable_last = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.last_seq(sid).ok())
+            .unwrap_or(0);
+        let state = sessions
+            .entry(sid.to_string())
+            .or_insert_with(|| SessionState {
+                last_seq: durable_last,
+                events: VecDeque::new(),
+                base_seq: 1,
+            });
         state.last_seq = state.last_seq.saturating_add(1);
         let seq = state.last_seq;
         let se = SequencedEvent::new(Some(sid.to_string()), seq, type_, payload);
@@ -302,6 +340,19 @@ impl WsRelaySink {
                 .front()
                 .map(|e| e.seq)
                 .unwrap_or(state.base_seq.saturating_add(1));
+        }
+        if let Some(persistence) = &self.persistence {
+            let record = PersistedEventRecord {
+                schema_version: SESSION_SCHEMA_VERSION,
+                session_id: sid.to_string(),
+                seq,
+                type_: type_.to_string(),
+                recorded_at: now_millis(),
+                payload: se.payload.clone(),
+            };
+            if let Err(error) = persistence.enqueue_event(record) {
+                warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
+            }
         }
         se
     }
@@ -375,48 +426,140 @@ impl WsRelaySink {
     /// emit cannot slip into the gap between unlock and register (TOCTOU).
     ///
     /// Returns the new client id + the receiver the write loop drains.
-    pub fn subscribe(
+    pub async fn subscribe(
         &self,
         sid: &str,
         last_seq: Option<u64>,
-    ) -> (ClientId, mpsc::UnboundedReceiver<SequencedEvent>, ReplayResult) {
+    ) -> (
+        ClientId,
+        mpsc::UnboundedReceiver<SequencedEvent>,
+        ReplayResult,
+    ) {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::unbounded_channel::<SequencedEvent>();
+        let Some(cursor) = last_seq else {
+            self.register(client_id, sid, tx);
+            return (client_id, rx, ReplayResult::Ok(0));
+        };
 
-        if let Some(n) = last_seq {
-            let sessions = self.sessions.lock();
-            if let Some(state) = sessions.get(sid) {
-                // Stale when the next expected seq is older than the ring's oldest.
-                // `checked_add` avoids overflow when `n == u64::MAX`.
-                if n.checked_add(1).is_some_and(|next| next < state.base_seq) {
+        let gate = {
+            let mut gates = self.replay_gates.lock().await;
+            gates
+                .entry(sid.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _replay_guard = gate.lock().await;
+        let mut by_seq = std::collections::BTreeMap::new();
+        loop {
+            if let Some(persistence) = &self.persistence {
+                // Flush is a queue barrier for everything assigned before it.
+                // The JSONL scan itself runs on spawn_blocking.
+                if persistence.flush_session(sid).await.is_err() {
                     return (client_id, rx, ReplayResult::Stale);
                 }
-                let to_replay: Vec<SequencedEvent> = state
-                    .events
-                    .iter()
-                    .filter(|e| e.seq > n)
-                    .cloned()
-                    .collect();
-                // Register WHILE holding sessions so emit's assign_and_append blocks
-                // until we are in session_subs (closes the replay/live gap).
-                self.register(client_id, sid, tx.clone());
-                let mut count = 0u64;
-                for evt in to_replay {
-                    if tx.send(evt).is_err() {
-                        drop(sessions);
-                        self.unregister_client(client_id);
-                        return (client_id, rx, ReplayResult::Stale);
-                    }
-                    count += 1;
+                let durable = match persistence
+                    .replay_after_async(sid.to_string(), cursor)
+                    .await
+                {
+                    Ok(records) => records,
+                    Err(_) => return (client_id, rx, ReplayResult::Stale),
+                };
+                for record in durable {
+                    by_seq.insert(
+                        record.seq,
+                        SequencedEvent::new(
+                            Some(record.session_id),
+                            record.seq,
+                            record.type_,
+                            record.payload,
+                        ),
+                    );
                 }
-                return (client_id, rx, ReplayResult::Ok(count));
             }
-            // last_seq provided but no log yet → live-only (fresh session).
-            drop(sessions);
-        }
 
-        self.register(client_id, sid, tx);
-        (client_id, rx, ReplayResult::Ok(0))
+            let sessions = self.sessions.lock();
+            if self.persistence.is_none()
+                && sessions.get(sid).is_some_and(|state| {
+                    cursor
+                        .checked_add(1)
+                        .is_some_and(|next| next < state.base_seq)
+                })
+            {
+                return (client_id, rx, ReplayResult::Stale);
+            }
+            let (ring, last_seq, base_seq) = sessions.get(sid).map_or_else(
+                || (Vec::new(), cursor, cursor.saturating_add(1)),
+                |state| {
+                    (
+                        state
+                            .events
+                            .iter()
+                            .filter(|event| event.seq > cursor)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        state.last_seq,
+                        state.base_seq,
+                    )
+                },
+            );
+            for event in ring {
+                by_seq.insert(event.seq, event);
+            }
+            // A high max sequence is not proof of coverage: validate every
+            // sequence from cursor+1 through the observed frontier. If any hole
+            // was evicted while disk replay was in flight, drop the state lock,
+            // flush/re-read durable history, and retry before registering.
+            let frontier = last_seq;
+            let first_missing = cursor.checked_add(1).and_then(|start| {
+                (start..=frontier).find(|seq| !by_seq.contains_key(seq))
+            });
+            if first_missing.is_some() {
+                if self.persistence.is_none() || base_seq <= cursor.saturating_add(1) {
+                    return (client_id, rx, ReplayResult::Stale);
+                }
+                drop(sessions);
+                continue;
+            }
+
+            self.register(client_id, sid, tx.clone());
+            let count = by_seq.len() as u64;
+            for event in by_seq.into_values() {
+                if tx.send(event).is_err() {
+                    drop(sessions);
+                    self.unregister_client(client_id);
+                    return (client_id, rx, ReplayResult::Stale);
+                }
+            }
+            return (client_id, rx, ReplayResult::Ok(count));
+        }
+    }
+
+    /// Authoritative server-authored user prompt: assign the relay sequence,
+    /// persist it, and synchronously wait for the durability boundary before
+    /// ACP dispatch.
+    pub async fn persist_user_prompt(
+        &self,
+        sid: &str,
+        payload: Value,
+    ) -> Result<SequencedEvent, String> {
+        let event = self.assign_and_append(sid, "user_prompt", payload);
+        if let Some(persistence) = &self.persistence {
+            persistence
+                .flush_session(sid)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let targets: Vec<ClientId> = self
+            .session_subs
+            .lock()
+            .get(sid)
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default();
+        for client_id in targets {
+            self.enqueue(client_id, event.clone(), ReliabilityTier::Reliable);
+        }
+        Ok(event)
     }
 
     /// Register a client + its sender under a session and the reverse index.
@@ -610,8 +753,10 @@ impl EventSink for WsRelaySink {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    let options =
-                        payload.get("options").cloned().unwrap_or(Value::Array(vec![]));
+                    let options = payload
+                        .get("options")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
                     rdz.register(request_id, agent_id, session_id, options);
                 }
             }
@@ -691,11 +836,16 @@ pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, active_project_id: O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::session_persistence::SessionRegistration;
     use serde::Serialize;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Drain a receiver into a Vec in arrival order (test helper for the live
     /// relay API — replaces the old `WsRelaySink::drain` recorder).
-    fn drain_rx(rx: &mut tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>) -> Vec<SequencedEvent> {
+    fn drain_rx(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>,
+    ) -> Vec<SequencedEvent> {
         let mut out = Vec::new();
         while let Ok(evt) = rx.try_recv() {
             out.push(evt);
@@ -725,11 +875,11 @@ mod tests {
 
     /// AC: `WsRelaySink` delivers session + agent-level events in emission
     /// order to a subscribed client (Story 1.4 live API; was Task 8.1).
-    #[test]
-    fn ws_relay_sink_delivers_events_in_order() {
+    #[tokio::test]
+    async fn ws_relay_sink_delivers_events_in_order() {
         let ws = Arc::new(WsRelaySink::new());
         // Subscribe BEFORE emitting so the client receives events live.
-        let (client, mut rx, replay) = ws.subscribe("sess-1", None);
+        let (client, mut rx, replay) = ws.subscribe("sess-1", None).await;
         assert_eq!(replay, ReplayResult::Ok(0), "fresh session has no replay");
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -753,7 +903,11 @@ mod tests {
 
         // Lossy events are pushed + flushed to the channel on enqueue (AC5/AC6),
         // so an explicit flush is a no-op here; reliable agent_disconnected is last.
-        assert_eq!(ws.flush_lossy(client), 0, "lossy ring already drained on enqueue");
+        assert_eq!(
+            ws.flush_lossy(client),
+            0,
+            "lossy ring already drained on enqueue"
+        );
 
         let drained = drain_rx(&mut rx);
         assert_eq!(drained.len(), 3, "exactly three events were delivered");
@@ -782,8 +936,8 @@ mod tests {
     /// the WS relay delivered an identical `Value` to a subscribed client.
     /// The relay strips the `acp:` prefix from `type_` (AC2) but passes the
     /// `payload` `Value` through verbatim (AC3 — byte-identity invariant).
-    #[test]
-    fn fan_out_delivers_identical_payload_to_every_sink() {
+    #[tokio::test]
+    async fn fan_out_delivers_identical_payload_to_every_sink() {
         /// A second recorder used as a stand-in for `TauriEventSink`'s view of
         /// the event (we can't build a real `AppHandle` here). It captures the
         /// exact `AcpEvent` handed to `emit`.
@@ -803,7 +957,7 @@ mod tests {
         let sinks: Vec<Arc<dyn EventSink>> = vec![tauri_stand_in.clone(), ws.clone()];
 
         // Subscribe BEFORE emitting so the WS client receives the event live.
-        let (_client, mut rx, _replay) = ws.subscribe("sess-7", None);
+        let (_client, mut rx, _replay) = ws.subscribe("sess-7", None).await;
 
         fan_out(
             &sinks,
@@ -844,20 +998,33 @@ mod tests {
 
     /// `WsRelaySink` live receiver drains only currently-queued events;
     /// subsequent emits produce new events on the next drain (AC6).
-    #[test]
-    fn ws_relay_sink_live_drain_is_incremental() {
+    #[tokio::test]
+    async fn ws_relay_sink_live_drain_is_incremental() {
         let ws = Arc::new(WsRelaySink::new());
-        let (client, mut rx, _replay) = ws.subscribe("sess-d", None);
+        let (client, mut rx, _replay) = ws.subscribe("sess-d", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
-        fan_out(&sinks, Some("sess-d"), "acp:message_chunk", &TestPayload::new("a", "sess-d", "m1"));
+        fan_out(
+            &sinks,
+            Some("sess-d"),
+            "acp:message_chunk",
+            &TestPayload::new("a", "sess-d", "m1"),
+        );
         // Lossy events are flushed to the channel on enqueue.
         assert_eq!(ws.lossy_ring_len_for_test(client), 0);
         let first = drain_rx(&mut rx);
         assert_eq!(first.len(), 1);
         // A second drain without a new emit yields nothing.
         let between = drain_rx(&mut rx);
-        assert!(between.is_empty(), "drain must not re-deliver already-drained events");
-        fan_out(&sinks, Some("sess-d"), "acp:message_chunk", &TestPayload::new("a", "sess-d", "m2"));
+        assert!(
+            between.is_empty(),
+            "drain must not re-deliver already-drained events"
+        );
+        fan_out(
+            &sinks,
+            Some("sess-d"),
+            "acp:message_chunk",
+            &TestPayload::new("a", "sess-d", "m2"),
+        );
         let second = drain_rx(&mut rx);
         assert_eq!(second.len(), 1, "a new emit must produce a new event");
         assert_eq!(second[0].seq, 2);
@@ -882,10 +1049,10 @@ mod tests {
 
     /// P1: a serialization failure must NOT emit a `null` payload on the wire
     /// — the event is dropped (preserving the old `events::emit` semantics).
-    #[test]
-    fn fan_out_skips_emission_when_payload_fails_to_serialize() {
+    #[tokio::test]
+    async fn fan_out_skips_emission_when_payload_fails_to_serialize() {
         let ws = Arc::new(WsRelaySink::new());
-        let (_client, mut rx, _replay) = ws.subscribe("sess-nan", None);
+        let (_client, mut rx, _replay) = ws.subscribe("sess-nan", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
             &sinks,
@@ -915,10 +1082,10 @@ mod tests {
     /// fields (a `None` optional field must be ABSENT, not emitted as `null`).
     /// This guards against any future `Value`-intermediate regression that would
     /// silently break byte-identity for real event structs.
-    #[test]
-    fn fan_out_preserves_skip_serializing_if_byte_identity() {
+    #[tokio::test]
+    async fn fan_out_preserves_skip_serializing_if_byte_identity() {
         let ws = Arc::new(WsRelaySink::new());
-        let (_client, mut rx, _replay) = ws.subscribe("sess-skip", None);
+        let (_client, mut rx, _replay) = ws.subscribe("sess-skip", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         let payload = SkipIfPayload {
             agent_id: "a1".to_string(),
@@ -954,8 +1121,8 @@ mod tests {
     }
 
     /// AC11: bounded per-session ring evicts oldest events and bumps `base_seq`.
-    #[test]
-    fn event_log_evicts_oldest_when_over_capacity() {
+    #[tokio::test]
+    async fn event_log_evicts_oldest_when_over_capacity() {
         let ws = Arc::new(WsRelaySink::with_capacity(2, 256));
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         for msg in ["a", "b", "c"] {
@@ -968,12 +1135,12 @@ mod tests {
         }
         // Cursor pointing at evicted seq 0 must be stale (base_seq is now 2;
         // next wanted seq 1 was evicted).
-        let (_c, mut rx, replay) = ws.subscribe("sess-evict", Some(0));
+        let (_c, mut rx, replay) = ws.subscribe("sess-evict", Some(0)).await;
         assert_eq!(replay, ReplayResult::Stale);
         assert!(drain_rx(&mut rx).is_empty());
 
         // Cursor at seq 1 → next wanted is 2, still in the ring → replay 2+3.
-        let (_c2, mut rx2, replay2) = ws.subscribe("sess-evict", Some(1));
+        let (_c2, mut rx2, replay2) = ws.subscribe("sess-evict", Some(1)).await;
         assert_eq!(replay2, ReplayResult::Ok(2));
         let drained2 = drain_rx(&mut rx2);
         assert_eq!(drained2.len(), 2);
@@ -981,7 +1148,7 @@ mod tests {
         assert_eq!(drained2[1].seq, 3);
 
         // Cursor at seq 2 → replay only seq 3.
-        let (_c3, mut rx3, replay3) = ws.subscribe("sess-evict", Some(2));
+        let (_c3, mut rx3, replay3) = ws.subscribe("sess-evict", Some(2)).await;
         assert_eq!(replay3, ReplayResult::Ok(1));
         let drained = drain_rx(&mut rx3);
         assert_eq!(drained.len(), 1);
@@ -989,9 +1156,87 @@ mod tests {
         assert_eq!(drained[0].payload["message"], "c");
     }
 
+    fn temp_dir(label: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("termul-sink-{label}-{stamp}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn durable_replay_catches_more_than_ring_capacity_then_streams_live() {
+        let root = temp_dir("replay-catchup");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-durable".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(2, persistence.clone()));
+        let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+        for index in 1..=2 {
+            fan_out(
+                &sinks,
+                Some("sess-durable"),
+                "acp:tool_call",
+                &TestPayload::new("a", "sess-durable", &index.to_string()),
+            );
+        }
+        persistence.flush_session("sess-durable").await.unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let hook = crate::acp::session_persistence::ReplayTestHook::new(entered_tx);
+        persistence.set_replay_test_hook(hook.clone());
+        let subscribe_relay = relay.clone();
+        let subscribe = tokio::spawn(async move {
+            subscribe_relay.subscribe("sess-durable", Some(0)).await
+        });
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+        // The first disk snapshot is now blocked. Inject more than ring capacity,
+        // forcing the handoff to detect missing 3..8 and retry durable replay.
+        for index in 3..=8 {
+            fan_out(
+                &sinks,
+                Some("sess-durable"),
+                "acp:tool_call",
+                &TestPayload::new("a", "sess-durable", &index.to_string()),
+            );
+        }
+        hook.release();
+        let (_client, mut rx, replay) = subscribe.await.unwrap();
+        assert_eq!(replay, ReplayResult::Ok(8));
+        let replayed = drain_rx(&mut rx);
+        assert_eq!(
+            replayed.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
+        fan_out(
+            &sinks,
+            Some("sess-durable"),
+            "acp:tool_call",
+            &TestPayload::new("a", "sess-durable", "live"),
+        );
+        assert_eq!(rx.recv().await.unwrap().seq, 9);
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// AC11: reconnect with `last_seq` replays the log tail then streams live.
-    #[test]
-    fn cursor_replay_then_live() {
+    #[tokio::test]
+    async fn cursor_replay_then_live() {
         let ws = Arc::new(WsRelaySink::new());
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1007,7 +1252,7 @@ mod tests {
             &TestPayload::new("a1", "sess-rp", "two"),
         );
 
-        let (_c, mut rx, replay) = ws.subscribe("sess-rp", Some(1));
+        let (_c, mut rx, replay) = ws.subscribe("sess-rp", Some(1)).await;
         assert_eq!(replay, ReplayResult::Ok(1));
         let replayed = drain_rx(&mut rx);
         assert_eq!(replayed.len(), 1);
@@ -1026,10 +1271,10 @@ mod tests {
     }
 
     /// AC11: lossy ring drop-oldest under pressure (ring filled without flush).
-    #[test]
-    fn lossy_ring_drop_oldest_under_pressure() {
+    #[tokio::test]
+    async fn lossy_ring_drop_oldest_under_pressure() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
-        let (client, mut rx, _) = ws.subscribe("sess-lossy", None);
+        let (client, mut rx, _) = ws.subscribe("sess-lossy", None).await;
         for i in 1..=5 {
             let se = SequencedEvent::new(
                 Some("sess-lossy".to_string()),
@@ -1039,7 +1284,11 @@ mod tests {
             );
             ws.push_lossy_no_flush_for_test(client, se);
         }
-        assert_eq!(ws.lossy_ring_len_for_test(client), 2, "capacity 2 keeps only newest");
+        assert_eq!(
+            ws.lossy_ring_len_for_test(client),
+            2,
+            "capacity 2 keeps only newest"
+        );
         assert_eq!(ws.flush_lossy(client), 2);
         let drained = drain_rx(&mut rx);
         assert_eq!(drained.len(), 2);
@@ -1048,10 +1297,10 @@ mod tests {
     }
 
     /// AC11: reliable events are never dropped even when lossy ring is full.
-    #[test]
-    fn reliable_events_never_dropped() {
+    #[tokio::test]
+    async fn reliable_events_never_dropped() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 1));
-        let (client, mut rx, _) = ws.subscribe("sess-rel", None);
+        let (client, mut rx, _) = ws.subscribe("sess-rel", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         // Fill lossy ring without flush, then emit a reliable event.
         ws.push_lossy_no_flush_for_test(
@@ -1081,11 +1330,11 @@ mod tests {
     }
 
     /// AC11: client on session A does not receive session B events.
-    #[test]
-    fn cross_session_isolation() {
+    #[tokio::test]
+    async fn cross_session_isolation() {
         let ws = Arc::new(WsRelaySink::new());
-        let (_ca, mut rx_a, _) = ws.subscribe("sess-a", None);
-        let (_cb, mut rx_b, _) = ws.subscribe("sess-b", None);
+        let (_ca, mut rx_a, _) = ws.subscribe("sess-a", None).await;
+        let (_cb, mut rx_b, _) = ws.subscribe("sess-b", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
             &sinks,
@@ -1113,11 +1362,11 @@ mod tests {
     /// `projects_changed` event (sid=null, seq=0) to every connected client.
     /// A client subscribed to ANY session receives it (the web client then
     /// refetches `GET /projects`).
-    #[test]
-    fn broadcast_projects_changed_reaches_subscribed_client() {
+    #[tokio::test]
+    async fn broadcast_projects_changed_reaches_subscribed_client() {
         let relay = Arc::new(WsRelaySink::new());
         // Subscribe a client to a session so it is in the relay's client set.
-        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None);
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, Some("p-3"));
 
@@ -1133,10 +1382,10 @@ mod tests {
     /// `broadcast_projects_changed` with no active project still fans out;
     /// the `ProjectsChangedPayload` struct's `skip_serializing_if` OMITS the
     /// `activeProjectId` key entirely (not `null`).
-    #[test]
-    fn broadcast_projects_changed_null_active_id() {
+    #[tokio::test]
+    async fn broadcast_projects_changed_null_active_id() {
         let relay = Arc::new(WsRelaySink::new());
-        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None);
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, None);
 

@@ -1,29 +1,17 @@
-//! In-memory project registry for the web/remote project-list mirror.
+//! In-memory project registry for web/remote project listing and switching.
 //!
-//! A deliberate bridge to Epic 4's file-backed project registry / VFS roots. The
-//! desktop renderer is the source of truth: on project-store mutation (while the
-//! shared-live server runs) it pushes its non-archived + archived project
-//! summaries + active id into here via the `remote_sync_projects` Tauri command
-//! (`commands.rs`). The browser reads the mirror via `GET /projects`
-//! (`projects_api.rs`) and switches projects via the `switch_project` WS request
-//! (`ws.rs`, which resolves a project id → cwd here).
+//! The standalone server seeds it from the file-backed VFS-root registry; the
+//! desktop shared-live server receives renderer snapshots. The browser reads it
+//! through `GET /projects` and resolves `switch_project` ids to private cwd/MCP
+//! context here. Public summaries remain redact-by-omission.
 //!
-//! # Scope fence (Epic 4 territory — do NOT build here)
-//!
-//! - NOT file-backed. Lives only while the server runs; cleared on
-//!   `remote_server_stop`. Survives nothing.
-//! - NO project CREATE/EDIT/DELETE from the web client (read + switch only).
-//! - NO env-var values (secret or plain) — `ProjectSummary` redacts-by-omission.
-//! - Does NOT change the desktop's active project — a web `switch_project`
-//!   starts a new session at the project's cwd; it does not mutate the desktop.
-//!
-//! Constructible WITHOUT a Tauri `AppHandle` (`Send + Sync` via `parking_lot`)
-//! so the standalone `termul-server` binary can pass an empty one to
-//! `serve_router` (its `/projects` then returns an empty list until a future
-//! Epic wires a server-side source).
+//! The registry itself is not durable. VPS mode persists the active id through
+//! the separately retained `FileProjectRegistry`; desktop mode remains file-free.
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+
+use agent_client_protocol::schema::McpServer;
 
 use crate::acp::{FileProjectRegistry, VfsRoot};
 
@@ -75,13 +63,21 @@ pub struct ProjectsChangedPayload {
     pub active_project_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProjectSwitchContext {
+    pub project_id: String,
+    pub cwd: String,
+    pub mcp_servers: Vec<McpServer>,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RegistryData {
     projects: Vec<ProjectSummary>,
     active_project_id: Option<String>,
 }
 
-/// In-memory, renderer-fed project registry (bridge to Epic 4).
+/// In-memory project registry shared by VPS and desktop-hosted web modes.
 ///
 /// `Arc<ProjectRegistry>` is shared between the router (read path + switch
 /// resolution), the `remote_sync_projects` command (write path), and
@@ -90,6 +86,7 @@ struct RegistryData {
 #[derive(Default)]
 pub struct ProjectRegistry {
     inner: Mutex<RegistryData>,
+    mcp_servers: Mutex<std::collections::HashMap<String, Vec<McpServer>>>,
 }
 
 impl ProjectRegistry {
@@ -103,7 +100,10 @@ impl ProjectRegistry {
     /// (renderer push) with the desktop's current non-archived + archived
     /// summaries + active id. The renderer is the source of truth — a fresh
     /// `set` fully supersedes the prior snapshot.
-    pub fn set(&self, projects: Vec<ProjectSummary>, active_id: Option<String>) {
+    pub fn set(&self, mut projects: Vec<ProjectSummary>, active_id: Option<String>) {
+        for project in &mut projects {
+            project.is_active = active_id.as_deref() == Some(project.id.as_str());
+        }
         let mut g = self.inner.lock();
         g.projects = projects;
         g.active_project_id = active_id;
@@ -118,6 +118,53 @@ impl ProjectRegistry {
             projects: g.projects.clone(),
             active_project_id: g.active_project_id.clone(),
         }
+    }
+
+    /// Resolve a complete switchable project context. Archived, unknown, and
+    /// pathless projects are rejected. MCP configuration is kept private and
+    /// never enters `ProjectSummary`/`GET /projects`.
+    #[must_use]
+    pub fn switch_context(&self, project_id: &str) -> Option<ProjectSwitchContext> {
+        let g = self.inner.lock();
+        let project = g
+            .projects
+            .iter()
+            .find(|p| p.id == project_id && !p.is_archived)?;
+        let cwd = project.path.clone()?.trim().to_string();
+        if cwd.is_empty() {
+            return None;
+        }
+        let mcp_servers = self
+            .mcp_servers
+            .lock()
+            .get(project_id)
+            .cloned()
+            .unwrap_or_default();
+        Some(ProjectSwitchContext {
+            project_id: project.id.clone(),
+            cwd,
+            mcp_servers,
+            is_active: g.active_project_id.as_deref() == Some(project_id),
+        })
+    }
+
+    /// Atomically update the active id and every summary flag.
+    pub fn set_active_project(&self, project_id: &str) -> bool {
+        let mut g = self.inner.lock();
+        if !g.projects.iter().any(|p| {
+            p.id == project_id
+                && !p.is_archived
+                && p.path
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty())
+        }) {
+            return false;
+        }
+        g.active_project_id = Some(project_id.to_string());
+        for project in &mut g.projects {
+            project.is_active = project.id == project_id;
+        }
+        true
     }
 
     /// Resolve a project id → its cwd (`path`), or `None` when the project is
@@ -138,6 +185,7 @@ impl ProjectRegistry {
     pub fn clear(&self) {
         let mut g = self.inner.lock();
         *g = RegistryData::default();
+        self.mcp_servers.lock().clear();
     }
 
     /// Number of projects currently mirrored (test helper / diagnostics).
@@ -185,6 +233,11 @@ impl From<VfsRoot> for ProjectSummary {
 /// constructs a `FileProjectRegistry`).
 pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry) {
     let active_id = file_reg.active_project_id().map(str::to_string);
+    let mcp_by_project = file_reg
+        .roots()
+        .iter()
+        .map(|root| (root.id.clone(), root.mcp_servers.clone()))
+        .collect();
     let mut summaries: Vec<ProjectSummary> = file_reg
         .roots()
         .iter()
@@ -198,6 +251,7 @@ pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry
         }
     }
     registry.set(summaries, active_id);
+    *registry.mcp_servers.lock() = mcp_by_project;
 }
 
 #[cfg(test)]
@@ -265,7 +319,10 @@ mod tests {
     #[test]
     fn clear_empties_the_mirror() {
         let reg = ProjectRegistry::new();
-        reg.set(vec![sample("p-1", Some("/a"), false)], Some("p-1".to_string()));
+        reg.set(
+            vec![sample("p-1", Some("/a"), false)],
+            Some("p-1".to_string()),
+        );
         assert!(!reg.is_empty());
         reg.clear();
         assert!(reg.is_empty());
@@ -295,10 +352,14 @@ mod tests {
 
     #[test]
     fn projects_changed_payload_omits_none_active() {
-        let p = ProjectsChangedPayload { active_project_id: None };
+        let p = ProjectsChangedPayload {
+            active_project_id: None,
+        };
         let v = serde_json::to_value(&p).unwrap();
         assert!(v.get("activeProjectId").is_none());
-        let p2 = ProjectsChangedPayload { active_project_id: Some("p-3".to_string()) };
+        let p2 = ProjectsChangedPayload {
+            active_project_id: Some("p-3".to_string()),
+        };
         let v2 = serde_json::to_value(&p2).unwrap();
         assert_eq!(v2["activeProjectId"], "p-3");
     }
@@ -316,6 +377,7 @@ mod tests {
             path: PathBuf::from("/some/cwd"),
             color: "blue".to_string(),
             is_archived: false,
+            mcp_servers: Vec::new(),
         };
         let summary: ProjectSummary = root.into();
         assert_eq!(summary.id, "p-1");
@@ -328,7 +390,10 @@ mod tests {
 
         // Redact-by-omission: the wire shape carries NO env-var field.
         let v = serde_json::to_value(&summary).unwrap();
-        assert!(v.get("envVars").is_none(), "ProjectSummary must not carry env-var values");
+        assert!(
+            v.get("envVars").is_none(),
+            "ProjectSummary must not carry env-var values"
+        );
 
         // An empty-path VfsRoot surfaces path: None (mirrors find_path's skip).
         let empty_root = VfsRoot {
@@ -337,8 +402,57 @@ mod tests {
             path: PathBuf::new(),
             color: "blue".to_string(),
             is_archived: false,
+            mcp_servers: Vec::new(),
         };
         let s: ProjectSummary = empty_root.into();
-        assert!(s.path.is_none(), "empty VfsRoot path => ProjectSummary.path None");
+        assert!(
+            s.path.is_none(),
+            "empty VfsRoot path => ProjectSummary.path None"
+        );
+    }
+
+    #[test]
+    fn active_update_keeps_snapshot_flags_consistent() {
+        let reg = ProjectRegistry::new();
+        reg.set(
+            vec![
+                sample("p-1", Some("/a"), false),
+                sample("p-2", Some("/b"), false),
+            ],
+            Some("p-1".to_string()),
+        );
+        assert!(reg.set_active_project("p-2"));
+        let snap = reg.snapshot();
+        assert_eq!(snap.active_project_id.as_deref(), Some("p-2"));
+        assert!(!snap.projects[0].is_active);
+        assert!(snap.projects[1].is_active);
+    }
+
+    #[test]
+    fn switch_context_rejects_archived_and_carries_private_mcp() {
+        use agent_client_protocol::schema::{McpServer, McpServerStdio};
+
+        let reg = ProjectRegistry::new();
+        reg.set(
+            vec![
+                sample("live", Some("/a"), false),
+                sample("old", Some("/b"), true),
+            ],
+            Some("live".to_string()),
+        );
+        reg.mcp_servers.lock().insert(
+            "live".to_string(),
+            vec![McpServer::Stdio(McpServerStdio::new(
+                "project-mcp",
+                std::path::PathBuf::from("mcp-bin"),
+            ))],
+        );
+        assert!(reg.switch_context("old").is_none());
+        let context = reg.switch_context("live").expect("live context");
+        assert_eq!(context.cwd, "/a");
+        assert!(context.is_active);
+        assert_eq!(context.mcp_servers.len(), 1);
+        let public = serde_json::to_value(reg.snapshot()).expect("public snapshot");
+        assert!(public["projects"][0].get("mcpServers").is_none());
     }
 }

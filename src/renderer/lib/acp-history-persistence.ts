@@ -8,6 +8,8 @@
  * The store is the runtime source of truth; this is a mirror. Payload writes are
  * debounced so streaming doesn't thrash the disk.
  */
+
+import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
@@ -106,6 +108,25 @@ export function scopeSessionIndex(
 }
 
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
+  const transport = getAcpTransport()
+  if (transport.historyMode?.() === 'server' && transport.listPersistedSessions) {
+    const summaries = await transport.listPersistedSessions()
+    return summaries.map((entry) => ({
+      id: entry.sessionId,
+      agentId: entry.runtimeAgentId ?? '',
+      agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
+        ? entry.stableAgentNamespace.slice('config:'.length)
+        : undefined,
+      title: entry.title ?? 'Untitled Chat',
+      cwd: entry.cwd,
+      projectId: entry.projectId ?? '',
+      createdAt: entry.createdAt,
+      lastActivityAt: entry.lastActivityAt,
+      messageCount: entry.messageCount,
+      status: entry.status
+    }))
+  }
+  if (transport.historyMode?.() === 'live_only') return []
   const res = await persistenceApi.read<SessionIndexEntry[]>(SESSION_INDEX_KEY)
   if (res.success && Array.isArray(res.data)) return res.data
   return []
@@ -180,6 +201,8 @@ export function _resetPendingIndexWriteTrackerForTesting(): void {
 }
 
 export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const res = await persistenceApi.write(SESSION_INDEX_KEY, entries)
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist session index')
@@ -187,12 +210,23 @@ export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<vo
 }
 
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
+  const transport = getAcpTransport()
+  if (transport.historyMode?.() === 'server' && transport.openPersistedSession) {
+    const index = await loadSessionIndex()
+    const metadata = index.find((entry) => entry.id === id)
+    if (!metadata) return null
+    await transport.openPersistedSession(id, 0)
+    return { metadata, messages: [] }
+  }
+  if (transport.historyMode?.() === 'live_only') return null
   const res = await persistenceApi.read<SessionPayload>(sessionPayloadKey(id))
   if (res.success && res.data) return res.data
   return null
 }
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   // Debounced: coalesces streaming updates so disk isn't thrashed.
   const res = await persistenceApi.writeDebounced(sessionPayloadKey(id), payload)
   if (!res.success) {
@@ -201,6 +235,8 @@ export async function saveSessionPayload(id: string, payload: SessionPayload): P
 }
 
 export async function deleteSessionPayload(id: string): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const res = await persistenceApi.delete(sessionPayloadKey(id))
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to delete session payload')
@@ -214,6 +250,8 @@ export async function deleteSessionPayload(id: string): Promise<void> {
  * it runs exactly once. Safe to call on every mount.
  */
 export async function runHistoryWipeMigration(): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const flagRes = await persistenceApi.read<boolean>(WIPE_MIGRATION_KEY)
   if (flagRes.success && flagRes.data === true) return
   // Fail closed: only proceed when the wipe flag is explicitly missing. A

@@ -13,7 +13,13 @@
  * (`.message` is the human string callers already toast).
  */
 
+import type {
+  ProjectSwitchCompletedEvent,
+  SwitchProjectReply
+} from '@shared/types/web-projects.types'
 import {
+  type HistoryMode,
+  type PersistedSessionSummary,
   WS_ERROR_CODES,
   type WsEvent,
   type WsReply,
@@ -83,13 +89,11 @@ export interface AcpTransport {
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(agentId: AgentId, methodId: string): Promise<void>
-  /**
-   * Web/remote only (Epic-4 bridge): switch the shared session to a project's
-   * cwd. Returns the NEW session id at that cwd; the caller points its
-   * tab-focused session id at it + re-subscribes. Absent on the Tauri desktop
-   * transport (desktop switches via the project store).
-   */
-  switchProject?(projectId: string): Promise<{ sessionId: string }>
+  /** Web/remote only: switch now or report that the switch was queued. */
+  switchProject?(projectId: string): Promise<SwitchProjectReply>
+  historyMode?(): HistoryMode | 'tauri_store'
+  listPersistedSessions?(): Promise<PersistedSessionSummary[]>
+  openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>
   onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
@@ -263,6 +267,7 @@ type EventListener = (payload: unknown) => void
 export class WsAcpTransport implements AcpTransport {
   private socket: WebSocket | null = null
   private authed = false
+  private negotiatedHistoryMode: HistoryMode = 'live_only'
   private connecting: Promise<void> | null = null
   private disposed = false
   private reconnectAttempt = 0
@@ -400,6 +405,20 @@ export class WsAcpTransport implements AcpTransport {
 
   // --- Agent lifecycle (desktop parity over WS) ----------------------------
 
+  historyMode(): HistoryMode {
+    return this.negotiatedHistoryMode
+  }
+
+  async listPersistedSessions(): Promise<PersistedSessionSummary[]> {
+    return this.request<PersistedSessionSummary[]>('list_persisted_sessions', {})
+  }
+
+  async openPersistedSession(sessionId: SessionId, lastSeq = 0): Promise<void> {
+    await this.connect()
+    this.subscribed.add(sessionId)
+    await this.request('open_persisted_session', { sessionId, lastSeq })
+  }
+
   async spawnAgent(config: AgentConfig): Promise<AgentId> {
     return this.request<AgentId>('spawn_agent', { config })
   }
@@ -430,12 +449,10 @@ export class WsAcpTransport implements AcpTransport {
     return outcome
   }
 
-  /** Web/remote (Epic-4 bridge): `switch_project` → new session at the project cwd. */
-  async switchProject(projectId: string): Promise<{ sessionId: string }> {
-    const outcome = await this.request<{ sessionId: string }>('switch_project', {
-      projectId
-    })
-    if (outcome?.sessionId) {
+  /** Web/remote: subscribe immediately only when the server completed the switch. */
+  async switchProject(projectId: string): Promise<SwitchProjectReply> {
+    const outcome = await this.request<SwitchProjectReply>('switch_project', { projectId })
+    if (outcome.status === 'completed') {
       await this.subscribeSession(outcome.sessionId, null)
     }
     return outcome
@@ -670,7 +687,10 @@ export class WsAcpTransport implements AcpTransport {
       // Send directly (socket is already open); do NOT call request()→connect()
       // or we deadlock on the in-flight connect promise.
       try {
-        await this.sendWhenOpen('authenticate', { token: 'dev' })
+        const auth = await this.sendWhenOpen<{ historyMode?: HistoryMode }>('authenticate', {
+          token: 'dev'
+        })
+        this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.authed = true
       } catch (err) {
         try {
@@ -684,8 +704,12 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
 
-    // Agent-level / relay events (seq 0, sid null): deliver immediately.
+    // Agent-level / relay events (seq 0, or sid null): deliver immediately.
     if (evt.sid == null || evt.seq === 0) {
+      if (evt.type === 'project_switch_completed') {
+        const payload = evt.payload as ProjectSwitchCompletedEvent
+        await this.subscribeSession(payload.sessionId, null)
+      }
       this.emitLocal(evt.type, evt.payload)
       return
     }

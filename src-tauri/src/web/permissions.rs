@@ -209,7 +209,11 @@ impl PermissionRendezvous {
     /// `arm_timeout` reliable — it does not depend on `Handle::try_current()`
     /// succeeding at construction time.
     #[must_use]
-    pub fn with_handle(acp: Arc<AcpManager>, timeout: Duration, handle: tokio::runtime::Handle) -> Self {
+    pub fn with_handle(
+        acp: Arc<AcpManager>,
+        timeout: Duration,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             tickets: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
@@ -503,7 +507,8 @@ impl PermissionRendezvous {
             (outstanding, queued)
         };
         for (request_id, agent_id) in to_deny {
-            self.deny(&request_id, &agent_id, DenyReason::Disconnect).await;
+            self.deny(&request_id, &agent_id, DenyReason::Disconnect)
+                .await;
         }
         // Resolve the drained queued tickets as deny directly (they were never
         // armed with a timeout and never in `self.tickets`, so `deny`'s
@@ -514,9 +519,7 @@ impl PermissionRendezvous {
                 .respond_permission(&agent_id, request_id.clone(), None)
                 .await
             {
-                warn!(
-                    "[permissions] disconnect-deny (queued) for {request_id} failed: {e}"
-                );
+                warn!("[permissions] disconnect-deny (queued) for {request_id} failed: {e}");
             }
         }
     }
@@ -552,9 +555,7 @@ impl PermissionRendezvous {
             .respond_permission(agent_id, request_id.to_string(), None)
             .await
         {
-            warn!(
-                "[permissions] deny ({reason:?}) for {request_id} failed to reach agent: {e}"
-            );
+            warn!("[permissions] deny ({reason:?}) for {request_id} failed to reach agent: {e}");
         }
         // Promote the next queued permission for this session.
         self.promote_next(&session_id);
@@ -608,15 +609,13 @@ impl PermissionRendezvous {
 /// membership by `optionId` string equality so the relay does not need to
 /// deserialize the full ACP `PermissionOption` struct.
 fn option_id_is_valid(options: &Value, option_id: &str) -> bool {
-    options
-        .as_array()
-        .is_some_and(|arr| {
-            arr.iter().any(|opt| {
-                opt.get("optionId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| id == option_id)
-            })
+    options.as_array().is_some_and(|arr| {
+        arr.iter().any(|opt| {
+            opt.get("optionId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id == option_id)
         })
+    })
 }
 
 impl Default for PermissionRendezvous {
@@ -648,10 +647,22 @@ impl Default for PermissionRendezvous {
 ///
 /// `Send + Sync` (the only state is `parking_lot::Mutex<HashMap<…>>`); the
 /// stored ids are opaque `String`s (client-generated uuids in 1.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnClaim {
+    Claimed,
+    Completed,
+    DuplicateInFlight,
+    Busy,
+}
+
 pub struct TurnWatermark {
-    /// `session_id → last-completed turn-id` (the high-water mark).
-    last_completed: Mutex<HashMap<String, String>>,
-    /// `session_id → set of seen turn-ids` (idempotent dedup for `prompt_complete`).
+    /// `session_id → completed turn ids` reconstructed from durable history and
+    /// updated on live completion.
+    completed: Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// `session_id → currently claimed turn id` (empty string for clients that
+    /// omit turnId). Claiming is atomic with duplicate/busy rejection.
+    in_flight: Mutex<HashMap<String, String>>,
+    /// `session_id → set of seen turn-ids` (idempotent event dedup).
     seen: Mutex<HashMap<String, std::collections::HashSet<String>>>,
 }
 
@@ -660,7 +671,8 @@ impl TurnWatermark {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            last_completed: Mutex::new(HashMap::new()),
+            completed: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
         }
     }
@@ -689,18 +701,63 @@ impl TurnWatermark {
     /// high-water mark). 1.8's `prompt_complete` handler calls this AFTER
     /// `mark_seen` returns `true` (so the completion is recorded once).
     pub fn record_completed(&self, session_id: &str, turn_id: &str) {
-        self.last_completed
+        self.completed
             .lock()
-            .insert(session_id.to_string(), turn_id.to_string());
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(turn_id.to_string());
+        self.release_claim(session_id, Some(turn_id));
     }
 
-    /// The last-completed turn-id for `session_id`, or `None` if none completed.
+    pub fn restore_completed<I>(&self, session_id: &str, turn_ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.completed
+            .lock()
+            .entry(session_id.to_string())
+            .or_default()
+            .extend(turn_ids);
+    }
+
+    /// One completed id for legacy diagnostics/tests; ordering is unspecified.
     #[must_use]
     pub fn last_completed(&self, session_id: &str) -> Option<String> {
-        self.last_completed
+        self.completed
             .lock()
             .get(session_id)
-            .cloned()
+            .and_then(|ids| ids.iter().next().cloned())
+    }
+
+    /// Atomically claim the session turn before persistence. Rejects an already
+    /// completed id as stale, the same in-flight id as duplicate, and any other
+    /// concurrent turn as busy.
+    pub fn claim_turn(&self, session_id: &str, turn_id: Option<&str>) -> TurnClaim {
+        let id = turn_id.unwrap_or_default();
+        if !id.is_empty() && self.is_completed(session_id, id) {
+            return TurnClaim::Completed;
+        }
+        let mut in_flight = self.in_flight.lock();
+        if let Some(active) = in_flight.get(session_id) {
+            return if active == id {
+                TurnClaim::DuplicateInFlight
+            } else {
+                TurnClaim::Busy
+            };
+        }
+        in_flight.insert(session_id.to_string(), id.to_string());
+        TurnClaim::Claimed
+    }
+
+    pub fn release_claim(&self, session_id: &str, turn_id: Option<&str>) {
+        let expected = turn_id.unwrap_or_default();
+        let mut in_flight = self.in_flight.lock();
+        if in_flight
+            .get(session_id)
+            .is_some_and(|active| active == expected)
+        {
+            in_flight.remove(session_id);
+        }
     }
 
     /// Whether `turn_id` is at-or-before the last-completed watermark for
@@ -711,15 +768,16 @@ impl TurnWatermark {
     /// abandoned and will not resend under the ACP contract).
     #[must_use]
     pub fn is_completed(&self, session_id: &str, turn_id: &str) -> bool {
-        self.last_completed
+        self.completed
             .lock()
             .get(session_id)
-            .is_some_and(|last| last == turn_id)
+            .is_some_and(|ids| ids.contains(turn_id))
     }
 
     /// Forget a session's watermark state (on explicit session close).
     pub fn forget_session(&self, session_id: &str) {
-        self.last_completed.lock().remove(session_id);
+        self.completed.lock().remove(session_id);
+        self.in_flight.lock().remove(session_id);
         self.seen.lock().remove(session_id);
     }
 }
@@ -821,13 +879,18 @@ mod tests {
             // Second is rejected — either NotFound (ticket evicted) or
             // AlreadyResolved (race window); both wire as `stale`.
             assert!(
-                matches!(b, Err(RespondError::NotFound) | Err(RespondError::AlreadyResolved)),
+                matches!(
+                    b,
+                    Err(RespondError::NotFound) | Err(RespondError::AlreadyResolved)
+                ),
                 "second response must be rejected (stale), got {b:?}"
             );
             let b_code = b.unwrap_err().wire_code();
             assert_eq!(b_code, "stale", "first-wins rejection wires as `stale`");
             // A third call is NotFound (also stale).
-            let c = rdz.try_respond(ClientId::new(), "perm-1", Some("allow")).await;
+            let c = rdz
+                .try_respond(ClientId::new(), "perm-1", Some("allow"))
+                .await;
             assert_eq!(c, Err(RespondError::NotFound));
         });
     }
@@ -855,12 +918,11 @@ mod tests {
                 "sess-1".to_string(),
                 options_value(&["allow", "deny"]),
             );
-            let outcome = rdz.try_respond(client, "perm-toctou", Some("escalate")).await;
+            let outcome = rdz
+                .try_respond(client, "perm-toctou", Some("escalate"))
+                .await;
             assert_eq!(outcome, Err(RespondError::InvalidOption));
-            assert_eq!(
-                RespondError::InvalidOption.wire_code(),
-                "permission_denied"
-            );
+            assert_eq!(RespondError::InvalidOption.wire_code(), "permission_denied");
             // The ticket is still outstanding (rejected, not resolved) — a valid
             // option can still win.
             assert!(rdz.is_outstanding("perm-toctou"));
@@ -884,7 +946,10 @@ mod tests {
             );
             let outcome = rdz.try_respond(client, "perm-cancel", None).await;
             assert_eq!(outcome, Ok(RespondOutcome::Resolved));
-            assert!(!rdz.is_outstanding("perm-cancel"), "resolved ticket is evicted");
+            assert!(
+                !rdz.is_outstanding("perm-cancel"),
+                "resolved ticket is evicted"
+            );
         });
     }
 
@@ -911,11 +976,17 @@ mod tests {
                 "sess-q".to_string(),
                 options_value(&["allow"]),
             );
-            assert!(!rdz.is_outstanding("perm-q2"), "second permission is queued, not outstanding");
+            assert!(
+                !rdz.is_outstanding("perm-q2"),
+                "second permission is queued, not outstanding"
+            );
             assert_eq!(rdz.queued_count_for_session("sess-q"), 1);
             // Resolving the first promotes the second.
             let _ = rdz.try_respond(client, "perm-q1", Some("allow")).await;
-            assert!(rdz.is_outstanding("perm-q2"), "queued permission promoted after the first resolves");
+            assert!(
+                rdz.is_outstanding("perm-q2"),
+                "queued permission promoted after the first resolves"
+            );
             assert_eq!(rdz.queued_count_for_session("sess-q"), 0);
         });
     }
@@ -951,7 +1022,10 @@ mod tests {
                 }
             }
             assert!(evicted, "timed-out ticket must be evicted");
-            assert!(!rdz.is_outstanding("perm-tmo"), "timed-out ticket is evicted");
+            assert!(
+                !rdz.is_outstanding("perm-tmo"),
+                "timed-out ticket is evicted"
+            );
         });
     }
 
@@ -989,7 +1063,10 @@ mod tests {
                     break;
                 }
             }
-            assert!(!rdz.is_outstanding("perm-e1"), "perm-e1 evicted by timeout-deny");
+            assert!(
+                !rdz.is_outstanding("perm-e1"),
+                "perm-e1 evicted by timeout-deny"
+            );
             assert!(promoted, "queue (perm-e2) promoted after expiry-deny");
         });
     }
@@ -1017,7 +1094,10 @@ mod tests {
             );
             // Now the last subscriber disconnects → ticket denied + evicted.
             rdz.deny_all_for_client(|_sid| 0usize).await; // 0 remaining subscribers
-            assert!(!rdz.is_outstanding("perm-dc"), "ticket denied on last-subscriber disconnect");
+            assert!(
+                !rdz.is_outstanding("perm-dc"),
+                "ticket denied on last-subscriber disconnect"
+            );
         });
     }
 
@@ -1035,7 +1115,10 @@ mod tests {
                 "sess-lookup".to_string(),
                 options_value(&["allow"]),
             );
-            assert_eq!(rdz.session_for_request("perm-lookup").as_deref(), Some("sess-lookup"));
+            assert_eq!(
+                rdz.session_for_request("perm-lookup").as_deref(),
+                Some("sess-lookup")
+            );
             assert_eq!(
                 rdz.agent_for_request("perm-lookup"),
                 Some(AgentId("a-lookup".to_string()))
@@ -1055,11 +1138,29 @@ mod tests {
         // First sight of a turn-id → new (process it).
         assert!(wm.mark_seen("sess-1", "turn-a"), "first sight is new");
         // Same turn-id again → duplicate (drop it — prompt_complete is idempotent).
-        assert!(!wm.mark_seen("sess-1", "turn-a"), "second sight is a duplicate");
+        assert!(
+            !wm.mark_seen("sess-1", "turn-a"),
+            "second sight is a duplicate"
+        );
         assert!(wm.is_seen("sess-1", "turn-a"));
         assert!(!wm.is_seen("sess-1", "turn-b"));
         // Different session is independent.
         assert!(wm.mark_seen("sess-2", "turn-a"));
+    }
+
+    #[test]
+    fn turn_watermark_claims_and_releases_atomically() {
+        let wm = TurnWatermark::new();
+        assert_eq!(wm.claim_turn("sess", Some("turn-a")), TurnClaim::Claimed);
+        assert_eq!(
+            wm.claim_turn("sess", Some("turn-a")),
+            TurnClaim::DuplicateInFlight
+        );
+        assert_eq!(wm.claim_turn("sess", Some("turn-b")), TurnClaim::Busy);
+        wm.release_claim("sess", Some("turn-a"));
+        assert_eq!(wm.claim_turn("sess", Some("turn-b")), TurnClaim::Claimed);
+        wm.record_completed("sess", "turn-b");
+        assert_eq!(wm.claim_turn("sess", Some("turn-b")), TurnClaim::Completed);
     }
 
     #[test]
@@ -1070,9 +1171,18 @@ mod tests {
         assert_eq!(wm.last_completed("sess-1").as_deref(), Some("turn-1"));
         // `is_completed` is true only for the exact watermark turn-id.
         assert!(wm.is_completed("sess-1", "turn-1"));
-        assert!(!wm.is_completed("sess-1", "turn-0"), "an older turn-id is not the watermark");
-        assert!(!wm.is_completed("sess-1", "turn-2"), "a newer turn-id is not yet completed");
-        assert!(!wm.is_completed("sess-2", "turn-1"), "a different session is not completed");
+        assert!(
+            !wm.is_completed("sess-1", "turn-0"),
+            "an older turn-id is not the watermark"
+        );
+        assert!(
+            !wm.is_completed("sess-1", "turn-2"),
+            "a newer turn-id is not yet completed"
+        );
+        assert!(
+            !wm.is_completed("sess-2", "turn-1"),
+            "a different session is not completed"
+        );
     }
 
     #[test]
@@ -1112,7 +1222,8 @@ mod tests {
             assert!(!rdz.is_outstanding("perm-race"));
             // A subsequent deny (e.g. a late timeout) is a no-op — no panic, no
             // double-resolution (the agent-side responder was already resolved).
-            rdz.deny("perm-race", &AgentId("a1".to_string()), DenyReason::Timeout).await;
+            rdz.deny("perm-race", &AgentId("a1".to_string()), DenyReason::Timeout)
+                .await;
             assert!(!rdz.is_outstanding("perm-race"));
         });
     }

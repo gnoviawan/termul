@@ -1,4 +1,4 @@
-import { Check, FolderGit2, Loader2 } from 'lucide-react'
+import { Check, Clock3, FolderGit2, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -8,9 +8,8 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
-import { getAcpTransport } from '@/lib/acp-transport'
 import { getColorClasses } from '@/lib/colors'
-import { setTabFocusedSessionId } from '@/lib/web-tab-session'
+import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 
@@ -34,21 +33,18 @@ export function ProjectSwitcherDrawer({
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
-  const selectProject = useProjectStore((s) => s.selectProject)
+  const switchProject = useAcpStore((s) => s.switchProject)
+  const queuedProjectSwitchId = useAcpStore((s) => s.queuedProjectSwitchId)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
 
   async function handleSwitch(project: Project): Promise<void> {
-    const transport = getAcpTransport()
-    // Desktop transport has no `switchProject`; the drawer is web-only, so this
-    // is defensive — never crash if mounted outside web mode.
-    if (!transport.switchProject) return
     if (switchingId !== null) return
     setSwitchingId(project.id)
     try {
-      const { sessionId } = await transport.switchProject(project.id)
-      setTabFocusedSessionId(sessionId)
-      selectProject(project.id)
-      onOpenChange(false)
+      const outcome = await switchProject(project.id)
+      if (outcome.status === 'completed') {
+        onOpenChange(false)
+      }
     } catch (err) {
       // `AcpTransportError.message` is the human string callers already toast
       // (e.g. "no_agent" → "switch_project requires a live agent; …").
@@ -84,7 +80,9 @@ export function ProjectSwitcherDrawer({
                 const isArchived = project.isArchived ?? false
                 const isActive = project.id === activeProjectId
                 const isSwitching = switchingId === project.id
-                const disabled = isArchived || isActive || switchingId !== null
+                const isQueued = queuedProjectSwitchId === project.id
+                const disabled =
+                  isArchived || isActive || switchingId !== null || queuedProjectSwitchId !== null
                 return (
                   <li key={project.id}>
                     <button
@@ -114,6 +112,11 @@ export function ProjectSwitcherDrawer({
                           size={14}
                           className="shrink-0 animate-spin text-muted-foreground"
                         />
+                      ) : isQueued ? (
+                        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                          <Clock3 size={13} />
+                          Queued
+                        </span>
                       ) : isActive ? (
                         <Check size={14} className="shrink-0 text-primary" />
                       ) : null}

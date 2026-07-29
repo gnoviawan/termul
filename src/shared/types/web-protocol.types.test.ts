@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 18 event types (16 acp:* prefix-dropped + auth_required + projects_changed)', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(18)
+  it('exports exactly 21 event types including durable user prompts', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(21)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -48,10 +48,15 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('auth_required')
     // Epic-4 bridge: desktop project-list live push (agent-level, seq 0).
     expect(WS_EVENT_TYPES).toContain('projects_changed')
+    expect(WS_EVENT_TYPES).toContain('project_switch_completed')
+    expect(WS_EVENT_TYPES).toContain('project_switch_failed')
+    expect(WS_EVENT_TYPES).toContain('user_prompt')
+    expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
+    expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
   })
 
-  it('exports exactly 17 request types (14 acp_* prefix-dropped + authenticate + switch_project + subscribe)', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(17)
+  it('exports exactly 19 request types including persisted history list/open', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(19)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -69,7 +74,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_agents',
       'switch_project',
       'authenticate',
-      'subscribe'
+      'subscribe',
+      'list_persisted_sessions',
+      'open_persisted_session'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
@@ -158,7 +165,10 @@ describe('web-protocol.types — reliability tier registry (AC5)', () => {
       'config_options_update',
       'session_info_update',
       'usage_update',
-      'auth_required'
+      'auth_required',
+      'projects_changed',
+      'project_switch_completed',
+      'project_switch_failed'
     ]
     for (const type of reliable) {
       expect(WS_EVENT_TIERS[type]).toBe('reliable')

@@ -235,6 +235,13 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText(/MCP servers attached/i)).toBeInTheDocument()
   })
+
+  it('prefers the switched session MCP count over the global registry', () => {
+    mockMcpCount.current = 5
+    renderInputBar({ session: { ...session(), mcpServerCount: 2 } })
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.queryByText('5')).not.toBeInTheDocument()
+  })
 })
 
 function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}) {

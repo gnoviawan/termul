@@ -42,6 +42,9 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// One-shot waiters registered by turn-scoped operations. `finish_turn`
+    /// removes and resolves the full waiter list exactly once.
+    turn_idle_waiters: HashMap<String, Vec<oneshot::Sender<()>>>,
     /// Sessions associated with each tool call id for this connection. ACP tool
     /// call ids are session-scoped, so a set preserves collisions as ambiguous.
     /// Bindings remain for the connection lifetime so delayed updates cannot be
@@ -146,6 +149,27 @@ impl DriverState {
         Some(rx)
     }
 
+    /// Whether the session currently has an active turn, including cancel grace.
+    #[must_use]
+    pub(crate) fn is_turn_active(&self, session_id: &str) -> bool {
+        self.active_turns.contains_key(session_id)
+    }
+
+    /// Register a one-shot notification for the session becoming idle.
+    /// Returns `None` when already idle so callers never wait for a completion
+    /// that already happened.
+    pub(crate) fn wait_turn_idle(&mut self, session_id: &str) -> Option<oneshot::Receiver<()>> {
+        if !self.is_turn_active(session_id) {
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        self.turn_idle_waiters
+            .entry(session_id.to_string())
+            .or_default()
+            .push(tx);
+        Some(rx)
+    }
+
     /// Signal the active turn for a session to wind down (a cancel was
     /// requested). Keeps the session marked active (so no concurrent turn can
     /// start during the grace window). No-op if there is no active turn.
@@ -161,6 +185,11 @@ impl DriverState {
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
         self.active_turns.remove(session_id);
+        if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
+            for waiter in waiters {
+                let _ = waiter.send(());
+            }
+        }
         self.drain_session(session_id)
     }
 }
@@ -204,6 +233,23 @@ mod tests {
             state.try_begin_turn("sess-1").is_some(),
             "a new turn must be allowed once the previous one finished"
         );
+    }
+
+    #[test]
+    fn turn_state_query_and_waiter_follow_authoritative_turn() {
+        let mut state = DriverState::new();
+        assert!(!state.is_turn_active("sess-1"));
+        assert!(state.wait_turn_idle("sess-1").is_none());
+        let _cancel = state.try_begin_turn("sess-1").expect("turn starts");
+        assert!(state.is_turn_active("sess-1"));
+        let mut waiter = state.wait_turn_idle("sess-1").expect("waiter registered");
+        assert!(waiter.try_recv().is_err());
+        let _ = state.finish_turn("sess-1");
+        assert!(!state.is_turn_active("sess-1"));
+        assert_eq!(waiter.try_recv(), Ok(()));
+        // Idempotent finish cannot resolve the consumed one-shot again.
+        let _ = state.finish_turn("sess-1");
+        assert!(state.wait_turn_idle("sess-1").is_none());
     }
 
     #[test]

@@ -204,10 +204,7 @@ fn get_extension(name: &str) -> Option<String> {
 ///   search path to exist (it short-circuits on `!exists()`); the fs_api
 ///   routes also create new paths (`mkdir`, `write`), which need a different
 ///   shape that tolerates non-existing targets.
-fn check_within_root(
-    path: &Path,
-    root: &Path,
-) -> Result<PathBuf, (String, &'static str)> {
+fn check_within_root(path: &Path, root: &Path) -> Result<PathBuf, (String, &'static str)> {
     // 1) Reject explicit `..` traversal components. This is a fast, cheap
     //    pre-filter that catches the obvious attack without needing a real
     //    filesystem call. Any `Component::ParentDir` is rejected regardless
@@ -217,10 +214,7 @@ fn check_within_root(
     //    is NOT a `Component::ParentDir` because it is a single path
     //    segment; it survives this check and is then caught or accepted by
     //    the canonicalize+`starts_with` check below.
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err((
             format!(
                 "path traversal: '..' component in request path '{}'",
@@ -233,17 +227,12 @@ fn check_within_root(
     // 2) Canonicalize the root (caller is expected to pass an existing
     //    absolute path; if it doesn't exist or is invalid, we surface that
     //    rather than silently accepting the request).
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|e| {
-            (
-                format!(
-                    "project root '{}' is not accessible: {e}",
-                    root.display()
-                ),
-                "OUTSIDE_ROOT",
-            )
-        })?;
+    let canonical_root = root.canonicalize().map_err(|e| {
+        (
+            format!("project root '{}' is not accessible: {e}", root.display()),
+            "OUTSIDE_ROOT",
+        )
+    })?;
 
     // 3) Resolve the request path. We canonicalize the path when it exists
     //    (covers symlink resolution); when it does NOT exist (e.g. the
@@ -287,10 +276,7 @@ fn check_within_root(
             if parent.exists() {
                 let canonical = parent.canonicalize().map_err(|e| {
                     (
-                        format!(
-                            "failed to resolve parent of '{}': {e}",
-                            path.display()
-                        ),
+                        format!("failed to resolve parent of '{}': {e}", path.display()),
                         "OUTSIDE_ROOT",
                     )
                 })?;
@@ -378,7 +364,11 @@ fn entry_dto(parent: &Path, name: String, metadata: Option<&fs::Metadata>) -> Di
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            (m.is_dir(), if m.is_dir() { 0 } else { m.len() }, modified_at)
+            (
+                m.is_dir(),
+                if m.is_dir() { 0 } else { m.len() },
+                modified_at,
+            )
         }
         None => {
             // Conservative defaults for an unreadable entry (dangling symlink,
@@ -393,7 +383,11 @@ fn entry_dto(parent: &Path, name: String, metadata: Option<&fs::Metadata>) -> Di
     DirectoryEntryDto {
         name: name.clone(),
         path: full_str.clone(),
-        r#type: if is_dir { "directory".to_string() } else { "file".to_string() },
+        r#type: if is_dir {
+            "directory".to_string()
+        } else {
+            "file".to_string()
+        },
         // Desktop `getExtension` / `shouldIgnore` are called with the entry
         // NAME (not the full path). Passing `full_str` here made `should_ignore`
         // never match (`C:/proj/node_modules` != `"node_modules"`) and made
@@ -438,10 +432,7 @@ pub async fn mkdir(
     let path = match check_within_root(Path::new(&req.path), state.project_root.as_path()) {
         Ok(safe) => safe,
         Err((msg, code)) => {
-            return (
-                StatusCode::OK,
-                Json(IpcBody::<()>::err(msg, code)),
-            );
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
         }
     };
     let result = tokio::task::spawn_blocking(move || fs::create_dir_all(&path))
@@ -473,10 +464,7 @@ pub async fn write(
     let path = match check_within_root(Path::new(&req.path), state.project_root.as_path()) {
         Ok(safe) => safe,
         Err((msg, code)) => {
-            return (
-                StatusCode::OK,
-                Json(IpcBody::<()>::err(msg, code)),
-            );
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
         }
     };
     let content = req.content;
@@ -495,10 +483,7 @@ pub async fn write(
 /// `{ success: true, data: DirectoryEntry[] }` or
 /// `{ success: false, error, code: "READ_ERROR" }` (missing dir = failure;
 /// the renderer's empty-check already treats missing as empty).
-pub async fn ls(
-    State(state): State<AppState>,
-    Query(q): Query<PathQuery>,
-) -> impl IntoResponse {
+pub async fn ls(State(state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
     let path = match check_within_root(Path::new(&q.path), state.project_root.as_path()) {
         Ok(safe) => safe,
         Err((msg, code)) => {
@@ -514,7 +499,9 @@ pub async fn ls(
     let body = match entries {
         Ok(Ok(list)) => IpcBody::ok(list),
         Ok(Err(e)) => IpcBody::<Vec<DirectoryEntryDto>>::err(format!("{e}"), "READ_ERROR"),
-        Err(e) => IpcBody::<Vec<DirectoryEntryDto>>::err(format!("ls task failed: {e}"), "READ_ERROR"),
+        Err(e) => {
+            IpcBody::<Vec<DirectoryEntryDto>>::err(format!("ls task failed: {e}"), "READ_ERROR")
+        }
     };
     (StatusCode::OK, Json(body))
 }
@@ -542,7 +529,9 @@ pub async fn browse(
     let body = match entries {
         Ok(Ok(list)) => IpcBody::ok(list),
         Ok(Err(e)) => IpcBody::<Vec<DirectoryEntryDto>>::err(format!("{e}"), "READ_ERROR"),
-        Err(e) => IpcBody::<Vec<DirectoryEntryDto>>::err(format!("browse task failed: {e}"), "READ_ERROR"),
+        Err(e) => {
+            IpcBody::<Vec<DirectoryEntryDto>>::err(format!("browse task failed: {e}"), "READ_ERROR")
+        }
     };
     (StatusCode::OK, Json(body))
 }
@@ -558,13 +547,15 @@ pub async fn git_init(
     let cwd = req.cwd;
     let result = tokio::task::spawn_blocking(move || {
         let output = GitTracker::run_git_command(&cwd, &["init"]);
-        output.ok_or_else(|| "Failed to run git init".to_string()).and_then(|o| {
-            if o.status.success() {
-                Ok(())
-            } else {
-                Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
-            }
-        })
+        output
+            .ok_or_else(|| "Failed to run git init".to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    Ok(())
+                } else {
+                    Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
+                }
+            })
     })
     .await
     .map_err(|e| format!("git init task failed: {e}"));
@@ -656,8 +647,8 @@ fn sort_directory_entries(entries: &mut [DirectoryEntryDto]) {
 mod tests {
     use super::*;
     use crate::acp::AcpManager;
-    use crate::web::sink::WsRelaySink;
     use crate::web::project_registry::ProjectRegistry;
+    use crate::web::sink::WsRelaySink;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::path::PathBuf;
@@ -677,8 +668,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos();
-            let path =
-                std::env::temp_dir().join(format!("termul-web-fsapi-{label}-{nanos}"));
+            let path = std::env::temp_dir().join(format!("termul-web-fsapi-{label}-{nanos}"));
             fs::create_dir_all(&path).expect("create temp dir");
             Self { path }
         }
@@ -711,17 +701,19 @@ mod tests {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
             registry: Arc::new(ProjectRegistry::new()),
-            project_root: Arc::new(
-                root.canonicalize()
-                    .unwrap_or_else(|_| root.to_path_buf()),
-            ),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf())),
         }
     }
 
     /// Deserialize an `IpcBody<T>` from a response body. Panics on failure
     /// (test-only).
     async fn body_as_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
-        let bytes = axum::body::to_bytes(body, usize::MAX).await.expect("read body");
+        let bytes = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .expect("read body");
         serde_json::from_slice(&bytes).expect("deserialize IpcBody")
     }
 
@@ -827,7 +819,11 @@ mod tests {
         let resp = post_json(test_state(), "/fs/mkdir", &req_body).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "idempotent mkdir should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "idempotent mkdir should succeed: {:?}",
+            body.error
+        );
     }
 
     #[tokio::test]
@@ -865,8 +861,7 @@ mod tests {
     async fn write_returns_failure_when_parent_missing() {
         let dir = TempDir::new("write-fail");
         let target = dir.path().join("no-such-parent/child.txt");
-        let req_body =
-            serde_json::json!({ "path": target.to_string_lossy(), "content": "x" });
+        let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "x" });
         let resp = post_json(test_state(), "/fs/write", &req_body).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
@@ -881,7 +876,11 @@ mod tests {
         let resp = get_request(test_state(), &uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "ls on empty dir should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "ls on empty dir should succeed: {:?}",
+            body.error
+        );
         assert!(body.data.unwrap_or_default().is_empty());
     }
 
@@ -927,7 +926,10 @@ mod tests {
         let dir = TempDir::new("browse");
         fs::create_dir_all(dir.path().join("subdir")).expect("mkdir");
         fs::write(dir.path().join("file.txt"), "x").expect("write");
-        let uri = format!("/fs/browse?path={}", urlencoding(&dir.path().to_string_lossy()));
+        let uri = format!(
+            "/fs/browse?path={}",
+            urlencoding(&dir.path().to_string_lossy())
+        );
         let resp = get_request(test_state(), &uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
@@ -976,8 +978,7 @@ mod tests {
     async fn write_refused_from_non_loopback_peer() {
         let dir = TempDir::new("write-guard");
         let target = dir.path().join("README.md");
-        let req_body =
-            serde_json::json!({ "path": target.to_string_lossy(), "content": "# hi" });
+        let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "# hi" });
         // Non-loopback peer (a random LAN-ish address).
         let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
         let resp = post_json_from(test_state(), "/fs/write", &req_body, remote).await;
@@ -1011,8 +1012,7 @@ mod tests {
     async fn write_allowed_from_loopback_ipv6() {
         let dir = TempDir::new("write-loopback-v6");
         let target = dir.path().join("README.md");
-        let req_body =
-            serde_json::json!({ "path": target.to_string_lossy(), "content": "ok" });
+        let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "ok" });
         let loopback_v6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 54321));
         let resp = post_json_from(test_state(), "/fs/write", &req_body, loopback_v6).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1035,8 +1035,7 @@ mod tests {
         let dangling = dir.path().join("dangling");
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink("/this/does/not/exist", &dangling)
-                .expect("symlink");
+            std::os::unix::fs::symlink("/this/does/not/exist", &dangling).expect("symlink");
         }
         #[cfg(windows)]
         {
@@ -1060,7 +1059,10 @@ mod tests {
         );
         let entries = body.data.expect("entries");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&"real.txt"), "readable entry present: {names:?}");
+        assert!(
+            names.contains(&"real.txt"),
+            "readable entry present: {names:?}"
+        );
         // The dangling symlink is either surfaced (unix) or absent (windows
         // when symlink creation failed) — in both cases the listing succeeds.
     }
@@ -1152,8 +1154,8 @@ mod tests {
         );
         assert!(raw.contains("\"type\""), "type field present: {raw}");
         // Round-trip: the exact handler bytes deserialize into the DTO struct.
-        let body: IpcBody<Vec<DirectoryEntryDto>> = serde_json::from_slice(&bytes)
-            .expect("deserialize IpcBody from raw handler bytes");
+        let body: IpcBody<Vec<DirectoryEntryDto>> =
+            serde_json::from_slice(&bytes).expect("deserialize IpcBody from raw handler bytes");
         assert!(body.success);
         let entries = body.data.expect("entries");
         assert_eq!(entries.len(), 1);
@@ -1163,10 +1165,17 @@ mod tests {
         assert_eq!(entry.extension.as_deref(), Some(".md"));
         // `modifiedAt` field is populated (not zero) — proves the camelCase
         // serde rename round-trips into the struct field `modified_at`.
-        assert!(entry.modified_at > 0, "modifiedAt populated: {}", entry.modified_at);
+        assert!(
+            entry.modified_at > 0,
+            "modifiedAt populated: {}",
+            entry.modified_at
+        );
         // Re-serialize and assert the camelCase key is preserved on the way out.
         let re = serde_json::to_string(entry).expect("re-serialize");
-        assert!(re.contains("\"modifiedAt\""), "re-serialize keeps camelCase: {re}");
+        assert!(
+            re.contains("\"modifiedAt\""),
+            "re-serialize keeps camelCase: {re}"
+        );
     }
 
     /// PR-S4: project-root boundary on `/fs/mkdir` (CWE-22). A target path
@@ -1224,8 +1233,7 @@ mod tests {
         let root = TempDir::new("write-root");
         let outside = TempDir::new("write-outside");
         let target = outside.path().join("evil.txt");
-        let req_body =
-            serde_json::json!({ "path": target.to_string_lossy(), "content": "pwn" });
+        let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "pwn" });
         let resp = post_json(test_state_with_root(root.path()), "/fs/write", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "write outside root must be refused");

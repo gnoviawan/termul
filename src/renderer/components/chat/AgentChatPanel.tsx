@@ -377,6 +377,14 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
+      <div
+        className="border-b border-border/40 px-3 py-1 text-[11px] text-muted-foreground"
+        title={session.cwd}
+      >
+        <span className="font-medium">{session.projectId || 'Project'}</span>
+        <span aria-hidden="true"> · </span>
+        <span className="font-mono">{session.cwd}</span>
+      </div>
       <PlanSupportHint agentId={planAgentId} planEntryCount={plan.length} />
       <PlanPanel entries={plan} />
       <ChatMessageList

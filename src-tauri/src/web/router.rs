@@ -16,12 +16,12 @@ use axum::{
     Router,
 };
 
-use crate::acp::AcpManager;
+use crate::acp::{AcpManager, FileProjectRegistry};
 use crate::web::fs_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
-use crate::web::ws::{ws_upgrade, AppState};
+use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
 
@@ -42,7 +42,10 @@ pub fn router(
     acp: Arc<AcpManager>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
+    registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<PathBuf>,
     project_root: PathBuf,
+    history_mode: HistoryMode,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -72,6 +75,9 @@ pub fn router(
         acp,
         relay: ws_relay,
         registry,
+        registry_persistence,
+        projects_file: projects_file.map(Arc::new),
+        history_mode,
         project_root: Arc::new(project_root),
     })
 }
@@ -99,6 +105,9 @@ pub fn router_with_static(
             acp,
             relay: ws_relay,
             registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
             project_root: Arc::new(project_root),
         })
 }

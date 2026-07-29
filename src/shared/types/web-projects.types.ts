@@ -60,8 +60,35 @@ export interface SwitchProjectRequest {
   projectId: string
 }
 
-/** `switch_project` WS reply payload (server→client, on success). */
-export interface SwitchProjectReply {
-  /** The newly created ACP session id at the project's cwd. */
+/** Completed `switch_project` outcome (server→client). */
+export interface SwitchProjectCompleted {
+  status: 'completed'
+  projectId: string
   sessionId: string
+  cwd: string
+  mcpServerCount: number
+}
+
+/** Deferred `switch_project` outcome while the current turn finishes. */
+export interface SwitchProjectQueued {
+  status: 'queued'
+  projectId: string
+  currentSessionId: string
+}
+
+/** Discriminated `switch_project` reply payload. */
+export type SwitchProjectReply = SwitchProjectCompleted | SwitchProjectQueued
+
+/** Reliable completion event for a previously queued switch. */
+export interface ProjectSwitchCompletedEvent extends SwitchProjectCompleted {
+  requestId: string
+  previousSessionId: string
+}
+
+/** Reliable, correlated failure event for a previously queued switch. */
+export interface ProjectSwitchFailedEvent {
+  requestId: string
+  projectId: string
+  previousSessionId: string
+  message: string
 }

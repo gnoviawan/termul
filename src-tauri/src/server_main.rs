@@ -17,9 +17,9 @@ use std::time::Duration;
 
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
-    serve, PermissionRendezvous, ProjectRegistry, ServerConfig, WsRelaySink, seed_from_file,
+    seed_from_file, serve, PermissionRendezvous, ProjectRegistry, ServerConfig, WsRelaySink,
 };
-use termul_manager_lib::{AcpManager, FileProjectRegistry};
+use termul_manager_lib::{AcpManager, FileProjectRegistry, SessionPersistence};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -58,8 +58,28 @@ fn main() -> ExitCode {
         // seq counters + subscriber set) and pass it to BOTH the ACP manager
         // (as an event sink) and `serve` (so `/ws` can subscribe clients +
         // replay cursors). AC7: standalone registers ONLY WsRelaySink (1 sink).
-        let ws_relay = Arc::new(WsRelaySink::with_log_capacity(cfg.event_log_capacity));
-        let acp = Arc::new(AcpManager::new(vec![ws_relay.clone()]));
+        let sessions_dir = match cfg.sessions_dir.clone() {
+            Some(path) => path,
+            None => {
+                eprintln!("termul-server: sessions directory is not configured");
+                return ExitCode::from(1);
+            }
+        };
+        let persistence = match SessionPersistence::open(sessions_dir).await {
+            Ok(persistence) => persistence,
+            Err(error) => {
+                eprintln!("termul-server: failed to open sessions store: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let ws_relay = Arc::new(WsRelaySink::with_persistence(
+            cfg.event_log_capacity,
+            Arc::clone(&persistence),
+        ));
+        let acp = Arc::new(AcpManager::with_persistence(
+            vec![ws_relay.clone()],
+            persistence,
+        ));
         // Story 1.7: attach the server-side permission rendezvous (bounded
         // timeout, at-most-one, first-response-wins, disconnect-deny, TOCTOU).
         // The relay snapshots `acp:permission_request` events into it; the
@@ -80,6 +100,7 @@ fn main() -> ExitCode {
         // VPS is obvious). Desktop-hosted mode never reaches here (it calls
         // `serve_router` directly with a renderer-fed registry).
         let registry = Arc::new(ProjectRegistry::new());
+        let mut registry_persistence = None;
         if let Some(ref projects_file) = cfg.projects_file {
             match FileProjectRegistry::load(projects_file) {
                 Ok(file_reg) => {
@@ -90,6 +111,7 @@ fn main() -> ExitCode {
                         projects_file.display()
                     );
                     seed_from_file(&registry, &file_reg);
+                    registry_persistence = Some(Arc::new(parking_lot::Mutex::new(file_reg)));
                 }
                 Err(e) => {
                     eprintln!(
@@ -101,7 +123,17 @@ fn main() -> ExitCode {
             }
         }
         // `serve` always kill_all()s after Axum returns (ok or err).
-        match serve(acp, ws_relay, registry, cfg).await {
+        let projects_file = cfg.projects_file.clone();
+        match serve(
+            acp,
+            ws_relay,
+            registry,
+            registry_persistence,
+            projects_file,
+            cfg,
+        )
+        .await
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("termul-server failed: {e}");
@@ -112,7 +144,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH] [--projects-file PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH]\n\n\
      Options:\n\
        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
        --port PORT                 Bind port (default: 8080)\n\
@@ -120,5 +152,6 @@ fn usage() -> &'static str {
        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
+       --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
        -h, --help                  Show this help"
 }

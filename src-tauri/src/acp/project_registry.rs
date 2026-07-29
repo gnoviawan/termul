@@ -38,24 +38,25 @@
 //! rather than reaching back into `web::config::resolve_and_validate_project_root`.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agent_client_protocol::schema::McpServer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 /// Current on-disk JSON schema version. Bump when the [`RegistryFile`] shape
 /// changes; [`FileProjectRegistry::load`] routes any other version through
 /// the [`migrate`] hook (today: reject as [`ProjectRegistryError::BadSchemaVersion`]).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A single VFS root served to the web client in VPS mode.
 ///
 /// `path` is the canonical absolute project root (canonicalized + validated
-/// to be a directory at load via [`validate_root_path`]). Carries NO env-var
-/// values — the registry is read-only to the web client and redacts-by-omission
-/// (frozen constraint, mirroring `web::project_registry::ProjectSummary`).
+/// to be a directory at load via [`validate_root_path`]). Public project
+/// summaries omit all MCP details; the file may contain MCP environment values
+/// because it is a server-local operator configuration, not a web payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VfsRoot {
@@ -69,6 +70,10 @@ pub struct VfsRoot {
     pub color: String,
     /// `true` when the project is archived (rendered greyed, not switchable).
     pub is_archived: bool,
+    /// Project-scoped MCP attachments passed to ACP `session/new`.
+    /// This field is never mapped into the public web project summary or logs.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServer>,
 }
 
 /// On-disk JSON schema for the registry file. CamelCase wire casing (consistent
@@ -88,10 +93,8 @@ pub struct RegistryFile {
 /// In-memory loaded form of the registry (post-load + post-validation).
 ///
 /// Built by [`load`] from a `RegistryFile` (paths canonicalized, schema
-/// checked, roots validated). The standalone binary seeds the in-memory
-/// `web::ProjectRegistry` from this; no runtime caller writes back yet
-/// (Story 4.2 will call [`save_atomic`] when `switch_project` persists the
-/// active id).
+/// checked, roots validated). The standalone binary retains this registry so a
+/// successful project switch can persist the active id with [`save_atomic`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProjectRegistry {
     roots: Vec<VfsRoot>,
@@ -122,6 +125,13 @@ pub enum ProjectRegistryError {
         /// Why the path was rejected (canonicalize / not-a-directory message).
         reason: String,
     },
+    /// Active-project mutation targeted a root that is not switchable.
+    InvalidActiveProject {
+        /// Requested project id.
+        id: String,
+        /// Stable operator-facing reason.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ProjectRegistryError {
@@ -136,6 +146,9 @@ impl std::fmt::Display for ProjectRegistryError {
             Self::InvalidRoot { id, reason } => {
                 write!(f, "registry root '{id}' is invalid: {reason}")
             }
+            Self::InvalidActiveProject { id, reason } => {
+                write!(f, "project '{id}' cannot become active: {reason}")
+            }
         }
     }
 }
@@ -145,7 +158,9 @@ impl std::error::Error for ProjectRegistryError {
         match self {
             Self::Io(e) => Some(e),
             Self::Parse(e) => Some(e),
-            Self::BadSchemaVersion { .. } | Self::InvalidRoot { .. } => None,
+            Self::BadSchemaVersion { .. }
+            | Self::InvalidRoot { .. }
+            | Self::InvalidActiveProject { .. } => None,
         }
     }
 }
@@ -207,10 +222,8 @@ impl FileProjectRegistry {
             }
         };
 
-        // Route any non-current schema through the migrate hook. Today
-        // `migrate` rejects every other version (returns BadSchemaVersion);
-        // when a v2 lands it upgrades the `RegistryFile` in-memory here, then
-        // loading continues with the upgraded shape.
+        // Route any non-current schema through the migration hook. v1 upgrades
+        // to v2 with empty per-project MCP configuration; unknown versions fail.
         let file = if file.schema_version != SCHEMA_VERSION {
             migrate(file.schema_version, file)?
         } else {
@@ -253,62 +266,7 @@ impl FileProjectRegistry {
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(ProjectRegistryError::Parse)?;
 
-        let parent = path.parent().ok_or_else(|| {
-            ProjectRegistryError::Io(io::Error::other(format!(
-                "registry path '{}' has no parent directory",
-                path.display()
-            )))
-        })?;
-        fs::create_dir_all(parent).map_err(ProjectRegistryError::Io)?;
-
-        let nanos = now_nanos();
-        let tmp = temp_path(path, std::process::id(), nanos);
-
-        // Scope the temp File so it's dropped (closed) before the rename.
-        {
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp)
-                .map_err(|e| {
-                    remove_quiet(&tmp);
-                    ProjectRegistryError::Io(e)
-                })?;
-            f.write_all(&bytes).map_err(|e| {
-                remove_quiet(&tmp);
-                ProjectRegistryError::Io(e)
-            })?;
-            // fsync the temp BEFORE rename — atomic != durable; a rename
-            // without fsync can leave a renamed file with incomplete data
-            // after power loss.
-            f.sync_all().map_err(|e| {
-                remove_quiet(&tmp);
-                ProjectRegistryError::Io(e)
-            })?;
-        }
-
-        // Atomic rename: POSIX rename(2); Windows MoveFileExW(REPLACE_EXISTING).
-        if let Err(e) = fs::rename(&tmp, path) {
-            remove_quiet(&tmp);
-            return Err(ProjectRegistryError::Io(e));
-        }
-
-        // Unix-only: fsync the parent dir so the rename's directory-entry
-        // update is durable. Windows/macOS persist directory metadata
-        // themselves (no-op-equivalent).
-        #[cfg(unix)]
-        {
-            if let Ok(dir) = fs::File::open(parent) {
-                if let Err(e) = dir.sync_all() {
-                    warn!(
-                        "could not fsync registry parent dir '{}': {e}",
-                        parent.display()
-                    );
-                }
-            }
-        }
-
-        Ok(())
+        crate::acp::atomic_file::replace(path, &bytes).map_err(ProjectRegistryError::Io)
     }
 
     /// The loaded VFS roots (canonicalized paths).
@@ -321,6 +279,44 @@ impl FileProjectRegistry {
     #[must_use]
     pub fn active_project_id(&self) -> Option<&str> {
         self.active_project_id.as_deref()
+    }
+
+    /// Validate and update the active project id in memory.
+    ///
+    /// Persistence remains an explicit caller-owned `save_atomic` step so a
+    /// switch transaction can create its target ACP session before committing.
+    pub fn set_active_project(&mut self, project_id: &str) -> Result<(), ProjectRegistryError> {
+        let root = self
+            .roots
+            .iter()
+            .find(|root| root.id == project_id)
+            .ok_or_else(|| ProjectRegistryError::InvalidActiveProject {
+                id: project_id.to_string(),
+                reason: "unknown project".to_string(),
+            })?;
+        if root.is_archived {
+            return Err(ProjectRegistryError::InvalidActiveProject {
+                id: project_id.to_string(),
+                reason: "project is archived".to_string(),
+            });
+        }
+        if root.path.as_os_str().is_empty() {
+            return Err(ProjectRegistryError::InvalidActiveProject {
+                id: project_id.to_string(),
+                reason: "project has no working directory".to_string(),
+            });
+        }
+        self.active_project_id = Some(project_id.to_string());
+        Ok(())
+    }
+
+    /// Restore a previously captured active id during transaction rollback.
+    ///
+    /// This deliberately does not revalidate: the value came from this loaded
+    /// registry immediately before a validated mutation, and may legitimately
+    /// be `None`. Callers must persist the restored value with `save_atomic`.
+    pub(crate) fn restore_active_project(&mut self, active_project_id: Option<String>) {
+        self.active_project_id = active_project_id;
     }
 
     /// Resolve a project id → its canonical VFS root path. Returns `None` for
@@ -348,17 +344,22 @@ impl FileProjectRegistry {
     }
 }
 
-/// Schema migration hook. Today the only schema is v1, so any other version is
-/// rejected as-is. When a v2 is introduced, this is where an older file is
-/// upgraded in-memory before the version is accepted — kept as the single
-/// reject/upgrade seam so `load` never branches on schema versions. Never
-/// over-build now: the hook + rejection satisfies the architecture's
-/// "schema versioning + migration" requirement.
-fn migrate(from: u32, _file: RegistryFile) -> Result<RegistryFile, ProjectRegistryError> {
-    Err(ProjectRegistryError::BadSchemaVersion {
-        expected: SCHEMA_VERSION,
-        found: from,
-    })
+/// Single schema migration seam. Version 1 upgrades in-memory to version 2;
+/// unknown versions are rejected without reinterpretation.
+fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectRegistryError> {
+    match from {
+        // v1 had the same project fields except project-scoped MCP servers.
+        // `VfsRoot.mcp_servers` deserializes with `default`, so the explicit
+        // migration is lossless and makes the new meaning/version deliberate.
+        1 => {
+            file.schema_version = SCHEMA_VERSION;
+            Ok(file)
+        }
+        _ => Err(ProjectRegistryError::BadSchemaVersion {
+            expected: SCHEMA_VERSION,
+            found: from,
+        }),
+    }
 }
 
 /// Validate a raw VFS-root path: canonicalize (exists + accessible) and require
@@ -367,9 +368,9 @@ fn migrate(from: u32, _file: RegistryFile) -> Result<RegistryFile, ProjectRegist
 /// (the `web -> acp -> web` cycle invariant). Returns the canonical absolute
 /// path on success, or an operator-facing message on failure.
 fn validate_root_path(raw: &Path) -> Result<PathBuf, String> {
-    let canonical = raw.canonicalize().map_err(|e| {
-        format!("project root '{}' is not accessible: {e}", raw.display())
-    })?;
+    let canonical = raw
+        .canonicalize()
+        .map_err(|e| format!("project root '{}' is not accessible: {e}", raw.display()))?;
     if !canonical.is_dir() {
         return Err(format!(
             "project root '{}' is not a directory",
@@ -386,7 +387,9 @@ fn validate_root_path(raw: &Path) -> Result<PathBuf, String> {
 fn backup_corrupt(path: &Path, bytes: &[u8]) {
     let bak = path.with_file_name(format!(
         "{}.corrupt-{}.bak",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("registry"),
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("registry"),
         now_nanos()
     ));
     match fs::write(&bak, bytes) {
@@ -402,17 +405,6 @@ fn backup_corrupt(path: &Path, bytes: &[u8]) {
     }
 }
 
-/// `<path>.<pid>.<nanos>.tmp` — a unique temp name **in the same directory**
-/// as `path` (same-filesystem so `rename` is atomic).
-fn temp_path(path: &Path, pid: u32, nanos: u128) -> PathBuf {
-    path.with_file_name(format!(
-        "{}.{}.{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("registry"),
-        pid,
-        nanos
-    ))
-}
-
 /// Monotonic-ish nanos suffix for unique temp/backup names (best-effort; 0 on
 /// clock failure). Reuses the same hand-rolled pattern as `web::config`'s
 /// `tempdir_like` (no `tempfile` dev-dep in this crate).
@@ -421,11 +413,6 @@ fn now_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
-}
-
-/// Remove a path ignoring errors (temp-file cleanup best-effort).
-fn remove_quiet(p: &Path) {
-    let _ = fs::remove_file(p);
 }
 
 #[cfg(test)]
@@ -469,6 +456,7 @@ mod tests {
             path: path.to_path_buf(),
             color: "blue".to_string(),
             is_archived: archived,
+            mcp_servers: Vec::new(),
         }
     }
 
@@ -499,9 +487,7 @@ mod tests {
         let reg = FileProjectRegistry::load(&file).expect("load ok");
         assert_eq!(reg.roots().len(), 2, "two roots loaded");
         assert_eq!(reg.active_project_id(), Some("p-1"));
-        let resolved = reg
-            .resolve_path("p-1")
-            .expect("resolve p-1");
+        let resolved = reg.resolve_path("p-1").expect("resolve p-1");
         // The loaded path is the canonical absolute form of root_a.
         assert!(resolved.is_absolute());
         assert_eq!(resolved, root_a.canonicalize().unwrap());
@@ -571,9 +557,12 @@ mod tests {
         assert!(
             matches!(
                 err,
-                ProjectRegistryError::BadSchemaVersion { expected: 1, found: 99 }
+                ProjectRegistryError::BadSchemaVersion {
+                    expected: SCHEMA_VERSION,
+                    found: 99
+                }
             ),
-            "expected BadSchemaVersion {{expected:1, found:99}}, got {err:?}"
+            "expected BadSchemaVersion {{expected:{SCHEMA_VERSION}, found:99}}, got {err:?}"
         );
         cleanup(&dir);
     }
@@ -633,10 +622,7 @@ mod tests {
         let root_a = real_dir(&dir, "proj-a");
         let file = dir.join("projects.json");
 
-        let reg = FileProjectRegistry::from_roots(
-            vec![root("p-1", &root_a, false)],
-            None,
-        );
+        let reg = FileProjectRegistry::from_roots(vec![root("p-1", &root_a, false)], None);
         reg.save_atomic(&file).expect("save_atomic ok");
 
         // No temp file (or any file) created in the OTHER directory by save_atomic.
@@ -666,6 +652,7 @@ mod tests {
                     path: PathBuf::new(),
                     color: "blue".to_string(),
                     is_archived: false,
+                    mcp_servers: Vec::new(),
                 },
             ],
             None,
@@ -680,5 +667,83 @@ mod tests {
         assert_eq!(reg.resolve_path("p-empty"), None);
         // Unknown id => None.
         assert_eq!(reg.resolve_path("missing"), None);
+    }
+
+    #[test]
+    fn v1_migrates_to_v2_with_empty_mcp_configuration() {
+        let dir = tempdir_like("migrate-v1");
+        let root_a = real_dir(&dir, "proj-a");
+        let file = dir.join("projects.json");
+        write_json(
+            &file,
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "activeProjectId": "p-1",
+                "projects": [{
+                    "id": "p-1", "name": "Project p-1", "path": root_a,
+                    "color": "blue", "isArchived": false
+                }]
+            })
+            .to_string(),
+        );
+        let reg = FileProjectRegistry::load(&file).expect("v1 migrates");
+        assert!(reg.roots()[0].mcp_servers.is_empty());
+        reg.save_atomic(&file).expect("save v2");
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["schemaVersion"], 2);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn set_active_project_validates_before_mutating() {
+        let reg_root = root("live", Path::new("/a"), false);
+        let archived = root("archived", Path::new("/b"), true);
+        let mut reg =
+            FileProjectRegistry::from_roots(vec![reg_root, archived], Some("live".to_string()));
+        assert!(reg.set_active_project("missing").is_err());
+        assert_eq!(reg.active_project_id(), Some("live"));
+        assert!(reg.set_active_project("archived").is_err());
+        assert_eq!(reg.active_project_id(), Some("live"));
+    }
+
+    #[test]
+    fn restore_active_project_supports_persistence_rollback() {
+        let dir = tempdir_like("active-rollback");
+        let root_a = real_dir(&dir, "proj-a");
+        let root_b = real_dir(&dir, "proj-b");
+        let file = dir.join("projects.json");
+        let mut reg = FileProjectRegistry::from_roots(
+            vec![root("p-1", &root_a, false), root("p-2", &root_b, false)],
+            Some("p-1".to_string()),
+        );
+        reg.save_atomic(&file).expect("seed registry");
+        let previous = reg.active_project_id().map(str::to_string);
+        reg.set_active_project("p-2").expect("switch active");
+        reg.save_atomic(&file).expect("persist switch");
+
+        reg.restore_active_project(previous);
+        reg.save_atomic(&file).expect("persist rollback");
+        let reloaded = FileProjectRegistry::load(&file).expect("reload rolled back registry");
+        assert_eq!(reloaded.active_project_id(), Some("p-1"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn active_project_persists_across_reload() {
+        let dir = tempdir_like("active-switch");
+        let root_a = real_dir(&dir, "proj-a");
+        let root_b = real_dir(&dir, "proj-b");
+        let file = dir.join("projects.json");
+        let mut reg = FileProjectRegistry::from_roots(
+            vec![root("p-1", &root_a, false), root("p-2", &root_b, false)],
+            Some("p-1".to_string()),
+        );
+        reg.save_atomic(&file).expect("seed registry");
+        reg.set_active_project("p-2").expect("switch active");
+        reg.save_atomic(&file).expect("persist switch");
+
+        let reloaded = FileProjectRegistry::load(&file).expect("reload switched registry");
+        assert_eq!(reloaded.active_project_id(), Some("p-2"));
+        cleanup(&dir);
     }
 }

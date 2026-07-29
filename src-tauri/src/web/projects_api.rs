@@ -59,7 +59,7 @@ pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
 mod tests {
     use super::*;
     use crate::acp::{AcpManager, FileProjectRegistry};
-    use crate::web::project_registry::{ProjectRegistry, ProjectSummary, seed_from_file};
+    use crate::web::project_registry::{seed_from_file, ProjectRegistry, ProjectSummary};
     use crate::web::sink::WsRelaySink;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -71,6 +71,9 @@ mod tests {
             acp: Arc::new(AcpManager::new(vec![])),
             relay: Arc::new(WsRelaySink::new()),
             registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
             project_root: Arc::new(std::path::PathBuf::new()),
         }
     }
@@ -125,12 +128,13 @@ mod tests {
         assert!(data.projects[2].is_archived);
         // No env-var values cross the wire (redact-by-omission): ProjectSummary
         // simply has no env-var field — assert the shape.
-        assert!(serde_json::from_slice::<serde_json::Value>(&body)
-            .unwrap()["data"]["projects"][0]
-            .as_object()
-            .unwrap()
-            .get("envVars")
-            .is_none());
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["data"]["projects"][0]
+                .as_object()
+                .unwrap()
+                .get("envVars")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -234,7 +238,10 @@ mod tests {
         assert_eq!(data.projects.len(), 2, "file's VFS roots");
         assert_eq!(data.active_project_id.as_deref(), Some("p-1"));
         assert_eq!(data.projects[0].id, "p-1");
-        assert!(data.projects[0].is_active, "active flag derived from active_project_id");
+        assert!(
+            data.projects[0].is_active,
+            "active flag derived from active_project_id"
+        );
         assert!(data.projects[1].is_archived);
 
         // switch_project resolves the cwd from the seeded registry via the
@@ -294,7 +301,13 @@ mod tests {
         assert!(data.projects[0].is_active);
 
         // switch_project resolves the cwd from the renderer-fed registry.
-        assert_eq!(registry.find_path("d-1").as_deref(), Some("/renderer/cwd-a"));
-        assert_eq!(registry.find_path("d-2").as_deref(), Some("/renderer/cwd-b"));
+        assert_eq!(
+            registry.find_path("d-1").as_deref(),
+            Some("/renderer/cwd-a")
+        );
+        assert_eq!(
+            registry.find_path("d-2").as_deref(),
+            Some("/renderer/cwd-b")
+        );
     }
 }

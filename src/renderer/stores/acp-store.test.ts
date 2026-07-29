@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }))
+
+vi.mock('sonner', () => ({
+  toast: { error: toastError }
+}))
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))
@@ -39,7 +45,11 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
-import { _resetAcpTransportForTests } from '@/lib/acp-transport'
+import {
+  _resetAcpTransportForTests,
+  _setAcpTransportForTests,
+  type AcpTransport
+} from '@/lib/acp-transport'
 import {
   _resetEphemeralSessionIdsForTesting,
   _resetInFlightHistoryOpensForTesting,
@@ -48,6 +58,7 @@ import {
   collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
   discoveryKey,
+  initAcpEventListeners,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -80,7 +91,8 @@ const FRESH = {
   pendingPermissions: {},
   promptQueues: {},
   suppressQueueFlush: {},
-  transportReconnecting: false
+  transportReconnecting: false,
+  queuedProjectSwitchId: null
 }
 
 /**
@@ -197,6 +209,97 @@ describe('acp-store', () => {
     const session = useAcpStore.getState().sessions['s1']
     expect(session.agentId).toBe('agent-1')
     expect(useAcpStore.getState().activeSessionId).toBe('s1')
+  })
+
+  it('switchProject applies completed session context transactionally', async () => {
+    seedSession('s-old', 'agent-1', false)
+    useAcpStore.setState({ activeSessionId: 's-old' })
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 3
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    expect(switchProject).toHaveBeenCalledWith('p2')
+    expect(useAcpStore.getState().activeSessionId).toBe('s-new')
+    expect(useAcpStore.getState().sessions['s-new']).toMatchObject({
+      agentId: 'agent-1',
+      cwd: '/work/p2',
+      projectId: 'p2',
+      mcpServerCount: 3,
+      status: 'active'
+    })
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+  })
+
+  it('switchProject records queued state without changing the current session', async () => {
+    seedSession('s-old', 'agent-1', true)
+    useAcpStore.setState({ activeSessionId: 's-old' })
+    const switchProject = vi.fn(async () => ({
+      status: 'queued' as const,
+      projectId: 'p2',
+      currentSessionId: 's-old'
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    expect(useAcpStore.getState().activeSessionId).toBe('s-old')
+    expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBe('p2')
+  })
+
+  it('queued project switch failure clears matching state and surfaces a toast', () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({ queuedProjectSwitchId: 'p2' })
+    const teardown = initAcpEventListeners()
+
+    listeners.get('project_switch_failed')?.({
+      requestId: 'r2',
+      projectId: 'p2',
+      previousSessionId: 's-old',
+      message: 'switch persistence failed'
+    })
+
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+    expect(toastError).toHaveBeenCalledWith('switch persistence failed')
+    teardown()
+  })
+
+  it('ignores a superseded queued project switch failure', () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({ queuedProjectSwitchId: 'p3' })
+    const teardown = initAcpEventListeners()
+
+    listeners.get('project_switch_failed')?.({
+      requestId: 'r2',
+      projectId: 'p2',
+      previousSessionId: 's-old',
+      message: 'replaced'
+    })
+
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBe('p3')
+    expect(toastError).not.toHaveBeenCalled()
+    teardown()
   })
 
   it('createSession preserves native ACP session models', async () => {

@@ -2,17 +2,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'
 
-const { mockSwitchProject, mockSetTabFocused, mockSelectProject } = vi.hoisted(() => ({
+const { mockSwitchProject, queuedRef } = vi.hoisted(() => ({
   mockSwitchProject: vi.fn(),
-  mockSetTabFocused: vi.fn(),
-  mockSelectProject: vi.fn()
+  queuedRef: { current: null as string | null }
 }))
 
-vi.mock('@/lib/acp-transport', () => ({
-  // Web transport exposes `switchProject` (Epic-4 bridge).
-  getAcpTransport: () => ({ switchProject: mockSwitchProject })
+vi.mock('@/stores/acp-store', () => ({
+  useAcpStore: (selector: (state: unknown) => unknown) =>
+    selector({ switchProject: mockSwitchProject, queuedProjectSwitchId: queuedRef.current })
 }))
-vi.mock('@/lib/web-tab-session', () => ({ setTabFocusedSessionId: mockSetTabFocused }))
 
 const projects = [
   {
@@ -57,12 +55,13 @@ vi.mock('@/stores/project-store', () => ({
 const state = {
   projects,
   activeProjectId: 'p1',
-  selectProject: mockSelectProject
+  selectProject: vi.fn()
 }
 
 describe('ProjectSwitcherDrawer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    queuedRef.current = null
   })
 
   it('renders the mirrored list, marks the active project, disables archived + active entries', async () => {
@@ -91,15 +90,38 @@ describe('ProjectSwitcherDrawer', () => {
   })
 
   it('switches the shared session on clicking a non-active project', async () => {
-    mockSwitchProject.mockResolvedValue({ sessionId: 's-new' })
+    mockSwitchProject.mockResolvedValue({
+      status: 'completed',
+      projectId: 'p3',
+      sessionId: 's-new',
+      cwd: '/g',
+      mcpServerCount: 2
+    })
     const onOpenChange = vi.fn()
     render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
 
     fireEvent.click(await screen.findByText('Gamma'))
 
     await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledWith('p3'))
-    expect(mockSetTabFocused).toHaveBeenCalledWith('s-new')
-    expect(mockSelectProject).toHaveBeenCalledWith('p3')
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('keeps the drawer open and shows queued state until completion', async () => {
+    mockSwitchProject.mockResolvedValue({
+      status: 'queued',
+      projectId: 'p3',
+      currentSessionId: 's-old'
+    })
+    const onOpenChange = vi.fn()
+    const { rerender } = render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
+
+    fireEvent.click(await screen.findByText('Gamma'))
+    await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledWith('p3'))
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+
+    queuedRef.current = 'p3'
+    rerender(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
+    expect(await screen.findByText('Queued')).toBeInTheDocument()
+    expect(screen.getByText('Gamma').closest('button')).toBeDisabled()
   })
 })

@@ -69,7 +69,12 @@ export const WS_EVENT_TYPES = [
   // Relay-level (not from events.rs) (reliable)
   'auth_required',
   // Desktop project-list live push (Epic-4 bridge — agent-level, seq 0)
-  'projects_changed'
+  'projects_changed',
+  // Queued project switch outcome (connection-local, seq 0)
+  'project_switch_completed',
+  'project_switch_failed',
+  // Server-authored authoritative user input (durable/replayable).
+  'user_prompt'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -108,7 +113,9 @@ export const WS_REQUEST_TYPES = [
   'list_agents',
   'switch_project',
   'authenticate',
-  'subscribe'
+  'subscribe',
+  'list_persisted_sessions',
+  'open_persisted_session'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -189,7 +196,36 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   usage_update: WS_RELAY_TIERS.RELIABLE,
   permission_request: WS_RELAY_TIERS.RELIABLE,
   auth_required: WS_RELAY_TIERS.RELIABLE,
-  projects_changed: WS_RELAY_TIERS.RELIABLE
+  projects_changed: WS_RELAY_TIERS.RELIABLE,
+  project_switch_completed: WS_RELAY_TIERS.RELIABLE,
+  project_switch_failed: WS_RELAY_TIERS.RELIABLE,
+  user_prompt: WS_RELAY_TIERS.RELIABLE
+}
+
+export type HistoryMode = 'server' | 'live_only'
+
+export interface PersistedSessionSummary {
+  storageKey: string
+  sessionId: string
+  stableAgentNamespace: string | null
+  runtimeAgentId?: string
+  projectId?: string
+  cwd: string
+  title: string | null
+  createdAt: number
+  lastActivityAt: number
+  status: 'active' | 'closed' | 'error'
+  messageCount: number
+  toolCount: number
+  lastSeq: number
+  resumeEligible: boolean
+}
+
+export interface UserPromptEvent {
+  agentId: string
+  sessionId: string
+  turnId?: string
+  content: unknown[]
 }
 
 /**

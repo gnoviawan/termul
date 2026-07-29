@@ -35,7 +35,7 @@ use tracing::{info, warn};
 
 use crate::acp::AcpManager;
 use crate::web::sink::WsRelaySink;
-use crate::web::{ProjectRegistry, serve_router, ServerConfig};
+use crate::web::{serve_router, ProjectRegistry, ServerConfig};
 
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,12 +221,11 @@ impl RemoteServerState {
         // (deleted account, broken symlink, etc.) now fails the start
         // call rather than leaking through and confusing the boundary
         // check.
-        let raw_root = crate::web::config::default_project_root()
-            .ok_or_else(|| {
-                "could not determine project root for shared-live server: \
+        let raw_root = crate::web::config::default_project_root().ok_or_else(|| {
+            "could not determine project root for shared-live server: \
                  set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
-                    .to_string()
-            })?;
+                .to_string()
+        })?;
         let project_root = crate::web::config::resolve_and_validate_project_root(&raw_root)
             .map_err(|e| {
                 format!(
@@ -250,6 +249,7 @@ impl RemoteServerState {
             // server-owned file (AC2 / architecture Gap #3). The
             // file-backed `acp::project_registry` is VPS-mode-only.
             projects_file: None,
+            sessions_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -258,7 +258,7 @@ impl RemoteServerState {
             info!("Shared-live web server shutting down…");
         };
 
-        let (addr, serve_handle) = serve_router(acp, ws_relay, registry, cfg, shutdown)
+        let (addr, serve_handle) = serve_router(acp, ws_relay, registry, None, None, cfg, shutdown)
             .await
             .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
@@ -365,10 +365,7 @@ mod tests {
     fn remote_bind_mode_host_and_display() {
         assert_eq!(RemoteBindMode::Localhost.host(), "127.0.0.1");
         assert_eq!(RemoteBindMode::All.host(), "0.0.0.0");
-        assert_eq!(
-            RemoteBindMode::Localhost.display_host(),
-            "127.0.0.1"
-        );
+        assert_eq!(RemoteBindMode::Localhost.display_host(), "127.0.0.1");
         assert_eq!(RemoteBindMode::All.display_host(), "0.0.0.0");
     }
 
@@ -453,13 +450,22 @@ mod tests {
             .expect("start on localhost binds an OS-assigned port");
         assert!(status.running, "start returns a running status");
         assert!(status.port.is_some(), "an OS-assigned port is reported");
-        assert!(state.status().running, "status reflects running after start");
+        assert!(
+            state.status().running,
+            "status reflects running after start"
+        );
         assert_eq!(state.status().port, status.port);
 
         // stop drains the serve task (the JoinHandle is awaited) and reports stopped.
-        let stopped = state.stop().await.expect("stop on a running server succeeds");
+        let stopped = state
+            .stop()
+            .await
+            .expect("stop on a running server succeeds");
         assert!(!stopped.running);
-        assert!(!state.status().running, "status reflects stopped after stop");
+        assert!(
+            !state.status().running,
+            "status reflects stopped after stop"
+        );
 
         // Restart works (the slot was cleared by stop).
         let again = state
@@ -568,7 +574,10 @@ mod tests {
         let start = src.find(&needle)?;
         // Find the next top-level `fn ` after the signature (closes the body).
         let rest = &src[start + needle.len()..];
-        let end = rest.find("\nfn ").or_else(|| rest.find("\nasync fn ")).unwrap_or(rest.len());
+        let end = rest
+            .find("\nfn ")
+            .or_else(|| rest.find("\nasync fn "))
+            .unwrap_or(rest.len());
         Some(src[start..start + needle.len() + end].to_string())
     }
 
