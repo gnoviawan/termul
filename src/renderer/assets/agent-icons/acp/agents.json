@@ -320,11 +320,11 @@
   {
     "id": "dirac",
     "name": "Dirac",
-    "version": "0.4.28",
+    "version": "0.4.29",
     "description": "Reduces API costs by more than 50%, produces better and faster work. Uses Hash anchored parallel edits, AST manipulation and a whole lot of neat optimizations. Fully Open Source.",
     "distribution": {
       "npx": {
-        "package": "dirac-cli@0.4.28",
+        "package": "dirac-cli@0.4.29",
         "args": ["--acp"]
       }
     }
@@ -348,11 +348,11 @@
   {
     "id": "fast-agent",
     "name": "fast-agent",
-    "version": "0.9.26",
+    "version": "0.9.27",
     "description": "Code and build agents with comprehensive multi-provider support",
     "distribution": {
       "uvx": {
-        "package": "fast-agent-acp==0.9.26",
+        "package": "fast-agent-acp==0.9.27",
         "args": ["-x"]
       }
     }
@@ -395,7 +395,7 @@
   {
     "id": "goose",
     "name": "goose",
-    "version": "1.44.0",
+    "version": "1.45.0",
     "description": "A local, extensible, open source AI agent that automates engineering tasks",
     "distribution": {
       "binary": {
@@ -417,7 +417,7 @@
         },
         "windows-x86_64": {
           "cmd": "./goose-package\\goose.exe",
-          "archive": "https://github.com/block/goose/releases/download/v1.44.0/goose-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/block/goose/releases/download/v1.45.0/goose-x86_64-pc-windows-msvc.zip",
           "args": ["acp"]
         }
       }
@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.114",
+    "version": "0.2.115",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.114",
+        "package": "@xai-official/grok@0.2.115",
         "args": ["agent", "stdio"]
       }
     }

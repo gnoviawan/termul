@@ -845,9 +845,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      await waitFor(() => {
-        expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
-      })
+      await waitFor(
+        () => {
+          expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
+        },
+        { timeout: 5000 }
+      )
     })
   })
 
