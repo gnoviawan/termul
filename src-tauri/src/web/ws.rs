@@ -1407,6 +1407,7 @@ async fn handle_switch_project(
 }
 
 /// `load_session` → `AcpManager::load_session(agent_id, session_id, cwd)`.
+/// Reply payload = the camelCase reopen option snapshot.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LoadResumeSessionPayload {
@@ -1437,21 +1438,19 @@ async fn handle_load_session(
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp
-        .load_session(&agent_id, parsed.session_id, parsed.cwd)
-        .await
-    {
-        Ok(()) => {
+    match acp.load_session(&agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(outcome) => {
             *current_agent = Some(agent_id);
             *current_session.lock() = Some(session_id);
             *current_project.lock() = None;
-            WsReply::ok(id, Some(json!({})))
+            ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
 
 /// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd)`.
+/// Reply payload = the camelCase reopen option snapshot.
 async fn handle_resume_session(
     id: String,
     payload: &Value,
@@ -1474,15 +1473,12 @@ async fn handle_resume_session(
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp
-        .resume_session(&agent_id, parsed.session_id, parsed.cwd)
-        .await
-    {
-        Ok(()) => {
+    match acp.resume_session(&agent_id, parsed.session_id, parsed.cwd).await {
+        Ok(outcome) => {
             *current_agent = Some(agent_id);
             *current_session.lock() = Some(session_id);
             *current_project.lock() = None;
-            WsReply::ok(id, Some(json!({})))
+            ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -2141,6 +2137,19 @@ mod tests {
         assert!(is_human_relayed_cap("session_notification"));
         assert!(!is_human_relayed_cap("fs/read_text_file"));
         assert!(!is_human_relayed_cap("terminal/run_command"));
+    }
+
+    #[test]
+    fn reopen_outcome_serializes_as_ws_reply_payload() {
+        let outcome = crate::acp::manager::SessionReopenOutcome {
+            modes: None,
+            models: None,
+            config_options: Some(vec![]),
+        };
+        let reply = ok_with_payload("reopen-1".to_string(), &outcome);
+        assert!(reply.ok);
+        assert_eq!(reply.payload, Some(json!({ "configOptions": [] })));
+        assert!(reply.err.is_none());
     }
 
     #[test]

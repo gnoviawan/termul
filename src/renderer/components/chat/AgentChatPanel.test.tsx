@@ -4,24 +4,32 @@ import type { AcpSession } from '@/stores/acp-store'
 
 const {
   mockOpen,
+  mockOpenDiscovered,
   sessionRef,
   indexRef,
   openingRef,
+  restoringRef,
   launchingRef,
   oskRef,
-  transportReconnectingRef
+  transportReconnectingRef,
+  discoveredContextRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
+  mockOpenDiscovered: vi.fn(),
   // AcpSession shape; typed loosely here because vi.hoisted runs before the
   // type-only import below is usable at runtime. `seedLiveSession` constructs
   // the value with a `satisfies AcpSession` check.
   sessionRef: { current: null as object | null },
   indexRef: { current: [] as Array<{ id: string }> },
   openingRef: { current: {} as Record<string, true> },
+  restoringRef: { current: {} as Record<string, true> },
   launchingRef: { current: {} as Record<string, true> },
   // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
-  transportReconnectingRef: { current: false }
+  transportReconnectingRef: { current: false },
+  discoveredContextRef: {
+    current: {} as Record<string, { agentId: string; cwd: string; projectId: string }>
+  }
 }))
 
 vi.mock('@/stores/acp-store', () => {
@@ -35,9 +43,12 @@ vi.mock('@/stores/acp-store', () => {
     configToLiveAgent: {},
     sessionIndex: indexRef.current,
     openingHistoryIds: openingRef.current,
+    restoringChatIds: restoringRef.current,
     launchingSessionIds: launchingRef.current,
+    discoveredReopenContexts: discoveredContextRef.current,
     transportReconnecting: transportReconnectingRef.current,
     openHistorySession: mockOpen,
+    openDiscoveredSession: mockOpenDiscovered,
     sendPrompt: vi.fn(),
     sendPromptBlocks: vi.fn(),
     cancelPrompt: vi.fn(),
@@ -81,7 +92,7 @@ vi.mock('./chat-timeline', () => ({
 
 import { AgentChatPanel } from './AgentChatPanel'
 
-function seedLiveSession(id: string): void {
+function seedLiveSession(id: string, lastError: string | null = null): void {
   sessionRef.current = {
     id,
     agentId: 'agent-1',
@@ -94,7 +105,7 @@ function seedLiveSession(id: string): void {
     modes: null,
     models: null,
     configOptions: [],
-    lastError: null,
+    lastError,
     createdAt: 1
   } satisfies AcpSession
 }
@@ -102,20 +113,38 @@ function seedLiveSession(id: string): void {
 describe('AgentChatPanel restored-tab rehydration', () => {
   beforeEach(() => {
     mockOpen.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionRef.current = null
     indexRef.current = []
     openingRef.current = {}
+    restoringRef.current = {}
     launchingRef.current = {}
     oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
     transportReconnectingRef.current = false
+    discoveredContextRef.current = {}
   })
 
-  it('rehydrates a visible restored tab from persisted history', () => {
+  it('shows a branded preload while rehydrating a visible restored tab', () => {
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText(/Restoring chat/)).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
+    expect(screen.getByText('Loading your conversation…')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Termul' })).toBeInTheDocument()
     expect(mockOpen).toHaveBeenCalledTimes(1)
     expect(mockOpen).toHaveBeenCalledWith('s1')
+  })
+
+  it('keeps the branded preload visible while a placeholder session exists', () => {
+    seedLiveSession('s1')
+    restoringRef.current = { s1: true }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
+    const mark = screen.getByRole('img', { name: 'Termul' })
+    expect(mark).toHaveClass('animate-pulse')
+    expect(mark).toHaveClass('motion-reduce:animate-none')
+    expect(
+      screen.getByRole('status', { name: 'Restoring chat' }).querySelectorAll('svg')
+    ).toHaveLength(1)
   })
 
   it('marks the live chat pane root as a pane-scoped @container (Story 5.1)', () => {
@@ -167,6 +196,26 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     expect(screen.getByText(/Reconnecting to agent/)).toBeInTheDocument()
   })
 
+  it('keeps the failed discovered restore banner hidden while reopen is pending', () => {
+    seedLiveSession('s1')
+    discoveredContextRef.current = {
+      s1: { agentId: 'agent-native', cwd: '/native', projectId: 'p-native' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByText('Failed to restore agent chat.')).not.toBeInTheDocument()
+  })
+
+  it('offers Retry for a failed discovered reopen and retries with ephemeral context', () => {
+    seedLiveSession('s1', 'native load failed')
+    discoveredContextRef.current = {
+      s1: { agentId: 'agent-native', cwd: '/native', projectId: 'p-native' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByText('Failed to restore agent chat.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-native', 's1', '/native', 'p-native')
+  })
+
   it('offers a Reconnect action for a closed session with history (no dead end)', () => {
     // A failed background reconnect leaves the session registered but closed;
     // the pane must offer a working way to re-attempt the reopen.
@@ -182,12 +231,15 @@ describe('AgentChatPanel restored-tab rehydration', () => {
 describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
   beforeEach(() => {
     mockOpen.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionRef.current = null
     indexRef.current = []
     openingRef.current = {}
+    restoringRef.current = {}
     launchingRef.current = {}
     oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
     transportReconnectingRef.current = false
+    discoveredContextRef.current = {}
   })
 
   it('applies OSK bottom padding when the OSK is open on mobile (AC1)', () => {

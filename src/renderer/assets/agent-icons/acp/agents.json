@@ -81,11 +81,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.46",
+    "version": "3.0.47",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.46",
+        "package": "cline@3.0.47",
         "args": ["--acp"]
       }
     }
@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.181.0",
+    "version": "0.182.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.181.0",
+        "package": "droid@0.182.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -360,11 +360,11 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.52.0",
+    "version": "0.53.0",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.52.0",
+        "package": "@google/gemini-cli@0.53.0",
         "args": ["--acp"]
       }
     }
@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.112",
+    "version": "0.2.113",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.112",
+        "package": "@xai-official/grok@0.2.113",
         "args": ["agent", "stdio"]
       }
     }
@@ -599,29 +599,29 @@
   {
     "id": "mistral-vibe",
     "name": "Mistral Vibe",
-    "version": "2.22.0",
+    "version": "2.23.1",
     "description": "Mistral's open-source coding assistant",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.22.0/vibe-acp-darwin-aarch64-2.22.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.1/vibe-acp-darwin-aarch64-2.23.1.zip"
         },
         "darwin-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.22.0/vibe-acp-darwin-x86_64-2.22.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.1/vibe-acp-darwin-x86_64-2.23.1.zip"
         },
         "linux-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.22.0/vibe-acp-linux-aarch64-2.22.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.1/vibe-acp-linux-aarch64-2.23.1.zip"
         },
         "linux-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.22.0/vibe-acp-linux-x86_64-2.22.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.1/vibe-acp-linux-x86_64-2.23.1.zip"
         },
         "windows-x86_64": {
           "cmd": "./vibe-acp.exe",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.22.0/vibe-acp-windows-x86_64-2.22.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.1/vibe-acp-windows-x86_64-2.23.1.zip"
         }
       }
     }
@@ -641,38 +641,38 @@
   {
     "id": "opencode",
     "name": "OpenCode",
-    "version": "1.18.8",
+    "version": "1.18.9",
     "description": "The open source coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-darwin-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-darwin-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-linux-arm64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-linux-x64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-windows-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-windows-arm64.zip",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./opencode.exe",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.8/opencode-windows-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.9/opencode-windows-x64.zip",
           "args": ["acp"]
         }
       }
@@ -744,11 +744,11 @@
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.0",
+    "version": "0.21.1",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.0",
+        "package": "@qwen-code/qwen-code@0.21.1",
         "args": ["--acp", "--experimental-skills"]
       }
     }

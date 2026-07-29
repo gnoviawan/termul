@@ -5,6 +5,7 @@ import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
   AcpTransportError,
+  createAcpTransport,
   resolveWsUrl,
   toTauriEventName,
   toWsEventType,
@@ -34,6 +35,17 @@ class FakeWebSocket {
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
   switchProjectReply: unknown = null
+  reopenOutcome: unknown = {
+    modes: {
+      currentModeId: 'ask',
+      availableModes: [{ id: 'ask', name: 'Ask' }]
+    },
+    models: {
+      currentModelId: 'model-a',
+      availableModels: [{ modelId: 'model-a', name: 'Model A' }]
+    },
+    configOptions: []
+  }
 
   constructor(public url: string) {
     queueMicrotask(() => {
@@ -92,6 +104,10 @@ class FakeWebSocket {
         payload: { sessionId, modes: null, models: null, configOptions: null }
       })
       void payload
+      return
+    }
+    if (req.type === 'load_session' || req.type === 'resume_session') {
+      this.emitReply({ id: req.id, ok: true, payload: this.reopenOutcome })
       return
     }
     if (req.type === 'send_prompt') {
@@ -539,6 +555,26 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('loadSession and resumeSession return the reopen snapshot before subscribing', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    const loaded = await transport.loadSession('a1', 's-load', '/work')
+    const resumed = await transport.resumeSession('a1', 's-resume', '/work')
+
+    expect(loaded).toEqual(sock.reopenOutcome)
+    expect(resumed).toEqual(sock.reopenOutcome)
+    const types = sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)
+    expect(types).toContain('load_session')
+    expect(types).toContain('resume_session')
+    expect(types.filter((type) => type === 'subscribe')).toHaveLength(2)
+    transport.dispose()
+  })
+
   it('sendPrompt generates + sends a client turnId (Story 1.8 T3.1)', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -890,6 +926,27 @@ describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
+  })
+
+  it('desktop load/resume return the typed Tauri invoke outcome', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const outcome = { configOptions: [] }
+    vi.mocked(invoke).mockResolvedValue(outcome)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'a1',
+      sessionId: 's1',
+      cwd: '/work'
+    })
+    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
+      agentId: 'a1',
+      sessionId: 's1',
+      cwd: '/work'
+    })
+    transport.dispose()
   })
 
   it('accepts an injected transport via test helper', async () => {

@@ -82,6 +82,13 @@ export interface SessionConfigOption {
   options: SessionConfigOptionValue[]
 }
 
+/** Option snapshot returned by ACP session/load and session/resume. */
+export interface SessionReopenOutcome {
+  modes?: SessionModeState
+  models?: SessionModelState
+  configOptions?: SessionConfigOption[]
+}
+
 export interface AgentCapabilities {
   loadSession?: boolean
   sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
@@ -451,16 +458,16 @@ export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await getAcpTransport().loadSession(agentId, sessionId, cwd)
+): Promise<SessionReopenOutcome> {
+  return getAcpTransport().loadSession(agentId, sessionId, cwd)
 }
 
 export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await getAcpTransport().resumeSession(agentId, sessionId, cwd)
+): Promise<SessionReopenOutcome> {
+  return getAcpTransport().resumeSession(agentId, sessionId, cwd)
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {

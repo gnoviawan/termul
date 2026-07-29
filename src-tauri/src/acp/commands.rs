@@ -13,7 +13,7 @@ use agent_client_protocol::schema::{
 use tauri::State;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
-use crate::acp::manager::{AcpManager, NewSessionOutcome};
+use crate::acp::manager::{AcpManager, NewSessionOutcome, SessionReopenOutcome};
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 #[tauri::command]
@@ -59,7 +59,7 @@ pub async fn acp_load_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionReopenOutcome, String> {
     manager.load_session(&agent_id, session_id, cwd).await
 }
 
@@ -70,7 +70,7 @@ pub async fn acp_resume_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionReopenOutcome, String> {
     manager.resume_session(&agent_id, session_id, cwd).await
 }
 
