@@ -185,4 +185,34 @@ describe('ProjectSwitcherDrawer', () => {
     // Retryable again now that the turn is idle.
     expect(screen.getByText('Gamma').closest('button')).not.toBeDisabled()
   })
+
+  it('clears a failure that arrives while the drawer is closed (no stale badge on reopen)', async () => {
+    const onOpenChange = vi.fn()
+    const { rerender } = render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
+
+    // Queued switch in flight while the drawer is open.
+    queuedRef.current = 'p3'
+    rerender(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
+    expect(await screen.findByText('Queued')).toBeInTheDocument()
+
+    // User closes the drawer while the queued switch is still pending server-side.
+    rerender(<ProjectSwitcherDrawer open={false} onOpenChange={onOpenChange} />)
+
+    // The queued switch fails AFTER closure: store clears queued + sets failed.
+    queuedRef.current = null
+    failedRef.current = 'p3'
+    setFailedProjectSwitch.mockClear()
+    rerender(<ProjectSwitcherDrawer open={false} onOpenChange={onOpenChange} />)
+
+    // The cleanup effect must react to the late failure (its deps include
+    // `failedProjectSwitchId`) and clear it so it can't resurface on reopen.
+    await waitFor(() => expect(setFailedProjectSwitch).toHaveBeenCalledWith(null))
+
+    // Store honored the clear → reopening shows no stale "Failed"/"Queued" badge.
+    failedRef.current = null
+    rerender(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
+  })
 })

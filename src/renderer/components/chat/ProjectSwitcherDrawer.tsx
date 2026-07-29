@@ -41,10 +41,13 @@ export function ProjectSwitcherDrawer({
 
   // The inline "Failed" badge is transient: dismiss it when the drawer closes
   // so a stale red indicator doesn't reappear on the next open. A fresh switch
-  // attempt also clears it (see `switchProject`), so retrying self-heals.
+  // attempt also clears it (see `switchProject`), so retrying self-heals. The
+  // `failedProjectSwitchId` dep covers a failure that arrives AFTER the drawer
+  // closes (e.g. a queued switch rejected while closed) — the effect re-runs
+  // and clears it immediately so no stale badge resurfaces on reopen.
   useEffect(() => {
-    if (!open) setFailedProjectSwitch(null)
-  }, [open, setFailedProjectSwitch])
+    if (!open && failedProjectSwitchId !== null) setFailedProjectSwitch(null)
+  }, [open, failedProjectSwitchId, setFailedProjectSwitch])
 
   async function handleSwitch(project: Project): Promise<void> {
     if (switchingId !== null) return
