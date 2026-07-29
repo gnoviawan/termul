@@ -135,11 +135,14 @@ function ChatMarkdownTableComponent({
 
   return (
     <div
-      className="my-4 flex flex-col gap-2 rounded-xl border border-border/50 bg-card/30 p-2 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)]"
+      className="my-2 min-w-0 overflow-hidden rounded-md border border-border/50"
       data-streamdown="table-wrapper"
     >
       {toolbar ? (
-        <div className="flex justify-end" data-streamdown="table-toolbar">
+        <div
+          className="flex justify-end border-b border-border/40 px-1 py-0.5"
+          data-streamdown="table-toolbar"
+        >
           <IconActionGroup className="gap-0.5 px-1 py-0.5">
             {showCopy ? (
               <TableCopyDropdown>
@@ -163,7 +166,7 @@ function ChatMarkdownTableComponent({
           </IconActionGroup>
         </div>
       ) : null}
-      <div className="overflow-x-auto rounded-lg border border-border/50 bg-background">
+      <div className="max-w-full overflow-x-auto bg-background">
         <table
           className={cn('w-full divide-y divide-border text-sm', className)}
           data-streamdown="table"
@@ -176,7 +179,4 @@ function ChatMarkdownTableComponent({
   )
 }
 
-export const ChatMarkdownTable = memo(
-  ChatMarkdownTableComponent,
-  (prev, next) => prev.className === next.className
-)
+export const ChatMarkdownTable = memo(ChatMarkdownTableComponent)

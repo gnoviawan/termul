@@ -1,4 +1,3 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useEffect, useMemo, useRef } from 'react'
 import {
   MessageScroller,
@@ -9,15 +8,15 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
-import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import type { AgentId, SessionId } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
-import { agentTurnMeta, type TimelineItem } from './chat-timeline'
+import { groupTurnActivity, type TimelineItem, type TurnTimelineItem } from './chat-timeline'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
+import { TurnActivity } from './TurnActivity'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -42,23 +41,15 @@ interface ChatMessageListProps {
   onRetry?: () => void
 }
 
-/** Hide the agent header when the previous timeline entry is also an agent reply. */
-function isGroupedReply(items: TimelineItem[], index: number): boolean {
-  const it = items[index]
-  if (it.kind !== 'message' || it.message.role !== 'agent') return false
-  const prev = items[index - 1]
-  return prev?.kind === 'message' && prev.message.role === 'agent'
-}
-
-/** Index of the last message item in the timeline (skips trailing tool cards). */
-function lastMessageIndex(items: TimelineItem[]): number {
+/** Index of the last visible message item in the turn-grouped timeline. */
+function lastMessageIndex(items: TurnTimelineItem[]): number {
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].kind === 'message') return i
   }
   return -1
 }
 
-/** Stable id for animate-enter tracking across message, tool, and thought rows. */
+/** Stable id for animate-enter tracking across message, tool, thought, and activity rows. */
 function timelineItemId(it: TimelineItem): string {
   if (it.kind === 'message') return it.message.id
   if (it.kind === 'tool') return it.tool.toolCallId
@@ -88,9 +79,9 @@ function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: stri
 }
 
 /**
- * Scrollable message thread built on the MessageScroller engine. Auto-follows
- * the live edge only while the reader is pinned to the bottom; a jump-to-latest
- * control appears otherwise. New user turns anchor the scroll position.
+ * Scrollable message thread built on the MessageScroller engine. Agent process
+ * output is grouped into one turn-level disclosure; the final reply remains a
+ * normal message below it.
  */
 export function ChatMessageList({
   items,
@@ -100,8 +91,11 @@ export function ChatMessageList({
   onEditMessage,
   onRetry
 }: ChatMessageListProps): React.JSX.Element {
-  const turnMeta = useMemo(() => agentTurnMeta(items), [items])
-  const lastMsgIndex = useMemo(() => lastMessageIndex(items), [items])
+  const groupedItems = useMemo(
+    () => groupTurnActivity(items, showRunningIndicator),
+    [items, showRunningIndicator]
+  )
+  const lastMsgIndex = useMemo(() => lastMessageIndex(groupedItems), [groupedItems])
   const shouldAnimateEnter = useAnimateEnter(sessionId, items)
 
   if (items.length === 0 && !showRunningIndicator) {
@@ -114,62 +108,52 @@ export function ChatMessageList({
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-background to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-background to-transparent" />
       <MessageScrollerProvider autoScroll>
-        <ItemCountReporter count={items.length} />
+        <ItemCountReporter count={groupedItems.length} />
         <MessageScroller>
           <MessageScrollerViewport className={cn(CHAT_GUTTER_X, 'py-4')}>
             <MessageScrollerContent className="mx-auto w-full max-w-3xl">
-              {items.map((it, i) => (
+              {groupedItems.map((item, index) => (
                 <MessageScrollerItem
-                  key={it.key}
-                  messageId={it.key}
-                  scrollAnchor={it.kind === 'message' && it.message.role === 'user'}
+                  key={item.key}
+                  messageId={item.key}
+                  scrollAnchor={item.kind === 'message' && item.message.role === 'user'}
                 >
-                  {it.kind === 'tool' ? (
-                    <ToolCallCard
-                      toolCall={it.tool}
-                      animateEnter={shouldAnimateEnter(it.tool.toolCallId)}
+                  {item.kind === 'activity' ? (
+                    <TurnActivity
+                      items={item.items}
+                      active={item.active}
+                      durationMs={item.durationMs}
+                      attentionRequired={item.attentionRequired}
+                      hasFinalResponse={item.hasFinalResponse}
+                      shouldAnimateEnter={shouldAnimateEnter}
                     />
-                  ) : it.kind === 'thought-group' ? (
-                    <ThoughtGroup messages={it.messages} isLiveTail={i === items.length - 1} />
+                  ) : item.kind === 'tool' ? (
+                    <ToolCallCard
+                      toolCall={item.tool}
+                      animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
+                    />
+                  ) : item.kind === 'thought-group' ? (
+                    <ThoughtGroup messages={item.messages} isLiveTail={false} />
                   ) : (
                     <ChatMessage
-                      message={it.message}
-                      showHeader={!isGroupedReply(items, i)}
-                      isLast={i === items.length - 1}
-                      isTurnTail={turnMeta.tail.has(it.message.id)}
-                      turnText={turnMeta.text.get(it.message.id)}
-                      actionsPinned={i === lastMsgIndex}
-                      animateEnter={shouldAnimateEnter(it.message.id)}
+                      message={item.message}
+                      showHeader
+                      isLast={index === groupedItems.length - 1}
+                      isTurnTail={item.isTurnTail}
+                      turnText={item.turnText}
+                      actionsPinned={index === lastMsgIndex}
+                      animateEnter={shouldAnimateEnter(item.message.id)}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />
                   )}
                 </MessageScrollerItem>
               ))}
-              <AnimatePresence initial={false}>
-                {showRunningIndicator && <TurnRunningIndicator key="running" />}
-              </AnimatePresence>
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
     </div>
-  )
-}
-
-/** Persistent turn-running cue — gradient matrix spin (no visible text label). */
-function TurnRunningIndicator(): React.JSX.Element {
-  const reduced = useReducedMotion() ?? false
-  return (
-    <motion.div
-      className="min-w-0 shrink-0 px-1 py-2"
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 6 }}
-      animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
-      transition={{ duration: 0.18, ease: 'easeOut' }}
-    >
-      <MonochromeSpinner pattern="diagonal" label="Agent is working" />
-    </motion.div>
   )
 }

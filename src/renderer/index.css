@@ -703,8 +703,55 @@
     }
   }
 
+  .chat-streamdown {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+  .chat-streamdown > :first-child {
+    margin-top: 0;
+  }
+  .chat-streamdown > :last-child {
+    margin-bottom: 0;
+  }
+  .chat-streamdown [data-streamdown^="heading-"] {
+    margin-block: 0.75em 0.3em;
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  .chat-streamdown [data-streamdown="heading-1"] {
+    font-size: 1.08em;
+  }
+  .chat-streamdown p,
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"],
+  .chat-streamdown [data-streamdown="blockquote"],
+  .chat-streamdown pre {
+    margin-block: 0 0.55em;
+  }
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"] {
+    padding-left: 1.25rem;
+  }
+  .chat-streamdown [data-streamdown="list-item"] {
+    padding-block: 0.08em;
+  }
+  .chat-streamdown [data-streamdown="blockquote"] {
+    border-left-width: 2px;
+    padding-left: 0.65rem;
+  }
+  .chat-streamdown [data-streamdown="horizontal-rule"] {
+    margin-block: 0.8rem;
+  }
+  .chat-streamdown :not(pre) > code {
+    border-radius: 0.25rem;
+    background: hsl(var(--muted) / 0.55);
+    padding: 0.08em 0.3em;
+    font-size: 0.88em;
+  }
   .chat-streamdown [data-streamdown="code-block-body"] {
-    line-height: 1.65;
+    line-height: 1.55;
   }
   .chat-streamdown [data-streamdown="code-block-body"] pre,
   .chat-streamdown [data-streamdown="code-block-body"] code {
@@ -741,13 +788,18 @@
     height: 0.875rem;
     flex-shrink: 0;
   }
+  .chat-streamdown [data-streamdown="table"] {
+    min-width: max-content;
+    font-size: 0.875rem;
+  }
   .chat-streamdown [data-streamdown="table"] th {
-    background: hsl(var(--muted) / 0.5);
+    background: hsl(var(--muted) / 0.35);
     font-weight: 600;
   }
   .chat-streamdown [data-streamdown="table"] th,
   .chat-streamdown [data-streamdown="table"] td {
-    padding: 0.35rem 0.6rem;
+    border-color: hsl(var(--border) / 0.45);
+    padding: 0.3rem 0.5rem;
     text-align: left;
   }
 }
