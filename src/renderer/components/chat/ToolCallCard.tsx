@@ -240,7 +240,7 @@ function ToolCallCardComponent({
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
             data-press-feedback="off"
-            className="flex min-h-7 w-full items-center gap-2 px-1 py-1 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="flex min-h-7 w-full items-center gap-2 px-1 py-1 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {row}
           </button>

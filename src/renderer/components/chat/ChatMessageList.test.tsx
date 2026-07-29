@@ -154,7 +154,10 @@ describe('ChatMessageList', () => {
     const trigger = screen.getByRole('button', { name: 'Worked for 3s' })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     trigger.focus()
-    // Native buttons dispatch a click with detail=0 when activated by keyboard.
+    // jsdom does not synthesize the click a real browser fires on Enter, so
+    // dispatch the key sequence then the keyboard-generated click (detail 0).
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.keyUp(trigger, { key: 'Enter' })
     fireEvent.click(trigger, { detail: 0 })
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
   })

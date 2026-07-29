@@ -196,9 +196,8 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
           finalTextIndex = i
           break
         }
-        // Empty text-only tails are ignored. Attachment-only replies remain
-        // visible independently and do not disqualify the preceding final text.
-        if (hasMediaContent(item.message)) continue
+        // Empty text-only tails and attachment-only replies are skipped: they
+        // stay visible independently and don't disqualify the preceding final text.
       }
     }
 
@@ -266,12 +265,23 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
       })
     }
 
+    // The turn tail carries the turn-level copy action. Prefer the last visible
+    // response with substantive text so attachment-only positional tails don't
+    // receive copy text; fall back to the final positional response when none of
+    // the visible responses contain text.
+    let turnTailIndex = visibleResponses.length - 1
+    for (let i = visibleResponses.length - 1; i >= 0; i--) {
+      if (hasSubstantiveText(visibleResponses[i]!.message)) {
+        turnTailIndex = i
+        break
+      }
+    }
     visibleResponses.forEach((response, index) => {
-      const isTurnTail = index === visibleResponses.length - 1
+      const isTurnTail = index === turnTailIndex
       out.push({
         ...response,
         isTurnTail,
-        turnText: isTurnTail ? allAgentText : undefined
+        turnText: isTurnTail && allAgentText.length > 0 ? allAgentText : undefined
       })
     })
 
@@ -279,11 +289,6 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     turn = []
     turnIndex += 1
   }
-
-  const lastUserIndex = items.reduce(
-    (last, item, index) => (item.kind === 'message' && item.message.role === 'user' ? index : last),
-    -1
-  )
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!
@@ -294,7 +299,7 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
       turn.push(item)
     }
 
-    if (i === items.length - 1) flush(activeTurn && lastUserIndex <= i)
+    if (i === items.length - 1) flush(activeTurn)
   }
 
   if (items.length === 0 && activeTurn) flush(true)

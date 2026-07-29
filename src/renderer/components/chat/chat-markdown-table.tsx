@@ -166,7 +166,12 @@ function ChatMarkdownTableComponent({
           </IconActionGroup>
         </div>
       ) : null}
-      <div className="max-w-full overflow-x-auto bg-background">
+      <section
+        className="max-w-full overflow-x-auto bg-background"
+        aria-label="Markdown table"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable table region is intentionally focusable so keyboard users can scroll wide tables (WAI-ARIA scrollable-region pattern)
+        tabIndex={0}
+      >
         <table
           className={cn('w-full divide-y divide-border text-sm', className)}
           data-streamdown="table"
@@ -174,7 +179,7 @@ function ChatMarkdownTableComponent({
         >
           {children}
         </table>
-      </div>
+      </section>
     </div>
   )
 }

@@ -233,6 +233,23 @@ describe('groupTurnActivity', () => {
         .filter((item) => item.kind === 'message' && item.message.role === 'agent')
         .map((item) => (item.kind === 'message' ? item.message.id : ''))
     ).toEqual(['final-text', 'attachment-tail'])
+
+    const finalTextItem = grouped.find(
+      (item) => item.kind === 'message' && item.message.id === 'final-text'
+    )
+    expect(finalTextItem?.kind).toBe('message')
+    if (finalTextItem?.kind === 'message') {
+      expect(finalTextItem.isTurnTail).toBe(true)
+      expect(finalTextItem.turnText).toBe('Final answer')
+    }
+    const attachmentItem = grouped.find(
+      (item) => item.kind === 'message' && item.message.id === 'attachment-tail'
+    )
+    expect(attachmentItem?.kind).toBe('message')
+    if (attachmentItem?.kind === 'message') {
+      expect(attachmentItem.isTurnTail).toBe(false)
+      expect(attachmentItem.turnText).toBeUndefined()
+    }
   })
 
   it('keeps a live response at a stable key when later activity arrives', () => {

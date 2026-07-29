@@ -56,4 +56,21 @@ describe('ChatMarkdownTable', () => {
     expect(wrapper).toHaveClass('overflow-hidden', 'border')
     expect(wrapper?.querySelector('.overflow-x-auto')).toBeInTheDocument()
   })
+
+  it('exposes a keyboard-focusable scroll region for wide tables', () => {
+    const { container } = render(
+      <ChatMarkdownTable>
+        <tbody>
+          <tr>
+            <td>cell</td>
+          </tr>
+        </tbody>
+      </ChatMarkdownTable>
+    )
+
+    const scrollRegion = container.querySelector('.overflow-x-auto')
+    expect(scrollRegion?.tagName).toBe('SECTION')
+    expect(scrollRegion).toHaveAttribute('tabindex', '0')
+    expect(scrollRegion).toHaveAttribute('aria-label', 'Markdown table')
+  })
 })
