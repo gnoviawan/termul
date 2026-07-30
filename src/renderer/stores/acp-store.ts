@@ -414,6 +414,8 @@ interface AcpState {
   // Actions — live window (memory bounding + scroll-up lazy-load)
   /** Lazy-load older messages from the cached full payload on scroll-up. */
   loadOlderMessages: (sessionId: SessionId, count: number) => Promise<void>
+  /** Drop the per-session backfill allowance (reader returned to the live edge). */
+  clearSessionBackfill: (sessionId: SessionId) => void
 
   // Actions — session discovery (gh-407)
   /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
@@ -759,7 +761,10 @@ function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMess
     if (messages[i].streaming) streamingCount++
     else break
   }
-  const keepCount = Math.max(streamingCount, MAX_LIVE_WINDOW_MESSAGES)
+  // Let the retained window grow by the reader's lazy-loaded backfill so a
+  // coalesced flush keeps history the reader just pulled in (no load→trim thrash).
+  const backfill = backfillCounts.get(sessionId) ?? 0
+  const keepCount = Math.max(streamingCount, MAX_LIVE_WINDOW_MESSAGES + backfill)
   return messages.slice(messages.length - keepCount)
 }
 
@@ -787,6 +792,10 @@ function dropSessionTranscriptState(
   state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
   sessionId: SessionId
 ): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
+  // Drop per-session module-level bookkeeping too so a closed/deleted session
+  // never leaks a backfill allowance or an in-flight load guard.
+  backfillCounts.delete(sessionId)
+  loadingOlderSessions.delete(sessionId)
   return {
     messages: dropRecordKey(state.messages, sessionId),
     toolCalls: dropRecordKey(state.toolCalls, sessionId),
@@ -1947,6 +1956,21 @@ let coalesceRafId: number | null = null
 /** Sessions whose `loadOlderMessages` is in flight (prevents concurrent loads). */
 const loadingOlderSessions = new Set<SessionId>()
 
+/**
+ * Per-session count of older messages the reader lazy-loaded by scrolling up.
+ * `trimLiveWindow` lets the retained window grow to MAX + backfill for that
+ * session so a coalesced flush never discards history the reader just pulled
+ * in (avoids a load→trim→load thrash while a turn streams and the reader is
+ * scrolled up). Reset by `clearSessionBackfill` when the reader returns to the
+ * live edge, and on session drop.
+ */
+const backfillCounts = new Map<SessionId, number>()
+
+/** Test-only: clear the backfill counts between tests to avoid cross-test leakage. */
+export function _resetBackfillForTesting(): void {
+  backfillCounts.clear()
+}
+
 function scheduleCoalesceFlush(): void {
   if (coalesceRafId !== null) return
   coalesceRafId = requestAnimationFrame(flushCoalesced)
@@ -3059,7 +3083,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (loadingOlderSessions.has(sessionId)) return
     loadingOlderSessions.add(sessionId)
     try {
-      const payload = await loadSessionPayload(sessionId)
+      // Best-effort read: a disk/server failure must not surface as an
+      // unhandled promise rejection in the UI — the reader keeps the current
+      // view and can retry by scrolling up again.
+      const payload = await loadSessionPayload(sessionId).catch((e: unknown) => {
+        console.warn('[acp] loadOlderMessages: payload read failed', e)
+        return null
+      })
       if (!payload) return
       // Re-read current state after the async gap — new chunks may have arrived.
       const current = get().messages[sessionId] ?? []
@@ -3084,6 +3114,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         const liveIds = new Set(live.map((m) => m.id))
         const deduped = older.filter((m) => !liveIds.has(m.id))
         if (deduped.length === 0) return {}
+        // Grow the retained window by the number of older messages actually
+        // prepended so the next coalesced flush keeps them (no load→trim thrash
+        // while a turn streams and the reader is scrolled up).
+        backfillCounts.set(sessionId, (backfillCounts.get(sessionId) ?? 0) + deduped.length)
         return {
           messages: { ...s.messages, [sessionId]: [...deduped, ...live] }
         }
@@ -3091,6 +3125,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     } finally {
       loadingOlderSessions.delete(sessionId)
     }
+  },
+
+  clearSessionBackfill: (sessionId) => {
+    // Drop the per-session backfill allowance so the next coalesced flush trims
+    // the window back to the live bound. Called by the chat list when the
+    // reader returns to the live edge (pinned), bounding browsing growth.
+    backfillCounts.delete(sessionId)
   },
 
   // --- Session discovery (gh-407) -------------------------------------------

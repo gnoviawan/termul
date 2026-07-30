@@ -121,23 +121,49 @@ function VirtualizedTimeline({
     }
   }, [groupedItems.length, pinned, virtualizer])
 
-  // Reverse-infinite-scroll: lazy-load older messages when the reader reaches
-  // the top of the mounted window. The store guards against concurrent loads
-  // and is idempotent at the history head, but we keep a local in-flight flag
-  // to avoid spamming the action on rapid range notifications.
+  // Reverse-infinite-scroll: lazy-load older messages ONLY on genuine reader
+  // intent — the viewport must be scrollable and the reader must have scrolled
+  // up off the live edge (not pinned). Without this gate, the first paint (and
+  // any session short enough to fit the viewport) has startIndex === 0 and would
+  // fire loadOlderMessages with no intent; each prepend changes groupedItems.length
+  // and re-runs the effect, cascading until the whole transcript is back in the
+  // live window and undoing the bound. The store guards concurrent loads and is
+  // idempotent at the history head; this local flag avoids spamming on rapid
+  // range notifications. The reader's position is preserved across the prepend.
   const loadingOlderRef = useRef(false)
   const startIndex = virtualizer.range?.startIndex
   useEffect(() => {
     if (startIndex === undefined || startIndex > 0) return
     if (groupedItems.length === 0 || loadingOlderRef.current) return
+    if (viewportEl === null || pinned) return
+    if (viewportEl.scrollHeight <= viewportEl.clientHeight) return
+    const prevScrollHeight = viewportEl.scrollHeight
+    const prevScrollTop = viewportEl.scrollTop
     loadingOlderRef.current = true
     void useAcpStore
       .getState()
       .loadOlderMessages(sessionId, 50)
+      .then(() => {
+        // Restore the reader's position after older rows are prepended above.
+        requestAnimationFrame(() => {
+          if (!viewportEl) return
+          viewportEl.scrollTop = prevScrollTop + (viewportEl.scrollHeight - prevScrollHeight)
+        })
+      })
       .finally(() => {
         loadingOlderRef.current = false
       })
-  }, [startIndex, groupedItems.length, sessionId])
+  }, [startIndex, groupedItems.length, sessionId, viewportEl, pinned])
+
+  // When the reader returns to the live edge, drop the per-session backfill
+  // allowance so the next coalesced flush trims the window back to the live
+  // bound. Bounded browsing: load-on-scroll-up grows the retained window; coming
+  // back to the live edge shrinks it again. Best-effort (optional chaining) so
+  // isolated tests that mock the store don't crash on the unconditional call.
+  useEffect(() => {
+    if (!pinned) return
+    useAcpStore.getState?.()?.clearSessionBackfill?.(sessionId)
+  }, [pinned, sessionId])
 
   const renderItemContent = (item: TurnTimelineItem, index: number): React.JSX.Element => {
     if (item.kind === 'activity') {

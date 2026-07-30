@@ -266,18 +266,21 @@ export function setCachedSessionPayload(id: string, payload: SessionPayload): vo
 }
 
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
-  const cached = payloadCache.get(id)
-  if (cached) return cached
   const transport = getAcpTransport()
-  if (transport.historyMode?.() === 'server' && transport.getSessionPayload) {
-    // Fetch the FULL stored transcript from the server cache (desktop-hosted) or
-    // the file-backed persistence (VPS, Story 4.3). Replaces the prior
-    // `messages: []` gap — the web client now renders the complete conversation.
+  const mode = transport.historyMode?.()
+  // Server mode: this process is not the sole writer (other clients/hosts can
+  // update the server cache). Always re-fetch so transcripts written elsewhere
+  // are visible; refresh the local cache with the latest payload.
+  if (mode === 'server' && transport.getSessionPayload) {
     const payload = await transport.getSessionPayload(id)
     if (payload) payloadCache.set(id, payload)
     return payload
   }
-  if (transport.historyMode?.() === 'live_only') return null
+  // Desktop/file modes: this process is the sole writer — cache-first avoids
+  // re-reading disk on every scroll-up rehydration.
+  const cached = payloadCache.get(id)
+  if (cached) return cached
+  if (mode === 'live_only') return null
   const res = await persistenceApi.read<SessionPayload>(sessionPayloadKey(id))
   if (res.success && res.data) {
     payloadCache.set(id, res.data)
