@@ -218,7 +218,10 @@ async fn probe_tunnel_ready_with(
         if reachable {
             return Ok(());
         }
-        tokio::time::sleep(interval).await;
+        // Cap the retry sleep by the remaining deadline so a sleep started near
+        // the deadline can't push total wait past `timeout` by a full interval.
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        tokio::time::sleep(interval.min(remaining)).await;
     }
     Err(format!(
         "tunnel URL not reachable within {}s",
@@ -415,10 +418,58 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "unreachable URL must not be reported ready");
+        // Tight bound: the deadline + capped retry sleep can't overshoot by a
+        // full interval, so ~2s + small epsilon — well under 3s.
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
-            "probe must give up near the deadline, not hang"
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "probe must give up near the deadline, not hang; took {:?}",
+            start.elapsed()
         );
         assert!(result.unwrap_err().contains("not reachable within 2s"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn probe_bounded_by_deadline_against_hanging_listener() {
+        // A listener that accepts the TCP connection but never sends an HTTP
+        // response — so the only thing that unblocks each GET is the probe's
+        // per-request timeout. This exercises the timeout + capped-retry-sleep
+        // path the port-1 (instant-refuse) test can't.
+        let addr = spawn_hanging_listener().await;
+        let url = format!("http://{addr}/");
+        let start = std::time::Instant::now();
+        let result = probe_tunnel_ready_with(
+            &url,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_millis(500),
+        )
+        .await;
+        assert!(result.is_err(), "hanging listener must not be reported ready");
+        // The per-request timeout is capped to the remaining deadline, so total
+        // wait must hug the 2s bound — not the 3s per-request default.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "probe overshot the deadline: {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// A local TCP listener that accepts connections but never sends an HTTP
+    /// response, so a probe client's per-request timeout is the only unblock.
+    async fn spawn_hanging_listener() -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind hanging listener");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            // Accept connections but never send an HTTP response — a probe
+            // client's per-request timeout is the only unblock.
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let _ = tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    drop(stream);
+                });
+            }
+        });
+        addr
     }
 }
