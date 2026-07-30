@@ -229,6 +229,23 @@ async fn probe_tunnel_ready_with(
     ))
 }
 
+/// Best-effort, non-blocking reachability probe: GET the public tunnel URL
+/// until 2xx or the deadline, then log the outcome. Spawned in the background
+/// by `remote_server_start` after the tunnel is attached, so the QR appears
+/// immediately and the probe only informs the log — it never hides the QR on a
+/// timeout (a slow edge / cold start must not block the connect UI).
+pub async fn log_tunnel_reachability(url: String) {
+    match probe_tunnel_ready(&url).await {
+        Ok(()) => log::info!(
+            "cloudflared tunnel reachable — edge routes to origin ({url})"
+        ),
+        Err(e) => log::warn!(
+            "cloudflared tunnel not confirmed reachable within deadline ({url}): {e} \
+             — QR shown anyway; rescan if the page doesn't load"
+        ),
+    }
+}
+
 /// Spawn `cloudflared tunnel --url http://localhost:{port}` and wait (up to
 /// [`TUNNEL_URL_TIMEOUT_SECS`]) for the ephemeral trycloudflare URL.
 ///
@@ -285,19 +302,13 @@ pub async fn start_quick_tunnel(port: u16) -> Result<QuickTunnel, String> {
     .await
     {
         Ok(Ok(url)) => {
-            log::info!(
-                "cloudflared tunnel URL obtained ({url}); probing edge reachability…"
-            );
-            // cloudflared prints the URL before the edge route is live; an
-            // eager QR yields "This site can't be reached" in the first few
-            // seconds. Probe the public URL end-to-end until it returns 2xx —
-            // the only signal proving the phone will succeed.
-            if let Err(e) = probe_tunnel_ready(&url).await {
-                let _ = child.kill().await;
-                log::warn!("cloudflared tunnel probe failed: {e}");
-                return Err(e);
-            }
-            log::info!("cloudflared tunnel reachable — edge routes to origin");
+            // Return the URL + child immediately. The edge-reachability probe is
+            // best-effort and runs in the background from `remote_server_start`
+            // (after attach) — fail-closed probing hid the QR entirely on slow
+            // edges / cold starts, which was worse than a scan that might need a
+            // rescan. The staleness watchdog in `host::status` clears the QR
+            // if cloudflared dies.
+            log::info!("cloudflared tunnel URL obtained ({url})");
             Ok(QuickTunnel { url, child })
         }
         // Sender dropped without sending → cloudflared exited before printing.

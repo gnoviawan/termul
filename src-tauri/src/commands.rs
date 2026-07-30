@@ -3043,11 +3043,19 @@ pub async fn remote_server_start(
             };
             match remote::cloudflared::start_quick_tunnel(port).await {
                 Ok(tunnel) => {
+                    // Clone the URL before attach consumes it, so the background
+                    // probe can log reachability without blocking the QR.
+                    let probe_url = tunnel.url.clone();
                     if let Err(e) = remote_state.attach_tunnel(tunnel.url, tunnel.child) {
                         // Server stopped between start and attach; attach already
                         // killed the orphan child. Surface the error.
                         return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
                     }
+                    // Best-effort reachability probe in the background — logs
+                    // whether the edge routes to the origin. Non-blocking so the
+                    // QR appears immediately; never hides the QR on probe timeout
+                    // (a slow edge / cold start must not block the connect UI).
+                    tokio::spawn(remote::cloudflared::log_tunnel_reachability(probe_url));
                     Ok(IpcResult::success(remote_state.status()))
                 }
                 Err(e) => {
