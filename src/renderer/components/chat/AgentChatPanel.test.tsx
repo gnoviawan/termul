@@ -77,8 +77,6 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => true
 }))
 
-vi.mock('./PlanSupportHint', () => ({ PlanSupportHint: () => null }))
-
 // Child components pull in heavy chat rendering; the states under test render
 // before any of them mount.
 vi.mock('./ChatErrorNotice', () => ({ ChatErrorNotice: () => null }))

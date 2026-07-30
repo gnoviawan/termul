@@ -19,7 +19,6 @@ import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X, NARROW_PANE_PX } from './chat-layout'
 import type { TimelineItem } from './chat-timeline'
 import { PlanPanel } from './PlanPanel'
-import { PlanSupportHint } from './PlanSupportHint'
 
 const { mockMcpCount } = vi.hoisted(() => ({
   mockMcpCount: { current: 2 }
@@ -36,12 +35,6 @@ vi.mock('@/stores/acp-store', () => ({
   useAcpMessages: () => [],
   useSessionUsage: () => null,
   useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' })
-}))
-
-vi.mock('@/lib/agents/acp-plan-compliance', () => ({
-  getAcpPlanCompliance: () => 'unsupported',
-  shouldShowPlanSupportHint: () => true,
-  planSupportHintMessage: () => 'Plan support hint'
 }))
 
 type ObserverEntry = { target: Element; contentRect: { width: number } }
@@ -207,7 +200,7 @@ describe('Story 5.1 responsive chat layout', () => {
     expect(container.innerHTML).toContain('@[400px]:px-5')
   })
 
-  it('aligns notice / plan / hint gutters with CHAT_GUTTER_X', () => {
+  it('aligns notice / plan gutters with CHAT_GUTTER_X', () => {
     const error = render(<ChatErrorNotice message="boom" onDismiss={vi.fn()} />)
     expect(error.container.innerHTML).toContain('max-w-3xl')
     expect(error.container.innerHTML).toContain('@[400px]:px-5')
@@ -219,10 +212,6 @@ describe('Story 5.1 responsive chat layout', () => {
     expect(plan.container.innerHTML).toContain('max-w-3xl')
     expect(plan.container.innerHTML).toContain('@[400px]:px-5')
     plan.unmount()
-
-    const hint = render(<PlanSupportHint agentId="cursor" planEntryCount={0} />)
-    expect(hint.container.innerHTML).toContain('max-w-3xl')
-    expect(hint.container.innerHTML).toContain('@[400px]:px-5')
   })
 
   it('uses a single toolbar row above ~400px pane width', () => {
