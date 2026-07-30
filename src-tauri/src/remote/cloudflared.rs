@@ -190,19 +190,27 @@ async fn probe_tunnel_ready_with(
     timeout: std::time::Duration,
     interval: std::time::Duration,
 ) -> Result<(), String> {
-    // A per-request timeout bounds each GET so a hung edge (no response) can't
-    // stall the loop past the deadline — without it reqwest has no default
-    // timeout and a hung send() would never yield the retry.
+    // No global client timeout — each request is capped to the *remaining*
+    // deadline budget inside the loop, so a straggler near the deadline can't
+    // push total wait past `timeout`. A hung send() still yields: reqwest errors
+    // on the per-request timeout → reachable=false → the loop re-checks the
+    // deadline + exits.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
         .build()
         .map_err(|e| format!("tunnel probe client build failed: {e}"))?;
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
+        // Cap each GET to the remaining budget (≤3s) so the probe can't
+        // overshoot the documented `timeout` bound by a full request's duration.
+        let per_request_timeout = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .min(std::time::Duration::from_secs(3));
         // Any 2xx means the edge is routing to the origin. Non-2xx / network
-        // errors (edge not yet routing, NXDOMAIN, origin refused) → retry.
+        // errors (edge not yet routing, NXDOMAIN, origin refused, per-request
+        // timeout) → retry until the deadline.
         let reachable = client
             .get(url)
+            .timeout(per_request_timeout)
             .send()
             .await
             .map(|resp| resp.status().is_success())
