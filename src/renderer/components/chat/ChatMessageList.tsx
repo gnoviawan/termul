@@ -139,20 +139,27 @@ function VirtualizedTimeline({
     if (viewportEl.scrollHeight <= viewportEl.clientHeight) return
     const prevScrollHeight = viewportEl.scrollHeight
     const prevScrollTop = viewportEl.scrollTop
+    // Cancel on dependency change (e.g. session switch) so a load that resolves
+    // after the reader moved to another chat never adjusts the new viewport.
+    let cancelled = false
     loadingOlderRef.current = true
     void useAcpStore
       .getState()
       .loadOlderMessages(sessionId, 50)
       .then(() => {
+        if (cancelled) return
         // Restore the reader's position after older rows are prepended above.
         requestAnimationFrame(() => {
-          if (!viewportEl) return
+          if (cancelled || !viewportEl) return
           viewportEl.scrollTop = prevScrollTop + (viewportEl.scrollHeight - prevScrollHeight)
         })
       })
       .finally(() => {
         loadingOlderRef.current = false
       })
+    return () => {
+      cancelled = true
+    }
   }, [startIndex, groupedItems.length, sessionId, viewportEl, pinned])
 
   // When the reader returns to the live edge, drop the per-session backfill

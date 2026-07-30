@@ -3128,10 +3128,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   clearSessionBackfill: (sessionId) => {
-    // Drop the per-session backfill allowance so the next coalesced flush trims
-    // the window back to the live bound. Called by the chat list when the
-    // reader returns to the live edge (pinned), bounding browsing growth.
+    // Drop the per-session backfill allowance AND trim the window back to the
+    // live bound immediately — don't wait for the next coalesced flush, which
+    // may never arrive if the turn already ended. Called by the chat list when
+    // the reader returns to the live edge (pinned), bounding browsing growth.
     backfillCounts.delete(sessionId)
+    set((s) => {
+      const list = s.messages[sessionId]
+      if (!list || list.length <= MAX_LIVE_WINDOW_MESSAGES) return {}
+      // backfill just cleared → trimLiveWindow keeps MAX (+ in-flight tail).
+      const trimmed = trimLiveWindow(list, sessionId)
+      if (trimmed.length === list.length) return {}
+      return { messages: { ...s.messages, [sessionId]: trimmed } }
+    })
   },
 
   // --- Session discovery (gh-407) -------------------------------------------
