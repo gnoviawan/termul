@@ -1484,6 +1484,10 @@ async fn run_switch_queue(
                 let _ = out_tx.send(Outbound::Event(event));
             }
             Ok(SwitchProjectOutcome::Queued { .. }) => {}
+            // `execute_project_switch` never returns `Selected` (only
+            // `execute_cold_tab_select` does, on the cold-tab path); kept for
+            // exhaustiveness now that the enum has a `Selected` variant.
+            Ok(SwitchProjectOutcome::Selected { .. }) => {}
             Err(error) => {
                 let _ = out_tx.send(Outbound::Event(project_switch_failed_event(
                     pending.request_id,
