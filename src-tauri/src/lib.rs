@@ -125,12 +125,6 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 pub use acp::{AcpManager, FileProjectRegistry, SessionPersistence};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
-// Re-export only where `web::fs_api` uses the Windows-specific boundary
-// normalization. On non-Windows targets the helper is unused, and keeping the
-// re-export enabled there fails the mandatory `-D warnings` clippy gate.
-#[cfg(windows)]
-pub(crate) use path_validation::strip_verbatim_prefix;
-
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
 // `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`

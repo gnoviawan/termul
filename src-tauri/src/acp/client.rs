@@ -57,29 +57,25 @@ pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
         .meta(meta)
 }
 
-/// Resolve an agent-supplied absolute path against a session's workspace root,
-/// rejecting anything that escapes the root.
+/// Resolve an agent-supplied absolute path, rejecting lexical `..` traversal
+/// and canonicalizing for symlink resolution.
 ///
-/// Defeats both lexical `..` traversal (rejected outright) and symlink
-/// traversal (the longest existing ancestor is canonicalized and must remain
-/// within the canonicalized root). Returns the original requested path on
-/// success; the caller performs the actual read/write on it.
-///
-/// `root` is the session `cwd`. When it is `None` (session unknown / not yet
-/// scoped) the request is rejected — we never service an unscoped fs request.
+/// The project-root prefix-containment check that previously lived here was
+/// removed by explicit decision (spec-remove-web-fs-path-jail) so that any
+/// absolute path the agent requests is resolved and served. The retained
+/// guards are: `..`-component rejection (defense-in-depth) and path
+/// canonicalization / ancestor-walking (symlink resolution). When `root` is
+/// `None` the absolute path is resolved directly (no longer denied). `root`
+/// remains in the signature as the session `cwd` for future relative-path
+/// resolution; it is not used for containment.
 async fn scope_to_workspace(
     requested: &Path,
-    root: Option<&Path>,
+    _root: Option<&Path>,
 ) -> Result<PathBuf, acp::Error> {
     if !requested.is_absolute() {
         return Err(acp::Error::invalid_params()
             .data(format!("path must be absolute: {}", requested.display())));
     }
-
-    let Some(root) = root else {
-        return Err(acp::Error::invalid_params()
-            .data("no workspace is associated with this session; fs access denied"));
-    };
 
     // Lexical `..` can escape regardless of symlinks; reject early.
     if requested
@@ -92,13 +88,6 @@ async fn scope_to_workspace(
         )));
     }
 
-    let canon_root = tokio::fs::canonicalize(root).await.map_err(|e| {
-        acp::util::internal_error(format!(
-            "failed to resolve workspace root {}: {e}",
-            root.display()
-        ))
-    })?;
-
     // Walk up to the longest existing ancestor and canonicalize it (resolving
     // any symlinks). The (possibly not-yet-existing) suffix cannot escape
     // because we already rejected `..` components.
@@ -106,27 +95,16 @@ async fn scope_to_workspace(
     // NOTE: a residual TOCTOU window exists between this check and the caller's
     // I/O (a concurrent symlink swap could redirect the resolved path). Fully
     // closing it requires descriptor-relative `openat`/cap-std I/O, which is a
-    // larger change deferred intentionally: this is a local desktop trust
-    // boundary already gated by the per-agent `terminal`/fs capability and the
-    // `..`-reject + canonicalize+starts_with checks here, so the marginal risk
-    // does not justify a cap-std migration in this pass.
+    // larger change deferred intentionally.
     let mut ancestor = requested;
     loop {
         match tokio::fs::canonicalize(ancestor).await {
-            Ok(canon) => {
-                if !canon.starts_with(&canon_root) {
-                    return Err(acp::Error::invalid_params().data(format!(
-                        "path escapes the session workspace: {}",
-                        requested.display()
-                    )));
-                }
-                break;
-            }
+            Ok(_) => break,
             Err(_) => match ancestor.parent() {
                 Some(parent) if parent != ancestor => ancestor = parent,
                 _ => {
                     return Err(acp::Error::invalid_params().data(format!(
-                        "path escapes the session workspace: {}",
+                        "path cannot be resolved: {}",
                         requested.display()
                     )));
                 }
@@ -139,10 +117,11 @@ async fn scope_to_workspace(
 
 /// Handle an inbound `fs/read_text_file` request from the agent.
 ///
-/// Scopes the read to the session workspace `root`, honors the optional 1-based
-/// `line` start and `limit` line count, and preserves the file's original line
-/// terminators when slicing. Returns an ACP error for relative paths, paths
-/// that escape the workspace, or filesystem failures.
+/// Resolves the request path (rejecting `..`, canonicalizing for symlink
+/// resolution), honors the optional 1-based `line` start and `limit` line
+/// count, and preserves the file's original line terminators when slicing.
+/// Returns an ACP error for relative paths, `..` traversal, or filesystem
+/// failures.
 pub async fn handle_read_text_file(
     req: &ReadTextFileRequest,
     root: Option<&Path>,
@@ -173,9 +152,9 @@ pub async fn handle_read_text_file(
 
 /// Handle an inbound `fs/write_text_file` request from the agent.
 ///
-/// Scopes the write to the session workspace `root` and creates parent
-/// directories as needed. Returns an ACP error for relative paths, paths that
-/// escape the workspace, or filesystem failures.
+/// Resolves the request path (rejecting `..`, canonicalizing for symlink
+/// resolution) and creates parent directories as needed. Returns an ACP
+/// error for relative paths, `..` traversal, or filesystem failures.
 pub async fn handle_write_text_file(
     req: &WriteTextFileRequest,
     root: Option<&Path>,
@@ -397,23 +376,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_without_workspace_root_is_denied() {
-        // An absolute path with no associated session root must be rejected.
+    async fn read_without_workspace_root_succeeds() {
+        // An absolute path with no associated session root is now resolved
+        // directly (no longer denied — the containment jail was removed by
+        // spec-remove-web-fs-path-jail).
         let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("file.txt");
         std::fs::write(&path, "secret").unwrap();
 
         let req = ReadTextFileRequest::new("sess", &path);
-        let err = handle_read_text_file(&req, None).await.unwrap_err();
-        assert_eq!(err.code, acp::ErrorCode::InvalidParams);
+        let resp = handle_read_text_file(&req, None).await.unwrap();
+        assert_eq!(resp.content, "secret");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
-    async fn read_outside_workspace_is_rejected() {
-        // Two sibling dirs: workspace and a secret dir outside it.
+    async fn read_outside_workspace_is_allowed() {
+        // A direct absolute path outside the workspace root is now allowed
+        // (the containment jail was removed by spec-remove-web-fs-path-jail).
         let base = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4()));
         let workspace = base.join("workspace");
         let outside = base.join("outside");
@@ -422,14 +404,26 @@ mod tests {
         let secret = outside.join("secret.txt");
         std::fs::write(&secret, "top secret").unwrap();
 
-        // Direct absolute path outside the workspace root.
         let req = ReadTextFileRequest::new("sess", &secret);
-        let err = handle_read_text_file(&req, Some(workspace.as_path()))
+        let resp = handle_read_text_file(&req, Some(workspace.as_path()))
             .await
-            .unwrap_err();
-        assert_eq!(err.code, acp::ErrorCode::InvalidParams);
+            .unwrap();
+        assert_eq!(resp.content, "top secret");
 
-        // `..` traversal out of the workspace is also rejected.
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn read_rejects_traversal_sequence_in_path() {
+        // `..` traversal is still rejected even though containment is removed.
+        let base = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4()));
+        let workspace = base.join("workspace");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, "top secret").unwrap();
+
         let escape = workspace.join("..").join("outside").join("secret.txt");
         let req = ReadTextFileRequest::new("sess", &escape);
         let err = handle_read_text_file(&req, Some(workspace.as_path()))
@@ -441,7 +435,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_outside_workspace_is_rejected() {
+    async fn write_outside_workspace_is_allowed() {
+        // A write to a path outside the workspace root is now allowed (the
+        // containment jail was removed by spec-remove-web-fs-path-jail).
         let base = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4()));
         let workspace = base.join("workspace");
         let outside = base.join("outside");
@@ -450,11 +446,11 @@ mod tests {
 
         let target = outside.join("evil.txt");
         let req = WriteTextFileRequest::new("sess", &target, "pwned");
-        let err = handle_write_text_file(&req, Some(workspace.as_path()))
+        handle_write_text_file(&req, Some(workspace.as_path()))
             .await
-            .unwrap_err();
-        assert_eq!(err.code, acp::ErrorCode::InvalidParams);
-        assert!(!target.exists(), "write must not have escaped the workspace");
+            .unwrap();
+        assert!(target.exists(), "write outside workspace must succeed");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "pwned");
 
         let _ = std::fs::remove_dir_all(&base);
     }
