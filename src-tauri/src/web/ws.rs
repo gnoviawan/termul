@@ -1089,6 +1089,14 @@ enum SwitchProjectOutcome {
         project_id: String,
         current_session_id: SessionId,
     },
+    /// Cold-tab (no live agent) deferred select: the shared active project
+    /// changed but no session was created. The web client spawns the agent
+    /// lazily when a chat starts (Ask-First resolution stands). `cwd` lets the
+    /// client resolve the project root without a second registry round-trip.
+    Selected {
+        project_id: String,
+        cwd: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1331,6 +1339,61 @@ async fn execute_project_switch(
     })
 }
 
+/// Cold-tab (no live agent) `switch_project`: deferred select. Updates the
+/// shared `active_project_id` (+ persists to disk with rollback, mirroring
+/// `execute_project_switch`) and the connection's `current_project`, then
+/// broadcasts `projects_changed`. No agent is spawned and no session is
+/// created — the Ask-First resolution stands; the web client spawns the agent
+/// lazily when a chat starts. Returns `Selected`; errors (persistence failure,
+/// target vanished between lookup and commit) are `String`s the caller maps
+/// via `acp_err_to_reply` (same mapping as the live-agent path).
+fn execute_cold_tab_select(
+    target: ProjectSwitchContext,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+) -> Result<SwitchProjectOutcome, String> {
+    let mut persisted_previous_active: Option<Option<String>> = None;
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_active = file_registry.active_project_id().map(str::to_string);
+            if let Err(error) = file_registry.set_active_project(&target.project_id) {
+                Err(error.to_string())
+            } else if let Err(error) = file_registry.save_atomic(path) {
+                file_registry.restore_active_project(old_active);
+                Err(error.to_string())
+            } else {
+                persisted_previous_active = Some(old_active);
+                Ok(())
+            }
+        };
+        if let Err(error) = persistence_result {
+            return Err(format!("failed to persist active project: {error}"));
+        }
+    }
+    if !registry.set_active_project(&target.project_id) {
+        if let (Some(file_registry), Some(path), Some(old_active)) =
+            (registry_persistence, projects_file, persisted_previous_active)
+        {
+            let mut file_registry = file_registry.lock();
+            file_registry.restore_active_project(old_active);
+            if let Err(error) = file_registry.save_atomic(path) {
+                warn!("[ws] failed to persist active-project rollback: {error}");
+            }
+        }
+        return Err("target project became unavailable before commit".to_string());
+    }
+    broadcast_projects_changed(relay, Some(&target.project_id));
+    *current_project.lock() = Some(target.project_id.clone());
+    Ok(SwitchProjectOutcome::Selected {
+        project_id: target.project_id,
+        cwd: target.cwd,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_switch_queue(
     agent_id: AgentId,
@@ -1465,26 +1528,11 @@ async fn handle_switch_project(
             )
         }
     };
-    let agent_id = match current_agent.clone() {
-        Some(agent_id) => agent_id,
-        None => {
-            return WsReply::err(
-                id,
-                WsErrorCode::NoAgent,
-                "switch_project requires a live agent; spawn or create a session first",
-            )
-        }
-    };
-    let previous_session_id = match current_session.lock().clone() {
-        Some(session_id) => session_id,
-        None => {
-            return WsReply::err(
-                id,
-                WsErrorCode::NotFound,
-                "switch_project requires a tracked current session",
-            )
-        }
-    };
+    // Resolve the target FIRST (pure registry lookup). Archived / unknown /
+    // pathless ids are `NOT_FOUND` for both cold-tab and live-agent paths —
+    // hoisted above the agent check so a cold tab can select without a live
+    // agent. The live-agent behavior is unchanged: it also resolves `target`
+    // before any session work.
     let target = match registry.switch_context(&parsed.project_id) {
         Some(target) => target,
         None => {
@@ -1495,6 +1543,34 @@ async fn handle_switch_project(
                     "project '{}' not found or not switchable",
                     parsed.project_id
                 ),
+            )
+        }
+    };
+    let agent_id = match current_agent.clone() {
+        Some(agent_id) => agent_id,
+        // Cold tab (no live agent): deferred select — update the shared active
+        // project (+ persist) + `current_project`, broadcast
+        // `projects_changed`, return `Selected`. No agent spawn / session
+        // (Ask-First stands; the web client spawns lazily on chat start).
+        None => match execute_cold_tab_select(
+            target,
+            relay,
+            registry,
+            registry_persistence,
+            projects_file,
+            current_project,
+        ) {
+            Ok(outcome) => return ok_with_payload(id, &outcome),
+            Err(error) => return acp_err_to_reply(id, error),
+        },
+    };
+    let previous_session_id = match current_session.lock().clone() {
+        Some(session_id) => session_id,
+        None => {
+            return WsReply::err(
+                id,
+                WsErrorCode::NotFound,
+                "switch_project requires a tracked current session",
             )
         }
     };
@@ -3070,17 +3146,182 @@ mod tests {
     }
 
     /// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
-    /// sends `switch_project` → `NO_AGENT` (Ask-First resolution: do NOT
-    /// auto-spawn). `handle_sync` uses `current_agent = None`.
+    /// sends `switch_project` → deferred `Selected` (Ask-First resolution:
+    /// do NOT auto-spawn). The shared `active_project_id` is updated,
+    /// `projects_changed` is broadcast, and no agent/session is touched —
+    /// the web client spawns the agent lazily when a chat starts.
     #[test]
-    fn handle_switch_project_cold_tab_is_no_agent() {
+    fn handle_switch_project_cold_tab_is_deferred_select() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_active: false,
+            }],
+            None,
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
         let mut authed = true;
-        let reply = handle_sync(
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(reply.ok, "{:?}", reply.err);
+        let payload = reply.payload.expect("selected payload");
+        assert_eq!(payload["status"], "selected");
+        assert_eq!(payload["projectId"], "p-1");
+        assert_eq!(payload["cwd"], "/a");
+        // Cold tab: no session was created.
+        assert!(current_session.lock().is_none());
+        // The shared active-project mirror + connection tracking reflect it.
+        let snap = registry.snapshot();
+        assert_eq!(snap.active_project_id.as_deref(), Some("p-1"));
+        let cp = current_project.lock().clone();
+        assert_eq!(cp.as_deref(), Some("p-1"));
+    }
+
+    /// Cold-tab `switch_project` with an unknown/archived/pathless `projectId`
+    /// → `NOT_FOUND` (the registry lookup is hoisted above the agent check, so
+    /// a cold tab gets the same `not_found` as the live-agent path).
+    #[test]
+    fn handle_switch_project_cold_tab_unknown_id_is_not_found() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_active: true,
+            }],
+            Some("p-1".to_string()),
         );
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let mut authed = true;
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
         assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "no_agent");
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Cold-tab deferred select persists the new active project to the
+    /// `--projects-file` (rollback-safe), mirroring the live-agent path. A
+    /// desktop/server restart therefore reflects the web tab's selection.
+    #[test]
+    fn execute_cold_tab_select_persists_active_project() {
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_active: false,
+            }],
+            None,
+        );
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: PathBuf::from("/a"),
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![],
+            }],
+            None,
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let path = std::env::temp_dir().join(format!(
+            "termul-ws-cold-tab-persist-{}.json",
+            std::process::id()
+        ));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let target = ProjectSwitchContext {
+            project_id: "p-1".to_string(),
+            cwd: "/a".to_string(),
+            mcp_servers: vec![],
+            is_active: false,
+        };
+        let result = execute_cold_tab_select(
+            target,
+            &relay,
+            &registry,
+            Some(&file_registry),
+            Some(&path),
+            &current_project,
+        );
+        // Capture the persisted file before best-effort cleanup so a failing
+        // assertion cannot leak the temp file.
+        let saved = std::fs::read_to_string(&path).ok();
+        let _ = std::fs::remove_file(&path);
+        let outcome = result.expect("cold-tab select succeeds");
+        let SwitchProjectOutcome::Selected { project_id, cwd } = outcome else {
+            panic!("expected Selected, got {:?}", outcome);
+        };
+        assert_eq!(project_id, "p-1");
+        assert_eq!(cwd, "/a");
+        // In-memory file registry + web registry + connection all reflect it.
+        let file_active = file_registry.lock().active_project_id().map(str::to_string);
+        assert_eq!(file_active.as_deref(), Some("p-1"));
+        let snap = registry.snapshot();
+        assert_eq!(snap.active_project_id.as_deref(), Some("p-1"));
+        let cp = current_project.lock().clone();
+        assert_eq!(cp.as_deref(), Some("p-1"));
+        // The persisted file on disk carries the active id (read raw — `load`
+        // would re-validate root paths against the real fs).
+        let saved = saved.expect("persisted file written");
+        let v: Value = serde_json::from_str(&saved).expect("valid json");
+        assert_eq!(v["activeProjectId"], "p-1");
     }
 
     /// `switch_project` with a live agent but an unknown `projectId` →

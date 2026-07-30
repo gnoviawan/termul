@@ -76,8 +76,24 @@ export interface SwitchProjectQueued {
   currentSessionId: string
 }
 
+/**
+ * Cold-tab `switch_project` outcome (server→client). The shared active project
+ * changed but no session was created and no agent was spawned — the web
+ * client spawns the agent lazily when a chat starts (Ask-First resolution
+ * stands). `cwd` lets the client resolve the project root without a second
+ * registry round-trip. Mirrors the Rust `SwitchProjectOutcome::Selected`.
+ */
+export interface SwitchProjectSelected {
+  status: 'selected'
+  projectId: string
+  cwd: string
+}
+
 /** Discriminated `switch_project` reply payload. */
-export type SwitchProjectReply = SwitchProjectCompleted | SwitchProjectQueued
+export type SwitchProjectReply =
+  | SwitchProjectCompleted
+  | SwitchProjectQueued
+  | SwitchProjectSelected
 
 /** Reliable completion event for a previously queued switch. */
 export interface ProjectSwitchCompletedEvent extends SwitchProjectCompleted {

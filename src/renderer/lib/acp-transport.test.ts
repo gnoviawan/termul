@@ -290,6 +290,31 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('switchProject passes through selected (cold-tab) replies without subscribing', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    sock.switchProjectReply = {
+      status: 'selected',
+      projectId: 'p-2',
+      cwd: '/work/p2'
+    }
+    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const switchReq = sent.find((r) => r.type === 'switch_project')
+    expect(switchReq).toBeTruthy()
+    expect(switchReq?.payload).toEqual({ projectId: 'p-2' })
+    // Cold tab: no session, so the client must NOT subscribe early.
+    expect(sent).not.toContainEqual(expect.objectContaining({ type: 'subscribe' }))
+
+    transport.dispose()
+  })
+
   it('switchProject maps queued replies without subscribing early', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

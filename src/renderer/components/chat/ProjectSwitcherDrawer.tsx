@@ -54,7 +54,7 @@ export function ProjectSwitcherDrawer({
     setSwitchingId(project.id)
     try {
       const outcome = await switchProject(project.id)
-      if (outcome.status === 'completed') {
+      if (outcome.status === 'completed' || outcome.status === 'selected') {
         onOpenChange(false)
       }
     } catch (err) {

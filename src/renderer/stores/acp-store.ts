@@ -2040,6 +2040,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set({ queuedProjectSwitchId: outcome.projectId })
       return outcome
     }
+    if (outcome.status === 'selected') {
+      // Cold tab: the server updated the shared active project but created no
+      // session (no agent spawned). Mirror desktop's local select + clear the
+      // transient switch badges; the agent spawns lazily when a chat starts.
+      set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
+      useProjectStore.getState().selectProject(outcome.projectId)
+      return outcome
+    }
     const agentId = currentSession?.agentId
     if (!agentId) throw new Error('Completed project switch has no tracked agent')
 
