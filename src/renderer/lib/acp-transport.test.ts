@@ -386,7 +386,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('gap-fills contiguous reliable events', async () => {
+  it('delivers reliable events on arrival across a seq gap (no reorder-recovery)', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -396,23 +396,22 @@ describe('WsAcpTransport', () => {
     transport.onEvent('acp:tool_call', (p) => calls.push(p))
 
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    sock.emit({
-      sid: 's1',
-      seq: 2,
-      type: 'tool_call',
-      payload: { n: 2 }
-    })
-    sock.emit({
-      sid: 's1',
-      seq: 1,
-      type: 'tool_call',
-      payload: { n: 1 }
-    })
-    expect(calls).toEqual([{ n: 1 }, { n: 2 }])
+    const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
+    // seq 1 (session_created) was emitted before the client subscribed, so the
+    // cursor stays 0 — a permanent gap. A reliable tool_call at seq 3 lands in
+    // the gap: deliver immediately (not held behind the unfillable hole) and
+    // advance the cursor to 3.
+    sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    expect(calls).toEqual([{ n: 3 }])
+    expect(lastSeq.get('s1')).toBe(3)
+    // A subsequent contiguous event (seq 4) flows without duplication.
+    sock.emit({ sid: 's1', seq: 4, type: 'tool_call', payload: { n: 4 } })
+    expect(calls).toEqual([{ n: 3 }, { n: 4 }])
+    expect(lastSeq.get('s1')).toBe(4)
     transport.dispose()
   })
 
-  it('emits lossy events without advancing cursor over a gap', async () => {
+  it('delivers lossy events in a gap and advances the cursor', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -422,24 +421,39 @@ describe('WsAcpTransport', () => {
     transport.onEvent('acp:message_chunk', (p) => chunks.push(p))
 
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    sock.emit({
-      sid: 's1',
-      seq: 2,
-      type: 'message_chunk',
-      payload: { n: 2 }
-    })
-    expect(chunks).toEqual([{ n: 2 }])
     const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
-    expect(lastSeq.get('s1')).toBeUndefined()
+    // seq 1 was missed; a lossy message_chunk at seq 2 lands in a gap: it is
+    // delivered (lossy events still render) AND the cursor advances to 2.
+    sock.emit({ sid: 's1', seq: 2, type: 'message_chunk', payload: { n: 2 } })
+    expect(chunks).toEqual([{ n: 2 }])
+    expect(lastSeq.get('s1')).toBe(2)
+    // A reordered-earlier seq cannot arrive on a single FIFO WebSocket, but if
+    // one did it is dropped as `seq <= last` — the cursor never regresses.
+    // Documents the intentional removal of reorder-recovery (see spec Design Notes).
+    sock.emit({ sid: 's1', seq: 1, type: 'message_chunk', payload: { n: 1 } })
+    expect(chunks).toEqual([{ n: 2 }])
+    expect(lastSeq.get('s1')).toBe(2)
+    transport.dispose()
+  })
 
-    sock.emit({
-      sid: 's1',
-      seq: 1,
-      type: 'message_chunk',
-      payload: { n: 1 }
+  it('drops reconnect-replay duplicates (seq <= lastSeq)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
     })
-    expect(chunks).toEqual([{ n: 2 }, { n: 1 }])
-    expect(lastSeq.get('s1')).toBe(1)
+    await transport.connect()
+    const calls: unknown[] = []
+    transport.onEvent('acp:tool_call', (p) => calls.push(p))
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    // Live delivery at seq 3 (seq 1 was missed) advances the cursor to 3.
+    sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    expect(calls).toEqual([{ n: 3 }])
+    // A reconnect replay re-emits the same seq (or a lower one already passed) —
+    // the transport drops it as `seq <= last`, never re-delivering.
+    sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    sock.emit({ sid: 's1', seq: 2, type: 'tool_call', payload: { n: 2 } })
+    expect(calls).toEqual([{ n: 3 }])
     transport.dispose()
   })
 

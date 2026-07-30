@@ -279,8 +279,6 @@ export class WsAcpTransport implements AcpTransport {
   private readonly listeners = new Map<string, Set<EventListener>>()
   /** Per-session last contiguous delivered seq. */
   private readonly lastSeq = new Map<string, number>()
-  /** Per-session out-of-order buffer keyed by seq. */
-  private readonly hold = new Map<string, Map<number, WsEvent>>()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
   /** Idempotent prompt_complete turn ids already delivered. */
@@ -362,8 +360,7 @@ export class WsAcpTransport implements AcpTransport {
       await this.request('subscribe', payload)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
-        // Stale: clear buffers + turn-id dedup, then live-only resubscribe (no lastSeq).
-        this.hold.delete(sessionId)
+        // Stale: clear cursor + turn-id dedup, then live-only resubscribe (no lastSeq).
         this.lastSeq.delete(sessionId)
         this.seenTurnIds.clear()
         await this.request('subscribe', { sessionId })
@@ -509,7 +506,6 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('close_session', { agentId, sessionId })
     this.subscribed.delete(sessionId)
     this.lastSeq.delete(sessionId)
-    this.hold.delete(sessionId)
   }
 
   async listSessions(
@@ -760,43 +756,26 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
 
-    // Idempotent prompt_complete: drop duplicate turn-id but still advance cursor
-    // when contiguous so the seq pipeline cannot stall.
+    // Idempotent prompt_complete: drop a duplicate turn-id but advance the
+    // cursor unconditionally so the seq pipeline cannot stall. A single FIFO
+    // WebSocket never reorders (see the deliver-on-arrival model below), so
+    // advancing only when contiguous would strand a replayed duplicate behind
+    // an unfillable pre-subscribe gap.
     if (tier === 'idempotent' && evt.type === 'prompt_complete') {
       const turnId = extractTurnId(evt.payload)
       if (turnId && this.seenTurnIds.has(turnId)) {
-        if (evt.seq === last + 1) {
-          this.lastSeq.set(sid, evt.seq)
-          this.flushHold(sid)
-        }
+        this.lastSeq.set(sid, evt.seq)
         return
       }
     }
 
-    if (evt.seq === last + 1) {
-      this.deliverContiguous(sid, evt)
-      this.flushHold(sid)
-      return
-    }
-
-    // Gap: lossy may never arrive — emit without advancing lastSeq past the hole
-    // (do not jump the cursor over undelivered reliable/idempotent seqs).
-    if (tier === 'lossy') {
-      this.emitLocal(evt.type, evt.payload)
-      return
-    }
-
-    // Reliable / idempotent: hold until contiguous.
-    this.bufferHold(sid, evt)
-  }
-
-  private bufferHold(sid: string, evt: WsEvent): void {
-    let map = this.hold.get(sid)
-    if (!map) {
-      map = new Map()
-      this.hold.set(sid, map)
-    }
-    map.set(evt.seq, evt)
+    // Deliver on arrival (desktop parity). A single FIFO WebSocket never
+    // reorders, so the only gap sources (missed pre-subscribe emits, server
+    // lossy drop-oldest) never fill later — an indefinite hold can only strand.
+    // Advance the cursor to the delivered seq so live + reconnect-replay events
+    // flow without duplication.
+    this.deliverContiguous(sid, evt)
+    return
   }
 
   private deliverContiguous(sid: string, evt: WsEvent): void {
@@ -806,18 +785,6 @@ export class WsAcpTransport implements AcpTransport {
       if (turnId) this.seenTurnIds.add(turnId)
     }
     this.emitLocal(evt.type, evt.payload)
-  }
-
-  private flushHold(sid: string): void {
-    const map = this.hold.get(sid)
-    if (!map) return
-    for (;;) {
-      const last = this.lastSeq.get(sid) ?? 0
-      const next = map.get(last + 1)
-      if (!next) break
-      map.delete(last + 1)
-      this.deliverContiguous(sid, next)
-    }
   }
 
   private emitLocal(wsType: string, payload: unknown): void {

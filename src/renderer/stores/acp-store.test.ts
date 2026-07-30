@@ -1018,6 +1018,33 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
   })
 
+  it('_onToolCall upserts by toolCallId so duplicates produce one entry', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onToolCall({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      toolCall: { toolCallId: 'tc-1', title: 'read', status: 'pending' }
+    })
+    store._onToolCall({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      toolCall: {
+        toolCallId: 'tc-1',
+        title: 'write',
+        status: 'completed',
+        content: [{ type: 'text', text: 'done' }]
+      }
+    })
+    const list = useAcpStore.getState().toolCalls['s1']
+    expect(list).toHaveLength(1)
+    expect(list[0].toolCallId).toBe('tc-1')
+    // Second call's content/status wins (upsert, latest wins).
+    expect(list[0].title).toBe('write')
+    expect(list[0].status).toBe('completed')
+    expect(list[0].content).toEqual([{ type: 'text', text: 'done' }])
+  })
+
   it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onSessionInfoUpdate({
