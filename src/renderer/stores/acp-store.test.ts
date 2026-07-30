@@ -1018,7 +1018,7 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
   })
 
-  it('_onToolCall upserts by toolCallId so duplicates produce one entry', () => {
+  it('_onToolCall upserts by toolCallId so duplicates produce one entry', async () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()
     store._onToolCall({
@@ -1026,6 +1026,13 @@ describe('acp-store', () => {
       sessionId: 's1',
       toolCall: { toolCallId: 'tc-1', title: 'read', status: 'pending' }
     })
+    // Capture the original timeline placement (arrival-stamped seq + timestamp).
+    const original = useAcpStore.getState().toolCalls['s1'][0]
+    const originalSeq = original.seq
+    const originalTimestamp = original.timestamp
+    expect(typeof originalSeq).toBe('number')
+    // Let the clock advance so a non-preserving merge would stamp a different timestamp.
+    await new Promise((r) => setTimeout(r, 3))
     store._onToolCall({
       agentId: 'agent-1',
       sessionId: 's1',
@@ -1039,10 +1046,14 @@ describe('acp-store', () => {
     const list = useAcpStore.getState().toolCalls['s1']
     expect(list).toHaveLength(1)
     expect(list[0].toolCallId).toBe('tc-1')
-    // Second call's content/status wins (upsert, latest wins).
+    // Latest call fields win (upsert, latest wins).
     expect(list[0].title).toBe('write')
     expect(list[0].status).toBe('completed')
     expect(list[0].content).toEqual([{ type: 'text', text: 'done' }])
+    // Replayed entry keeps its original timeline placement (seq + timestamp),
+    // not the replay's fresh stamps — the card must not jump to a later position.
+    expect(list[0].seq).toBe(originalSeq)
+    expect(list[0].timestamp).toBe(originalTimestamp)
   })
 
   it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {

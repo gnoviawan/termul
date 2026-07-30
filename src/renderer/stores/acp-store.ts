@@ -3443,7 +3443,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           toolCalls: { ...s.toolCalls, [e.sessionId]: [...list, stamped] }
         }
       }
-      const merged = { ...list[idx], ...stamped }
+      // Preserve the original timeline placement: a replay (reconnect overlap)
+      // must not move the card to a later position. The latest call fields
+      // (title/status/content/...) win; the arrival-stamped seq + timestamp stay.
+      const merged: ToolCall = {
+        ...list[idx],
+        ...stamped,
+        timestamp: list[idx].timestamp,
+        seq: list[idx].seq
+      }
       const next = [...list]
       next[idx] = merged
       return {
