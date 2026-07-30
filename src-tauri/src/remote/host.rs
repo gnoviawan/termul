@@ -157,9 +157,16 @@ struct RemoteServer {
     bind_mode: RemoteBindMode,
     /// Ephemeral trycloudflare URL (set when the quick-tunnel came up).
     tunnel_url: Option<String>,
-    /// Live `cloudflared` child. Killed in `stop()`; `kill_on_drop(true)` is
-    /// the safety net for the panic/abort path where `stop()` never runs.
-    tunnel_child: Option<Child>,
+    /// `true` once the cloudflared watchdog observed the child exit. Read by
+    /// `status()` (sync) to drop the stale `tunnel_url` so the renderer poller
+    /// clears the QR (it would otherwise offer a link that yields "This site
+    /// can't be reached"). `None` when no tunnel is attached.
+    tunnel_dead: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The watchdog task owning the cloudflared child: it `wait()`s for exit
+    /// then flips `tunnel_dead`. Aborted on `stop()`/`Drop` so the owned child
+    /// is reaped via `kill_on_drop` — the child is NOT held here directly,
+    /// which keeps `status()` sync (no try_wait-across-`.await` dance).
+    tunnel_watchdog: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RemoteServer {
@@ -176,11 +183,17 @@ impl Drop for RemoteServer {
     fn drop(&mut self) {
         // Best-effort graceful shutdown on drop (e.g. app exit). Signal the
         // serve task to drain; the JoinHandle is left to the runtime to reap
-        // (awaiting it in `Drop` isn't possible — `Drop` is sync). The
-        // cloudflared `tunnel_child` is dropped here too — its `kill_on_drop`
-        // guarantees the process is reaped even when `stop()` never ran.
+        // (awaiting it in `Drop` isn't possible — `Drop` is sync).
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        // Abort the cloudflared watchdog so the child it owns is reaped via
+        // `kill_on_drop` (the child lives inside the watchdog task; aborting
+        // drops its future → drops the child). Without this, dropping the
+        // JoinHandle would detach the task and the cloudflared process could
+        // outlive the server on a hard exit where `stop()` never ran.
+        if let Some(handle) = self.tunnel_watchdog.take() {
+            handle.abort();
         }
     }
 }
@@ -313,11 +326,13 @@ impl RemoteServerState {
             serve_handle: Some(serve_handle),
             addr,
             bind_mode,
-            // Tunnel URL + child are attached after `cloudflared::start_quick_tunnel`
-            // resolves in `remote_server_start` — keeps this method testable without
-            // a real cloudflared binary (the lifecycle tests bind/stop/status here).
+            // Tunnel URL + watchdog are attached after
+            // `cloudflared::start_quick_tunnel` resolves in
+            // `remote_server_start` — keeps this method testable without a real
+            // cloudflared binary (the lifecycle tests bind/stop/status here).
             tunnel_url: None,
-            tunnel_child: None,
+            tunnel_dead: None,
+            tunnel_watchdog: None,
         });
         Ok(status)
     }
@@ -332,15 +347,17 @@ impl RemoteServerState {
         let server = { self.inner.lock().unwrap().take() };
         match server {
             Some(mut server) => {
-                // Kill the cloudflared child first so the public tunnel stops
-                // forwarding new traffic before Axum drains existing conns.
-                // (kill_on_drop would also reap it on Drop, but an explicit
-                // kill here lets us await + log failures, and the child stays
-                // owned until this call so Drop can't race us.)
-                if let Some(mut child) = server.tunnel_child.take() {
-                    if let Err(e) = child.kill().await {
-                        warn!("cloudflared child kill failed during stop: {e}");
-                    }
+                // Abort the cloudflared watchdog so the owned child is reaped
+                // via `kill_on_drop` (the child lives inside the watchdog task;
+                // aborting drops its future → drops the child). Done before
+                // Axum drains so the public tunnel stops forwarding new traffic
+                // before existing conns flush. An already-exited child (the
+                // watchdog already completed) is a no-op.
+                if let Some(handle) = server.tunnel_watchdog.take() {
+                    handle.abort();
+                    // Await completion of the abort so the child is reaped
+                    // before we proceed (returns Err(Cancelled) — ignored).
+                    let _ = handle.await;
                 }
                 // Signal drain, then await the serve task so Axum finishes
                 // flushing before the caller proceeds (e.g. app exit →
@@ -365,20 +382,37 @@ impl RemoteServerState {
     }
 
     /// Current status of the in-process web server.
+    ///
+    /// Also detects a dead cloudflared child: if the watchdog flag reports the
+    /// child has exited, the public trycloudflare URL no longer routes, so the
+    /// stale `tunnel_url` is cleared — the renderer poller then drops the QR
+    /// (it would otherwise offer a link that yields "This site can't be
+    /// reached"). Stays sync (reads an `AtomicBool`) so callers need no
+    /// `.await`.
     pub fn status(&self) -> RemoteStatus {
-        let slot = self.inner.lock().unwrap();
-        match slot.as_ref() {
-            // If the spawned serve task has exited (error/panic), don't keep
-            // reporting `running` with a dead listener — surface stopped so the
-            // UI doesn't lie about a server the phone can't reach.
-            Some(server) if !server.task_finished() => RemoteStatus::running(
-                server.addr,
-                server.bind_mode,
-                server.tunnel_url.clone(),
-            ),
-            Some(_) => RemoteStatus::stopped(),
-            None => RemoteStatus::stopped(),
+        let mut slot = self.inner.lock().unwrap();
+        let Some(server) = slot.as_mut() else {
+            return RemoteStatus::stopped();
+        };
+        // If the spawned serve task has exited (error/panic), don't keep
+        // reporting `running` with a dead listener — surface stopped so the
+        // UI doesn't lie about a server the phone can't reach.
+        if server.task_finished() {
+            return RemoteStatus::stopped();
         }
+        // Clear the tunnel URL once the cloudflared watchdog reports the child
+        // dead (the public URL no longer routes). Logged once: the flag stays
+        // set but `tunnel_url` is cleared here so subsequent polls skip the arm.
+        if server
+            .tunnel_dead
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+            && server.tunnel_url.is_some()
+        {
+            warn!("cloudflared tunnel child exited; clearing stale tunnel URL");
+            server.tunnel_url = None;
+        }
+        RemoteStatus::running(server.addr, server.bind_mode, server.tunnel_url.clone())
     }
 
     /// Attach a started cloudflared quick-tunnel (URL + live child) to the
@@ -395,8 +429,24 @@ impl RemoteServerState {
         let mut slot = self.inner.lock().unwrap();
         match slot.as_mut() {
             Some(server) if !server.task_finished() => {
+                let child = child.take().expect("child present after take");
+                let dead_flag =
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let flag = dead_flag.clone();
+                // The watchdog owns the child: `wait()` for natural exit, then
+                // flag death so the next `status()` poll clears the stale URL.
+                // Aborted on `stop()`/`Drop`; at that point the owned child is
+                // reaped via its `kill_on_drop`. Owning the child in a task
+                // (not in `RemoteServer`) keeps `status()` sync — no
+                // `try_wait`-across-`.await` + no `!Send` MutexGuard hazard.
+                let watchdog = tokio::spawn(async move {
+                    let mut child = child;
+                    let _ = child.wait().await;
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                });
                 server.tunnel_url = Some(url);
-                server.tunnel_child = child.take();
+                server.tunnel_dead = Some(dead_flag);
+                server.tunnel_watchdog = Some(watchdog);
                 Ok(())
             }
             _ => {
@@ -640,6 +690,69 @@ mod tests {
         // direct kill_all assertion possible without a spy; the invariant is
         // structural: serve_router does not call kill_all, host::stop does not
         // call kill_all. This test guards the path end-to-end.)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn status_clears_tunnel_url_when_cloudflared_child_exits() {
+        // The watchdog flips `tunnel_dead` once the child exits; `status()`
+        // then clears `tunnel_url` so the renderer poller drops the stale QR
+        // (it would otherwise offer a link that yields "This site can't be
+        // reached").
+        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let state = RemoteServerState::new();
+        let _ = state
+            .start(
+                acp.clone(),
+                relay.clone(),
+                registry.clone(),
+                chat_history_cache.clone(),
+                RemoteBindMode::Localhost,
+            )
+            .await
+            .expect("start");
+
+        // Attach a tunnel child that exits almost immediately (cross-platform
+        // exit-0). kill_on_drop mirrors the real start_quick_tunnel child.
+        let mut cmd = quick_exit_command();
+        cmd.kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn quick-exit child");
+        state
+            .attach_tunnel("https://stale.trycloudflare.com".to_string(), child)
+            .expect("attach");
+
+        // Poll status until the dead-child path clears the tunnel URL. The
+        // child exits within a few ms; allow up to 1s for the OS + watchdog.
+        let mut cleared = false;
+        for _ in 0..20 {
+            let s = state.status();
+            if s.running && s.tunnel_url.is_none() {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            cleared,
+            "status() must clear tunnel_url once cloudflared exits"
+        );
+
+        let _ = state.stop().await;
+    }
+
+    /// A cross-platform command that exits 0 almost immediately, for the
+    /// dead-child staleness test.
+    fn quick_exit_command() -> tokio::process::Command {
+        #[cfg(target_os = "windows")]
+        let mut c = tokio::process::Command::new("cmd");
+        #[cfg(target_os = "windows")]
+        c.args(["/c", "exit", "0"]);
+        #[cfg(not(target_os = "windows"))]
+        let mut c = tokio::process::Command::new("true");
+
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        c
     }
 
     #[test]

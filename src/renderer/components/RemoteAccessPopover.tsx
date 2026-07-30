@@ -1,6 +1,6 @@
 import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
@@ -36,6 +36,14 @@ export function RemoteAccessPopover(): React.JSX.Element {
   const isRunning = remoteStatus?.running ?? false
   // The QR encodes the public tunnel URL only — never the localhost `url`.
   const tunnelUrl = remoteStatus?.tunnelUrl ?? null
+  // Track whether a tunnel URL was ever seen this session so the popover can
+  // distinguish "Starting tunnel…" (never connected) from "Tunnel
+  // disconnected" (was connected, now gone — the 3s status poll cleared it).
+  const [sawUrl, setSawUrl] = useState(false)
+  useEffect(() => {
+    if (tunnelUrl) setSawUrl(true)
+    if (!isRunning) setSawUrl(false)
+  }, [tunnelUrl, isRunning])
 
   const handleRemoteToggle = async (enable: boolean): Promise<void> => {
     setRemoteBusy(true)
@@ -178,7 +186,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
 
           {isRunning && !tunnelUrl && (
             <div className="flex items-center justify-center text-xs text-muted-foreground py-2">
-              Starting tunnel…
+              {sawUrl ? 'Tunnel disconnected — toggle off and on to retry' : 'Starting tunnel…'}
             </div>
           )}
         </div>
