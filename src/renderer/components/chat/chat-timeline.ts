@@ -205,21 +205,10 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     turn.forEach((item, index) => {
       if (item.kind !== 'message' || item.message.role !== 'agent') return
       if (hasMediaContent(item.message)) visibleResponseIndices.add(index)
-      if (active && hasSubstantiveText(item.message)) visibleResponseIndices.add(index)
+      // Live intermediate + streaming text renders INSIDE the activity collapsible;
+      // only the final response (finalTextIndex, computed when !active) stays outside.
     })
     if (finalTextIndex >= 0) visibleResponseIndices.add(finalTextIndex)
-
-    if (active && visibleResponseIndices.size === 0) {
-      let emptyStreamingIndex = -1
-      for (let index = turn.length - 1; index >= 0; index--) {
-        const item = turn[index]!
-        if (item.kind === 'message' && item.message.role === 'agent' && item.message.streaming) {
-          emptyStreamingIndex = index
-          break
-        }
-      }
-      if (emptyStreamingIndex >= 0) visibleResponseIndices.add(emptyStreamingIndex)
-    }
 
     const visibleResponses = turn.filter(
       (item, index): item is Extract<TimelineItem, { kind: 'message' }> =>
@@ -227,11 +216,16 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     )
     const activityItems = turn.filter((item, index) => {
       if (visibleResponseIndices.has(index)) return false
+      // Keep only the TRAILING empty streaming live tail inside the collapsible
+      // (so the caret renders there); non-trailing empty streaming messages are
+      // dropped to avoid spurious blank bubbles. finalizeStreaming clears
+      // `streaming` when activeTurn flips false, so this only applies while live.
       return !(
         item.kind === 'message' &&
         item.message.role === 'agent' &&
         !hasSubstantiveText(item.message) &&
-        !hasMediaContent(item.message)
+        !hasMediaContent(item.message) &&
+        !(index === turn.length - 1 && item.message.streaming)
       )
     })
     const allAgentText = turn

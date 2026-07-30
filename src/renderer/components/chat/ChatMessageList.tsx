@@ -142,7 +142,7 @@ export function ChatMessageList({
                       isTurnTail={item.isTurnTail}
                       turnText={item.turnText}
                       actionsPinned={index === lastMsgIndex}
-                      animateEnter={shouldAnimateEnter(item.message.id)}
+                      animateEnter={item.isTurnTail ? false : shouldAnimateEnter(item.message.id)}
                       onEdit={onEditMessage}
                       onRetry={onRetry}
                     />

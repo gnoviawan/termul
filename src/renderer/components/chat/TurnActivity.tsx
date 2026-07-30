@@ -99,7 +99,7 @@ export function TurnActivity({
                   key={item.key}
                   message={item.message}
                   showHeader={false}
-                  isLast={false}
+                  isLast={active && index === items.length - 1}
                   animateEnter={shouldAnimateEnter(item.message.id)}
                 />
               )

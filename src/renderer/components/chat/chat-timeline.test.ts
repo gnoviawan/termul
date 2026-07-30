@@ -264,12 +264,56 @@ describe('groupTurnActivity', () => {
       true
     )
 
-    expect(beforeTool.map((item) => item.key)).toEqual(['user', 'activity:user', 'live-response'])
-    expect(afterTool.map((item) => item.key)).toEqual(['user', 'activity:user', 'live-response'])
-    const activity = afterTool[1]
-    expect(activity.kind).toBe('activity')
-    if (activity.kind === 'activity') {
-      expect(activity.items.map(timelineItemId)).toEqual(['read'])
+    // While the turn is live, the response renders INSIDE the activity
+    // collapsible (not as a top-level row), at a stable key that survives the
+    // arrival of later activity without remounting.
+    expect(beforeTool.map((item) => item.key)).toEqual(['user', 'activity:user'])
+    expect(afterTool.map((item) => item.key)).toEqual(['user', 'activity:user'])
+    const beforeActivity = beforeTool[1]
+    const afterActivity = afterTool[1]
+    expect(beforeActivity?.kind).toBe('activity')
+    expect(afterActivity?.kind).toBe('activity')
+    if (beforeActivity?.kind === 'activity' && afterActivity?.kind === 'activity') {
+      expect(beforeActivity.items.map(timelineItemId)).toEqual(['live-response'])
+      expect(afterActivity.items.map(timelineItemId)).toEqual(['live-response', 'read'])
+    }
+  })
+
+  it('keeps the empty streaming live tail inside the activity, not outside', () => {
+    const emptyStreaming = msg('empty-tail', 'agent', 120, 2, '')
+    emptyStreaming.streaming = true
+    const grouped = groupTurnActivity(
+      buildTimeline([msg('user', 'user', 100, 1), emptyStreaming], []),
+      true
+    )
+    // The pre-text streaming tail stays inside the activity (not a top-level
+    // row) so the caret renders inside the open collapsible while the turn is
+    // live.
+    expect(grouped.map((item) => item.key)).toEqual(['user', 'activity:user'])
+    const activity = grouped[1]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['empty-tail'])
+    }
+  })
+
+  it('drops a non-trailing empty streaming message instead of rendering a blank bubble', () => {
+    const whitespaceStreaming = msg('ws-tail', 'agent', 120, 2, '   ')
+    whitespaceStreaming.streaming = true
+    const grouped = groupTurnActivity(
+      buildTimeline(
+        [msg('user', 'user', 100, 1), whitespaceStreaming, msg('final', 'agent', 140, 4, 'Done')],
+        [tool('read', 130, 3)]
+      ),
+      true
+    )
+    // A non-trailing empty/whitespace streaming message is dropped entirely
+    // (no blank bubble); only the trailing live tail is kept for the caret.
+    expect(grouped.some((item) => item.key === 'ws-tail')).toBe(false)
+    const activity = grouped.find((item) => item.kind === 'activity')
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['read', 'final'])
     }
   })
 
