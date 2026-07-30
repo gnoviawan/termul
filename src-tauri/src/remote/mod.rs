@@ -10,6 +10,7 @@
 //! web server has no `/api/projects` or `/api/spawn` routes — the phone connects
 //! directly to a session via the WS URL. Auth / token-gating land in Epic 2.
 
+pub mod cloudflared;
 pub mod host;
 
 pub use host::{RemoteBindMode, RemoteServerState, RemoteStatus};

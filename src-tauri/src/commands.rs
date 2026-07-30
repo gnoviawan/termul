@@ -2987,9 +2987,14 @@ pub async fn sftp_create_file(
 
 /// Start the desktop-hosted shared-live web server.
 ///
-/// Shares the desktop's live `AcpManager` sessions with a browser/phone client
-/// over the LAN (the same server the standalone `termul-server` binary uses).
-/// Bind mode defaults to localhost; `all` exposes it on the LAN.
+/// Shares the desktop's live `AcpManager` sessions with a phone/browser client.
+///
+/// Starts the in-process localhost web server (the same one the standalone
+/// `termul-server` binary uses), then brings up a built-in cloudflared
+/// quick-tunnel so the phone can reach it on any network — the popover renders
+/// the ephemeral `https://*.trycloudflare.com` URL as a QR. The `bind_mode`
+/// param is accepted for API stability but ignored (the tunnel targets
+/// localhost). App auth / token-gating land in Epic 2.
 #[tauri::command]
 pub async fn remote_server_start(
     acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
@@ -3002,7 +3007,7 @@ pub async fn remote_server_start(
     // Default to localhost only when the caller omits the bind mode; an
     // explicit-but-unrecognized value (e.g. a typo of "all") is an error — do
     // not silently downgrade to localhost (the phone would silently fail to
-    // connect on the LAN).
+    // connect).
     let bind_mode = match bind_mode.as_deref() {
         None => remote::RemoteBindMode::Localhost,
         Some(s) => remote::RemoteBindMode::parse(s).ok_or_else(|| {
@@ -3011,7 +3016,7 @@ pub async fn remote_server_start(
             )
         })?,
     };
-    match remote_state
+    let started = remote_state
         .start(
             acp_manager.inner().clone(),
             ws_relay.inner().clone(),
@@ -3019,9 +3024,38 @@ pub async fn remote_server_start(
             chat_history_cache.inner().clone(),
             bind_mode,
         )
-        .await
-    {
-        Ok(status) => Ok(IpcResult::success(status)),
+        .await;
+    match started {
+        Ok(status) => {
+            // Server is up on localhost. Bring up the cloudflared quick-tunnel so
+            // the phone can reach it on any network — the QR encodes the resulting
+            // ephemeral HTTPS URL (edge TLS via cloudflared; app auth is Epic 2).
+            // On tunnel failure, drain the server and surface the error so the
+            // popover never holds a localhost-only server + a stale toggle.
+            let port = match status.port {
+                Some(p) => p,
+                None => {
+                    return Ok(IpcResult::error(
+                        "started remote server reported no port".to_string(),
+                        "REMOTE_START_FAILED",
+                    ))
+                }
+            };
+            match remote::cloudflared::start_quick_tunnel(port).await {
+                Ok(tunnel) => {
+                    if let Err(e) = remote_state.attach_tunnel(tunnel.url, tunnel.child) {
+                        // Server stopped between start and attach; attach already
+                        // killed the orphan child. Surface the error.
+                        return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
+                    }
+                    Ok(IpcResult::success(remote_state.status()))
+                }
+                Err(e) => {
+                    let _ = remote_state.stop().await;
+                    Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"))
+                }
+            }
+        }
         Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
     }
 }

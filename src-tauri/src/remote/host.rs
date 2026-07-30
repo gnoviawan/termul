@@ -30,6 +30,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use serde::Serialize;
+use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -80,6 +81,13 @@ impl RemoteBindMode {
     }
 
     /// `true` when bound to all interfaces (LAN-exposed).
+    ///
+    /// Currently unused: the desktop-hosted server always binds localhost
+    /// because the cloudflared quick-tunnel targets it (the LAN `all` mode is
+    /// removed from the popover and deferred — see
+    /// `spec-remote-qr-cloudflared-tunnel`). Retained + tested for the
+    /// deferred LAN-only connect mode.
+    #[allow(dead_code)]
     pub fn is_lan_exposed(self) -> bool {
         matches!(self, Self::All)
     }
@@ -99,6 +107,10 @@ pub struct RemoteStatus {
     pub bind_mode: Option<String>,
     /// Bind host shown in the UI (`127.0.0.1` or `0.0.0.0`).
     pub bind_host: Option<String>,
+    /// Ephemeral `https://*.trycloudflare.com` tunnel URL when the built-in
+    /// cloudflared quick-tunnel is up; `None` when stopped or before the URL
+    /// arrives. The StatusBar QR encodes this (never the local `url`).
+    pub tunnel_url: Option<String>,
 }
 
 impl RemoteStatus {
@@ -109,15 +121,15 @@ impl RemoteStatus {
             port: None,
             bind_mode: None,
             bind_host: None,
+            tunnel_url: None,
         }
     }
 
-    fn running(addr: SocketAddr, bind_mode: RemoteBindMode) -> Self {
-        // When bound to 0.0.0.0 (LAN-exposed), the host's LAN IP can't be known
-        // from the bind address alone, so don't fabricate a loopback URL the
-        // phone can't reach — leave `url` empty and let the status-bar UI show
-        // "connect via this machine's LAN IP:{port}". On localhost the URL is
-        // concrete and useful.
+    fn running(addr: SocketAddr, bind_mode: RemoteBindMode, tunnel_url: Option<String>) -> Self {
+        // The desktop-hosted server always binds localhost (the cloudflared
+        // quick-tunnel targets it), so `url` is a concrete loopback URL — kept
+        // for "open on this machine" diagnostics. The phone-reachable address
+        // is `tunnel_url`, which the popover renders as a QR.
         let url = if addr.ip().is_unspecified() {
             None
         } else {
@@ -129,6 +141,7 @@ impl RemoteStatus {
             port: Some(addr.port()),
             bind_mode: Some(bind_mode.as_str().to_string()),
             bind_host: Some(bind_mode.display_host().to_string()),
+            tunnel_url,
         }
     }
 }
@@ -142,6 +155,11 @@ struct RemoteServer {
     serve_handle: Option<tokio::task::JoinHandle<()>>,
     addr: SocketAddr,
     bind_mode: RemoteBindMode,
+    /// Ephemeral trycloudflare URL (set when the quick-tunnel came up).
+    tunnel_url: Option<String>,
+    /// Live `cloudflared` child. Killed in `stop()`; `kill_on_drop(true)` is
+    /// the safety net for the panic/abort path where `stop()` never runs.
+    tunnel_child: Option<Child>,
 }
 
 impl RemoteServer {
@@ -158,7 +176,9 @@ impl Drop for RemoteServer {
     fn drop(&mut self) {
         // Best-effort graceful shutdown on drop (e.g. app exit). Signal the
         // serve task to drain; the JoinHandle is left to the runtime to reap
-        // (awaiting it in `Drop` isn't possible — `Drop` is sync).
+        // (awaiting it in `Drop` isn't possible — `Drop` is sync). The
+        // cloudflared `tunnel_child` is dropped here too — its `kill_on_drop`
+        // guarantees the process is reaped even when `stop()` never ran.
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -194,20 +214,20 @@ impl RemoteServerState {
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
         chat_history_cache: Arc<ChatHistoryCache>,
-        bind_mode: RemoteBindMode,
+        _bind_mode: RemoteBindMode,
     ) -> Result<RemoteStatus, String> {
+        // The built-in cloudflared quick-tunnel forwards to localhost, so the
+        // desktop-hosted server always binds localhost regardless of the
+        // caller's bind mode — the LAN `all` mode is removed from the popover
+        // and deferred (see spec-remote-qr-cloudflared-tunnel). The param stays
+        // for API stability / the standalone binary's parity path; it is
+        // ignored here (`_bind_mode`) to avoid churning every caller.
+        let bind_mode = RemoteBindMode::Localhost;
         {
             let slot = self.inner.lock().unwrap();
             if slot.is_some() {
                 return Err("Remote server is already running".to_string());
             }
-        }
-
-        if bind_mode.is_lan_exposed() {
-            warn!(
-                "Binding shared-live server to 0.0.0.0 — LAN exposure without auth \
-                 (Epic 2). Anyone on the network can drive the live agent sessions."
-            );
         }
 
         // PR-S4: resolve the project-root boundary for the fs_api routes.
@@ -272,7 +292,7 @@ impl RemoteServerState {
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
 
-        let status = RemoteStatus::running(addr, bind_mode);
+        let status = RemoteStatus::running(addr, bind_mode, None);
         info!(
             "Shared-live web server sharing desktop AcpManager on http://{}",
             addr
@@ -293,6 +313,11 @@ impl RemoteServerState {
             serve_handle: Some(serve_handle),
             addr,
             bind_mode,
+            // Tunnel URL + child are attached after `cloudflared::start_quick_tunnel`
+            // resolves in `remote_server_start` — keeps this method testable without
+            // a real cloudflared binary (the lifecycle tests bind/stop/status here).
+            tunnel_url: None,
+            tunnel_child: None,
         });
         Ok(status)
     }
@@ -307,6 +332,16 @@ impl RemoteServerState {
         let server = { self.inner.lock().unwrap().take() };
         match server {
             Some(mut server) => {
+                // Kill the cloudflared child first so the public tunnel stops
+                // forwarding new traffic before Axum drains existing conns.
+                // (kill_on_drop would also reap it on Drop, but an explicit
+                // kill here lets us await + log failures, and the child stays
+                // owned until this call so Drop can't race us.)
+                if let Some(mut child) = server.tunnel_child.take() {
+                    if let Err(e) = child.kill().await {
+                        warn!("cloudflared child kill failed during stop: {e}");
+                    }
+                }
                 // Signal drain, then await the serve task so Axum finishes
                 // flushing before the caller proceeds (e.g. app exit →
                 // `kill_all`). `Drop` would only signal; awaiting here enforces
@@ -336,11 +371,41 @@ impl RemoteServerState {
             // If the spawned serve task has exited (error/panic), don't keep
             // reporting `running` with a dead listener — surface stopped so the
             // UI doesn't lie about a server the phone can't reach.
-            Some(server) if !server.task_finished() => {
-                RemoteStatus::running(server.addr, server.bind_mode)
-            }
+            Some(server) if !server.task_finished() => RemoteStatus::running(
+                server.addr,
+                server.bind_mode,
+                server.tunnel_url.clone(),
+            ),
             Some(_) => RemoteStatus::stopped(),
             None => RemoteStatus::stopped(),
+        }
+    }
+
+    /// Attach a started cloudflared quick-tunnel (URL + live child) to the
+    /// running server so [`status`](Self::status) reports the tunnel URL and
+    /// [`stop`](Self::stop) kills the child. Called by `remote_server_start`
+    /// after the server binds and `cloudflared::start_quick_tunnel` resolves.
+    ///
+    /// If the server stopped/died between `start` and this call, the orphaned
+    /// child is killed (sync `start_kill`) so no cloudflared lingers. Keeping
+    /// this out of `start` lets the server-lifecycle unit tests run without a
+    /// real cloudflared binary.
+    pub fn attach_tunnel(&self, url: String, child: Child) -> Result<(), String> {
+        let mut child = Some(child);
+        let mut slot = self.inner.lock().unwrap();
+        match slot.as_mut() {
+            Some(server) if !server.task_finished() => {
+                server.tunnel_url = Some(url);
+                server.tunnel_child = child.take();
+                Ok(())
+            }
+            _ => {
+                // Server gone — kill the orphan we still hold (sync).
+                if let Some(c) = child.as_mut() {
+                    let _ = c.start_kill();
+                }
+                Err("remote server stopped before tunnel attached".to_string())
+            }
         }
     }
 }
@@ -393,17 +458,33 @@ mod tests {
         assert_eq!(s.port, None);
         assert_eq!(s.bind_mode, None);
         assert_eq!(s.bind_host, None);
+        assert_eq!(s.tunnel_url, None);
     }
 
     #[test]
     fn remote_status_running_localhost_uses_loopback_url() {
         let addr: SocketAddr = "127.0.0.1:5123".parse().unwrap();
-        let s = RemoteStatus::running(addr, RemoteBindMode::Localhost);
+        let s = RemoteStatus::running(addr, RemoteBindMode::Localhost, None);
         assert!(s.running);
         assert_eq!(s.url.as_deref(), Some("http://127.0.0.1:5123"));
         assert_eq!(s.port, Some(5123));
         assert_eq!(s.bind_mode.as_deref(), Some("localhost"));
         assert_eq!(s.bind_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(s.tunnel_url, None);
+    }
+
+    #[test]
+    fn remote_status_running_carries_tunnel_url() {
+        let addr: SocketAddr = "127.0.0.1:5123".parse().unwrap();
+        let s = RemoteStatus::running(
+            addr,
+            RemoteBindMode::Localhost,
+            Some("https://foo-bar.trycloudflare.com".to_string()),
+        );
+        assert_eq!(
+            s.tunnel_url.as_deref(),
+            Some("https://foo-bar.trycloudflare.com")
+        );
     }
 
     #[test]
@@ -412,7 +493,7 @@ mod tests {
         // address, so `url` is `None` (the UI shows "use this machine's LAN
         // IP:{port}"). Don't fabricate a loopback URL the phone can't reach.
         let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
-        let s = RemoteStatus::running(addr, RemoteBindMode::All);
+        let s = RemoteStatus::running(addr, RemoteBindMode::All, None);
         assert!(s.running);
         assert_eq!(s.url, None, "0.0.0.0 must not fabricate a loopback URL");
         assert_eq!(s.port, Some(8080));
