@@ -248,6 +248,18 @@ const SEND_PROMPT_GRACE_MS = 10_000
 const SEND_PROMPT_TIMEOUT_MS = 600_000 + SEND_PROMPT_GRACE_MS
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
+/**
+ * How long the page must stay hidden before a return triggers a proactive
+ * reconnect. Mobile browsers suspend JS in backgrounded tabs, so the server's
+ * keepalive Ping goes un-ponged and the server tears the socket down at its
+ * ~75s Pong-timeout (`web/ws.rs::PONG_TIMEOUT`) — but the client only learns
+ * this when `onclose` is finally delivered on resume (late, or never on a
+ * half-open link). 30s sits between the server's 20s Ping interval and its 75s
+ * Pong-timeout: long enough to ride out a brief tab switch without a needless
+ * reconnect, short enough that a real background/idle triggers recovery before
+ * the user sees a dead chat. Tunable.
+ */
+const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
 function requestTimeoutMs(type: WsRequestType): number {
   return type === 'send_prompt' ? SEND_PROMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS
@@ -275,6 +287,12 @@ export class WsAcpTransport implements AcpTransport {
   private disposed = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the page became hidden (epoch-ms), or null while visible. Drives the
+   * visibility-triggered proactive reconnect on mobile idle/background resume. */
+  private lastHiddenAt: number | null = null
+  /** Bound DOM-listener refs so `dispose()` can detach them. */
+  private visibilityHandler: (() => void) | null = null
+  private focusHandler: (() => void) | null = null
   private readonly pending = new Map<string, Pending>()
   private readonly listeners = new Map<string, Set<EventListener>>()
   /** Per-session last contiguous delivered seq. */
@@ -313,6 +331,7 @@ export class WsAcpTransport implements AcpTransport {
 
   async connect(): Promise<void> {
     if (this.disposed) return
+    this.attachVisibilityListeners()
     if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
     if (this.connecting) return this.connecting
     this.connecting = this.openSocket()
@@ -325,6 +344,7 @@ export class WsAcpTransport implements AcpTransport {
 
   dispose(): void {
     this.disposed = true
+    this.detachVisibilityListeners()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -644,6 +664,110 @@ export class WsAcpTransport implements AcpTransport {
       p.reject(new AcpTransportError(code, message))
     }
     this.pending.clear()
+  }
+
+  /**
+   * Attach `visibilitychange` + `focus` listeners (web only) so a return from a
+   * backgrounded mobile tab proactively reconnects instead of waiting for an
+   * `onclose` the suspended browser delivers late or never. Idempotent; detached
+   * in {@link dispose}. `visibilitychange` is the primary signal (it carries
+   * hidden/visible timing); `focus` is a fallback for platforms where
+   * `visibilitychange` is unreliable.
+   */
+  private attachVisibilityListeners(): void {
+    if (this.visibilityHandler || typeof document === 'undefined') return
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') {
+        this.lastHiddenAt = Date.now()
+        return
+      }
+      // visible — a backgrounded tab returning to the foreground.
+      this.maybeReconnectOnReturn()
+    }
+    const onFocus = (): void => {
+      // Fallback: focus implies the window is active again. Only acts when we
+      // previously recorded a hide, so normal interaction is a no-op.
+      this.maybeReconnectOnReturn()
+    }
+    this.visibilityHandler = onVisibility
+    this.focusHandler = onFocus
+    document.addEventListener('visibilitychange', onVisibility)
+    // `focus`/`blur` for tab/window backgrounding are window-level events and do
+    // NOT bubble — attach to `window`, not `document` (a document-level listener
+    // would never fire for window focus changes, making the fallback dead code).
+    window.addEventListener('focus', onFocus)
+  }
+
+  /** Detach the visibility/focus listeners (called from {@link dispose}). */
+  private detachVisibilityListeners(): void {
+    if (this.visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+    if (this.focusHandler && typeof window !== 'undefined') {
+      window.removeEventListener('focus', this.focusHandler)
+      this.focusHandler = null
+    }
+  }
+
+  /**
+   * On a return-to-foreground, if the page was hidden past the staleness
+   * threshold OR the socket is not OPEN, force a reconnect. The existing
+   * `reconnect()` + `subscribeSession(lastSeq)` cursor path then replays missed
+   * events from the server's per-session event log and resumes streaming — no
+   * manual page reload. Consumes `lastHiddenAt` so a `focus` following a
+   * `visibilitychange` (or vice-versa) does not double-trigger.
+   */
+  private maybeReconnectOnReturn(): void {
+    if (this.disposed) return
+    const hiddenAt = this.lastHiddenAt
+    this.lastHiddenAt = null
+    if (hiddenAt == null) return // never recorded a hide — nothing to recover
+    const hiddenFor = Date.now() - hiddenAt
+    const socketDown = this.socket?.readyState !== WebSocket.OPEN
+    if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS || socketDown) {
+      this.forceReconnect(
+        socketDown ? 'socket closed while page was hidden' : 'visibility return after idle'
+      )
+    }
+  }
+
+  /**
+   * Force a clean reconnect, bypassing the `connect()` fast path that trusts
+   * `readyState === OPEN`. Used by the visibility-triggered path: a mobile
+   * browser backgrounded the tab, the server tore the socket down at its
+   * Pong-timeout, and the client's `onclose` may not have fired yet (or the
+   * link is half-open and still reports OPEN). Tears down the suspect socket
+   * (detaching its handlers so its eventual close does not double-trigger
+   * `scheduleReconnect`/`rejectAllPending`), then reuses `scheduleReconnect()`
+   * so the existing backoff + `reconnect()` + cursor-resubscribe +
+   * `onReconnectStateChange` machinery runs unchanged.
+   */
+  private forceReconnect(reason: string): void {
+    if (this.disposed) return
+    const old = this.socket
+    this.socket = null
+    this.authed = false
+    this.connecting = null
+    this.rejectAllPending('closed', reason)
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.reconnectAttempt = 0
+    if (old) {
+      // Detach so the old socket's close does not double-fire scheduleReconnect
+      // / rejectAllPending on an already-tearing-down transport.
+      old.onclose = null
+      old.onerror = null
+      old.onmessage = null
+      try {
+        old.close()
+      } catch {
+        /* ignore — already closed */
+      }
+    }
+    this.scheduleReconnect()
   }
 
   private scheduleReconnect(): void {
