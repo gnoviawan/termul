@@ -31,7 +31,9 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => {
     loadSessionIndex: vi.fn(async () => []),
     saveSessionIndex: vi.fn(async () => {}),
     saveSessionPayload: vi.fn(async () => {}),
-    loadSessionPayload: vi.fn(async () => null),
+    // Read-through the module-level cache so tests can seed payloads via
+    // setCachedSessionPayload (preferred over per-test mockResolvedValue).
+    loadSessionPayload: vi.fn(async (id: string) => actual.getCachedSessionPayload(id) ?? null),
     deleteSessionPayload: vi.fn(async () => {})
   }
 })
@@ -67,19 +69,30 @@ vi.mock('@/lib/web-tab-session', () => ({
 
 import { invoke } from '@tauri-apps/api/core'
 import {
+  _clearPayloadCacheForTesting,
+  getCachedSessionPayload,
+  setCachedSessionPayload
+} from '@/lib/acp-history-persistence'
+import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
 import {
+  _flushCoalescedForTesting,
+  _isCoalescePendingForTesting,
+  _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
+  _resetLoadingOlderForTesting,
   agentReuseKey,
+  type ChatMessage,
   collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
   discoveryKey,
   initAcpEventListeners,
+  MAX_LIVE_WINDOW_MESSAGES,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -236,6 +249,7 @@ describe('acp-store', () => {
     _resetAcpTransportForTests(null)
     _resetInFlightHistoryOpensForTesting()
     _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -746,6 +760,7 @@ describe('acp-store', () => {
       role: 'agent',
       content: { type: 'text', text: 'world' }
     })
+    _flushCoalescedForTesting()
     const msgs = useAcpStore.getState().messages['s1']
     expect(msgs).toHaveLength(1)
     expect(msgs[0].role).toBe('agent')
@@ -768,6 +783,7 @@ describe('acp-store', () => {
       role: 'agent',
       content: { type: 'text', text: 'answer' }
     })
+    _flushCoalescedForTesting()
     const msgs = useAcpStore.getState().messages['s1']
     expect(msgs).toHaveLength(2)
     expect(msgs[0].role).toBe('thought')
@@ -1026,6 +1042,7 @@ describe('acp-store', () => {
       sessionId: 's1',
       toolCall: { toolCallId: 'tc-1', title: 'read', status: 'pending' }
     })
+    _flushCoalescedForTesting()
     // Capture the original timeline placement (arrival-stamped seq + timestamp).
     const original = useAcpStore.getState().toolCalls['s1'][0]
     const originalSeq = original.seq
@@ -1043,6 +1060,7 @@ describe('acp-store', () => {
         content: [{ type: 'text', text: 'done' }]
       }
     })
+    _flushCoalescedForTesting()
     const list = useAcpStore.getState().toolCalls['s1']
     expect(list).toHaveLength(1)
     expect(list[0].toolCallId).toBe('tc-1')
@@ -1215,6 +1233,9 @@ describe('acp-store', () => {
       role: 'agent',
       content: { type: 'text', text: ' there' }
     })
+    // Flush the coalesced chunks synchronously so scheduleTurnEnd's
+    // finalizeStreaming sees them (rAF fires async in jsdom).
+    _flushCoalescedForTesting()
     await done
     await flushTurnEnd()
     const msgs = useAcpStore.getState().messages['s1']
@@ -1269,6 +1290,7 @@ describe('acp-store', () => {
       content: { type: 'text', text: ' world' }
     })
     await done
+    _flushCoalescedForTesting()
     const agentMsg = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
     expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'Hello world' })
   })
@@ -1294,6 +1316,7 @@ describe('acp-store', () => {
     })
     await done
     await flushTurnEnd()
+    _flushCoalescedForTesting()
     const agentMsg = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
     expect(agentMsg?.blocks[0]).toEqual({ type: 'text', text: 'Hi there' })
   })
@@ -4342,6 +4365,7 @@ describe('ACP agent plan store', () => {
 describe('acp-store transcript eviction (WebView memory)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _resetCoalesceForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -4505,6 +4529,220 @@ describe('acp-store transcript eviction (WebView memory)', () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
     await useAcpStore.getState().openHistorySession('sess-reopen')
     expect(useAcpStore.getState().messages['sess-reopen']?.[0]?.id).toBe('m-disk')
+  })
+})
+
+describe('acp-store live window + lazy-load + coalescing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    _resetCoalesceForTesting()
+    _resetLoadingOlderForTesting()
+    _clearPayloadCacheForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  /** Build N complete messages [m0..m(N-1)] alternating user/agent. */
+  function buildMessages(count: number): ChatMessage[] {
+    return Array.from(
+      { length: count },
+      (_, i): ChatMessage => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'agent',
+        blocks: [{ type: 'text', text: `msg ${i}` }],
+        streaming: false,
+        timestamp: i,
+        seq: i
+      })
+    )
+  }
+
+  /** Minimal metadata entry for a cached payload. */
+  function fakeMetadata(sid: string, count: number) {
+    return {
+      id: sid,
+      agentId: 'agent-1',
+      title: 'T',
+      cwd: '/work',
+      projectId: 'p1',
+      createdAt: 0,
+      lastActivityAt: 0,
+      messageCount: count,
+      status: 'active' as const
+    }
+  }
+
+  it('(a) trimLiveWindow trims oldest complete messages and keeps the streaming tail', () => {
+    const sid = 's-trim'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(351)
+    // Cache the full payload so trimming is safe (older msgs restorable on scroll-up).
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 351), messages: fullMessages })
+    // Live window holds all 351; mark the last as the in-flight streaming tail.
+    const liveWindow = fullMessages.map((m, i) => (i === 350 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    // Push a chunk via the coalesced path; flush triggers trimLiveWindow.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' tail' }
+    })
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages[sid]
+    expect(msgs.length).toBeLessThanOrEqual(MAX_LIVE_WINDOW_MESSAGES)
+    // The in-flight streaming tail is always retained.
+    expect(msgs[msgs.length - 1].streaming).toBe(true)
+  })
+
+  it('(b) trim is skipped when no cached payload (no data loss for un-persisted sessions)', () => {
+    const sid = 's-no-cache'
+    seedSession(sid, 'agent-1', true)
+    // No setCachedSessionPayload — the session is not yet persisted to disk.
+    const liveWindow = buildMessages(310).map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' more' }
+    })
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages[sid]
+    // No trim — all messages retained (no disk copy to lazy-load from).
+    expect(msgs.length).toBe(310)
+    expect(msgs[msgs.length - 1].streaming).toBe(true)
+  })
+
+  it('(c) loadOlderMessages prepends older messages and is idempotent at history head', async () => {
+    const sid = 's-older'
+    seedSession(sid, 'agent-1', false)
+    const fullMessages = buildMessages(401)
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 401), messages: fullMessages })
+    // Live window starts at m150 (trimmed) — [m150..m400] (251 messages).
+    useAcpStore.setState({ messages: { [sid]: fullMessages.slice(150) } })
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m150')
+
+    // Load 50 older: should prepend m100..m149.
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const afterFirst = useAcpStore.getState().messages[sid]
+    expect(afterFirst[0].id).toBe('m100')
+    expect(afterFirst.length).toBe(301) // 251 + 50
+
+    // Load again: now oldest is m100, load 50 more → m50..m99.
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m50')
+
+    // Load until history head (oldestId === m0).
+    await useAcpStore.getState().loadOlderMessages(sid, 50) // m0..m49
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m0')
+    const beforeHead = useAcpStore.getState().messages[sid].length
+
+    // Idempotent at head — no duplicate, no infinite loop.
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    expect(useAcpStore.getState().messages[sid].length).toBe(beforeHead)
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m0')
+  })
+
+  it('(d) coalescing collapses a burst of chunks into a single set() per frame', () => {
+    const sid = 's-coalesce'
+    seedSession(sid, 'agent-1', true)
+    let setCount = 0
+    const unsub = useAcpStore.subscribe(() => {
+      setCount++
+    })
+    try {
+      const store = useAcpStore.getState()
+      store._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'a' }
+      })
+      store._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'b' }
+      })
+      store._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'c' }
+      })
+      // A coalesce flush is pending (rAF scheduled) but no set() has fired yet.
+      expect(_isCoalescePendingForTesting()).toBe(true)
+      expect(setCount).toBe(0)
+      // Flush applies all buffered chunks in ONE set().
+      _flushCoalescedForTesting()
+      expect(setCount).toBe(1)
+      // Final state reflects every chunk.
+      const msgs = useAcpStore.getState().messages[sid]
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'abc' })
+    } finally {
+      unsub()
+    }
+  })
+
+  it('(e) closed-session chunk is dropped (no map re-growth)', () => {
+    const sid = 's-closed-late'
+    seedSession(sid, 'agent-1', false)
+    // Simulate close-time eviction: messages map entry dropped.
+    useAcpStore.setState({
+      sessions: { [sid]: { ...useAcpStore.getState().sessions[sid], status: 'closed' } },
+      messages: {}
+    })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: 'late' }
+    })
+    _flushCoalescedForTesting()
+    // No messages map entry recreated.
+    expect(useAcpStore.getState().messages[sid]).toBeUndefined()
+  })
+
+  it('(e) replay mode replaces the transcript immediately (not coalesced)', () => {
+    const sid = 's-replay'
+    seedSession(sid, 'agent-1', false)
+    // Seed an existing transcript that replay should replace.
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'old',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'old' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 0
+          }
+        ]
+      }
+    })
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        [sid]: { ...s.sessions[sid], status: 'closed', replaying: 'pending' }
+      }
+    }))
+    // First replayed chunk replaces the transcript (immediate set, not buffered).
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: 'replayed' }
+    })
+    // Replay mode uses immediate set() — no coalesce pending.
+    expect(_isCoalescePendingForTesting()).toBe(false)
+    const msgs = useAcpStore.getState().messages[sid]
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'replayed' })
+    expect(msgs[0].streaming).toBe(true)
+    expect(useAcpStore.getState().sessions[sid].replaying).toBe('streaming')
   })
 })
 

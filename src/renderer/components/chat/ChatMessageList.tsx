@@ -1,3 +1,4 @@
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useMemo, useRef } from 'react'
 import {
   MessageScroller,
@@ -10,6 +11,7 @@ import {
 } from '@/components/ui/message-scroller'
 import type { AgentId, SessionId } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import { useAcpStore } from '@/stores/acp-store'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
@@ -78,6 +80,156 @@ function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: stri
   return (id: string) => !initialIdsRef.current!.has(id)
 }
 
+/** Props shared between the list and its virtualized inner timeline. */
+interface TimelineRenderProps {
+  sessionId: SessionId
+  groupedItems: TurnTimelineItem[]
+  lastMsgIndex: number
+  shouldAnimateEnter: (id: string) => boolean
+  onEditMessage?: (text: string) => void
+  onRetry?: () => void
+}
+
+/**
+ * Virtualized timeline body. Lives inside <MessageScrollerProvider> so it can
+ * read `viewportEl` (the virtualizer's scroll element) and `pinned` (follow
+ * state) from the scroller context. Only near-viewport rows are mounted.
+ */
+function VirtualizedTimeline({
+  sessionId,
+  groupedItems,
+  lastMsgIndex,
+  shouldAnimateEnter,
+  onEditMessage,
+  onRetry
+}: TimelineRenderProps): React.JSX.Element {
+  const { viewportEl, pinned } = useMessageScroller()
+  const virtualizer = useVirtualizer({
+    count: groupedItems.length,
+    getScrollElement: () => viewportEl,
+    estimateSize: () => 120,
+    overscan: 6,
+    getItemKey: (i) => groupedItems[i]?.key ?? i
+  })
+
+  // Stick-to-bottom while streaming: only auto-follow when the reader is
+  // pinned to the live edge (followOnAppend — do NOT pull a reader who has
+  // scrolled up to read history back down).
+  useEffect(() => {
+    if (pinned && groupedItems.length > 0) {
+      virtualizer.scrollToIndex(groupedItems.length - 1, { align: 'end' })
+    }
+  }, [groupedItems.length, pinned, virtualizer])
+
+  // Reverse-infinite-scroll: lazy-load older messages when the reader reaches
+  // the top of the mounted window. The store guards against concurrent loads
+  // and is idempotent at the history head, but we keep a local in-flight flag
+  // to avoid spamming the action on rapid range notifications.
+  const loadingOlderRef = useRef(false)
+  const startIndex = virtualizer.range?.startIndex
+  useEffect(() => {
+    if (startIndex === undefined || startIndex > 0) return
+    if (groupedItems.length === 0 || loadingOlderRef.current) return
+    loadingOlderRef.current = true
+    void useAcpStore
+      .getState()
+      .loadOlderMessages(sessionId, 50)
+      .finally(() => {
+        loadingOlderRef.current = false
+      })
+  }, [startIndex, groupedItems.length, sessionId])
+
+  const renderItemContent = (item: TurnTimelineItem, index: number): React.JSX.Element => {
+    if (item.kind === 'activity') {
+      return (
+        <TurnActivity
+          items={item.items}
+          active={item.active}
+          durationMs={item.durationMs}
+          attentionRequired={item.attentionRequired}
+          hasFinalResponse={item.hasFinalResponse}
+          shouldAnimateEnter={shouldAnimateEnter}
+        />
+      )
+    }
+    if (item.kind === 'tool') {
+      return (
+        <ToolCallCard
+          toolCall={item.tool}
+          animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
+        />
+      )
+    }
+    if (item.kind === 'thought-group') {
+      return <ThoughtGroup messages={item.messages} isLiveTail={false} />
+    }
+    return (
+      <ChatMessage
+        message={item.message}
+        showHeader
+        isLast={index === groupedItems.length - 1}
+        isTurnTail={item.isTurnTail}
+        turnText={item.turnText}
+        actionsPinned={index === lastMsgIndex}
+        animateEnter={item.isTurnTail ? false : shouldAnimateEnter(item.message.id)}
+        onEdit={onEditMessage}
+        onRetry={onRetry}
+      />
+    )
+  }
+
+  // Fallback: when the viewport can't be measured (zero height — jsdom in tests,
+  // or the pre-measurement first paint), render all items in normal flow so
+  // content is always present. A real production viewport yields virtual items
+  // and the windowed path runs.
+  const virtualItems = virtualizer.getVirtualItems()
+  if (viewportEl === null || virtualItems.length === 0) {
+    return (
+      <MessageScrollerContent className="mx-auto w-full max-w-3xl">
+        {groupedItems.map((item, index) => (
+          <MessageScrollerItem
+            key={item.key}
+            messageId={item.key}
+            scrollAnchor={item.kind === 'message' && item.message.role === 'user'}
+          >
+            {renderItemContent(item, index)}
+          </MessageScrollerItem>
+        ))}
+      </MessageScrollerContent>
+    )
+  }
+
+  return (
+    <MessageScrollerContent
+      className="mx-auto w-full max-w-3xl"
+      style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
+    >
+      {virtualItems.map((virtualItem) => {
+        const item = groupedItems[virtualItem.index]
+        if (!item) return null
+        return (
+          <MessageScrollerItem
+            key={virtualItem.key}
+            ref={virtualizer.measureElement}
+            messageId={item.key}
+            scrollAnchor={item.kind === 'message' && item.message.role === 'user'}
+            data-index={virtualItem.index}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItem.start}px)`
+            }}
+          >
+            {renderItemContent(item, virtualItem.index)}
+          </MessageScrollerItem>
+        )
+      })}
+    </MessageScrollerContent>
+  )
+}
+
 /**
  * Scrollable message thread built on the MessageScroller engine. Agent process
  * output is grouped into one turn-level disclosure; the final reply remains a
@@ -111,45 +263,14 @@ export function ChatMessageList({
         <ItemCountReporter count={groupedItems.length} />
         <MessageScroller>
           <MessageScrollerViewport className={cn(CHAT_GUTTER_X, 'py-4')}>
-            <MessageScrollerContent className="mx-auto w-full max-w-3xl">
-              {groupedItems.map((item, index) => (
-                <MessageScrollerItem
-                  key={item.key}
-                  messageId={item.key}
-                  scrollAnchor={item.kind === 'message' && item.message.role === 'user'}
-                >
-                  {item.kind === 'activity' ? (
-                    <TurnActivity
-                      items={item.items}
-                      active={item.active}
-                      durationMs={item.durationMs}
-                      attentionRequired={item.attentionRequired}
-                      hasFinalResponse={item.hasFinalResponse}
-                      shouldAnimateEnter={shouldAnimateEnter}
-                    />
-                  ) : item.kind === 'tool' ? (
-                    <ToolCallCard
-                      toolCall={item.tool}
-                      animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
-                    />
-                  ) : item.kind === 'thought-group' ? (
-                    <ThoughtGroup messages={item.messages} isLiveTail={false} />
-                  ) : (
-                    <ChatMessage
-                      message={item.message}
-                      showHeader
-                      isLast={index === groupedItems.length - 1}
-                      isTurnTail={item.isTurnTail}
-                      turnText={item.turnText}
-                      actionsPinned={index === lastMsgIndex}
-                      animateEnter={item.isTurnTail ? false : shouldAnimateEnter(item.message.id)}
-                      onEdit={onEditMessage}
-                      onRetry={onRetry}
-                    />
-                  )}
-                </MessageScrollerItem>
-              ))}
-            </MessageScrollerContent>
+            <VirtualizedTimeline
+              sessionId={sessionId}
+              groupedItems={groupedItems}
+              lastMsgIndex={lastMsgIndex}
+              shouldAnimateEnter={shouldAnimateEnter}
+              onEditMessage={onEditMessage}
+              onRetry={onRetry}
+            />
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>

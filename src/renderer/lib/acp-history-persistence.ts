@@ -246,21 +246,50 @@ export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<vo
   }
 }
 
+/**
+ * Module-level payload cache so scroll-up rehydrations don't re-read disk.
+ * Populated by `loadSessionPayload` (read-through) and `saveSessionPayload`
+ * (write-through). Holds the **full** transcript — the live React window is
+ * a trimmed projection of this. `persistSession` merges the cache with the
+ * live window so trimming never prunes the persisted copy.
+ */
+const payloadCache = new Map<string, SessionPayload>()
+
+/** Read the cached full payload (no disk read). Undefined when not cached. */
+export function getCachedSessionPayload(id: string): SessionPayload | undefined {
+  return payloadCache.get(id)
+}
+
+/** Replace the cached full payload (used by `persistSession` after merge). */
+export function setCachedSessionPayload(id: string, payload: SessionPayload): void {
+  payloadCache.set(id, payload)
+}
+
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
+  const cached = payloadCache.get(id)
+  if (cached) return cached
   const transport = getAcpTransport()
   if (transport.historyMode?.() === 'server' && transport.getSessionPayload) {
     // Fetch the FULL stored transcript from the server cache (desktop-hosted) or
     // the file-backed persistence (VPS, Story 4.3). Replaces the prior
     // `messages: []` gap — the web client now renders the complete conversation.
-    return transport.getSessionPayload(id)
+    const payload = await transport.getSessionPayload(id)
+    if (payload) payloadCache.set(id, payload)
+    return payload
   }
   if (transport.historyMode?.() === 'live_only') return null
   const res = await persistenceApi.read<SessionPayload>(sessionPayloadKey(id))
-  if (res.success && res.data) return res.data
+  if (res.success && res.data) {
+    payloadCache.set(id, res.data)
+    return res.data
+  }
   return null
 }
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
+  // Update the cache immediately so the merge in `persistSession` always sees
+  // the latest full payload, even before the debounced disk write settles.
+  payloadCache.set(id, payload)
   const mode = getAcpTransport().historyMode?.()
   if (mode === 'server' || mode === 'live_only') return
   // Debounced: coalesces streaming updates so disk isn't thrashed.
@@ -271,12 +300,18 @@ export async function saveSessionPayload(id: string, payload: SessionPayload): P
 }
 
 export async function deleteSessionPayload(id: string): Promise<void> {
+  payloadCache.delete(id)
   const mode = getAcpTransport().historyMode?.()
   if (mode === 'server' || mode === 'live_only') return
   const res = await persistenceApi.delete(sessionPayloadKey(id))
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to delete session payload')
   }
+}
+
+/** Test-only: clear the payload cache between tests to avoid cross-test leakage. */
+export function _clearPayloadCacheForTesting(): void {
+  payloadCache.clear()
 }
 
 /**

@@ -78,6 +78,7 @@ import {
 import {
   deleteSessionPayload,
   deriveTitle,
+  getCachedSessionPayload,
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
   type SessionIndexEntry,
@@ -410,6 +411,10 @@ interface AcpState {
    * is still surfaced; respawn only happens on explicit user action). */
   retryCrashedSession: (sessionId: SessionId) => Promise<void>
 
+  // Actions — live window (memory bounding + scroll-up lazy-load)
+  /** Lazy-load older messages from the cached full payload on scroll-up. */
+  loadOlderMessages: (sessionId: SessionId, count: number) => Promise<void>
+
   // Actions — session discovery (gh-407)
   /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
   discoverSessions: (agentId: AgentId, cwd: string) => Promise<void>
@@ -727,6 +732,53 @@ function dropRecordKey<T>(
 }
 
 /**
+ * Maximum number of messages retained per session in the live React window.
+ * Generous so normal single-session use never trims — only the multi-hour /
+ * multi-session pathology that climbs toward GB engages. Older messages fall
+ * out of the in-memory window but remain on disk, restorable via
+ * `loadOlderMessages` on scroll-up.
+ */
+export const MAX_LIVE_WINDOW_MESSAGES = 300
+
+/**
+ * Trim a session's messages to the live window: keep the most recent
+ * `MAX_LIVE_WINDOW_MESSAGES` messages, always retaining the in-flight
+ * streaming tail (never trimmed). Only trims when the full payload is cached
+ * (`getCachedSessionPayload`) so un-persisted messages are never lost — a
+ * freshly created session keeps all messages until `persistSession` caches the
+ * full transcript.
+ */
+function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMessage[] {
+  if (messages.length <= MAX_LIVE_WINDOW_MESSAGES) return messages
+  // Don't trim unless the full payload is cached — otherwise un-persisted
+  // messages would be lost (no disk copy to lazy-load from).
+  if (!getCachedSessionPayload(sessionId)) return messages
+  // Count trailing streaming messages (the in-flight tail — always retained).
+  let streamingCount = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].streaming) streamingCount++
+    else break
+  }
+  const keepCount = Math.max(streamingCount, MAX_LIVE_WINDOW_MESSAGES)
+  return messages.slice(messages.length - keepCount)
+}
+
+/**
+ * Merge the cached full payload with the live (possibly trimmed) window so
+ * disk persistence never loses messages. Messages present in the live window
+ * (more up-to-date) replace their cached counterparts; messages trimmed out
+ * of the live window are restored from the cache.
+ */
+function mergeTranscriptMessages(cached: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
+  if (cached.length === 0) return live
+  if (live.length === 0) return cached
+  const liveIds = new Set(live.map((m) => m.id))
+  // Keep cached messages not in the live window (older, trimmed) + all live.
+  const older = cached.filter((m) => !liveIds.has(m.id))
+  return [...older, ...live]
+}
+
+/**
  * Free per-session transcript maps held in the WebView heap.
  * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
  * Call only after any needed `persistSession` so the last mirror is flushed.
@@ -924,9 +976,19 @@ function persistSession(
   if (!(sessionId in state.messages)) return
   // `streaming` is transient UI state; persisting it would restore a message
   // stuck in its shimmer state after a restart.
-  const messages = (state.messages[sessionId] ?? []).map((m) =>
+  const liveMessages = (state.messages[sessionId] ?? []).map((m) =>
     m.streaming ? { ...m, streaming: false } : m
   )
+  // Merge with the cached full payload so the live-window trim never prunes
+  // the persisted copy. The cache holds the full transcript (populated by
+  // `loadSessionPayload` / `saveSessionPayload`); the live window is a trimmed
+  // projection of it. Messages present in the live window (more up-to-date)
+  // replace their cached counterparts; messages trimmed out of the live window
+  // are restored from the cache. Disk format is unchanged.
+  const cachedPayload = getCachedSessionPayload(sessionId)
+  const cachedMessages = cachedPayload?.messages ?? []
+  const messages =
+    cachedMessages.length > 0 ? mergeTranscriptMessages(cachedMessages, liveMessages) : liveMessages
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
@@ -1583,7 +1645,7 @@ async function openHistorySessionInner(
         replaying: null
       }
     },
-    messages: { ...s.messages, [id]: payload.messages }
+    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
   }))
   onTranscriptInstalled()
 
@@ -1689,7 +1751,7 @@ async function openHistorySessionInner(
       // Load failed — restore the local transcript so the user still sees
       // history (a partial replay may have replaced it).
       set((s) => ({
-        messages: { ...s.messages, [id]: payload.messages },
+        messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -1866,6 +1928,103 @@ async function runPromptTurn(
   }
 }
 
+// --- Streaming coalescing (rAF-batched set()) -------------------------------
+//
+// Buffer streaming chunk/tool-call updates so ≤1 Zustand `set()` fires per
+// animation frame. Flushed synchronously on turn-complete / agent-error /
+// transport disconnect so the final transcript is consistent before status
+// flips. Replay mode (`session.replaying`) keeps its immediate `set()` (the
+// replay replaces the transcript, not a per-token storm).
+
+interface CoalescedUpdate {
+  sessionId: SessionId
+  apply: (s: AcpState) => Partial<AcpState>
+}
+
+let coalescedBuffer: CoalescedUpdate[] = []
+let coalesceRafId: number | null = null
+
+/** Sessions whose `loadOlderMessages` is in flight (prevents concurrent loads). */
+const loadingOlderSessions = new Set<SessionId>()
+
+function scheduleCoalesceFlush(): void {
+  if (coalesceRafId !== null) return
+  coalesceRafId = requestAnimationFrame(flushCoalesced)
+}
+
+/**
+ * Drain the coalesced buffer and apply a single merged `set()`. Each buffered
+ * update is applied sequentially against a working copy so the second event
+ * sees the first event's result. Live windows are trimmed for affected
+ * sessions after all updates are merged.
+ */
+function flushCoalesced(): void {
+  coalesceRafId = null
+  const updates = coalescedBuffer
+  coalescedBuffer = []
+  if (updates.length === 0) return
+  useAcpStore.setState((s) => {
+    let working = s
+    let merged: Partial<AcpState> = {}
+    const affectedSessions = new Set<SessionId>()
+    for (const { sessionId, apply } of updates) {
+      const patch = apply(working)
+      working = { ...working, ...patch }
+      merged = { ...merged, ...patch }
+      affectedSessions.add(sessionId)
+    }
+    // Trim live windows for affected sessions after merging all updates.
+    const messages = { ...(merged.messages ?? working.messages) }
+    let trimmed = false
+    for (const sessionId of affectedSessions) {
+      const list = messages[sessionId]
+      if (list && list.length > MAX_LIVE_WINDOW_MESSAGES) {
+        messages[sessionId] = trimLiveWindow(list, sessionId)
+        trimmed = true
+      }
+    }
+    return trimmed ? { ...merged, messages } : merged
+  })
+}
+
+/** Cancel any pending rAF and flush synchronously (turn-complete / disconnect). */
+function flushCoalescedSync(): void {
+  if (coalesceRafId !== null) {
+    cancelAnimationFrame(coalesceRafId)
+    coalesceRafId = null
+  }
+  flushCoalesced()
+}
+
+/** Test-only: drain the coalesced buffer synchronously. */
+export function _flushCoalescedForTesting(): void {
+  flushCoalescedSync()
+}
+
+/** Test-only: reset coalescing state (clear buffer + cancel pending rAF). */
+export function _resetCoalesceForTesting(): void {
+  if (coalesceRafId !== null) {
+    cancelAnimationFrame(coalesceRafId)
+    coalesceRafId = null
+  }
+  coalescedBuffer = []
+}
+
+/** Test-only: check whether a coalesce flush is pending. */
+export function _isCoalescePendingForTesting(): boolean {
+  return coalesceRafId !== null || coalescedBuffer.length > 0
+}
+
+/** Test-only: clear the loading-older guard set. */
+export function _resetLoadingOlderForTesting(): void {
+  loadingOlderSessions.clear()
+}
+
+/** Queue a streaming update for rAF-batched `set()`. */
+function coalesceSet(sessionId: SessionId, apply: (s: AcpState) => Partial<AcpState>): void {
+  coalescedBuffer.push({ sessionId, apply })
+  scheduleCoalesceFlush()
+}
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -2885,6 +3044,55 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  // --- Live window: scroll-up lazy-load -------------------------------------
+
+  /**
+   * Lazy-load older messages from the cached full payload on scroll-up.
+   * Reads the full payload via `loadSessionPayload` (cached module-side so
+   * re-hydrations don't re-read disk), finds messages older than the
+   * window's oldest retained id, and prepends the next `count` into the
+   * in-memory window. Idempotent at the history head (no infinite loop).
+   * Reversible trim — disk format unchanged.
+   */
+  loadOlderMessages: async (sessionId, count) => {
+    // Prevent concurrent loads for the same session (rapid scroll-up).
+    if (loadingOlderSessions.has(sessionId)) return
+    loadingOlderSessions.add(sessionId)
+    try {
+      const payload = await loadSessionPayload(sessionId)
+      if (!payload) return
+      // Re-read current state after the async gap — new chunks may have arrived.
+      const current = get().messages[sessionId] ?? []
+      if (current.length === 0) return
+      const oldestId = current[0].id
+      const fullMessages = payload.messages
+      const oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
+      // Not found: the oldest live message isn't in the persisted payload (a
+      // live-only session or the message was created after the last persist).
+      // Nothing older to load from disk.
+      if (oldestIdx === -1) return
+      // Already at the head: no older messages (idempotent — prevents
+      // infinite scroll-up loops).
+      if (oldestIdx === 0) return
+      const start = Math.max(0, oldestIdx - count)
+      const older = fullMessages.slice(start, oldestIdx)
+      if (older.length === 0) return
+      set((s) => {
+        const live = s.messages[sessionId] ?? []
+        // Deduplicate against the live window (a chunk may have arrived
+        // between the payload read and this set).
+        const liveIds = new Set(live.map((m) => m.id))
+        const deduped = older.filter((m) => !liveIds.has(m.id))
+        if (deduped.length === 0) return {}
+        return {
+          messages: { ...s.messages, [sessionId]: [...deduped, ...live] }
+        }
+      })
+    } finally {
+      loadingOlderSessions.delete(sessionId)
+    }
+  },
+
   // --- Session discovery (gh-407) -------------------------------------------
 
   discoverSessions: async (agentId, cwd) => {
@@ -3349,13 +3557,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
     }),
 
-  _onMessageChunk: (e) =>
-    set((s) => {
-      const session = s.sessions[e.sessionId]
+  _onMessageChunk: (e) => {
+    // Replay mode replaces the transcript with an immediate set (not a
+    // per-token storm). Normal streaming is coalesced via rAF so ≤1 set()
+    // fires per animation frame.
+    const session = get().sessions[e.sessionId]
+    const useCoalesce = !session?.replaying
+    const apply = (s: AcpState): Partial<AcpState> => {
+      const sess = s.sessions[e.sessionId]
       // Drop chunks for unknown or already-closed sessions (no orphan state) —
       // unless a session/load replay is in flight: the session stays 'closed'
       // until the load IPC resolves, but its replayed chunks must land.
-      if (!session || (session.status === 'closed' && !session.replaying)) return {}
+      if (!sess || (sess.status === 'closed' && !sess.replaying)) return {}
       const role = e.role as MessageRole
       // First replayed chunk: the agent is re-streaming the full conversation,
       // which supersedes the locally persisted mirror. Replace the transcript
@@ -3363,7 +3576,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Stale tool calls from a previous live period are dropped too — the
       // replay re-delivers the conversation's tool calls, and keeping the old
       // list would render each of them twice.
-      if (session.replaying === 'pending') {
+      if (sess.replaying === 'pending') {
         // A whitespace-only first chunk must not count as "real replay
         // content" — replacing the mirror with it would blank the chat.
         if (e.content.type === 'text' && !(e.content.text ?? '').trim().length) return {}
@@ -3380,7 +3593,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           toolCalls: { ...s.toolCalls, [e.sessionId]: [] },
           sessions: {
             ...s.sessions,
-            [e.sessionId]: { ...session, replaying: 'streaming' }
+            [e.sessionId]: { ...sess, replaying: 'streaming' }
           }
         }
       }
@@ -3405,7 +3618,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
       }
-      if (!mayStartChunkMessage(session, list, role)) return {}
+      if (!mayStartChunkMessage(sess, list, role)) return {}
       // Ignore an empty leading text chunk (avoids a flashing empty bubble).
       if (e.content.type === 'text' && !(e.content.text ?? '').length) return {}
       const message: ChatMessage = {
@@ -3417,10 +3630,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         seq: nextSeq()
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
-    }),
+    }
+    if (useCoalesce) {
+      coalesceSet(e.sessionId, apply)
+    } else {
+      set(apply)
+    }
+  },
 
-  _onToolCall: (e) =>
-    set((s) => {
+  _onToolCall: (e) => {
+    const session = get().sessions[e.sessionId]
+    const useCoalesce = !session?.replaying
+    const apply = (s: AcpState): Partial<AcpState> => {
       // Same guard as message chunks: never grow maps for unknown/closed sessions.
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
@@ -3457,10 +3678,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         toolCalls: { ...s.toolCalls, [e.sessionId]: next }
       }
-    }),
+    }
+    if (useCoalesce) {
+      coalesceSet(e.sessionId, apply)
+    } else {
+      set(apply)
+    }
+  },
 
-  _onToolCallUpdate: (e) =>
-    set((s) => {
+  _onToolCallUpdate: (e) => {
+    const session = get().sessions[e.sessionId]
+    const useCoalesce = !session?.replaying
+    const apply = (s: AcpState): Partial<AcpState> => {
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
@@ -3469,7 +3698,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const next = [...list]
       next[idx] = merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
-    }),
+    }
+    if (useCoalesce) {
+      coalesceSet(e.sessionId, apply)
+    } else {
+      set(apply)
+    }
+  },
 
   _onPlanUpdate: (e) =>
     set((s) => {
@@ -3588,6 +3823,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onPromptComplete: (e) => {
+    // Flush any coalesced streaming updates so the final transcript is
+    // consistent before the turn status flips.
+    flushCoalescedSync()
     set((s) => {
       const messages = finalizeStreaming(s.messages, e.sessionId)
       const session = s.sessions[e.sessionId]
@@ -3622,6 +3860,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   _onAgentError: (e) => {
+    // Flush coalesced updates so the error reflects the final transcript state.
+    flushCoalescedSync()
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
@@ -3678,6 +3918,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   // `agent_error` + `agent_disconnected`. The UI shows a manual-restart action
   // (no silent respawn, honoring ADR-003).
   _onAgentCrashed: (e) => {
+    // Flush coalesced updates so the crash reflects the final transcript state.
+    flushCoalescedSync()
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       // Story 1.9 review: don't resurrect a closed session to 'error' (a late
@@ -3723,6 +3965,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   _onAgentDisconnected: (e) => {
+    // Flush coalesced updates so the disconnect reflects the final transcript state.
+    flushCoalescedSync()
     const affected: SessionId[] = []
     const dropTranscriptIds: SessionId[] = []
     set((s) => {
@@ -3805,6 +4049,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   _onSessionClosed: (e) => {
+    // Flush coalesced updates so transcript eviction sees the final state.
+    flushCoalescedSync()
     invalidateSessionReopen(e.sessionId)
     // Reclaim app-owned temp files staged for this session (e.g. agent
     // disconnected) so they do not linger in the OS temp dir.

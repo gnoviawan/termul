@@ -17,6 +17,8 @@ const BOTTOM_THRESHOLD_PX = 48
 
 interface MessageScrollerContextValue {
   registerViewport: (el: HTMLDivElement | null) => void
+  /** The current viewport scroll element (for the virtualizer's `getScrollElement`). */
+  viewportEl: HTMLDivElement | null
   pinned: boolean
   showButton: boolean
   /** Number of items added while the reader was scrolled away from the live edge. */
@@ -104,13 +106,14 @@ function MessageScrollerProvider({
   const value = React.useMemo<MessageScrollerContextValue>(
     () => ({
       registerViewport: setViewportEl,
+      viewportEl,
       pinned,
       showButton,
       newCount,
       setItemCount,
       scrollToEnd
     }),
-    [pinned, showButton, newCount, scrollToEnd]
+    [viewportEl, pinned, showButton, newCount, scrollToEnd]
   )
 
   return <MessageScrollerContext.Provider value={value}>{children}</MessageScrollerContext.Provider>
@@ -163,17 +166,20 @@ function MessageScrollerContent({
   )
 }
 
-function MessageScrollerItem({
-  className,
-  scrollAnchor = false,
-  messageId,
-  ...props
-}: React.ComponentProps<'div'> & {
-  scrollAnchor?: boolean
-  messageId?: string
-}): React.JSX.Element {
+/**
+ * Single timeline row. Forwards its ref so the TanStack Virtual virtualizer
+ * can attach `measureElement` for dynamic row-height measurement.
+ */
+const MessageScrollerItem = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<'div'> & {
+    scrollAnchor?: boolean
+    messageId?: string
+  }
+>(function MessageScrollerItem({ className, scrollAnchor = false, messageId, ...props }, ref) {
   return (
     <div
+      ref={ref}
       data-slot="message-scroller-item"
       data-scroll-anchor={scrollAnchor || undefined}
       data-message-id={messageId}
@@ -181,7 +187,7 @@ function MessageScrollerItem({
       {...props}
     />
   )
-}
+})
 
 function MessageScrollerButton({
   className,
