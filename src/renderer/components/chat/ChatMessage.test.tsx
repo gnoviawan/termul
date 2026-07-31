@@ -123,6 +123,7 @@ vi.mock('streamdown', async () => {
   const StreamdownContext = React.createContext({ controls: false, isAnimating: false })
   return {
     Streamdown: MockStreamdown,
+    defaultRemarkPlugins: {},
     StreamdownContext,
     TableCopyDropdown: ({ children }: { children: ReactNode }) => <>{children}</>,
     TableDownloadDropdown: ({ children }: { children: ReactNode }) => <>{children}</>

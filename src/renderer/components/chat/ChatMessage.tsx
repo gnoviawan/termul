@@ -5,6 +5,7 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   type Components,
+  defaultRemarkPlugins,
   type LinkSafetyConfig,
   type LinkSafetyModalProps,
   Streamdown
@@ -46,6 +47,8 @@ import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-link
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
+
+const FILE_PATH_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkFilePathLinks]
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -289,7 +292,7 @@ function AgentProse({
         animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
         plugins={STREAMDOWN_PLUGINS}
-        remarkPlugins={filePathContext ? [remarkFilePathLinks] : undefined}
+        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
         controls={STREAMDOWN_CONTROLS}
         components={
           filePathComponents
