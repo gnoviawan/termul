@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.186.0",
+    "version": "0.185.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.186.0",
+        "package": "droid@0.185.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -348,11 +348,11 @@
   {
     "id": "fast-agent",
     "name": "fast-agent",
-    "version": "0.9.29",
+    "version": "0.9.28",
     "description": "Code and build agents with comprehensive multi-provider support",
     "distribution": {
       "uvx": {
-        "package": "fast-agent-acp==0.9.29",
+        "package": "fast-agent-acp==0.9.28",
         "args": ["-x"]
       }
     }
@@ -360,11 +360,11 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.53.1",
+    "version": "0.53.0",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.53.1",
+        "package": "@google/gemini-cli@0.53.0",
         "args": ["--acp"]
       }
     }
@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.118",
+    "version": "0.2.117",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.118",
+        "package": "@xai-official/grok@0.2.117",
         "args": ["agent", "stdio"]
       }
     }
