@@ -71,8 +71,10 @@ This preserves a browser/dev/test path while keeping the Tauri-specific app as t
 ## ACP / AI Agent Chat Architecture
 
 Agent Chat is an ACP-backed workspace surface. It is separate from the
-terminal-native CLI-agent path: the renderer starts and owns ACP sessions, while
-the Rust ACP runtime owns the agent subprocess and protocol connection.
+terminal-native CLI-agent path. The renderer is responsible for initiating and
+tracking the UI session, transcript, and active tab; `AcpManager` and the Rust
+ACP runtime own the agent subprocess, backend session lifecycle, and protocol
+state.
 
 ```text
 Agent Chat components

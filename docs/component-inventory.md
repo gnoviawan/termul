@@ -60,7 +60,7 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `chat/ToolCallCard.tsx` / `chat/ThoughtGroup.tsx` / `chat/TurnActivity.tsx` — streamed tool, reasoning, and turn-state views
 - `chat/PlanPanel.tsx` / `chat/ContextUsageIndicator.tsx` — agent plan and reported context-window usage surfaces
 - `chat/PermissionDialog.tsx` / `chat/PromptQueuePanel.tsx` — pending permission decisions and queued prompts
-- `components/ai-elements/attachments.tsx` — vendored AI SDK Elements attachment primitives adapted to the repository's shadcn primitives, with grid/inline/list variants
+- `src/renderer/components/ai-elements/attachments.tsx` — vendored AI SDK Elements attachment primitives adapted to the repository's shadcn primitives, with grid/inline/list variants
 
 #### ACP state, hooks, and transport topology
 

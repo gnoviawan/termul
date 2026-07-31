@@ -6,8 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- Document the existing ACP / Agent Chat architecture, command and event
-  contracts, renderer components, and state/transport boundaries.
+- Document the existing ACP / Agent Chat subsystem across the Rust backend,
+  renderer chat UI, command/event contracts, agent registry and binary
+  installation, authentication, history/resume, MCP passthrough, and
+  desktop/web transport boundaries; see `docs/architecture.md` and
+  `docs/api-contracts.md`.
 
 ## [0.4.0] - 2026-05-31
 

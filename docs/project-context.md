@@ -111,7 +111,10 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
 - Treat `src-tauri/src/acp/commands.rs`, `events.rs`, and the renderer facade as one contract: preserve command names, `acp:*` event names, camelCase payload fields, and nested ACP schema values together.
 - Preserve desktop↔web parity for ACP commands and events. A new desktop command or event needs the equivalent web/remote transport path, or an explicit desktop-only boundary.
 - Keep ACP state in `acp-store.ts`; use its selectors and existing persistence adapters rather than introducing a second session store. History identity is `(projectId, cwd)`.
-- Preserve ACP capability and authentication ordering: retain initialize-advertised auth methods, authenticate one unambiguous method before `session/new`, and require user choice when multiple methods are advertised.
+- Preserve ACP capability and authentication ordering: when `authMethods` is
+  empty, do not authenticate; when exactly one method is advertised, authenticate
+  it automatically before `session/new`; when multiple methods are advertised,
+  require an explicit user choice.
 
 ### Testing Rules
 

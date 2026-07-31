@@ -363,8 +363,10 @@ and event definitions remain the contract source of truth.
 | `acp_respond_permission` | `agentId`, `requestId`, optional `optionId` | `()` |
 | `acp_probe_runtime` | none | `AcpRuntimeProbe` |
 
-`acp_send_prompt` rejects empty content, and a second in-flight turn returns the
-stable `ACP_TURN_IN_PROGRESS` diagnostic used by the renderer queue. Permission
+`acp_send_prompt` uses structured `content` when it is non-empty and falls back
+to the `text` field when structured content is empty. It rejects the prompt only
+when both are absent. A second in-flight turn returns the stable
+`ACP_TURN_IN_PROGRESS` diagnostic used by the renderer queue. Permission
 resolution is first-response-wins across desktop and web/remote paths.
 
 ### Native events
