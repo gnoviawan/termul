@@ -344,7 +344,7 @@ export function AgentChatPanel({
   return (
     <div
       ref={rootRef}
-      className="@container flex h-full flex-col bg-background"
+      className="@container flex h-full flex-col bg-terminal-bg"
       // Story 5.3 (T2.1): apply OSK spacer as bottom padding so the sticky
       // composer card stays visible above the on-screen keyboard. iOS Safari
       // ignores `interactive-widget=resizes-content` (T3.1) — the layout

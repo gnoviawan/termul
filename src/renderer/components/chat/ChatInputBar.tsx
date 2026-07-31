@@ -443,7 +443,7 @@ export function ChatInputBar({
   const mcpBadge = <McpBadge count={mcpCount} />
 
   return (
-    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-3.5 pt-3')}>
+    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>
       <div className="relative mx-auto w-full max-w-3xl">
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />
