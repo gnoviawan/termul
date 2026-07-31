@@ -290,4 +290,19 @@ describe('ChatInputBar morph button', () => {
       expect(screen.queryByRole('button', { name: 'Cancel turn' })).not.toBeInTheDocument()
     })
   })
+
+  it('accepts a drop whose file is exposed only through dataTransfer.items', async () => {
+    renderInputBar({ imageCapable: true })
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    const dataTransfer = {
+      files: [] as unknown as FileList,
+      items: [{ kind: 'file', getAsFile: () => file }]
+    } as unknown as DataTransfer
+
+    fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+  })
 })
