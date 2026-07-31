@@ -114,14 +114,19 @@ function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): Reac
 }
 
 const MAX_INLINE_RESOURCE_TEXT = 32 * 1024
+const MAX_INLINE_AUDIO_BYTES = 20 * 1024 * 1024
 
-/** Return only local inline audio sources; remote URLs must not auto-load. */
+/** Return only bounded inline audio sources; remote URLs must not auto-load. */
 function inlineAudioUrl(block: ContentBlock): string | null {
   if (block.type !== 'audio' || !blockMimeType(block)?.startsWith('audio/')) return null
   const data = blockData(block)
   if (!data) return null
-  if (data.startsWith('blob:') || data.startsWith('data:audio/')) return data
+  if (data.startsWith('blob:')) return data
+  if (data.startsWith('data:audio/')) {
+    return data.length <= MAX_INLINE_AUDIO_BYTES * 1.4 ? data : null
+  }
   if (data.startsWith('data:')) return null
+  if (data.length > MAX_INLINE_AUDIO_BYTES * 1.4) return null
   return `data:${blockMimeType(block)};base64,${data}`
 }
 
