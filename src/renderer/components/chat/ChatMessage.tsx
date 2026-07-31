@@ -237,6 +237,9 @@ function AgentProse({
                 event.preventDefault()
                 if (href) setExternalUrl(href)
               }}
+              onAuxClick={(event) => {
+                event.preventDefault()
+              }}
             >
               {children}
             </a>
