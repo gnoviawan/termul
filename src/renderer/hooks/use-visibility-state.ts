@@ -1,6 +1,6 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect, useRef } from 'react'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+import { getCurrentWindow } from '@/lib/tauri-window'
 import { visibilityApi } from '@/lib/visibility-api'
 import { markVisible } from '@/lib/visibility-signal'
 import { HIDDEN_BUFFER_TRUNCATION_DELAY, useTerminalStore } from '@/stores/terminal-store'

@@ -1,4 +1,4 @@
-import type { IpcResult, RemoteProjectTree, RemoteStatus } from '@shared/types/ipc.types'
+import type { IpcResult, RemoteStatus } from '@shared/types/ipc.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockInvoke } = vi.hoisted(() => ({
@@ -56,25 +56,6 @@ describe('remoteServerApi', () => {
     await remoteServerApi.status()
 
     expect(mockInvoke).toHaveBeenCalledWith('remote_server_status', undefined)
-  })
-
-  it('publishProjects() forwards the tree as the `tree` arg', async () => {
-    const tree: RemoteProjectTree = {
-      projects: [
-        {
-          id: 'p1',
-          name: 'Proj 1',
-          terminals: [{ ptyId: 'terminal-1', name: 'zsh', cwd: '/home/u' }]
-        }
-      ]
-    }
-    const ipc: IpcResult<void> = { success: true, data: undefined }
-    mockInvoke.mockResolvedValueOnce(ipc)
-
-    const result = await remoteServerApi.publishProjects(tree)
-
-    expect(mockInvoke).toHaveBeenCalledWith('remote_publish_projects', { tree })
-    expect(result.success).toBe(true)
   })
 
   it('wraps a thrown invoke error into a failed IpcResult', async () => {

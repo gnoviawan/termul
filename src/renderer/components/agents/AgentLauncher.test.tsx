@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import * as supportedAcpAgents from '@/lib/agents/supported-acp-agents'
 import {
@@ -10,6 +11,11 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
+
+function clickMenuOption(name: string | RegExp): void {
+  const dialog = screen.getByRole('dialog')
+  fireEvent.pointerDown(within(dialog).getByText(name))
+}
 
 function defaultReadyAgent(): SupportedAcpAgentEntry {
   const entries = buildSupportedAcpAgents([], 'windows-x86_64')
@@ -24,6 +30,13 @@ const {
   mockStartChat,
   mockPrepareChat,
   mockCancelPreparedChat,
+  mockClaimPreparedChat,
+  mockCreateLaunchPlaceholder,
+  mockFinalizeChatLaunch,
+  mockApplyPendingLauncherOptions,
+  mockSeedLaunchUserMessage,
+  mockClearLaunchingSession,
+  mockPrewarmAgent,
   mockSendPrompt,
   mockSaveAgentConfig,
   mockSetConfigOption,
@@ -32,15 +45,25 @@ const {
   mockAuthenticateAgent,
   mockInstallRegistryBinary,
   mockAddAgentChatTab,
+  mockRemapAgentChatSession,
   mockHideAgentLauncher,
   mockPersistRead,
   mockPersistWrite,
   mockNavigate,
+  mockRetargetWarmPool,
+  mockSetSelectedAgentConfigId,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
   mockPrepareChat: vi.fn(),
   mockCancelPreparedChat: vi.fn(),
+  mockClaimPreparedChat: vi.fn(),
+  mockCreateLaunchPlaceholder: vi.fn(),
+  mockFinalizeChatLaunch: vi.fn(),
+  mockApplyPendingLauncherOptions: vi.fn(),
+  mockSeedLaunchUserMessage: vi.fn(),
+  mockClearLaunchingSession: vi.fn(),
+  mockPrewarmAgent: vi.fn(),
   mockSendPrompt: vi.fn(),
   mockSaveAgentConfig: vi.fn(),
   mockSetConfigOption: vi.fn(),
@@ -49,16 +72,29 @@ const {
   mockAuthenticateAgent: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
+  mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockNavigate: vi.fn(),
+  mockRetargetWarmPool: vi.fn(),
+  mockSetSelectedAgentConfigId: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
       preparedSessions: {} as Record<string, string>,
       preparingChatKeys: {} as Record<string, true>,
       prepareChatErrors: {} as Record<string, unknown>,
+      agentOptionsCache: {} as Record<
+        string,
+        {
+          models: AcpSession['models']
+          modes: AcpSession['modes']
+          configOptions: AcpSession['configOptions']
+          updatedAt: number
+        }
+      >,
+      launchingSessionIds: {} as Record<string, true>,
       sessions: {} as Record<string, AcpSession>,
       commands: {},
       configToLiveAgent: {} as Record<string, string>,
@@ -122,6 +158,7 @@ vi.mock('@/stores/workspace-store', () => {
   const state = {
     hideAgentLauncher: mockHideAgentLauncher,
     addAgentChatTab: mockAddAgentChatTab,
+    remapAgentChatSession: mockRemapAgentChatSession,
     activePaneId: 'pane1'
   }
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
@@ -134,22 +171,66 @@ vi.mock('@/stores/acp-store', () => {
     startChat: mockStartChat,
     prepareChat: mockPrepareChat,
     cancelPreparedChat: mockCancelPreparedChat,
+    claimPreparedChat: mockClaimPreparedChat,
+    createLaunchPlaceholder: mockCreateLaunchPlaceholder,
+    finalizeChatLaunch: mockFinalizeChatLaunch,
+    applyPendingLauncherOptions: mockApplyPendingLauncherOptions,
+    seedLaunchUserMessage: mockSeedLaunchUserMessage,
+    clearLaunchingSession: mockClearLaunchingSession,
+    prewarmAgent: mockPrewarmAgent,
     sendPrompt: mockSendPrompt,
+    sendPromptBlocks: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
-    authenticateAgent: mockAuthenticateAgent
+    authenticateAgent: mockAuthenticateAgent,
+    retargetWarmPool: mockRetargetWarmPool,
+    setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
-  type MockAcpState = typeof acpStateRef.current & { saveAgentConfig: typeof mockSaveAgentConfig }
+  type MockAcpState = typeof acpStateRef.current & {
+    saveAgentConfig: typeof mockSaveAgentConfig
+    retargetWarmPool: typeof mockRetargetWarmPool
+    setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
+  }
   const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
-    sel ? sel({ ...acpStateRef.current, saveAgentConfig: mockSaveAgentConfig }) : getState()
+    sel
+      ? sel({
+          ...acpStateRef.current,
+          saveAgentConfig: mockSaveAgentConfig,
+          retargetWarmPool: mockRetargetWarmPool,
+          setSelectedAgentConfigId: mockSetSelectedAgentConfigId
+        })
+      : getState()
   useAcpStore.getState = getState
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
   const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
-  return { useAcpStore, useAcpSession, prepareChatKey, agentReuseKey }
+  const hasModelRelevantOptionsCache = (
+    entry:
+      | {
+          models: AcpSession['models']
+          modes: AcpSession['modes']
+          configOptions: AcpSession['configOptions']
+          updatedAt: number
+        }
+      | null
+      | undefined
+  ) => {
+    if (!entry) return false
+    if (entry.models && entry.models.availableModels.length > 0) return true
+    return entry.configOptions.some(
+      (option) => option.category === 'model' && option.options.length > 0
+    )
+  }
+  return {
+    useAcpStore,
+    useAcpSession,
+    prepareChatKey,
+    agentReuseKey,
+    hasModelRelevantOptionsCache
+  }
 })
 
 const ACP_CONFIG: StoredAgentConfig = {
@@ -234,9 +315,11 @@ function preparedSession(
 
 function renderLauncher(): void {
   render(
-    <MemoryRouter>
-      <AgentLauncher paneId="pane1" />
-    </MemoryRouter>
+    <TooltipProvider>
+      <MemoryRouter>
+        <AgentLauncher paneId="pane1" />
+      </MemoryRouter>
+    </TooltipProvider>
   )
 }
 
@@ -249,6 +332,8 @@ beforeEach(() => {
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
+    agentOptionsCache: {},
+    launchingSessionIds: {},
     sessions: {},
     commands: {},
     configToLiveAgent: {},
@@ -258,6 +343,21 @@ beforeEach(() => {
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
+  mockClaimPreparedChat.mockReturnValue(null)
+  mockCreateLaunchPlaceholder.mockReturnValue('launch-placeholder-1')
+  mockFinalizeChatLaunch.mockImplementation(
+    async (args: { adoptSession?: (a: string, b: string) => void; placeholderId: string }) => {
+      args.adoptSession?.(args.placeholderId, 'session-1')
+      return 'session-1'
+    }
+  )
+  mockApplyPendingLauncherOptions.mockResolvedValue(undefined)
+  mockSeedLaunchUserMessage.mockImplementation(() => undefined)
+  mockClearLaunchingSession.mockImplementation(() => undefined)
+  mockPrepareChat.mockImplementation(() => undefined)
+  mockCancelPreparedChat.mockImplementation(() => undefined)
+  mockPrewarmAgent.mockResolvedValue(undefined)
+  mockSendPrompt.mockResolvedValue(undefined)
   mockSaveAgentConfig.mockImplementation(async (config: StoredAgentConfig) => {
     const existing = acpStateRef.current.agentConfigs.findIndex((entry) => entry.id === config.id)
     acpStateRef.current.agentConfigs =
@@ -272,21 +372,64 @@ beforeEach(() => {
 })
 
 describe('AgentLauncher ACP new thread', () => {
-  it('routes submit to ACP startChat + addAgentChatTab and forwards the prompt', async () => {
+  it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
-    await waitFor(() => expect(mockStartChat).toHaveBeenCalledTimes(1))
-    expect(mockStartChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
-    await waitFor(() => expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-1', 'pane1'))
-    expect(mockSendPrompt).toHaveBeenCalledWith('session-1', 'hello acp')
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalled()
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placeholderId: 'launch-placeholder-1',
+        configId: defaultAgent.configId,
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'hello acp' }],
+        adoptSession: expect.any(Function)
+      })
+    )
+    expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+      'launch-placeholder-1',
+      'session-1',
+      'pane1'
+    )
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
       agentId: defaultAgent.configId,
       mode: 'acp'
     })
+  })
+
+  it('claims a prepared session so launch skips the placeholder path', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    mockClaimPreparedChat.mockReturnValue('prepared-ready-1')
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    renderLauncher()
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'ready now' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    expect(mockClaimPreparedChat).toHaveBeenCalledWith(key, 'p1')
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+    expect(mockSeedLaunchUserMessage).toHaveBeenCalledWith('prepared-ready-1', [
+      { type: 'text', text: 'ready now' }
+    ])
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('prepared-ready-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        'prepared-ready-1',
+        [{ type: 'text', text: 'ready now' }],
+        { skipUserAppend: true }
+      )
+    )
   })
 
   it('prepares the selected ACP session in the background', async () => {
@@ -294,7 +437,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     expect(mockStartChat).not.toHaveBeenCalled()
   })
@@ -312,7 +455,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     mockPrepareChat.mockClear()
     // A timeout reads as "Session setup timed out", never a misleading "Model unavailable".
@@ -342,9 +485,9 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
-    mockPrepareChat.mockClear()
+    mockRetargetWarmPool.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Agent connection lost' }))
     expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
     // Retry re-prepares, which (after backend eviction) spawns a fresh process.
@@ -375,9 +518,9 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
-    mockPrepareChat.mockClear()
+    mockRetargetWarmPool.mockClear()
     // Zed-style banner is visible without opening the model picker popover.
     expect(screen.getByText('Run `cursor login` to continue')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Cursor' }))
@@ -414,7 +557,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     expect(
       screen.getByText('Choose one of the following authentication options:')
@@ -423,20 +566,25 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
   })
 
-  it('reaps an unconsumed prepared session when the launcher unmounts', async () => {
+  it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {
     const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
-      <MemoryRouter>
-        <AgentLauncher paneId="pane1" />
-      </MemoryRouter>
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
     )
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     unmount()
 
-    expect(mockCancelPreparedChat).toHaveBeenCalledWith(`${defaultAgent.configId}\0/work\0`)
+    // The app-level warm pool owns the session lifecycle, so unmounting the
+    // launcher must NOT cancel the warm session (it stays ready for the next
+    // chat / a project switch-back).
+    expect(mockCancelPreparedChat).not.toHaveBeenCalled()
   })
 
   it('restores a persisted ACP selection', async () => {
@@ -448,12 +596,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     await waitFor(() =>
-      expect(mockPrepareChat).toHaveBeenCalledWith(
-        'acp-registry:opencode',
-        '/work',
-        undefined,
-        'p1'
-      )
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
     )
   })
 
@@ -475,15 +618,50 @@ describe('AgentLauncher ACP new thread', () => {
     expect(agentPicker).toHaveTextContent('Claude Agent')
     expect(agentPicker).not.toHaveTextContent('ACP:')
     fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
-    fireEvent.click(await screen.findByText('Model Two'))
+    clickMenuOption('Model Two')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
     mockSetConfigOption.mockClear()
     expect(screen.getAllByRole('button', { name: /^Agent$/ })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
-    fireEvent.click(await screen.findByText('Plan'))
+    clickMenuOption('Plan')
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
+  }, 10000)
+
+  it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    let resolveConfig!: () => void
+    mockSetConfigOption.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfig = resolve
+        })
+    )
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    clickMenuOption('Model Two')
+
+    const pendingChip = await screen.findByRole('button', { name: 'Select model: Model Two' })
+    expect(pendingChip).toHaveAttribute('aria-busy', 'true')
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+
+    await act(async () => {
+      resolveConfig()
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Select model: Model Two' })).not.toHaveAttribute(
+        'aria-busy'
+      )
+    })
   }, 10000)
 
   it('uses native ACP session models when configOptions has no model option', async () => {
@@ -512,7 +690,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Select model: kiro/Claude Opus 4.8' })
     )
-    fireEvent.click(await screen.findByText('OpenRouter/GPT-5.5'))
+    clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
@@ -550,7 +728,7 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('xAI/Grok 4.3'))
+    clickMenuOption('xAI/Grok 4.3')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'grok-43')
   })
 
@@ -659,6 +837,181 @@ describe('AgentLauncher ACP new thread', () => {
           command: 'C:/tools/legacy.exe',
           args: ['acp']
         })
+      )
+    )
+  })
+
+  it('paints cached model options while preparing (cold agent, cache hit)', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparingChatKeys = { [key]: true }
+    acpStateRef.current.agentOptionsCache = {
+      [defaultAgent.configId]: {
+        models: null,
+        modes: {
+          currentModeId: 'agent',
+          availableModes: [
+            { id: 'agent', name: 'Agent' },
+            { id: 'plan', name: 'Plan' }
+          ]
+        },
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'cached-m1',
+            options: [
+              { value: 'cached-m1', name: 'Cached Model' },
+              { value: 'cached-m2', name: 'Cached Two' }
+            ]
+          }
+        ],
+        updatedAt: Date.now()
+      }
+    }
+    renderLauncher()
+
+    expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
+    const modelChip = await screen.findByRole('button', { name: 'Select model: Cached Model' })
+    expect(modelChip).toBeEnabled()
+    expect(
+      screen.queryByRole('button', { name: 'Select model: Loading model…' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Connecting/)).not.toBeInTheDocument()
+    const modeChip = screen.getByRole('button', { name: /^Agent$/ })
+    expect(modeChip).toBeEnabled()
+
+    fireEvent.click(modelChip)
+    clickMenuOption('Cached Two')
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Cached Two' })
+    ).toBeInTheDocument()
+  })
+
+  it('still shows Loading model when cache has modes only (no model options)', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparingChatKeys = { [key]: true }
+    acpStateRef.current.agentOptionsCache = {
+      [defaultAgent.configId]: {
+        models: null,
+        modes: {
+          currentModeId: 'agent',
+          availableModes: [{ id: 'agent', name: 'Agent' }]
+        },
+        configOptions: [],
+        updatedAt: Date.now()
+      }
+    }
+    renderLauncher()
+
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Loading model…' })
+    ).toBeInTheDocument()
+  })
+
+  it('keeps Retry reachable when prepare failed but cached models exist', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'timeout',
+        label: 'Session setup timed out',
+        detail: 'session/new timed out after 30s'
+      }
+    }
+    acpStateRef.current.agentOptionsCache = {
+      [defaultAgent.configId]: {
+        models: null,
+        modes: null,
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'cached-m1',
+            options: [{ value: 'cached-m1', name: 'Cached Model' }]
+          }
+        ],
+        updatedAt: Date.now()
+      }
+    }
+    renderLauncher()
+
+    const modelChip = await screen.findByRole('button', {
+      name: 'Select model: Session setup timed out'
+    })
+    expect(modelChip).not.toBeDisabled()
+    fireEvent.click(modelChip)
+    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
+    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+  })
+
+  it('keeps composer usable with loading chip when cold and no cache', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparingChatKeys = { [key]: true }
+    renderLauncher()
+
+    expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Loading model…' })
+    ).toBeInTheDocument()
+  })
+
+  it('retargets the warm pool when the launcher opens', async () => {
+    const defaultAgent = defaultReadyAgent()
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith(defaultAgent.configId)
+    )
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+  })
+
+  it('opens chat instantly while finalizeChatLaunch runs in the background (send-while-cold)', async () => {
+    let resolveFinalize!: (id: string) => void
+    mockFinalizeChatLaunch.mockImplementation(
+      (args: { adoptSession?: (a: string, b: string) => void; placeholderId: string }) =>
+        new Promise<string>((resolve) => {
+          resolveFinalize = (id: string) => {
+            args.adoptSession?.(args.placeholderId, id)
+            resolve(id)
+          }
+        })
+    )
+    renderLauncher()
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello cold' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialUserBlocks: [{ type: 'text', text: 'hello cold' }]
+      })
+    )
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+    expect(screen.getByLabelText('Start agent chat').querySelector('.animate-spin')).toBeNull()
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+
+    await act(async () => {
+      resolveFinalize('session-cold')
+    })
+
+    await waitFor(() =>
+      expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+        'launch-placeholder-1',
+        'session-cold',
+        'pane1'
       )
     )
   })

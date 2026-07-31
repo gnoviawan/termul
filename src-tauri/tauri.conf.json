@@ -6,7 +6,7 @@
 	"build": {
 		"beforeDevCommand": "npx vite --config vite.config.tauri.ts",
 		"devUrl": "http://localhost:5180/tauri-index.html",
-		"beforeBuildCommand": "npx vite build --config vite.config.tauri.ts",
+		"beforeBuildCommand": "npx vite build --config vite.config.web.ts && npx vite build --config vite.config.tauri.ts",
 		"frontendDist": "../dist-tauri"
 	},
 	"app": {

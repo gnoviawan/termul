@@ -780,23 +780,49 @@ impl PtyManager {
         // a) Drop writer first to close PTY input stream cleanly.
         let _ = instance.writer.blocking_lock().take();
 
-        // b) Wait flusher thread to finish naturally (max 2s)
+        // b) Kill the child FIRST and wait briefly for it to exit. Once the
+        //    child exits, the OS closes the PTY slave end and the reader
+        //    thread's blocking `reader.read()` returns Ok(0) (EOF), so it
+        //    exits naturally and the joins below complete fast.
+        //
+        //    The previous order (join reader, THEN kill child) left the reader
+        //    blocked because the child was still alive holding the PTY open.
+        //    Every cleanup hit the 3s join timeout, leaking the detached
+        //    watcher thread spawned by `join_reader_with_timeout` plus the
+        //    stuck reader thread. With N terminals, those leaked threads kept
+        //    the process alive in the task manager and spinning CPU after the
+        //    window was closed (issue #390).
+        if let Some(mut child) = instance.child.blocking_lock().take() {
+            let _ = child.kill();
+            // Best-effort wait: give the child up to ~2s to exit so the PTY
+            // EOF propagates to the reader before we join. If it doesn't exit
+            // (stubborn grandchild / ConPTY edge case), proceed anyway — the
+            // join timeout below is the safety net.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
+        }
+
+        // c) Wait flusher thread to finish naturally (max 2s). It observes the
+        //    reader's done_flag, which is set once the reader exits on EOF.
         if let Some(flusher_handle) = instance.flusher_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(flusher_handle, Duration::from_secs(2));
             }
         }
 
-        // c) Wait reader thread to finish naturally (max 3s)
+        // d) Wait reader thread to finish naturally (max 3s). With the child
+        //    already killed above, the reader should have hit EOF and exited;
+        //    this join is a safety net for slow/edge-case exits.
         if let Some(reader_handle) = instance.reader_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(reader_handle, Duration::from_secs(3));
             }
-        }
-
-        // d) Kill child process
-        if let Some(mut child) = instance.child.blocking_lock().take() {
-            let _ = child.kill();
         }
 
         // e) Drop ConPTY handles last

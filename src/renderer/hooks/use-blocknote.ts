@@ -55,6 +55,8 @@ interface UseBlockNoteResult {
   editor: BlockNoteEditor<any, any, any>
   replaceContent: (markdown: string) => void
   flushPendingContent: () => Promise<void>
+  /** Capture current body markdown without calling onChange (clears debounce). */
+  capturePendingContent: () => Promise<string | null>
   getHeadings: () => TocHeading[]
   scrollToBlock: (blockId: string) => void
 }
@@ -170,19 +172,24 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     [runReplace]
   )
 
-  const flushPendingContent = useCallback(async (): Promise<void> => {
+  const capturePendingContent = useCallback(async (): Promise<string | null> => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current)
       debounceTimerRef.current = null
     }
-    if (isReplacingRef.current) return
+    if (isReplacingRef.current) return null
     try {
-      const markdown = await editor.blocksToMarkdownLossy(editor.document)
-      onChangeRef.current(markdown)
+      return await editor.blocksToMarkdownLossy(editor.document)
     } catch {
-      // Failed to convert to markdown
+      return null
     }
   }, [editor])
+
+  const flushPendingContent = useCallback(async (): Promise<void> => {
+    const markdown = await capturePendingContent()
+    if (markdown === null) return
+    onChangeRef.current(markdown)
+  }, [capturePendingContent])
 
   const getHeadings = useCallback((): TocHeading[] => {
     return editor.document.flatMap((block) => {
@@ -248,5 +255,12 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     [editor]
   )
 
-  return { editor, replaceContent, flushPendingContent, getHeadings, scrollToBlock }
+  return {
+    editor,
+    replaceContent,
+    flushPendingContent,
+    capturePendingContent,
+    getHeadings,
+    scrollToBlock
+  }
 }

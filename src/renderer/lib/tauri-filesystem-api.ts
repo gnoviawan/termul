@@ -24,6 +24,7 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+import { webServerFilesystem } from './web-server-api'
 
 // Names that are commonly git-ignored. Entries matching these are still shown in
 // the file tree but rendered dimmed (and skipped during recursive walks for perf).
@@ -189,6 +190,11 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
 export function createTauriFilesystemApi(): FilesystemApi {
   return {
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
+      // Web/remote mode: route through the same-origin server (Story: Web/
+      // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
+      if (!isTauriContext()) {
+        return webServerFilesystem.readDirectory(dirPath)
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
@@ -609,6 +615,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -618,6 +628,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createDirectory(dirPath)
+      }
       try {
         await mkdir(dirPath, { recursive: true })
         return { success: true, data: undefined }

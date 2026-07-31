@@ -9,6 +9,7 @@ node_modules/
 dist/
 dist-ssr/
 dist-tauri/
+dist-web/
 out/
 *.tsbuildinfo
 
@@ -80,6 +81,7 @@ VERIFICATION_CHECKLIST.md
 .github/copilot-instructions.md
 /.pi
 /.pi-lens
+/.pi-subagents
 /.agents
 .pi-automator-active
 
@@ -92,3 +94,4 @@ VERIFICATION_CHECKLIST.md
 /agent/
 /video/
 /compositions/
+/plans

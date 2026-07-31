@@ -788,7 +788,7 @@ pub async fn browser_tab_create(
     bounds: BrowserBounds,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<BrowserTabInfo>, String> {
-    match browser_manager.create(tab_id, url, bounds) {
+    match browser_manager.create(tab_id, url, bounds).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
     }
@@ -2985,39 +2985,115 @@ pub async fn sftp_create_file(
 
 // ==================== Remote Server Commands ====================
 
-/// Start the remote terminal server
+/// Start the desktop-hosted shared-live web server.
+///
+/// Shares the desktop's live `AcpManager` sessions with a phone/browser client.
+///
+/// Starts the in-process localhost web server (the same one the standalone
+/// `termul-server` binary uses), then brings up a built-in cloudflared
+/// quick-tunnel so the phone can reach it on any network — the popover renders
+/// the ephemeral `https://*.trycloudflare.com` URL as a QR. The `bind_mode`
+/// param is accepted for API stability but ignored (the tunnel targets
+/// localhost). App auth / token-gating land in Epic 2.
 #[tauri::command]
 pub async fn remote_server_start(
-    app_handle: AppHandle,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let bind_mode = bind_mode
-        .as_deref()
-        .and_then(remote::server::RemoteBindMode::parse)
-        .unwrap_or(remote::server::RemoteBindMode::Localhost);
-    match remote_state
-        .start(pty_manager.inner().clone(), app_handle, bind_mode)
-        .await
-    {
-        Ok(status) => Ok(IpcResult::success(status)),
+    // Default to localhost only when the caller omits the bind mode; an
+    // explicit-but-unrecognized value (e.g. a typo of "all") is an error — do
+    // not silently downgrade to localhost (the phone would silently fail to
+    // connect).
+    let bind_mode = match bind_mode.as_deref() {
+        None => remote::RemoteBindMode::Localhost,
+        Some(s) => remote::RemoteBindMode::parse(s).ok_or_else(|| {
+            format!(
+                "invalid bind mode '{s}': use 'localhost' or 'all'",
+            )
+        })?,
+    };
+    let started = remote_state
+        .start(
+            acp_manager.inner().clone(),
+            ws_relay.inner().clone(),
+            project_registry.inner().clone(),
+            chat_history_cache.inner().clone(),
+            bind_mode,
+        )
+        .await;
+    match started {
+        Ok(status) => {
+            // Server is up on localhost. Bring up the cloudflared quick-tunnel so
+            // the phone can reach it on any network — the QR encodes the resulting
+            // ephemeral HTTPS URL (edge TLS via cloudflared; app auth is Epic 2).
+            // On tunnel failure, drain the server and surface the error so the
+            // popover never holds a localhost-only server + a stale toggle.
+            let port = match status.port {
+                Some(p) => p,
+                None => {
+                    return Ok(IpcResult::error(
+                        "started remote server reported no port".to_string(),
+                        "REMOTE_START_FAILED",
+                    ))
+                }
+            };
+            match remote::cloudflared::start_quick_tunnel(port).await {
+                Ok(tunnel) => {
+                    // Clone the URL before attach consumes it, so the background
+                    // probe can log reachability without blocking the QR.
+                    let probe_url = tunnel.url.clone();
+                    if let Err(e) = remote_state.attach_tunnel(tunnel.url, tunnel.child) {
+                        // Server stopped between start and attach; attach already
+                        // killed the orphan child. Surface the error.
+                        return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
+                    }
+                    // Best-effort reachability probe in the background — logs
+                    // whether the edge routes to the origin. Non-blocking so the
+                    // QR appears immediately; never hides the QR on probe timeout
+                    // (a slow edge / cold start must not block the connect UI).
+                    tokio::spawn(remote::cloudflared::log_tunnel_reachability(probe_url));
+                    Ok(IpcResult::success(remote_state.status()))
+                }
+                Err(e) => {
+                    let _ = remote_state.stop().await;
+                    Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"))
+                }
+            }
+        }
         Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
     }
 }
 
-/// Stop the remote terminal server
+/// Stop the desktop-hosted web server.
+///
+/// Signals graceful shutdown to the serve task. The desktop's live agents are
+/// NOT killed — they survive a shared-live toggle-off. The in-memory project
+/// registry is cleared (it lives only while the server runs — Epic-4 bridge).
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    match remote_state.stop().await {
+    let result = remote_state.stop().await;
+    // Clear the in-memory project mirror so a stale list does not linger after
+    // the server is off (the registry is renderer-fed; it is repopulated on the
+    // next server start via `remote_sync_projects`).
+    project_registry.clear();
+    // Clear the chat-history cache too (mirrors the registry — it lives only
+    // while the server runs and is re-fed on the next start).
+    chat_history_cache.clear();
+    match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
     }
 }
 
-/// Get remote server status
+/// Get the desktop-hosted web server status.
 #[tauri::command]
 pub async fn remote_server_status(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
@@ -3025,16 +3101,82 @@ pub async fn remote_server_status(
     Ok(IpcResult::success(remote_state.status()))
 }
 
-/// Publish the renderer's project → terminal tree to the remote server.
-///
-/// The web client reads this tree from `GET /api/projects`. The renderer should
-/// call this whenever its projects/terminals change (and once on server start).
+/// Push the desktop renderer's current project list into the in-memory
+/// `ProjectRegistry` (Epic-4 bridge) and broadcast a `projects_changed` WS event
+/// so connected web clients refetch `GET /projects`. Called by the renderer
+/// on server-start success + on every project-store mutation while the server
+/// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProjectsPayload {
+    pub projects: Vec<crate::web::ProjectSummary>,
+    #[serde(default)]
+    pub active_project_id: Option<String>,
+}
+
 #[tauri::command]
-pub async fn remote_publish_projects(
-    tree: remote::ProjectTree,
+pub async fn remote_sync_projects(
+    payload: SyncProjectsPayload,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    project_registry.set(payload.projects, payload.active_project_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.active_project_id.as_deref());
+    Ok(IpcResult::success(()))
+}
+
+/// Push the desktop renderer's chat-history index + payloads into the
+/// in-memory `ChatHistoryCache` (Epic-4 bridge) and broadcast a
+/// `chat_history_changed` WS event so connected web clients refetch the
+/// session index. Called by the renderer on server-start success + on every
+/// session-index/payload mutation while the server runs. No secrets,
+/// permission tickets, or auth data cross the wire (redact-by-omission — the
+/// cache holds only transcript metadata + messages).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncChatHistoryPayload {
+    /// The full session index (wire `PersistedSessionSummary[]` shape).
+    /// `None` on a payload-only sync (the `useAcpHistorySync` hook owns the
+    /// index push; `persistSession` pushes only its payload to avoid a
+    /// double `set_index` + double broadcast per mutation).
+    #[serde(default)]
+    pub index: Option<Vec<crate::acp::SessionIndexEntry>>,
+    /// Monotonic revision stamped by the renderer on each index push
+    /// (`useAcpHistorySync` increments it; the seed in `RemoteAccessPopover`
+    /// omits it → `0`). `set_index` rejects a push whose revision is strictly
+    /// lower than the current one so a delayed older index cannot replace a
+    /// newer snapshot. Absent on a payload-only sync (unused).
+    #[serde(default)]
+    pub revision: Option<u64>,
+    /// Optional per-session payloads (`{ metadata, messages }`) — pushed lazily
+    /// (only sessions the renderer has in memory). Omitted on an index-only sync.
+    #[serde(default)]
+    pub payloads: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[tauri::command]
+pub async fn remote_sync_chat_history(
+    payload: SyncChatHistoryPayload,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<()>, String> {
-    remote_state.registry.replace(tree);
+    // Defense in depth: the TS caller already gates on `running`, but the
+    // server may have just been stopped (`remote_server_stop` clears the
+    // cache). Early-return so a late push does not repopulate a cache that
+    // was just cleared.
+    if !remote_state.status().running {
+        return Ok(IpcResult::success(()));
+    }
+    if let Some(index) = payload.index {
+        chat_history_cache.set_index(payload.revision.unwrap_or(0), index);
+    }
+    if let Some(payloads) = payload.payloads {
+        for (id, p) in payloads {
+            chat_history_cache.set_payload(&id, p);
+        }
+    }
+    crate::web::broadcast_chat_history_changed(ws_relay.inner());
     Ok(IpcResult::success(()))
 }
 

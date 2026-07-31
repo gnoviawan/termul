@@ -23,8 +23,13 @@ function thought(id: string, text: string, streaming: boolean): ChatMessage {
 
 describe('ThoughtGroup', () => {
   it('shows Thinking… and expanded content while streaming at live tail', async () => {
-    render(<ThoughtGroup messages={[thought('t1', 'Checking the codebase…', true)]} isLiveTail />)
+    const { container } = render(
+      <ThoughtGroup messages={[thought('t1', 'Checking the codebase…', true)]} isLiveTail />
+    )
     expect(screen.getByText(/Thinking/)).toBeInTheDocument()
+    const shimmer = container.querySelector('.t-shimmer')
+    expect(shimmer).toBeInTheDocument()
+    expect(shimmer).toHaveAttribute('data-text', 'Thinking…')
     await waitFor(() => {
       expect(screen.getByText('Checking the codebase…')).toBeInTheDocument()
     })

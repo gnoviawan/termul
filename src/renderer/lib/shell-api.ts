@@ -11,6 +11,8 @@
 
 import type { DetectedShells, IpcResult, ShellApi } from '@shared/types/ipc.types'
 import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import { isTauriContext } from './tauri-runtime'
+import { webServerShell } from './web-server-api'
 
 /**
  * IPC Command name for shell detection
@@ -46,6 +48,12 @@ let shellCachePromise: Promise<IpcResult<DetectedShells>> | null = null
 function createTauriShellApi(): ShellApi {
   return {
     async getAvailableShells(): Promise<IpcResult<DetectedShells>> {
+      // Web/remote mode: route through the same-origin server (Story: Web/
+      // remote project creation). Desktop stays on the Tauri IPC path with
+      // its frontend cache + dedupe.
+      if (!isTauriContext()) {
+        return webServerShell.getAvailableShells()
+      }
       // Return cached result if available
       if (cachedShells) {
         return cachedShells

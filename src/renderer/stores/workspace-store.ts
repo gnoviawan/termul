@@ -182,6 +182,11 @@ export interface WorkspaceState {
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
   addAgentChatTab: (sessionId: string, targetPaneId?: string) => void
+  /**
+   * Swap a launch-placeholder chat tab to the real ACP session id without
+   * leaving a duplicate tab behind.
+   */
+  remapAgentChatSession: (fromSessionId: string, toSessionId: string, targetPaneId?: string) => void
   removeTab: (tabId: string) => void
   getNextTabId: (direction: 1 | -1) => string | null
 }
@@ -199,7 +204,7 @@ function editorTabId(filePath: string): string {
 }
 
 function agentChatTabId(sessionId: string): string {
-  return 'chat-' + sessionId
+  return `chat-${sessionId}`
 }
 
 function resolveFullscreenPaneId(root: PaneNode, fullscreenPaneId: string | null): string | null {
@@ -836,6 +841,47 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
       get().addTabToPane(paneId, tab)
+    },
+
+    remapAgentChatSession: (fromSessionId, toSessionId, targetPaneId?: string): void => {
+      if (fromSessionId === toSessionId) {
+        get().addAgentChatTab(toSessionId, targetPaneId)
+        return
+      }
+      const fromId = agentChatTabId(fromSessionId)
+      const toId = agentChatTabId(toSessionId)
+      const { root, agentLauncherPaneId } = get()
+      const pane = findPaneContainingTab(root, fromId)
+      if (!pane) {
+        get().addAgentChatTab(toSessionId, targetPaneId)
+        return
+      }
+      const { fullscreenPaneId } = get()
+      const nextRoot = updateLeaf(root, pane.id, (leaf) => {
+        const tabs = leaf.tabs.map((tab) => {
+          if (tab.id !== fromId || tab.type !== 'agent-chat') return tab
+          return { type: 'agent-chat' as const, id: toId, sessionId: toSessionId }
+        })
+        // Drop a pre-existing destination tab to avoid duplicates after remap.
+        const deduped = tabs.filter(
+          (tab, index, all) =>
+            !(
+              tab.type === 'agent-chat' &&
+              tab.id === toId &&
+              all.findIndex((t) => t.id === toId) !== index
+            )
+        )
+        return {
+          ...leaf,
+          tabs: deduped,
+          activeTabId: leaf.activeTabId === fromId ? toId : leaf.activeTabId
+        }
+      })
+      set({
+        root: nextRoot,
+        activePaneId: resolveActivePaneId(fullscreenPaneId, pane.id),
+        agentLauncherPaneId: agentLauncherPaneId === pane.id ? null : agentLauncherPaneId
+      })
     },
 
     removeTab: (tabId: string): void => {

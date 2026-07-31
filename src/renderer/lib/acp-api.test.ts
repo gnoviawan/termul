@@ -6,6 +6,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()
 }))
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => true),
+  cleanupTauriListener: vi.fn()
+}))
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -19,10 +23,13 @@ import {
   acpSpawnAgent,
   onAcpEvent
 } from './acp-api'
+import { _resetAcpTransportForTests, _setAcpTransportForTests } from './acp-transport'
 
-describe('acp-api command wrappers', () => {
+describe('acp-api command wrappers (Tauri transport)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Force a fresh Tauri transport so invoke mocks are used.
+    _resetAcpTransportForTests(null)
   })
 
   it('acpSpawnAgent passes the config arg', async () => {
@@ -95,9 +102,10 @@ describe('acp-api command wrappers', () => {
   })
 })
 
-describe('onAcpEvent subscription', () => {
+describe('onAcpEvent subscription (Tauri transport)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _resetAcpTransportForTests(null)
   })
 
   it('subscribes to the named event and forwards payloads', async () => {
@@ -129,5 +137,45 @@ describe('onAcpEvent subscription', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(unlisten).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('acp-api web path (injected WS transport)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('delegates sendPrompt to the injected transport', async () => {
+    const sendPrompt = vi.fn().mockResolvedValue('end_turn')
+    _setAcpTransportForTests({
+      installRegistryBinary: vi.fn(),
+      probeRuntime: vi.fn(),
+      fetchRegistrySnapshot: vi.fn(),
+      spawnAgent: vi.fn(),
+      killAgent: vi.fn(),
+      listAgents: vi.fn(),
+      newSession: vi.fn(),
+      loadSession: vi.fn(),
+      resumeSession: vi.fn(),
+      closeSession: vi.fn(),
+      listSessions: vi.fn(),
+      sendPrompt,
+      sendPromptBlocks: vi.fn(),
+      cancelPrompt: vi.fn(),
+      setConfigOption: vi.fn(),
+      setMode: vi.fn(),
+      setModel: vi.fn(),
+      respondPermission: vi.fn(),
+      authenticate: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      connect: vi.fn(),
+      dispose: vi.fn()
+    } as never)
+
+    const reason = await acpSendPrompt('a1', 's1', 'hi')
+    expect(reason).toBe('end_turn')
+    expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi')
+    expect(invoke).not.toHaveBeenCalled()
+    _resetAcpTransportForTests(null)
   })
 })

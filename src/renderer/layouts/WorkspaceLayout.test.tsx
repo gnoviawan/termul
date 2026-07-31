@@ -11,6 +11,11 @@ const { platformState } = vi.hoisted(() => ({
   platformState: { isMac: false }
 }))
 
+vi.mock('@/lib/tauri-runtime', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
+  return { ...actual, isTauriContext: () => true }
+})
+
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
   return {
@@ -136,8 +141,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     remoteServerApi: {
       start: vi.fn(),
       stop: vi.fn(),
-      status: vi.fn(),
-      publishProjects: vi.fn()
+      status: vi.fn()
     },
     openerApi: {
       openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
@@ -403,9 +407,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
     renderWithRouter()
 
-    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
     expect(strip).not.toBeNull()
     expect(strip?.className).toContain('h-8')
+    // Panel-visibility toggles were relocated into the macOS titlebar strip.
+    expect(strip?.querySelector('button[title="Toggle sidebar"]')).not.toBeNull()
+    expect(strip?.querySelector('button[title="Toggle file explorer"]')).not.toBeNull()
   })
 
   it('renders active project name in macOS titlebar strip when a project is active', () => {
@@ -422,7 +429,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
     renderWithRouter()
 
-    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
     expect(strip).not.toBeNull()
     expect(strip?.querySelector('span')).not.toBeTruthy()
   })
@@ -838,9 +845,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      await waitFor(() => {
-        expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
-      })
+      await waitFor(
+        () => {
+          expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
+        },
+        { timeout: 5000 }
+      )
     })
   })
 

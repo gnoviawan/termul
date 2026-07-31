@@ -8,6 +8,9 @@
  * The store is the runtime source of truth; this is a mirror. Payload writes are
  * debounced so streaming doesn't thrash the disk.
  */
+
+import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
+import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
@@ -40,6 +43,42 @@ export interface SessionIndexEntry {
 export interface SessionPayload {
   metadata: SessionIndexEntry
   messages: ChatMessage[]
+}
+
+/**
+ * Convert the renderer's local `SessionIndexEntry[]` to the wire
+ * `PersistedSessionSummary[]` shape for the `syncChatHistory` push (Epic-4
+ * bridge). The renderer is the source of truth; this fills the server-side-only
+ * fields (`storageKey`, `toolCount`, `lastSeq`) with sensible defaults and
+ * derives `resumeEligible` from the presence of a stable agent config id.
+ */
+export function toPersistedSessionSummaries(
+  entries: SessionIndexEntry[]
+): PersistedSessionSummary[] {
+  return entries.map((entry) => ({
+    storageKey: entry.id,
+    sessionId: entry.id,
+    stableAgentNamespace: entry.agentConfigId ? `config:${entry.agentConfigId}` : null,
+    runtimeAgentId: entry.agentId || undefined,
+    projectId: entry.projectId || undefined,
+    cwd: entry.cwd,
+    title: entry.title,
+    createdAt: entry.createdAt,
+    lastActivityAt: entry.lastActivityAt,
+    status: entry.status === 'initializing' ? 'active' : entry.status,
+    messageCount: entry.messageCount,
+    toolCount: 0,
+    lastSeq: 0,
+    // A session is a reopen CANDIDATE when it has a stable agent config id OR
+    // a runtime agent id (ad-hoc / `agent-safe:*` agents without a config).
+    // The actual capability check still gates the reopen in
+    // `openHistorySession`/`openDiscoveredSession`, and
+    // `try_reopen_session_for_switch` falls back to the unfiltered lookup when
+    // the current agent's namespace can't be resolved. `stableAgentNamespace`
+    // stays `config:<configId>` or `null` (the backend-computed `agent-safe:*`
+    // namespace sync is deferred — noted in the commit message, not here).
+    resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
+  }))
 }
 
 /** Derive a chat title from the first user message; fallback to the provided title. */
@@ -106,6 +145,25 @@ export function scopeSessionIndex(
 }
 
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
+  const transport = getAcpTransport()
+  if (transport.historyMode?.() === 'server' && transport.listPersistedSessions) {
+    const summaries = await transport.listPersistedSessions()
+    return summaries.map((entry) => ({
+      id: entry.sessionId,
+      agentId: entry.runtimeAgentId ?? '',
+      agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
+        ? entry.stableAgentNamespace.slice('config:'.length)
+        : undefined,
+      title: entry.title ?? 'Untitled Chat',
+      cwd: entry.cwd,
+      projectId: entry.projectId ?? '',
+      createdAt: entry.createdAt,
+      lastActivityAt: entry.lastActivityAt,
+      messageCount: entry.messageCount,
+      status: entry.status
+    }))
+  }
+  if (transport.historyMode?.() === 'live_only') return []
   const res = await persistenceApi.read<SessionIndexEntry[]>(SESSION_INDEX_KEY)
   if (res.success && Array.isArray(res.data)) return res.data
   return []
@@ -180,19 +238,63 @@ export function _resetPendingIndexWriteTrackerForTesting(): void {
 }
 
 export async function saveSessionIndex(entries: SessionIndexEntry[]): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const res = await persistenceApi.write(SESSION_INDEX_KEY, entries)
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist session index')
   }
 }
 
+/**
+ * Module-level payload cache so scroll-up rehydrations don't re-read disk.
+ * Populated by `loadSessionPayload` (read-through) and `saveSessionPayload`
+ * (write-through). Holds the **full** transcript — the live React window is
+ * a trimmed projection of this. `persistSession` merges the cache with the
+ * live window so trimming never prunes the persisted copy.
+ */
+const payloadCache = new Map<string, SessionPayload>()
+
+/** Read the cached full payload (no disk read). Undefined when not cached. */
+export function getCachedSessionPayload(id: string): SessionPayload | undefined {
+  return payloadCache.get(id)
+}
+
+/** Replace the cached full payload (used by `persistSession` after merge). */
+export function setCachedSessionPayload(id: string, payload: SessionPayload): void {
+  payloadCache.set(id, payload)
+}
+
 export async function loadSessionPayload(id: string): Promise<SessionPayload | null> {
+  const transport = getAcpTransport()
+  const mode = transport.historyMode?.()
+  // Server mode: this process is not the sole writer (other clients/hosts can
+  // update the server cache). Always re-fetch so transcripts written elsewhere
+  // are visible; refresh the local cache with the latest payload.
+  if (mode === 'server' && transport.getSessionPayload) {
+    const payload = await transport.getSessionPayload(id)
+    if (payload) payloadCache.set(id, payload)
+    return payload
+  }
+  // Desktop/file modes: this process is the sole writer — cache-first avoids
+  // re-reading disk on every scroll-up rehydration.
+  const cached = payloadCache.get(id)
+  if (cached) return cached
+  if (mode === 'live_only') return null
   const res = await persistenceApi.read<SessionPayload>(sessionPayloadKey(id))
-  if (res.success && res.data) return res.data
+  if (res.success && res.data) {
+    payloadCache.set(id, res.data)
+    return res.data
+  }
   return null
 }
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
+  // Update the cache immediately so the merge in `persistSession` always sees
+  // the latest full payload, even before the debounced disk write settles.
+  payloadCache.set(id, payload)
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   // Debounced: coalesces streaming updates so disk isn't thrashed.
   const res = await persistenceApi.writeDebounced(sessionPayloadKey(id), payload)
   if (!res.success) {
@@ -201,10 +303,18 @@ export async function saveSessionPayload(id: string, payload: SessionPayload): P
 }
 
 export async function deleteSessionPayload(id: string): Promise<void> {
+  payloadCache.delete(id)
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const res = await persistenceApi.delete(sessionPayloadKey(id))
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to delete session payload')
   }
+}
+
+/** Test-only: clear the payload cache between tests to avoid cross-test leakage. */
+export function _clearPayloadCacheForTesting(): void {
+  payloadCache.clear()
 }
 
 /**
@@ -214,6 +324,8 @@ export async function deleteSessionPayload(id: string): Promise<void> {
  * it runs exactly once. Safe to call on every mount.
  */
 export async function runHistoryWipeMigration(): Promise<void> {
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   const flagRes = await persistenceApi.read<boolean>(WIPE_MIGRATION_KEY)
   if (flagRes.success && flagRes.data === true) return
   // Fail closed: only proceed when the wipe flag is explicitly missing. A

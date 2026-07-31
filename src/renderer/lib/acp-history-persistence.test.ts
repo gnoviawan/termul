@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const mockTransport = {
+  historyMode: vi.fn(() => 'tauri_store' as const),
+  listPersistedSessions: vi.fn(),
+  openPersistedSession: vi.fn(),
+  getSessionPayload: vi.fn()
+}
+
+vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
+
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: vi.fn(),
@@ -16,12 +25,14 @@ import {
   deriveTitle,
   groupSessionsByRecency,
   loadSessionIndex,
+  loadSessionPayload,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
   type SessionIndexEntry,
   saveSessionPayload,
   scopeSessionIndex,
   sessionPayloadKey,
+  toPersistedSessionSummaries,
   trackPendingIndexWrite,
   WIPE_MIGRATION_KEY,
   waitForPendingSessionIndexWrite
@@ -80,7 +91,36 @@ describe('groupSessionsByRecency', () => {
 })
 
 describe('persistence I/O', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+  })
+
+  it('loads safe summaries from the standalone server provider', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    mockTransport.listPersistedSessions.mockResolvedValue([
+      {
+        storageKey: 'opaque',
+        sessionId: 's-server',
+        stableAgentNamespace: 'config:cfg-1',
+        runtimeAgentId: 'runtime-old',
+        projectId: 'p1',
+        cwd: '/srv/project',
+        title: 'Server chat',
+        createdAt: 1,
+        lastActivityAt: 2,
+        status: 'closed',
+        messageCount: 3,
+        toolCount: 1,
+        lastSeq: 7,
+        resumeEligible: true
+      }
+    ])
+    await expect(loadSessionIndex()).resolves.toEqual([
+      expect.objectContaining({ id: 's-server', agentConfigId: 'cfg-1', title: 'Server chat' })
+    ])
+    expect(persistenceApi.read).not.toHaveBeenCalled()
+  })
 
   it('loadSessionIndex returns [] on KEY_NOT_FOUND', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -136,7 +176,10 @@ describe('persistence I/O', () => {
 })
 
 describe('runHistoryWipeMigration', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+  })
 
   it('is a no-op when the v2 flag is already true', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -228,6 +271,7 @@ describe('runHistoryWipeMigration', () => {
 describe('trackPendingIndexWrite / waitForPendingSessionIndexWrite', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
     _resetPendingIndexWriteTrackerForTesting()
   })
 
@@ -401,5 +445,122 @@ describe('scopeSessionIndex', () => {
   it('returns [] when no entry matches projectId at all', () => {
     const entries = [entry('s1', 'p2', '/a')]
     expect(scopeSessionIndex(entries, 'p1', '/a')).toEqual([])
+  })
+})
+
+describe('loadSessionPayload — server branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+  })
+
+  it('fetches the full transcript via getSessionPayload (not messages: [])', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    const fullPayload = {
+      metadata: {
+        id: 's-9',
+        agentId: 'a',
+        title: 'Chat',
+        cwd: '/c',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        status: 'closed' as const
+      },
+      messages: [msg('user', 'hi'), msg('agent', 'hello')]
+    }
+    mockTransport.getSessionPayload.mockResolvedValue(fullPayload)
+    const result = await loadSessionPayload('s-9')
+    expect(mockTransport.getSessionPayload).toHaveBeenCalledWith('s-9')
+    expect(mockTransport.openPersistedSession).not.toHaveBeenCalled()
+    expect(result).toEqual(fullPayload)
+    expect(result?.messages).toHaveLength(2)
+  })
+
+  it('returns null when getSessionPayload returns null (not_found)', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    mockTransport.getSessionPayload.mockResolvedValue(null)
+    expect(await loadSessionPayload('missing')).toBeNull()
+  })
+})
+
+describe('toPersistedSessionSummaries', () => {
+  it('converts renderer SessionIndexEntry[] to wire PersistedSessionSummary[]', () => {
+    const entries: SessionIndexEntry[] = [
+      {
+        id: 's-1',
+        agentId: 'a1',
+        agentConfigId: 'cfg-1',
+        title: 'Chat',
+        cwd: '/c',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        status: 'active'
+      }
+    ]
+    const summaries = toPersistedSessionSummaries(entries)
+    expect(summaries).toHaveLength(1)
+    expect(summaries[0]).toEqual({
+      storageKey: 's-1',
+      sessionId: 's-1',
+      stableAgentNamespace: 'config:cfg-1',
+      runtimeAgentId: 'a1',
+      projectId: 'p1',
+      cwd: '/c',
+      title: 'Chat',
+      createdAt: 1,
+      lastActivityAt: 2,
+      status: 'active',
+      messageCount: 3,
+      toolCount: 0,
+      lastSeq: 0,
+      resumeEligible: true
+    })
+  })
+
+  it('maps initializing status to active and derives resumeEligible from agentConfigId', () => {
+    const summaries = toPersistedSessionSummaries([
+      {
+        id: 's-2',
+        agentId: '',
+        title: 'T',
+        cwd: '/c',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 0,
+        status: 'initializing'
+      }
+    ])
+    expect(summaries[0].status).toBe('active')
+    expect(summaries[0].resumeEligible).toBe(false)
+    expect(summaries[0].stableAgentNamespace).toBeNull()
+    expect(summaries[0].runtimeAgentId).toBeUndefined()
+  })
+
+  it('marks a config-less agent with a runtime agentId as resumeEligible', () => {
+    // Ad-hoc / `agent-safe:*` agents have no `agentConfigId` but DO carry a
+    // runtime agentId — they must be reopen candidates (the capability check
+    // still gates the actual reopen). `stableAgentNamespace` stays null
+    // (the backend-computed namespace sync is deferred).
+    const summaries = toPersistedSessionSummaries([
+      {
+        id: 's-adhoc',
+        agentId: 'agent-runtime-1',
+        title: 'Ad-hoc',
+        cwd: '/c',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 0,
+        status: 'active'
+      }
+    ])
+    expect(summaries[0].resumeEligible).toBe(true)
+    expect(summaries[0].stableAgentNamespace).toBeNull()
+    expect(summaries[0].runtimeAgentId).toBe('agent-runtime-1')
   })
 })

@@ -2,19 +2,20 @@
  * ACP (Agent Client Protocol) renderer facade.
  *
  * This is the ONLY module in the renderer that talks to the P0 ACP backend
- * (Tauri commands `acp_*` and events `acp:*`). Components and the acp-store go
- * through here.
+ * (Tauri commands `acp_*` / events `acp:*`, or the web WS relay). Components
+ * and the acp-store go through here.
  *
- * IMPORTANT: the ACP Tauri commands return a raw `Result<T, String>` — on the
- * JS side `invoke()` RESOLVES with `T` or REJECTS (throws) with the error
- * string. This is unlike the browser/terminal APIs which return an
- * `IpcResult<T>` envelope. The wrappers below surface the thrown error as-is;
- * callers (the store) normalize it (toast, etc.).
+ * Transport selection (Story 1.6): `getAcpTransport()` picks Tauri IPC when
+ * `isTauriContext()` is true, otherwise the multiplexed WS client. Public
+ * method names and TypeScript signatures are unchanged.
+ *
+ * IMPORTANT: ACP commands surface failures by throwing (Tauri `Result` Err
+ * string, or `AcpTransportError` from WS `{ok:false,err}`). Callers (the store)
+ * normalize it (toast, etc.).
  */
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+
+import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
-import { isTauriContext } from '@/lib/tauri-runtime'
 
 // --- Identifiers -----------------------------------------------------------
 
@@ -79,6 +80,13 @@ export interface SessionConfigOption {
   type: string
   currentValue: string
   options: SessionConfigOptionValue[]
+}
+
+/** Option snapshot returned by ACP session/load and session/resume. */
+export interface SessionReopenOutcome {
+  modes?: SessionModeState
+  models?: SessionModelState
+  configOptions?: SessionConfigOption[]
 }
 
 export interface AgentCapabilities {
@@ -213,6 +221,8 @@ export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 export type McpServer = McpServerConfig
 
 export interface AgentConfig {
+  /** Stable configured-agent identity used for standalone durable history matching. */
+  configId?: string
   name: string
   command: string
   args: string[]
@@ -275,6 +285,13 @@ export interface SessionCreatedEvent {
   models?: SessionModelState | null
   configOptions?: SessionConfigOption[] | null
 }
+export interface UserPromptEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  turnId?: string
+  content: ContentBlock[]
+}
+
 export interface MessageChunkEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -323,8 +340,20 @@ export interface PromptCompleteEvent {
   agentId: AgentId
   sessionId: SessionId
   stopReason: StopReason
+  /** Story 1.8 T3.2 (FR11): client turn-id echoed back so `seenTurnIds` dedup
+   * fires (no duplicate completion on reconnect replay). Absent for desktop /
+   * older clients (dedup is a no-op). */
+  turnId?: string
 }
 export interface AgentErrorEvent {
+  agentId: AgentId
+  sessionId?: SessionId | null
+  message: string
+}
+/** Story 1.9 FR26: the agent subprocess crashed mid-turn (a typed event
+ * distinct from `agent_error` (non-fatal) + `agent_disconnected` (always)).
+ * `acp-store` sets `status: 'error'` + the UI shows a manual-restart action. */
+export interface AgentCrashedEvent {
   agentId: AgentId
   sessionId?: SessionId | null
   message: string
@@ -343,9 +372,34 @@ export interface SessionInfoUpdateEvent {
   title?: string | null
 }
 
+export interface UsageCost {
+  amount: number
+  currency: string
+}
+
+export interface UsageUpdateEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  used: number
+  size: number
+  cost?: UsageCost | null
+}
+
+/** Agent-reported context window state for a session. */
+export interface SessionUsage {
+  used: number
+  size: number
+  /** First `used` snapshot for this session — static agent bootstrap prefix. */
+  baselineUsed: number
+  cost?: UsageCost
+  updatedAt: number
+  source: 'reported'
+}
+
 export const ACP_EVENTS = {
   agentSpawned: 'acp:agent_spawned',
   sessionCreated: 'acp:session_created',
+  userPrompt: 'acp:user_prompt',
   messageChunk: 'acp:message_chunk',
   toolCall: 'acp:tool_call',
   toolCallUpdate: 'acp:tool_call_update',
@@ -356,9 +410,11 @@ export const ACP_EVENTS = {
   permissionRequest: 'acp:permission_request',
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
+  agentCrashed: 'acp:agent_crashed',
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
-  sessionInfoUpdate: 'acp:session_info_update'
+  sessionInfoUpdate: 'acp:session_info_update',
+  usageUpdate: 'acp:usage_update'
 } as const
 
 // --- Command wrappers ------------------------------------------------------
@@ -378,14 +434,11 @@ export interface InstallAcpRegistryBinaryOutcome {
 export async function acpInstallRegistryBinary(
   request: InstallAcpRegistryBinaryRequest
 ): Promise<InstallAcpRegistryBinaryOutcome> {
-  return invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request })
+  return getAcpTransport().installRegistryBinary(request)
 }
 
 export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
-  if (!isTauriContext()) {
-    return { npx: true, uvx: true }
-  }
-  return invoke<AcpRuntimeAvailability>('acp_probe_runtime')
+  return getAcpTransport().probeRuntime()
 }
 
 export interface AcpRegistrySnapshot {
@@ -395,22 +448,19 @@ export interface AcpRegistrySnapshot {
 }
 
 export async function acpFetchRegistrySnapshot(forceRefresh = false): Promise<AcpRegistrySnapshot> {
-  if (!isTauriContext()) {
-    return { agents: [], source: 'empty', fetchedAt: null }
-  }
-  return invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh })
+  return getAcpTransport().fetchRegistrySnapshot(forceRefresh)
 }
 
 export async function acpSpawnAgent(config: AgentConfig): Promise<AgentId> {
-  return invoke<AgentId>('acp_spawn_agent', { config })
+  return getAcpTransport().spawnAgent(config)
 }
 
 export async function acpKillAgent(agentId: AgentId): Promise<void> {
-  await invoke('acp_kill_agent', { agentId })
+  await getAcpTransport().killAgent(agentId)
 }
 
 export async function acpListAgents(): Promise<AgentId[]> {
-  return invoke<AgentId[]>('acp_list_agents')
+  return getAcpTransport().listAgents()
 }
 
 export async function acpNewSession(
@@ -418,27 +468,27 @@ export async function acpNewSession(
   cwd: string,
   mcpServers?: McpServer[]
 ): Promise<NewSessionOutcome> {
-  return invoke<NewSessionOutcome>('acp_new_session', { agentId, cwd, mcpServers })
+  return getAcpTransport().newSession(agentId, cwd, mcpServers)
 }
 
 export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await invoke('acp_load_session', { agentId, sessionId, cwd })
+): Promise<SessionReopenOutcome> {
+  return getAcpTransport().loadSession(agentId, sessionId, cwd)
 }
 
 export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string
-): Promise<void> {
-  await invoke('acp_resume_session', { agentId, sessionId, cwd })
+): Promise<SessionReopenOutcome> {
+  return getAcpTransport().resumeSession(agentId, sessionId, cwd)
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-  await invoke('acp_close_session', { agentId, sessionId })
+  await getAcpTransport().closeSession(agentId, sessionId)
 }
 
 export async function acpListSessions(
@@ -446,7 +496,7 @@ export async function acpListSessions(
   cwd?: string,
   cursor?: string
 ): Promise<ListSessionsResponse> {
-  return invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor })
+  return getAcpTransport().listSessions(agentId, cwd, cursor)
 }
 
 export async function acpSendPrompt(
@@ -454,7 +504,7 @@ export async function acpSendPrompt(
   sessionId: SessionId,
   text: string
 ): Promise<StopReason> {
-  return invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text })
+  return getAcpTransport().sendPrompt(agentId, sessionId, text)
 }
 
 export async function acpSendPromptBlocks(
@@ -462,11 +512,11 @@ export async function acpSendPromptBlocks(
   sessionId: SessionId,
   content: ContentBlock[]
 ): Promise<StopReason> {
-  return invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content })
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
-  await invoke('acp_cancel_prompt', { agentId, sessionId })
+  await getAcpTransport().cancelPrompt(agentId, sessionId)
 }
 
 export async function acpSetConfigOption(
@@ -475,12 +525,7 @@ export async function acpSetConfigOption(
   configId: string,
   valueId: string
 ): Promise<SessionConfigOption[]> {
-  return invoke<SessionConfigOption[]>('acp_set_config_option', {
-    agentId,
-    sessionId,
-    configId,
-    valueId
-  })
+  return getAcpTransport().setConfigOption(agentId, sessionId, configId, valueId)
 }
 
 export async function acpSetMode(
@@ -488,7 +533,7 @@ export async function acpSetMode(
   sessionId: SessionId,
   modeId: string
 ): Promise<void> {
-  await invoke('acp_set_mode', { agentId, sessionId, modeId })
+  await getAcpTransport().setMode(agentId, sessionId, modeId)
 }
 
 export async function acpSetModel(
@@ -496,7 +541,7 @@ export async function acpSetModel(
   sessionId: SessionId,
   modelId: string
 ): Promise<void> {
-  await invoke('acp_set_model', { agentId, sessionId, modelId })
+  await getAcpTransport().setModel(agentId, sessionId, modelId)
 }
 
 export async function acpRespondPermission(
@@ -504,45 +549,21 @@ export async function acpRespondPermission(
   requestId: string,
   optionId?: string
 ): Promise<void> {
-  await invoke('acp_respond_permission', { agentId, requestId, optionId })
+  await getAcpTransport().respondPermission(agentId, requestId, optionId)
 }
 
 export async function acpAuthenticate(agentId: AgentId, methodId: string): Promise<void> {
-  await invoke('acp_authenticate', { agentId, methodId })
+  await getAcpTransport().authenticate(agentId, methodId)
 }
 
 // --- Event subscription ----------------------------------------------------
 
 /**
- * Subscribe to a backend event with an early-unlisten guard (mirrors
- * `browser-api.ts`). The returned function detaches the listener; if it is
- * called before `listen()` resolves, the listener is torn down as soon as it
- * resolves.
+ * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
+ * WS event fan-in on web (Story 1.6).
  */
 export function onAcpEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
-  let resolvedUnlisten: UnlistenFn | null = null
-  let unlistenCalledEarly = false
-
-  void listen<T>(eventName, (event) => {
-    callback(event.payload)
-  })
-    .then((unlisten) => {
-      if (unlistenCalledEarly) {
-        unlisten()
-        return
-      }
-      resolvedUnlisten = unlisten
-    })
-    .catch(console.error)
-
-  return () => {
-    if (resolvedUnlisten) {
-      resolvedUnlisten()
-      resolvedUnlisten = null
-    } else {
-      unlistenCalledEarly = true
-    }
-  }
+  return getAcpTransport().onEvent(eventName, callback)
 }
 
 export const acpApi = {

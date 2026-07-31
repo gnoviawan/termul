@@ -40,7 +40,12 @@ interface SidebarEntry {
 }
 
 /** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
-export function ChatHistoryTab(): React.JSX.Element {
+export function ChatHistoryTab({
+  onSessionOpened
+}: {
+  /** Optional callback after a chat row successfully opens (e.g. close a mobile drawer). */
+  onSessionOpened?: () => void
+} = {}): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const discoveredSessions = useAcpStore((s) => s.discoveredSessions)
   const agents = useAcpStore((s) => s.agents)
@@ -203,24 +208,30 @@ export function ChatHistoryTab(): React.JSX.Element {
     async (entry: SidebarEntry) => {
       try {
         if (entry.discovered && entry.agentId && entry.cwd) {
-          // Discovered entries have no local transcript to show, so the pane
-          // only becomes useful once load/resume succeeds — keep awaiting.
-          await openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
+          // Register the restore synchronously before focusing the tab so its
+          // first render shows the branded preload, then reconnect in the
+          // background just like local mirrors.
+          const opening = openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
           addAgentChatTab(entry.id)
+          void opening.catch((err) => {
+            toast.error(`Failed to open chat: ${String(err)}`)
+          })
         } else {
-          // Mirror entries: open the tab immediately (the pane shows a
-          // restoring state, then the local transcript) and reconnect in the
-          // background — a cold agent spawn must not block the click.
+          // Register the restore synchronously before focusing the tab so its
+          // first render cannot miss the branded preload. Reconnect continues
+          // in the background after the local transcript becomes usable.
+          const opening = openHistorySession(entry.id)
           addAgentChatTab(entry.id)
-          void openHistorySession(entry.id).catch((err) => {
+          void opening.catch((err) => {
             toast.error(`Failed to reconnect chat: ${String(err)}`)
           })
         }
+        onSessionOpened?.()
       } catch (err) {
         toast.error(`Failed to open chat: ${String(err)}`)
       }
     },
-    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId]
+    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
   )
 
   const handleDelete = useCallback(

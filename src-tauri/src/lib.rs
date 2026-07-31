@@ -1,8 +1,8 @@
 // Module declarations
 mod acp;
 mod acp_binary_install;
-mod agent_registry;
 mod acp_registry_snapshot;
+mod agent_registry;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -15,13 +15,14 @@ mod shell_paths;
 mod skills;
 mod ssh;
 mod trackers;
+pub mod web;
 mod worktree;
 
 #[cfg(target_os = "windows")]
 use crate::shell_paths::git_bash_paths;
 use migrations::MigrationManager;
 use remote::RemoteServerState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -49,6 +50,12 @@ const MENU_ID_EXPORT_LOG_DEFAULT: &str = "help-export-log-default";
 const MENU_ID_CLOSE_TAB: &str = "window-close-tab";
 const MENU_EVENT_CLOSE_TAB: &str = "menu:close-tab";
 const MENU_EVENT_CHECK_FOR_UPDATES_TRIGGERED: &str = "updater:check-for-updates-triggered";
+
+// Tray menu IDs
+const TRAY_ID: &str = "termul-tray";
+const TRAY_MENU_SHOW: &str = "tray-show";
+const TRAY_MENU_QUIT: &str = "tray-quit";
+const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
 const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
@@ -115,21 +122,29 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
-pub use acp::AcpManager;
+pub use acp::{AcpManager, FileProjectRegistry, SessionPersistence};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+// Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
+// `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
+// (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
+// binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
+// `AppHandle` at all.
+use web::{
+    ChatHistoryCache, PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink,
+};
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
     pub path: String,
     pub display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DetectedShells {
     pub available: Vec<ShellInfo>,
     pub default: Option<ShellInfo>,
@@ -141,6 +156,14 @@ static CACHE_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 
 #[tauri::command]
 fn detect_shells() -> Result<DetectedShells, String> {
+    detect_shells_inner()
+}
+
+/// Reusable shell-detection entry point (same logic as the `detect_shells`
+/// Tauri command, without the `#[tauri::command]` macro). The HTTP `/shells`
+/// route (`web::fs_api::shells`) calls this directly so the web/remote path
+/// can reach shell detection without a Tauri runtime.
+pub(crate) fn detect_shells_inner() -> Result<DetectedShells, String> {
     let count = CACHE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::debug!("[ShellDetect] detect_shells called (call #{})", count);
 
@@ -513,15 +536,8 @@ fn open_external_url(url: &str) -> Result<(), String> {
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
-    let file_menu = {
-        #[cfg(target_os = "macos")]
-        let builder = SubmenuBuilder::new(app, "File");
-
-        #[cfg(not(target_os = "macos"))]
-        let builder = SubmenuBuilder::new(app, "File").quit();
-
-        builder.build()?
-    };
+    #[cfg(not(target_os = "macos"))]
+    let file_menu = SubmenuBuilder::new(app, "File").quit().build()?;
 
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -613,7 +629,7 @@ fn build_app_menu<R: tauri::Runtime>(
         .build()?;
 
     #[cfg(target_os = "macos")]
-    let menu = {
+    {
         let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
             .about(None)
             .separator()
@@ -626,13 +642,18 @@ fn build_app_menu<R: tauri::Runtime>(
             .quit()
             .build()?;
 
-        MenuBuilder::new(app).item(&app_menu)
-    };
+        return MenuBuilder::new(app)
+            .item(&app_menu)
+            .item(&edit_menu)
+            .item(&view_menu)
+            .item(&window_menu)
+            .item(&help_menu)
+            .build();
+    }
 
     #[cfg(not(target_os = "macos"))]
-    let menu = MenuBuilder::new(app);
-
-    menu.item(&file_menu)
+    MenuBuilder::new(app)
+        .item(&file_menu)
         .item(&edit_menu)
         .item(&view_menu)
         .item(&window_menu)
@@ -887,6 +908,16 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     Ok(())
 }
 
+static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Claimed synchronously when we enter the async cleanup path and never reset.
+// Prevents a second ExitRequested (e.g. an OS exit signal, or the exit(0) we
+// call at the end of cleanup re-entering before the first task finishes) from
+// spawning a duplicate cleanup that races kill_all()/destroy_all()/exit(0).
+// CLEANUP_DONE still marks final completion so the trailing exit(0) re-entry
+// returns immediately via the check above.
+static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install the panic hook before anything can panic so Rust panics are
@@ -909,9 +940,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     let builder = builder.on_menu_event(handle_menu_event);
 
+    // Single-instance must be the first plugin: Tauri initializes plugins in
+    // registration order, so duplicate launches must be rejected before any
+    // other plugin performs setup or side effects. The plugin is desktop-only.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            // Unminimize before focus so the restored window is reliably
+            // foregrounded on every platform.
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
     let mut builder = builder
-        // Logging must be registered first so the global logger is installed
-        // before any other plugin or setup code emits a log line.
+        // Logging is first among the remaining plugins so the global logger is
+        // installed before their setup code emits log lines.
         .plugin(logging::build_log_plugin())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -984,9 +1029,57 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
-            // Create ACP Manager — spawns/owns ACP agent subprocesses
-            let acp_manager = Arc::new(AcpManager::new(handle.clone()));
+            // Create ACP Manager — spawns/owns ACP agent subprocesses.
+            //
+            // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
+            // (the renderer's `acp:*` events, byte-for-byte unchanged) and a
+            // `WsRelaySink` (the shared-live web server's per-session event log
+            // + subscriber set). `fan_out` serializes once and fans N, so adding
+            // the second sink does not change the `TauriEventSink` payloads.
+            //
+            // The shared-live web server (`remote/host.rs`) pulls both
+            // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
+            // the desktop's live sessions to a browser/phone over the LAN.
+            let ws_relay = Arc::new(WsRelaySink::new());
+            let acp_manager = Arc::new(AcpManager::new(vec![
+                Arc::new(TauriEventSink::new(handle.clone())),
+                ws_relay.clone(),
+            ]));
+            // Attach the server-side permission rendezvous so a phone can
+            // respond to `acp:permission_request` over WS. The desktop renderer
+            // still responds via the `acp_respond_permission` Tauri command
+            // (direct `AcpManager::respond_permission`); the rendezvous's
+            // at-most-one `take_permission` gate ensures whichever path responds
+            // first wins.
+            //
+            // Capture the runtime handle explicitly (`tauri::async_runtime`)
+            // rather than relying on `Handle::try_current()` — `setup` runs on
+            // the main thread and is not guaranteed to be inside a tokio runtime
+            // context, so capturing the handle here keeps `arm_timeout` reliable
+            // when it runs later on the agent driver thread.
+            let rendezvous = Arc::new(PermissionRendezvous::with_handle(
+                Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(60),
+                tauri::async_runtime::handle().inner().clone(),
+            ));
+            ws_relay.set_rendezvous(rendezvous);
             app.manage(acp_manager);
+            app.manage(ws_relay);
+
+            // In-memory project registry (Epic-4 bridge) — renderer-fed via
+            // `remote_sync_projects`; the source for `GET /projects` +
+            // `switch_project` cwd resolution on the shared-live web server.
+            // Lives only while the server runs; cleared on `remote_server_stop`.
+            let project_registry = Arc::new(ProjectRegistry::new());
+            app.manage(project_registry);
+
+            // In-memory chat-history cache (Epic-4 bridge) — renderer-fed via
+            // `remote_sync_chat_history`; the source for `list_persisted_sessions`
+            // + `get_session_payload` + switch-back reopen on the shared-live
+            // web server. Lives only while the server runs; cleared on
+            // `remote_server_stop`.
+            let chat_history_cache = Arc::new(ChatHistoryCache::new());
+            app.manage(chat_history_cache);
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -1054,6 +1147,77 @@ pub fn run() {
 
                 return Err(anyhow::anyhow!(failure_message).into());
             }
+
+            // ── System Tray Icon ────────────────────────────────────────────
+            // Buat tray icon dengan menu klik kanan seperti Telegram.
+            // Klik icon → show/focus window.
+            // Close button (X) → minimize ke tray, bukan quit.
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Termul")
+                    .build(app)?;
+                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Termul")
+                    .build(app)?;
+                let separator = PredefinedMenuItem::separator(app)?;
+
+                let tray_menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .item(&separator)
+                    .item(&quit_item)
+                    .build()?;
+
+                let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                    .tooltip("Termul Manager")
+                    .icon(app.default_window_icon().cloned().unwrap())
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| match event.id().as_ref() {
+                            id if id == TRAY_MENU_SHOW => {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            id if id == TRAY_MENU_QUIT => {
+                                // Let the renderer run the existing dirty-file
+                                // prompt and persistence flush before it destroys
+                                // the window. Direct app.exit(0) would bypass it.
+                                let _ = app_handle.emit_to(
+                                    "main",
+                                    TRAY_QUIT_REQUESTED_EVENT,
+                                    (),
+                                );
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event({
+                        let app_handle = handle.clone();
+                        move |_tray, event| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+
+            }
+            // ── End Tray ────────────────────────────────────────────────────
 
             Ok(())
         })
@@ -1209,7 +1373,8 @@ pub fn run() {
             commands::remote_server_start,
             commands::remote_server_stop,
             commands::remote_server_status,
-            commands::remote_publish_projects,
+            commands::remote_sync_projects,
+            commands::remote_sync_chat_history,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])
@@ -1218,8 +1383,29 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
-            // Prevent the default exit behavior so we can cleanup first
+            // Cleanup already finished — let the app exit immediately.
+            if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            // Prevent every exit request while the single cleanup task runs.
+            // A re-entrant request must not bypass cleanup through Tauri's
+            // default exit behavior while CLEANUP_IN_PROGRESS is already true.
             api.prevent_exit();
+
+            // Atomically claim the cleanup path. If a previous ExitRequested
+            // already started the async cleanup (not yet done), short-circuit
+            // so we don't spawn a second task racing kill_all()/destroy_all().
+            if CLEANUP_IN_PROGRESS
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .is_err()
+            {
+                return;
+            }
 
             let browser_tab_manager = app_handle
                 .try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
@@ -1256,6 +1442,8 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    // Mark cleanup as done so the subsequent exit event isn't prevented
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // After cleanup completes, allow the app to exit with code 0
                     app_handle_clone.exit(0);
                 });
@@ -1266,6 +1454,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     app_handle_clone.exit(0);
                 });
             } else {
@@ -1280,6 +1469,7 @@ pub fn run() {
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
+                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
                     // No PTY or ACP manager, just exit
                     app_handle_clone.exit(0);
                 });

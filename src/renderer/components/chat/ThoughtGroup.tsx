@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
+import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
-import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
 import { CHAT_SPRING } from './chat-motion'
 
@@ -53,21 +53,17 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   }
 
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={handleOpenChange}
-      className="border-b border-border/50 py-2"
-    >
+    <Collapsible open={open} onOpenChange={handleOpenChange} className="py-2">
       <CollapsibleTrigger
         data-press-feedback="off"
         className="flex min-h-10 w-full cursor-pointer items-center gap-1 text-left"
       >
-        <Marker variant="border" className="inline-flex min-w-0 flex-1 italic">
+        <Marker variant="default" className="inline-flex min-w-0 flex-1 italic">
           <MarkerIcon>
             <Brain />
           </MarkerIcon>
-          <MarkerContent className={cn('min-w-0 flex-1', isStreaming && 'shimmer')}>
-            {isStreaming ? 'Thinking…' : 'Thought'}
+          <MarkerContent className="min-w-0 flex-1">
+            {isStreaming ? <ShimmerText text="Thinking…" /> : 'Thought'}
             {lines > 0 ? (
               <>
                 {' · '}
@@ -89,7 +85,7 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open}>
-          <div className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border/70 pl-3 text-xs italic text-muted-foreground">
+          <div className="mt-1.5 whitespace-pre-wrap break-words pl-3 text-xs italic text-muted-foreground">
             {text}
           </div>
         </CollapseExpandMotion>

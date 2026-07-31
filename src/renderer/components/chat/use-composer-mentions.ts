@@ -1,8 +1,8 @@
 import type { FileChangeEvent } from '@shared/types/ipc.types'
-import { readDir } from '@tauri-apps/plugin-fs'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
+import { readDir } from '@/lib/tauri-fs'
 import { basename } from './chat-attachments'
 import type { FileMentionMenuHandle } from './FileMentionMenu'
 import {

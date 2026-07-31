@@ -1,8 +1,8 @@
 import { motion, type Transition, useReducedMotion } from 'framer-motion'
 import { Bug, FileText, ListChecks, Sparkles } from 'lucide-react'
+import { TermulMark } from '@/components/TermulMark'
 import type { AgentId } from '@/lib/acp-api'
 import { useAgentIdentity } from '@/stores/acp-store'
-import { AgentBadge } from './AgentBadge'
 import { CHAT_SPRING } from './chat-motion'
 
 interface Suggestion {
@@ -56,7 +56,7 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
         transition={transition(0)}
       >
         <div className="flex size-12 items-center justify-center rounded-2xl bg-secondary/60">
-          <AgentBadge agentId={agentId} iconSize={24} showName={false} />
+          <TermulMark size={24} className="text-foreground" />
         </div>
         <div>
           <h2 className="text-base font-semibold text-foreground">

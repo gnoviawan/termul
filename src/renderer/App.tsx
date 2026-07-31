@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -29,9 +30,11 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 // See _bmad-output/implementation-artifacts/spec-gh133-xterm-6-1-upgrade-memory-leak-fix.md.
 
 import { isWindows } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpHistorySync } from './hooks/use-acp-history-sync'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
@@ -102,6 +105,7 @@ function AppEffects(): null {
   useAcpListeners()
   useAcpAgents()
   useAcpHistory()
+  useAcpHistorySync()
   useAcpMcp()
   useUpdateCheck()
   useUpdateToast()
@@ -133,10 +137,15 @@ const router = createHashRouter(
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
+    <TooltipProvider delayDuration={80} skipDelayDuration={300}>
       <AppEffects />
       <Toaster />
       <Sonner />
+      {/* Web/remote mode only: in-app directory picker registered with
+          dialogApi so NewProjectModal's Browse button works without a native
+          dialog.open (Story: Web/remote project creation). Desktop never
+          mounts it. */}
+      {!isTauriContext() && <DirectoryPicker />}
       <RouterProvider router={router} future={{ v7_startTransition: true }} />
     </TooltipProvider>
   </QueryClientProvider>

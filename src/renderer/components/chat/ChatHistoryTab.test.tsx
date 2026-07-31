@@ -9,6 +9,9 @@ const {
   mockDiscover,
   mockOpenDiscovered,
   sessionIndexRef,
+  discoveredSessionsRef,
+  agentsRef,
+  agentStatusRef,
   projectRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
@@ -17,6 +20,9 @@ const {
   mockDiscover: vi.fn().mockResolvedValue(undefined),
   mockOpenDiscovered: vi.fn().mockResolvedValue(undefined),
   sessionIndexRef: { current: [] as SessionIndexEntry[] },
+  discoveredSessionsRef: { current: {} as Record<string, unknown[]> },
+  agentsRef: { current: {} as Record<string, unknown> },
+  agentStatusRef: { current: {} as Record<string, string> },
   projectRef: {
     current: null as {
       id: string
@@ -39,9 +45,9 @@ vi.mock('@/stores/acp-store', () => {
       sessionIndex: sessionIndexRef.current,
       openHistorySession: mockOpen,
       deleteHistorySession: mockDelete,
-      discoveredSessions: {},
-      agents: {},
-      agentStatus: {},
+      discoveredSessions: discoveredSessionsRef.current,
+      agents: agentsRef.current,
+      agentStatus: agentStatusRef.current,
       agentConfigs: [],
       configToLiveAgent: {},
       discoverSessions: mockDiscover,
@@ -98,6 +104,9 @@ describe('ChatHistoryTab scoping', () => {
     mockDiscover.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionIndexRef.current = []
+    discoveredSessionsRef.current = {}
+    agentsRef.current = {}
+    agentStatusRef.current = {}
     projectRef.current = {
       id: 'p1',
       path: '/work',
@@ -158,7 +167,7 @@ describe('ChatHistoryTab scoping', () => {
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
-  it('opens the tab immediately without waiting for the history reconnect', () => {
+  it('opens the local tab immediately after synchronously starting restore', () => {
     // A cold agent spawn can take ~30s+; the click must not block on it. The
     // tab is added synchronously and openHistorySession runs in the background.
     sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
@@ -172,8 +181,43 @@ describe('ChatHistoryTab scoping', () => {
     render(<ChatHistoryTab />)
     fireEvent.click(screen.getByText('s1'))
     // Tab added while the open is still pending.
-    expect(mockAddTab).toHaveBeenCalledWith('s1')
     expect(mockOpen).toHaveBeenCalledWith('s1')
+    expect(mockAddTab).toHaveBeenCalledWith('s1')
+    expect(mockOpen.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAddTab.mock.invocationCallOrder[0]
+    )
+    resolveOpen?.()
+  })
+
+  it('opens a discovered tab immediately without waiting for its reopen', () => {
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'CLI chat', updatedAt: '2026-01-01' }
+      ]
+    }
+    let resolveOpen: (() => void) | undefined
+    mockOpenDiscovered.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOpen = resolve
+        })
+    )
+
+    render(<ChatHistoryTab />)
+    fireEvent.click(screen.getByText('CLI chat'))
+
+    expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-1', 'cli-1', '/work', 'p1')
+    expect(mockAddTab).toHaveBeenCalledWith('cli-1')
+    expect(mockOpenDiscovered.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAddTab.mock.invocationCallOrder[0]
+    )
     resolveOpen?.()
   })
 
@@ -216,5 +260,29 @@ describe('ChatHistoryTab scoping', () => {
       target: { value: 'chat-55' }
     })
     expect(screen.getByText('chat-55')).toBeInTheDocument()
+  })
+
+  it('calls onSessionOpened after opening a visible chat', () => {
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+    mockOpen.mockResolvedValue(undefined)
+    const onSessionOpened = vi.fn()
+    render(<ChatHistoryTab onSessionOpened={onSessionOpened} />)
+    fireEvent.click(screen.getByText('s1'))
+    // Mirror entries open the tab immediately and fire onSessionOpened without
+    // waiting on the background reconnect (the drawer closes right away).
+    expect(onSessionOpened).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call onSessionOpened from the catch path when addAgentChatTab throws', () => {
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+    mockOpen.mockResolvedValue(undefined)
+    mockAddTab.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    const onSessionOpened = vi.fn()
+    render(<ChatHistoryTab onSessionOpened={onSessionOpened} />)
+    fireEvent.click(screen.getByText('s1'))
+    // The throw aborts the try block before onSessionOpened?.() runs.
+    expect(onSessionOpened).not.toHaveBeenCalled()
   })
 })

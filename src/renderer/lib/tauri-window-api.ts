@@ -1,5 +1,6 @@
 import type { AppCloseRequestedCallback, IpcResult, WindowApi } from '@shared/types/ipc.types'
 import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
+import { isWindows } from './platform'
 
 /**
  * Wrap window operations in IpcResult<T> pattern with try/catch
@@ -106,6 +107,18 @@ export function createTauriWindowApi(): WindowApi {
         }
       const window = getCurrentWindow()
       const unlisten = window.onCloseRequested(async (event) => {
+        if (!isWindows) {
+          // macOS/Linux close hides to the tray. Do not enter the renderer's
+          // destroy-after-flush quit flow; tray Quit emits a separate event.
+          event.preventDefault()
+          try {
+            await window.hide()
+          } catch (error) {
+            console.error('Failed to hide window to tray:', error)
+          }
+          return
+        }
+
         const shouldClose = await callback()
         if (!shouldClose) {
           event.preventDefault()
