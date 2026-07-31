@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
@@ -290,6 +292,18 @@ export function AgentChatPanel({
     session?.lastError
   ])
 
+  const filePathContext = useMemo(
+    () =>
+      isTauriContext()
+        ? {
+            cwd: session?.cwd,
+            projectRoot: session
+              ? getDefaultCwdForProject(session.projectId) || session.cwd
+              : undefined
+          }
+        : undefined,
+    [session]
+  )
   const timeline = useMemo(
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
     [messages, toolCalls]
@@ -344,7 +358,7 @@ export function AgentChatPanel({
   return (
     <div
       ref={rootRef}
-      className="@container flex h-full flex-col bg-background"
+      className="@container flex h-full flex-col bg-terminal-bg"
       // Story 5.3 (T2.1): apply OSK spacer as bottom padding so the sticky
       // composer card stays visible above the on-screen keyboard. iOS Safari
       // ignores `interactive-widget=resizes-content` (T3.1) — the layout
@@ -437,6 +451,7 @@ export function AgentChatPanel({
         sessionId={session.id}
         agentId={session.agentId}
         showRunningIndicator={showRunningIndicator}
+        filePathContext={filePathContext}
         onEditMessage={seedComposer}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />

@@ -100,6 +100,9 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
  *
  * `subscribe` (Story 1.6) is relay-level (not an `acp_*` command): binds a
  * connection to a session event log with an optional `lastSeq` cursor.
+ * `ping` is a relay-level heartbeat: a client-emitted request that round-trips
+ * an ok reply so the server's keepalive watchdog (`last_activity`) stays fresh
+ * through proxies that strip WS-level Ping/Pong control frames.
  */
 export const WS_REQUEST_TYPES = [
   'send_prompt',
@@ -119,6 +122,7 @@ export const WS_REQUEST_TYPES = [
   'switch_project',
   'authenticate',
   'subscribe',
+  'ping',
   'list_persisted_sessions',
   'open_persisted_session',
   'get_session_payload'

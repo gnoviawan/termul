@@ -1,4 +1,4 @@
-import { FolderGit2, Menu, MessageSquarePlus, Settings } from 'lucide-react'
+import { FolderGit2, FolderTree, Menu, MessageSquarePlus, Settings } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
@@ -16,6 +16,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import { MobileFileExplorer } from './MobileFileExplorer'
 
 interface MobileChatShellProps {
   children: React.ReactNode
@@ -37,6 +38,7 @@ export function MobileChatShell({
 }: MobileChatShellProps): React.JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const navigate = useNavigate()
   const activeProject = useActiveProject()
 
@@ -94,6 +96,20 @@ export function MobileChatShell({
             onClick={() => setProjectsOpen(true)}
           >
             <FolderGit2 size={20} />
+          </Button>
+        )}
+
+        {!isTauriContext() && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 shrink-0"
+            aria-label="Browse files"
+            aria-expanded={filesOpen}
+            onClick={() => setFilesOpen(true)}
+          >
+            <FolderTree size={20} />
           </Button>
         )}
 
@@ -166,6 +182,8 @@ export function MobileChatShell({
       {!isTauriContext() && (
         <ProjectSwitcherDrawer open={projectsOpen} onOpenChange={setProjectsOpen} />
       )}
+
+      {!isTauriContext() && <MobileFileExplorer open={filesOpen} onOpenChange={setFilesOpen} />}
     </div>
   )
 }

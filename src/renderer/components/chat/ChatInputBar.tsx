@@ -54,7 +54,7 @@ import {
   type SlashItem,
   slashFilter
 } from './slash-menu-model'
-import { useComposerAttachments } from './use-composer-attachments'
+import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
 import { useComposerMentions } from './use-composer-mentions'
 import { useComposerTextarea } from './use-composer-textarea'
 
@@ -190,9 +190,11 @@ export function ChatInputBar({
     (e: DragEvent<HTMLDivElement>) => {
       dragDepth.current = 0
       setDragActive(false)
-      if (!canDropPaste || e.dataTransfer.files.length === 0) return
+      if (!canDropPaste) return
+      const files = dataTransferFiles(e.dataTransfer)
+      if (files.length === 0) return
       e.preventDefault()
-      void addFiles(e.dataTransfer.files)
+      void addFiles(files)
     },
     [canDropPaste, addFiles]
   )
@@ -443,7 +445,7 @@ export function ChatInputBar({
   const mcpBadge = <McpBadge count={mcpCount} />
 
   return (
-    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-3.5 pt-3')}>
+    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>
       <div className="relative mx-auto w-full max-w-3xl">
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />

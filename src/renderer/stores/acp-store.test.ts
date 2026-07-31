@@ -16,6 +16,9 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: vi.fn(() => true),
   cleanupTauriListener: vi.fn()
 }))
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
 vi.mock('@/lib/acp-agents-persistence', async (orig) => {
   const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
   return {
@@ -79,6 +82,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { logFrontendError } from '@/lib/log-api'
 import {
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
@@ -487,6 +491,36 @@ describe('acp-store', () => {
     expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
     // turn is marked active until the command resolves / prompt_complete fires
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+  })
+
+  it('stages the optimistic user message with a turn:<id> and dedups a same-turnId echo even when blocks differ', async () => {
+    // Regression for the duplicate-bubble bug: the optimistic message and the
+    // server `user_prompt` echo must share the same `turn:<turnId>` id so
+    // `_onUserPrompt` dedups by id (not a fragile block-exact compare) — a
+    // differing echo is collapsed into the optimistic message, not appended.
+    seedSession('s1', 'agent-1', false)
+    // never resolve, so the turn stays active for the assertion
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPrompt('s1', 'hi there')
+    await Promise.resolve()
+    const msgs = useAcpStore.getState().messages['s1']
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('user')
+    expect(msgs[0].id.startsWith('turn:')).toBe(true)
+    const turnId = msgs[0].id.slice('turn:'.length)
+    expect(turnId.length).toBeGreaterThan(0)
+    // Server echoes the SAME turn id but with DIFFERENT block content — must
+    // collapse into the optimistic message (dedup by id), not append a copy.
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId,
+      content: [{ type: 'text', text: 'echoed-different-blocks' }]
+    })
+    const after = useAcpStore.getState().messages['s1']
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(`turn:${turnId}`)
+    expect(after[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
   })
 
   it('sendPrompt updates the persisted history title from the first user message', async () => {
@@ -2945,6 +2979,61 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
   })
 
+  it('reloads the configured agent before reopening a cold-start history tab', async () => {
+    // The history index and agent-config hook mount independently. A restored
+    // tab can open before the config hook finishes, but it should still resume
+    // against the already-connected config+cwd agent instead of becoming local.
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-restart', '/w')]: 'fresh-agent'
+      },
+      agents: {
+        ...s.agents,
+        'fresh-agent': { id: 'fresh-agent', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'fresh-agent': 'connected' }
+    }))
+    const { loadAgentConfigs } = await import('@/lib/acp-agents-persistence')
+    vi.mocked(loadAgentConfigs).mockResolvedValueOnce([
+      { id: 'cfg-restart', name: 'Restarted', command: 'agent', args: [], env: {} }
+    ])
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-cold-start',
+        agentId: 'stale-dead-uuid',
+        agentConfigId: 'cfg-restart',
+        title: 'Cold start',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockResolvedValueOnce(undefined)
+
+    await useAcpStore.getState().openHistorySession('s-cold-start')
+
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'fresh-agent',
+      sessionId: 's-cold-start',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-cold-start'].status).toBe('active')
+  })
+
   it('spawnAgent keeps capabilities delivered by acp:agent_spawned during its own await', async () => {
     // Real backend ordering: `acp:agent_spawned` (carrying capabilities) is
     // emitted BEFORE `acp_spawn_agent` returns, so `_onAgentSpawned` runs while
@@ -4452,6 +4541,20 @@ describe('ACP agent plan store', () => {
     vi.mocked(invoke).mockResolvedValue(undefined)
     await useAcpStore.getState().closeSession('sess-1')
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+
+  it('logs close failures while still closing the session locally', async () => {
+    seedSession('sess-close-failure', 'agent-1', false)
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('agent rejected session/close'))
+
+    await useAcpStore.getState().closeSession('sess-close-failure')
+
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'acp.closeSession',
+      message: 'Failed to close session sess-close-failure: Error: agent rejected session/close'
+    })
+    expect(useAcpStore.getState().sessions['sess-close-failure']?.status).toBe('closed')
   })
 
   it('_onSessionClosed clears cached plan for the session', () => {

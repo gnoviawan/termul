@@ -13,6 +13,7 @@ import { isVisibleReady } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
 import type { Terminal as TerminalRecord } from '@/types/project'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import { useAcpStore } from '../stores/acp-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
@@ -417,6 +418,7 @@ export function useTerminalRestore(): void {
           }
 
           const workspaceStore = useWorkspaceStore.getState()
+          const preserveActiveTab = hasValidActiveAgentChatTab(workspaceStore, projectIdToRestore)
           reconcilePersistedHistoryIntoLiveTerminals(liveProjectTerminals, layout)
           const terminalIdToSelect = selectTerminalForProject(liveProjectTerminals, layout)
 
@@ -424,7 +426,7 @@ export function useTerminalRestore(): void {
             workspaceStore.ensureTerminalTab(
               terminal.id,
               undefined,
-              terminal.id === terminalIdToSelect
+              !preserveActiveTab && terminal.id === terminalIdToSelect
             )
           }
 
@@ -438,7 +440,7 @@ export function useTerminalRestore(): void {
             ? findPaneContainingTab(useWorkspaceStore.getState().root, terminalTab)
             : null
           const activePane = containingPane ?? workspaceStore.getActivePaneLeaf()
-          if (terminalTab && activePane) {
+          if (!preserveActiveTab && terminalTab && activePane) {
             workspaceStore.setActiveTab(activePane.id, terminalTab)
           }
 
@@ -650,6 +652,25 @@ export function useTerminalRestore(): void {
  * Select the appropriate terminal for a project
  * Uses multiple matching strategies: ID match, then name match, then fallback
  */
+function hasValidActiveAgentChatTab(
+  workspaceStore: ReturnType<typeof useWorkspaceStore.getState>,
+  projectId: string
+): boolean {
+  const activePane = workspaceStore.getActivePaneLeaf()
+  if (!activePane?.activeTabId) return false
+
+  const activeTab = activePane.tabs.find((tab) => tab.id === activePane.activeTabId)
+  if (!activeTab || activeTab.type !== 'agent-chat') return false
+
+  const acpState = useAcpStore.getState()
+  return (
+    acpState.sessions[activeTab.sessionId]?.projectId === projectId ||
+    acpState.sessionIndex.some(
+      (entry) => entry.id === activeTab.sessionId && entry.projectId === projectId
+    )
+  )
+}
+
 function reconcilePersistedHistoryIntoLiveTerminals(
   liveProjectTerminals: TerminalRecord[],
   layout: PersistedTerminalLayout | null

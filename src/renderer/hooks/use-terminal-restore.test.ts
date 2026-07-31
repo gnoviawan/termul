@@ -67,6 +67,17 @@ vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent
 }))
 
+const mockAcpState = {
+  sessions: {} as Record<string, { projectId: string }>,
+  sessionIndex: [] as Array<{ id: string; projectId: string }>
+}
+
+vi.mock('../stores/acp-store', () => ({
+  useAcpStore: {
+    getState: vi.fn(() => mockAcpState)
+  }
+}))
+
 const mockProjectState = {
   activeProjectId: '',
   projects: [
@@ -155,6 +166,8 @@ beforeEach(() => {
   mockProjectState.activeProjectId = ''
   mockTerminalStoreState.terminals = []
   mockTerminalStoreState.activeTerminalId = ''
+  mockAcpState.sessions = {}
+  mockAcpState.sessionIndex = []
   mockWorkspaceStore.root = {
     type: 'leaf',
     id: 'pane-active',
@@ -263,6 +276,44 @@ describe('useTerminalRestore', () => {
         liveTerminalCount: 1
       }
     })
+  })
+
+  it('preserves a valid active agent-chat tab during live terminal reconciliation', async () => {
+    mockTerminalStoreState.terminals = [
+      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+    ]
+    mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
+      id: 'pane-active',
+      type: 'leaf',
+      tabs: [{ type: 'agent-chat', id: 'chat-agent', sessionId: 'session-a' }],
+      activeTabId: 'chat-agent'
+    })
+    mockAcpState.sessions = { 'session-a': { projectId: 'project-a' } }
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'a-live',
+      terminals: [
+        {
+          id: 'a-live',
+          name: 'A',
+          shell: 'bash',
+          cwd: '/projects/a',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockWorkspaceStore.ensureTerminalTab).toHaveBeenCalledWith('a-live', undefined, false)
+    })
+
+    expect(mockWorkspaceStore.setActiveTab).not.toHaveBeenCalled()
+    expect(mockTerminalStoreState.selectTerminal).toHaveBeenCalledWith('a-live')
   })
 
   it('prefers currently active live terminal when selecting a live terminal', async () => {

@@ -72,11 +72,17 @@ export interface AcpTransport {
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
-  sendPrompt(agentId: AgentId, sessionId: SessionId, text: string): Promise<StopReason>
+  sendPrompt(
+    agentId: AgentId,
+    sessionId: SessionId,
+    text: string,
+    turnId?: string
+  ): Promise<StopReason>
   sendPromptBlocks(
     agentId: AgentId,
     sessionId: SessionId,
-    content: ContentBlock[]
+    content: ContentBlock[],
+    turnId?: string
   ): Promise<StopReason>
   cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void>
   setConfigOption(
@@ -152,9 +158,9 @@ function createTauriAcpTransport(): AcpTransport {
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
-    sendPrompt: (agentId, sessionId, text) =>
+    sendPrompt: (agentId, sessionId, text, _turnId) =>
       invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text }),
-    sendPromptBlocks: (agentId, sessionId, content) =>
+    sendPromptBlocks: (agentId, sessionId, content, _turnId) =>
       invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content }),
     cancelPrompt: async (agentId, sessionId) => {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
@@ -261,6 +267,25 @@ const RECONNECT_MAX_MS = 8_000
  */
 const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
+/**
+ * Application-level heartbeat interval. A client-emitted `ping` text request
+ * refreshes the server keepalive watchdog (`last_activity`) through proxies
+ * that strip WS-level Ping/Pong control frames (Cloudflare tunnels, etc.), so
+ * a focused tab no longer false-positive drops at the server's ~75s
+ * `PONG_TIMEOUT`. ~30s sits under both the 75s timeout and the 20s Ping
+ * interval, so even a single tick keeps a healthy peer alive. Tunable.
+ */
+const HEARTBEAT_INTERVAL_MS = 30_000
+
+/**
+ * Consecutive ping failures that trigger a forced reconnect. A single missed
+ * reply can be transient (slow link); two in a row (~60s+ of no round-trip) is
+ * a strong half-open signal — the inbound ping keeps the *server's* watchdog
+ * fresh, so without this the client could sit on a dead socket whose `onclose`
+ * never fires (the server→client reply path is broken but client→server works).
+ */
+const HEARTBEAT_FAILURE_THRESHOLD = 2
+
 function requestTimeoutMs(type: WsRequestType): number {
   return type === 'send_prompt' ? SEND_PROMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS
 }
@@ -287,6 +312,11 @@ export class WsAcpTransport implements AcpTransport {
   private disposed = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** Application-level heartbeat timer (`setInterval`) — cleared on close /
+   * dispose / force-reconnect. `null` while no socket is live. */
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  /** Consecutive heartbeat ping failures — forces a reconnect at the threshold. */
+  private consecutivePingFailures = 0
   /** When the page became hidden (epoch-ms), or null while visible. Drives the
    * visibility-triggered proactive reconnect on mobile idle/background resume. */
   private lastHiddenAt: number | null = null
@@ -345,6 +375,7 @@ export class WsAcpTransport implements AcpTransport {
   dispose(): void {
     this.disposed = true
     this.detachVisibilityListeners()
+    this.clearHeartbeat()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -536,24 +567,32 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
   }
 
-  async sendPrompt(agentId: AgentId, sessionId: SessionId, text: string): Promise<StopReason> {
+  async sendPrompt(
+    agentId: AgentId,
+    sessionId: SessionId,
+    text: string,
+    turnId?: string
+  ): Promise<StopReason> {
     await this.subscribeSession(sessionId) // no-op if already subscribed
-    // Story 1.8 T3.1 (FR11): generate a client turn-id so the server echoes it
-    // back on `prompt_complete` → our `seenTurnIds` dedup fires (no duplicate
-    // completion on reconnect replay). `crypto.randomUUID()` (available in
-    // browsers + Node 19+; the web build targets modern evergreen browsers).
-    const turnId = crypto.randomUUID()
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId })
+    // The turn-id is minted by the store (`runPromptTurn`) so the optimistic
+    // user message can share the same `turn:<turnId>` id as the server's
+    // `user_prompt` echo → reliable dedup in `_onUserPrompt` regardless of
+    // block differences (issue: the echo rendered a second user bubble because
+    // the optimistic id (`newId('msg')`) never matched the echo's `turn:<uuid>`).
+    // Fall back to a fresh UUID for callers that omit it (backward-compat / tests).
+    const id = turnId ?? crypto.randomUUID()
+    return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId: id })
   }
 
   async sendPromptBlocks(
     agentId: AgentId,
     sessionId: SessionId,
-    content: ContentBlock[]
+    content: ContentBlock[],
+    turnId?: string
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId)
-    const turnId = crypto.randomUUID()
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId })
+    const id = turnId ?? crypto.randomUUID()
+    return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId: id })
   }
 
   async cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
@@ -640,6 +679,7 @@ export class WsAcpTransport implements AcpTransport {
       ws.onclose = () => {
         this.socket = null
         this.authed = false
+        this.clearHeartbeat()
         this.rejectAllPending('closed', 'WebSocket closed')
         if (!this.disposed) this.scheduleReconnect()
         settleErr(new AcpTransportError('closed', 'WebSocket closed before auth'))
@@ -750,6 +790,7 @@ export class WsAcpTransport implements AcpTransport {
     this.authed = false
     this.connecting = null
     this.rejectAllPending('closed', reason)
+    this.clearHeartbeat()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -768,6 +809,48 @@ export class WsAcpTransport implements AcpTransport {
       }
     }
     this.scheduleReconnect()
+  }
+
+  /**
+   * Start the application-level heartbeat that keeps the server's keepalive
+   * watchdog fresh through proxies that strip WS-level Ping/Pong control
+   * frames. A periodic `ping` text request lands in the server read loop,
+   * which stamps `last_activity` on every inbound frame — so a focused tab no
+   * longer false-positive drops at the ~75s `PONG_TIMEOUT`. Idempotent: clears
+   * any prior timer first. Stopped on close / dispose / force-reconnect.
+   */
+  private startHeartbeat(): void {
+    this.clearHeartbeat()
+    this.heartbeatTimer = setInterval(() => {
+      if (this.disposed) return
+      // Only tick while OPEN; the reconnect path owns recovery otherwise. A
+      // failed ping (half-open link) is swallowed per-tick but counted — at the
+      // threshold, force a reconnect so a dead reply path doesn't strand the
+      // client on a socket whose onclose may never fire.
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        void this.request<void>('ping', {})
+          .then(() => {
+            this.consecutivePingFailures = 0
+          })
+          .catch(() => {
+            this.consecutivePingFailures += 1
+            if (!this.disposed && this.consecutivePingFailures >= HEARTBEAT_FAILURE_THRESHOLD) {
+              this.forceReconnect(
+                `ping heartbeat: ${this.consecutivePingFailures} consecutive failures (half-open link)`
+              )
+            }
+          })
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  /** Stop the heartbeat timer (on close / dispose / force-reconnect). */
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+    this.consecutivePingFailures = 0
   }
 
   private scheduleReconnect(): void {
@@ -849,6 +932,10 @@ export class WsAcpTransport implements AcpTransport {
         })
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.authed = true
+        // Start the application-level heartbeat now that the socket is OPEN
+        // + authed — it refreshes the server keepalive watchdog through proxies
+        // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
+        this.startHeartbeat()
       } catch (err) {
         try {
           this.socket?.close()

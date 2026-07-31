@@ -110,6 +110,51 @@ pub struct GitInitRequest {
     pub cwd: String,
 }
 
+/// Mirrors the renderer's `MAX_FILE_SIZE` (1 MiB). `/fs/read` refuses files
+/// larger than this with `code: "FILE_TOO_LARGE"` BEFORE reading or
+/// transferring the content, matching the desktop facade's size guard.
+const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+/// `GET /fs/read?path=...` response body (one item). Mirrors the shared TS
+/// `FileContent` contract (`{ content, encoding, size, modifiedAt }`) used by
+/// the renderer's `filesystemApi.readFile` / editor store.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContentDto {
+    pub content: String,
+    pub encoding: String,
+    pub size: u64,
+    pub modified_at: u64,
+}
+
+/// `POST /fs/delete` body: `{ "path": "...", "recursive": true? }`.
+/// `recursive` defaults to `false`; directories require it to be `true`
+/// (mirrors `@tauri-apps/plugin-fs` `remove` semantics).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteRequest {
+    pub path: String,
+    pub recursive: Option<bool>,
+}
+
+/// `POST /fs/rename` body: `{ "from": "...", "to": "..." }`. Both endpoints
+/// are resolved through `check_within_root` so the destination stays inside
+/// the project root.
+#[derive(Debug, Deserialize)]
+pub struct RenameRequest {
+    pub from: String,
+    pub to: String,
+}
+
+/// `POST /fs/copy` body: `{ "from": "...", "to": "..." }`. Copies a single
+/// file (matches the desktop `copyFile` which uses `@tauri-apps/plugin-fs`
+/// `copyFile` — directories error with `COPY_ERROR`).
+#[derive(Debug, Deserialize)]
+pub struct CopyRequest {
+    pub from: String,
+    pub to: String,
+}
+
 // Names commonly git-ignored; entries matching these are surfaced with
 // `ignored: true` (shown dimmed in the tree, same as the Tauri path).
 const ALWAYS_IGNORE: &[&str] = &[
@@ -475,6 +520,190 @@ pub async fn browse(
     (StatusCode::OK, Json(body))
 }
 
+/// `GET /fs/read?path=...` — read a text file's content. Returns
+/// `{ success: true, data: FileContent }` or
+/// `{ success: false, error, code }` where code is one of `PATH_TRAVERSAL`
+/// (explicit `..` component, defense-in-depth — matches `ls`/`mkdir`),
+/// `READ_ERROR` (missing/dir/io), `FILE_TOO_LARGE` (> 1 MiB, refused before
+/// read), or `BINARY_FILE` (NUL/control bytes in the first 512 bytes —
+/// mirrors the renderer's `isBinaryFile`). Paths outside the configured
+/// `project_root` are allowed (the prefix-containment jail was removed by
+/// spec-remove-web-fs-path-jail), matching `/fs/ls` + `/fs/browse`. A read
+/// route: intentionally NOT loopback-guarded, so desktop-hosted LAN clients
+/// can open files in the editor; mutations stay loopback-only
+/// (`delete`/`rename`/`copy`).
+pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
+    let path = match resolve_request_path(Path::new(&q.path)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<FileContentDto>::err(msg, code)));
+        }
+    };
+    let result = tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
+        let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+        if metadata.is_dir() {
+            return Err((
+                "cannot read a directory as a file".to_string(),
+                "READ_ERROR",
+            ));
+        }
+        let size = metadata.len();
+        if size > MAX_FILE_SIZE {
+            return Err((
+                format!("File too large ({size} bytes, max {MAX_FILE_SIZE})"),
+                "FILE_TOO_LARGE",
+            ));
+        }
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let bytes = fs::read(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+        // Binary detection: control bytes (0x00-0x08) in the first 512
+        // bytes — mirrors the renderer's `isBinaryFile` regex `/[\x00-\x08]/`
+        // so the web path rejects binaries exactly like desktop.
+        let sample_end = bytes.len().min(512);
+        if bytes[..sample_end].iter().any(|&b| b <= 0x08) {
+            return Err((
+                "Binary file cannot be displayed".to_string(),
+                "BINARY_FILE",
+            ));
+        }
+        // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
+        // would replace invalid bytes with U+FFFD and let the editor save the
+        // corrupted content back over the original file. Desktop's
+        // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
+        // contract so the web path never silently corrupts a file.
+        let content = String::from_utf8(bytes)
+            .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
+        Ok(FileContentDto {
+            content,
+            encoding: "utf-8".to_string(),
+            size,
+            modified_at,
+        })
+    })
+    .await
+    .map_err(|e| format!("read task failed: {e}"));
+    let body = match result {
+        Ok(Ok(fc)) => IpcBody::ok(fc),
+        Ok(Err((msg, code))) => IpcBody::<FileContentDto>::err(msg, code),
+        Err(e) => IpcBody::<FileContentDto>::err(format!("read task failed: {e}"), "READ_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// `POST /fs/delete` — delete a file or directory. `{ "path": "...",
+/// "recursive": true? }`. A non-recursive delete of a non-empty directory
+/// fails with `DELETE_ERROR` (mirrors `fs::remove_dir`). Loopback-guarded
+/// like `mkdir`/`write` — mutations stay localhost-only even when the server
+/// is bound to `0.0.0.0`.
+pub async fn delete(
+    State(_state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<DeleteRequest>,
+) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<()>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let path = match resolve_request_path(Path::new(&req.path)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
+        }
+    };
+    let recursive = req.recursive.unwrap_or(false);
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        match fs::metadata(&path) {
+            Ok(m) if m.is_dir() && recursive => fs::remove_dir_all(&path),
+            Ok(m) if m.is_dir() => fs::remove_dir(&path),
+            _ => fs::remove_file(&path),
+        }
+    })
+    .await
+    .map_err(|e| format!("delete task failed: {e}"));
+    let body = match result {
+        Ok(Ok(())) => IpcBody::<()>::ok(()),
+        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "DELETE_ERROR"),
+        Err(e) => IpcBody::<()>::err(format!("delete task failed: {e}"), "DELETE_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// `POST /fs/rename` — rename/move a file or directory. `{ "from": "...",
+/// "to": "..." }`. Both endpoints are resolved via `resolve_request_path`
+/// (explicit `..` components are rejected; paths outside `project_root` are
+/// allowed, matching `ls`/`mkdir`). Loopback-guarded (mutation).
+pub async fn rename(
+    State(_state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<()>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let from = match resolve_request_path(Path::new(&req.from)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
+        }
+    };
+    let to = match resolve_request_path(Path::new(&req.to)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
+        }
+    };
+    let result = tokio::task::spawn_blocking(move || fs::rename(&from, &to))
+        .await
+        .map_err(|e| format!("rename task failed: {e}"));
+    let body = match result {
+        Ok(Ok(())) => IpcBody::<()>::ok(()),
+        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "RENAME_ERROR"),
+        Err(e) => IpcBody::<()>::err(format!("rename task failed: {e}"), "RENAME_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// `POST /fs/copy` — copy a single file. `{ "from": "...", "to": "..." }`.
+/// `std::fs::copy` copies one file (not a directory) — directories fail with
+/// `COPY_ERROR`, matching the desktop `copyFile`. Both endpoints are resolved
+/// via `resolve_request_path` (explicit `..` components are rejected; paths
+/// outside `project_root` are allowed, matching `ls`/`mkdir`). Loopback-guarded
+/// (mutation).
+pub async fn copy(
+    State(_state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<CopyRequest>,
+) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<()>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let from = match resolve_request_path(Path::new(&req.from)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
+        }
+    };
+    let to = match resolve_request_path(Path::new(&req.to)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
+        }
+    };
+    let result = tokio::task::spawn_blocking(move || fs::copy(&from, &to).map(|_| ()))
+        .await
+        .map_err(|e| format!("copy task failed: {e}"));
+    let body = match result {
+        Ok(Ok(())) => IpcBody::<()>::ok(()),
+        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "COPY_ERROR"),
+        Err(e) => IpcBody::<()>::err(format!("copy task failed: {e}"), "COPY_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
 /// `POST /git/init` — initialize a git repository in `cwd`. Reuses
 /// `GitTracker::run_git_command(&cwd, &["init"])` (same call the
 /// `#[tauri::command] git_init` makes). Returns `{ success: true }` or
@@ -687,6 +916,10 @@ mod tests {
             .route("/fs/write", axum::routing::post(write))
             .route("/fs/ls", axum::routing::get(ls))
             .route("/fs/browse", axum::routing::get(browse))
+            .route("/fs/read", axum::routing::get(read))
+            .route("/fs/delete", axum::routing::post(delete))
+            .route("/fs/rename", axum::routing::post(rename))
+            .route("/fs/copy", axum::routing::post(copy))
             .route("/git/init", axum::routing::post(git_init))
             .route("/shells", axum::routing::get(shells))
             .with_state(state)
@@ -1250,5 +1483,353 @@ mod tests {
         assert_eq!(body.code.as_deref(), Some("GIT_INIT_ERROR"));
         let err = body.error.expect("error message present");
         assert!(!err.trim().is_empty(), "error must be non-empty: {err:?}");
+    }
+
+    /// `/fs/read` returns the file content + size + modifiedAt for an existing
+    /// text file inside the project root.
+    #[tokio::test]
+    async fn read_returns_file_content() {
+        let root = TempDir::new("read-root");
+        let file = root.path().join("note.txt");
+        fs::write(&file, "hello world").expect("write file");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "read inside root must succeed");
+        let fc = body.data.expect("content present");
+        assert_eq!(fc.content, "hello world");
+        assert_eq!(fc.encoding, "utf-8");
+        assert_eq!(fc.size, "hello world".len() as u64);
+        assert!(fc.modified_at > 0, "modifiedAt must be populated");
+    }
+
+    /// `/fs/read` allows a path outside the project root (the prefix-containment
+    /// jail was removed by spec-remove-web-fs-path-jail; matches `/fs/ls`).
+    #[tokio::test]
+    async fn read_allows_path_outside_project_root() {
+        let root = TempDir::new("read-root");
+        let outside = TempDir::new("read-outside");
+        let target = outside.path().join("evil.txt");
+        fs::write(&target, "pwn").expect("write outside file");
+        let uri = format!("/fs/read?path={}", urlencoding(&target.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "read outside root should succeed: {:?}", body.error);
+        assert_eq!(body.data.expect("content").content, "pwn");
+    }
+
+    /// `/fs/read` rejects explicit `..` traversal components (defense-in-depth).
+    #[tokio::test]
+    async fn read_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("read-trav-root");
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal = inside.join("..").join("..").join("etc");
+        let uri = format!("/fs/read?path={}", urlencoding(&traversal.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal must be refused");
+        let code = body.code.as_deref().unwrap_or("");
+        assert!(
+            code == "PATH_TRAVERSAL" || code == "OUTSIDE_ROOT",
+            "expected PATH_TRAVERSAL or OUTSIDE_ROOT, got {code:?}"
+        );
+    }
+
+    /// `/fs/read` refuses a directory (cannot read a dir as a file) with
+    /// `READ_ERROR`, never returning a directory listing.
+    #[tokio::test]
+    async fn read_rejects_directory() {
+        let root = TempDir::new("read-dir-root");
+        let dir_path = root.path().join("a-dir");
+        fs::create_dir_all(&dir_path).expect("mkdir");
+        let uri = format!("/fs/read?path={}", urlencoding(&dir_path.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "reading a directory must fail");
+        assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
+    }
+
+    /// `/fs/read` refuses a binary file (NUL/control bytes in the first 512
+    /// bytes) with `BINARY_FILE`, mirroring the renderer's `isBinaryFile`.
+    #[tokio::test]
+    async fn read_rejects_binary_file() {
+        let root = TempDir::new("read-bin-root");
+        let file = root.path().join("blob.bin");
+        // Leading NUL byte (0x00) — caught by the binary sample scan.
+        fs::write(&file, [0x00u8, 0x01, 0x02, 0x03]).expect("write binary");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "binary file must be refused");
+        assert_eq!(body.code.as_deref(), Some("BINARY_FILE"));
+    }
+
+    /// `/fs/read` refuses a non-UTF-8 text file with `READ_ERROR` instead of
+    /// lossy-decoding it (matches desktop `readTextFile`, which fails on
+    /// invalid UTF-8). Prevents the editor from saving U+FFFD replacement
+    /// characters back over the original bytes.
+    #[tokio::test]
+    async fn read_rejects_non_utf8_text_file() {
+        let root = TempDir::new("read-latin1-root");
+        let file = root.path().join("latin1.txt");
+        // 0xE9 (Latin-1 `é`) is > 0x08 so it clears the binary sample scan,
+        // but it is not valid UTF-8 (0xE9 is a 3-byte lead expecting two
+        // continuation bytes). Previously this was lossy-decoded to U+FFFD.
+        fs::write(&file, [0xE9u8]).expect("write latin-1");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-UTF-8 text must be refused, not lossy-decoded");
+        assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
+    }
+
+    /// `/fs/read` refuses a file larger than `MAX_FILE_SIZE` (1 MiB) with
+    /// `FILE_TOO_LARGE` BEFORE reading any bytes (matches the desktop
+    /// facade's size guard).
+    #[tokio::test]
+    async fn read_rejects_file_too_large() {
+        let root = TempDir::new("read-large-root");
+        let file = root.path().join("huge.txt");
+        // One byte over the 1 MiB cap; refused before the read.
+        let bytes = vec![b'x'; (MAX_FILE_SIZE + 1) as usize];
+        fs::write(&file, &bytes).expect("write large file");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "oversized file must be refused before reading");
+        assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
+    }
+
+    /// `/fs/delete` removes a file inside the project root.
+    #[tokio::test]
+    async fn delete_removes_file() {
+        let root = TempDir::new("delete-root");
+        let file = root.path().join("doomed.txt");
+        fs::write(&file, "bye").expect("write file");
+        let req_body = serde_json::json!({ "path": file.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "delete must succeed");
+        assert!(!file.exists(), "file must be gone after delete");
+    }
+
+    /// `/fs/delete` removes a non-empty directory only when `recursive: true`.
+    #[tokio::test]
+    async fn delete_removes_dir_recursive() {
+        let root = TempDir::new("delete-rec-root");
+        let dir = root.path().join("tree");
+        fs::create_dir_all(dir.join("child")).expect("mkdir tree");
+        fs::write(dir.join("child").join("f.txt"), "x").expect("write child");
+        let req_body = serde_json::json!({ "path": dir.to_string_lossy(), "recursive": true });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "recursive delete must succeed");
+        assert!(!dir.exists(), "dir must be gone after recursive delete");
+    }
+
+    /// `/fs/delete` allows a path outside the project root (the jail was
+    /// removed; matches `mkdir`/`write`). The file is actually removed.
+    #[tokio::test]
+    async fn delete_allows_path_outside_project_root() {
+        let root = TempDir::new("delete-root");
+        let outside = TempDir::new("delete-outside");
+        let target = outside.path().join("evil.txt");
+        fs::write(&target, "pwn").expect("write outside");
+        let req_body = serde_json::json!({ "path": target.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "delete outside root should succeed: {:?}", body.error);
+        assert!(!target.exists(), "file outside root must be deleted");
+    }
+
+    /// `/fs/delete` is loopback-guarded: a non-loopback peer is refused with
+    /// `FORBIDDEN` (Patch D, same as `mkdir`/`write`).
+    #[tokio::test]
+    async fn delete_rejects_non_loopback_peer() {
+        let root = TempDir::new("delete-peer-root");
+        let file = root.path().join("doomed.txt");
+        fs::write(&file, "bye").expect("write file");
+        let req_body = serde_json::json!({ "path": file.to_string_lossy() });
+        let resp = post_json_from(
+            test_state_with_root(root.path()),
+            "/fs/delete",
+            &req_body,
+            SocketAddr::from(([192, 168, 1, 10], 54321)),
+        )
+        .await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback delete must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(file.exists(), "refused delete must not remove the file");
+    }
+
+    /// `/fs/rename` moves a file inside the project root.
+    #[tokio::test]
+    async fn rename_moves_file() {
+        let root = TempDir::new("rename-root");
+        let from = root.path().join("a.txt");
+        let to = root.path().join("b.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "rename must succeed");
+        assert!(!from.exists(), "source must be gone after rename");
+        assert!(to.exists(), "destination must exist after rename");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/rename` is loopback-guarded: a non-loopback peer is refused with
+    /// `FORBIDDEN` (same guard as `delete`/`mkdir`/`write`). The source is
+    /// not moved.
+    #[tokio::test]
+    async fn rename_rejects_non_loopback_peer() {
+        let root = TempDir::new("rename-peer-root");
+        let from = root.path().join("a.txt");
+        let to = root.path().join("b.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json_from(
+            test_state_with_root(root.path()),
+            "/fs/rename",
+            &req_body,
+            SocketAddr::from(([192, 168, 1, 10], 54321)),
+        )
+        .await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback rename must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(from.exists(), "refused rename must not move the source");
+        assert!(!to.exists(), "refused rename must not create the destination");
+    }
+
+    /// `/fs/rename` allows a destination outside the project root (the jail
+    /// was removed; matches `mkdir`/`write`). The source is actually moved.
+    #[tokio::test]
+    async fn rename_allows_destination_outside_root() {
+        let root = TempDir::new("rename-root");
+        let outside = TempDir::new("rename-outside");
+        let from = root.path().join("a.txt");
+        let to = outside.path().join("b.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "rename to outside root should succeed: {:?}", body.error);
+        assert!(!from.exists(), "source must be gone after rename");
+        assert!(to.exists(), "destination must exist after rename");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/copy` duplicates a file inside the project root (source kept).
+    #[tokio::test]
+    async fn copy_duplicates_file() {
+        let root = TempDir::new("copy-root");
+        let from = root.path().join("orig.txt");
+        let to = root.path().join("dup.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "copy must succeed");
+        assert!(from.exists(), "source must remain after copy");
+        assert!(to.exists(), "destination must exist after copy");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/copy` is loopback-guarded: a non-loopback peer is refused with
+    /// `FORBIDDEN` (same guard as `delete`/`rename`). No copy is written.
+    #[tokio::test]
+    async fn copy_rejects_non_loopback_peer() {
+        let root = TempDir::new("copy-peer-root");
+        let from = root.path().join("orig.txt");
+        let to = root.path().join("dup.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json_from(
+            test_state_with_root(root.path()),
+            "/fs/copy",
+            &req_body,
+            SocketAddr::from(([192, 168, 1, 10], 54321)),
+        )
+        .await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback copy must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(from.exists(), "refused copy must not remove the source");
+        assert!(!to.exists(), "refused copy must not create the destination");
+    }
+
+    /// `/fs/copy` allows a destination outside the project root (the jail was
+    /// removed; matches `mkdir`/`write`). The source is kept and the copy is
+    /// written outside.
+    #[tokio::test]
+    async fn copy_allows_destination_outside_root() {
+        let root = TempDir::new("copy-root");
+        let outside = TempDir::new("copy-outside");
+        let from = root.path().join("orig.txt");
+        let to = outside.path().join("dup.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "copy to outside root should succeed: {:?}", body.error);
+        assert!(from.exists(), "source must remain after copy");
+        assert!(to.exists(), "destination must exist after copy");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/delete` rejects explicit `..` components with `PATH_TRAVERSAL`
+    /// (defense-in-depth — matches `mkdir`).
+    #[tokio::test]
+    async fn delete_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("delete-trav-root");
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal = inside.join("..").join("..").join("etc");
+        let req_body = serde_json::json!({ "path": traversal.to_string_lossy() });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal delete must be refused");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+    }
+
+    /// `/fs/rename` rejects explicit `..` components in either endpoint with
+    /// `PATH_TRAVERSAL` (defense-in-depth — matches `mkdir`).
+    #[tokio::test]
+    async fn rename_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("rename-trav-root");
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal_from = inside.join("..").join("..").join("etc");
+        let req_body = serde_json::json!({
+            "from": traversal_from.to_string_lossy(),
+            "to": root.path().join("x.txt").to_string_lossy()
+        });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal rename must be refused");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+    }
+
+    /// `/fs/copy` rejects explicit `..` components with `PATH_TRAVERSAL`
+    /// (defense-in-depth — matches `mkdir`).
+    #[tokio::test]
+    async fn copy_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("copy-trav-root");
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal_from = inside.join("..").join("..").join("etc");
+        let req_body = serde_json::json!({
+            "from": traversal_from.to_string_lossy(),
+            "to": root.path().join("x.txt").to_string_lossy()
+        });
+        let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal copy must be refused");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
     }
 }
