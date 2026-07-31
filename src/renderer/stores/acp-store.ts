@@ -69,6 +69,7 @@ import {
   type SessionModeState,
   type SessionReopenOutcome,
   type SessionUsage,
+  type TerminalOutputEvent,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
@@ -495,6 +496,7 @@ interface AcpState {
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
   _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
   _onUsageUpdate: (e: UsageUpdateEvent) => void
+  _onTerminalOutput: (e: TerminalOutputEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
@@ -4053,6 +4055,28 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  _onTerminalOutput: (e) => {
+    const session = get().sessions[e.sessionId]
+    if (!session || session.agentId !== e.agentId) return
+    const list = get().toolCalls[e.sessionId] ?? []
+    const next = list.map((tool) => {
+      if (
+        !tool.content?.some((item) => item.type === 'terminal' && item.terminalId === e.terminalId)
+      ) {
+        return tool
+      }
+      return {
+        ...tool,
+        terminalOutput: e.output,
+        terminalTruncated: e.truncated,
+        terminalExitStatus: e.exitStatus ?? null
+      }
+    })
+    if (next.some((tool, i) => tool !== list[i])) {
+      set({ toolCalls: { ...get().toolCalls, [e.sessionId]: next } })
+    }
+  },
+
   _onUsageUpdate: (e) => {
     if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
       return
@@ -4532,6 +4556,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
       useAcpStore.getState()._onUsageUpdate(e)
+    ),
+    acpApi.onEvent<TerminalOutputEvent>(ACP_EVENTS.terminalOutput, (e) =>
+      useAcpStore.getState()._onTerminalOutput(e)
     ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)

@@ -48,7 +48,7 @@ use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
     AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
-    SessionCreatedEvent,
+    SessionCreatedEvent, TerminalOutputEvent,
 };
 use crate::acp::session::DriverState;
 use crate::acp::session_persistence::{
@@ -1266,6 +1266,9 @@ async fn drive_connection(
     let term_create = terminals.clone();
     let term_create_state = driver_state.clone();
     let term_output = terminals.clone();
+    let term_output_allowed = allow_terminal;
+    let term_output_sinks = sinks.clone();
+    let term_output_agent_id = agent_id.clone();
     let term_wait = terminals.clone();
     let term_kill = terminals.clone();
     let term_release = terminals.clone();
@@ -1412,9 +1415,31 @@ async fn drive_connection(
                         responder,
                         _cx| {
                 use agent_client_protocol::schema::TerminalOutputResponse;
-                let result = term_output
-                    .lock()
-                    .output(&request.terminal_id)
+                if !term_output_allowed {
+                    let denied: Result<TerminalOutputResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
+                let session_id = request.session_id.0.to_string();
+                let snapshot = term_output.lock().output(&request.terminal_id);
+                if let Ok((output, truncated, exit_status)) = &snapshot {
+                    let event = TerminalOutputEvent {
+                        agent_id: term_output_agent_id.clone(),
+                        session_id: SessionId::new(session_id.clone()),
+                        terminal_id: request.terminal_id.0.to_string(),
+                        output: output.clone(),
+                        truncated: *truncated,
+                        exit_status: exit_status.clone(),
+                    };
+                    events::fan_out(
+                        &term_output_sinks,
+                        Some(session_id.as_str()),
+                        events::EVENT_TERMINAL_OUTPUT,
+                        &event,
+                    );
+                }
+                let result = snapshot
                     .map(|(output, truncated, exit)| {
                         TerminalOutputResponse::new(output, truncated).exit_status(exit)
                     })

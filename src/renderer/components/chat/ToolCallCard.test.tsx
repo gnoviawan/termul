@@ -58,4 +58,25 @@ describe('ToolCallCard', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('Result')).toBeInTheDocument()
   })
+
+  it('renders terminal output, truncation, and exit status in collapsed details', () => {
+    render(
+      <ToolCallCard
+        toolCall={{
+          ...toolCall('completed'),
+          content: [{ type: 'terminal', terminalId: 'term-3' }],
+          terminalOutput: 'npm test passed',
+          terminalTruncated: true,
+          terminalExitStatus: { exitCode: 0 }
+        }}
+      />
+    )
+
+    const trigger = screen.getByRole('button')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(trigger)
+    expect(screen.getByText('npm test passed')).toBeInTheDocument()
+    expect(screen.getByText('Output truncated')).toBeInTheDocument()
+    expect(screen.getByText('Exit code 0')).toBeInTheDocument()
+  })
 })

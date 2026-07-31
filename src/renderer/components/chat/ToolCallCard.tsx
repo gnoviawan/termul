@@ -81,7 +81,11 @@ function renderContentBlock(block: ContentBlock, key: number): React.JSX.Element
   )
 }
 
-function renderContentItem(item: ToolCallContent, key: number): React.JSX.Element {
+function renderContentItem(
+  item: ToolCallContent,
+  key: number,
+  toolCall: ToolCall
+): React.JSX.Element {
   if (item.type === 'diff') {
     const d = item as { path: string; oldText?: string | null; newText: string }
     return (
@@ -102,16 +106,30 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
     )
   }
   if (item.type === 'terminal') {
-    // The ACP `terminal` content variant only references a terminal by id; its
-    // live output is fetched separately via `terminal/output` (not embedded in
-    // the tool call), so we surface the reference rather than inline output.
     const terminalId = (item as { terminalId?: string }).terminalId
+    const output = typeof toolCall.terminalOutput === 'string' ? toolCall.terminalOutput : ''
+    const exit = toolCall.terminalExitStatus as
+      | { exitCode?: number | null; signal?: string | null }
+      | null
+      | undefined
     return (
-      <div
-        key={key}
-        className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground"
-      >
-        {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
+      <div key={key} className="rounded border border-border/40 px-2 py-1 text-xs">
+        <div className="text-muted-foreground">
+          {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
+        </div>
+        {output && <ResultBlock text={output} />}
+        {toolCall.terminalTruncated && (
+          <div className="mt-1 text-3xs text-amber-600 dark:text-amber-400">Output truncated</div>
+        )}
+        {exit && (
+          <div className="mt-1 text-3xs text-muted-foreground">
+            {exit.exitCode != null
+              ? `Exit code ${exit.exitCode}`
+              : exit.signal
+                ? `Signal ${exit.signal}`
+                : 'Exited'}
+          </div>
+        )}
       </div>
     )
   }
@@ -251,7 +269,7 @@ function ToolCallCardComponent({
           <CollapseExpandMotion open={open}>
             <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
               {hasContent
-                ? content.map((item, i) => renderContentItem(item, i))
+                ? content.map((item, i) => renderContentItem(item, i, toolCall))
                 : resultText && <ResultBlock text={resultText} />}
             </div>
           </CollapseExpandMotion>

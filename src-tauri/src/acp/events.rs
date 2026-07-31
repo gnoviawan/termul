@@ -61,6 +61,8 @@ pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
 /// Event name: the agent updated session metadata (e.g. title).
 pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
+/// Event name: the agent requested a terminal output snapshot.
+pub const EVENT_TERMINAL_OUTPUT: &str = "acp:terminal_output";
 /// Event name: the agent reported context window utilization (and optional cost).
 pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 
@@ -283,6 +285,22 @@ pub struct UsageCostEvent {
     pub currency: String,
 }
 
+/// `acp:terminal_output`
+///
+/// Emitted after the agent requests `terminal/output`. The snapshot is scoped
+/// to the requesting agent and session by the driver that owns the registry.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOutputEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub terminal_id: String,
+    pub output: String,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<agent_client_protocol::schema::TerminalExitStatus>,
+}
+
 /// `acp:usage_update`
 ///
 /// Emitted when the agent pushes context window utilization via ACP
@@ -400,6 +418,27 @@ mod tests {
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["requestId"], "req-7");
         assert_eq!(value["sessionId"], "s");
+    }
+
+    #[test]
+    fn terminal_output_serializes_snapshot() {
+        let event = TerminalOutputEvent {
+            agent_id: AgentId("agent-1".to_string()),
+            session_id: SessionId::new("session-1"),
+            terminal_id: "term-1".to_string(),
+            output: "done\n".to_string(),
+            truncated: true,
+            exit_status: Some(
+                agent_client_protocol::schema::TerminalExitStatus::new().exit_code(7),
+            ),
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["agentId"], "agent-1");
+        assert_eq!(value["sessionId"], "session-1");
+        assert_eq!(value["terminalId"], "term-1");
+        assert_eq!(value["output"], "done\n");
+        assert_eq!(value["truncated"], true);
+        assert_eq!(value["exitStatus"]["exitCode"], 7);
     }
 
     #[test]
