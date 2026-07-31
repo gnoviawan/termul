@@ -7,7 +7,9 @@
     "distribution": {
       "npx": {
         "package": "agoragentic-mcp@1.3.0",
-        "args": ["--acp"]
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
@@ -49,7 +51,9 @@
     "distribution": {
       "npx": {
         "package": "@augmentcode/auggie@0.34.0",
-        "args": ["--acp"],
+        "args": [
+          "--acp"
+        ],
         "env": {
           "AUGMENT_DISABLE_AUTO_UPDATE": "1"
         }
@@ -81,12 +85,14 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.47",
+    "version": "3.0.48",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.47",
-        "args": ["--acp"]
+        "package": "cline@3.0.48",
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
@@ -98,7 +104,9 @@
     "distribution": {
       "npx": {
         "package": "@tencent-ai/codebuddy-code@2.106.7",
-        "args": ["--acp"]
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
@@ -123,32 +131,50 @@
         "darwin-aarch64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-darwin-arm64/cortex",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-darwin-arm64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-darwin-amd64/cortex",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-darwin-amd64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-linux-amd64/cortex",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-linux-amd64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-linux-arm64/cortex",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-linux-arm64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-windows-amd64/cortex.exe",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-windows-amd64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./coco-1.0.73+180523.e6179a031de9-windows-arm64/cortex.exe",
           "archive": "https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/1.0.73%2B180523.e6179a031de9/coco-1.0.73%2B180523.e6179a031de9-windows-arm64.tar.gz",
-          "args": ["acp", "serve"]
+          "args": [
+            "acp",
+            "serve"
+          ]
         }
       }
     }
@@ -189,27 +215,37 @@
         "darwin-aarch64": {
           "cmd": "./crow-cli",
           "archive": "https://github.com/crow-cli/crow-cli/releases/download/v0.1.24/crow-cli-darwin-aarch64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./crow-cli",
           "archive": "https://github.com/crow-cli/crow-cli/releases/download/v0.1.24/crow-cli-darwin-x86_64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./crow-cli",
           "archive": "https://github.com/crow-cli/crow-cli/releases/download/v0.1.24/crow-cli-linux-aarch64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./crow-cli",
           "archive": "https://github.com/crow-cli/crow-cli/releases/download/v0.1.24/crow-cli-linux-x86_64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./crow-cli.exe",
           "archive": "https://github.com/crow-cli/crow-cli/releases/download/v0.1.24/crow-cli-windows-x86_64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -224,32 +260,44 @@
         "darwin-aarch64": {
           "cmd": "./dist-package/cursor-agent",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/darwin/arm64/agent-cli-package.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./dist-package/cursor-agent",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/darwin/x64/agent-cli-package.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./dist-package/cursor-agent",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/linux/arm64/agent-cli-package.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./dist-package/cursor-agent",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/linux/x64/agent-cli-package.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./dist-package\\cursor-agent.cmd",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/windows/arm64/agent-cli-package.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./dist-package\\cursor-agent.cmd",
           "archive": "https://downloads.cursor.com/lab/2026.07.23-e383d2b/windows/x64/agent-cli-package.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -275,32 +323,44 @@
         "darwin-aarch64": {
           "cmd": "./bin/devin",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-aarch64-apple-darwin.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./bin/devin",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-x86_64-apple-darwin.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./bin/devin",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-aarch64-unknown-linux.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./bin/devin",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-x86_64-unknown-linux.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./bin\\devin.exe",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-aarch64-pc-windows.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./bin\\devin.exe",
           "archive": "https://static.devin.ai/cli/3000.3.22/devin-3000.3.22-x86_64-pc-windows.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -313,7 +373,9 @@
     "distribution": {
       "npx": {
         "package": "dimcode@0.3.1",
-        "args": ["acp"]
+        "args": [
+          "acp"
+        ]
       }
     }
   },
@@ -325,19 +387,25 @@
     "distribution": {
       "npx": {
         "package": "dirac-cli@0.4.31",
-        "args": ["--acp"]
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.184.0",
+    "version": "0.186.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.184.0",
-        "args": ["exec", "--output-format", "acp-daemon"],
+        "package": "droid@0.186.0",
+        "args": [
+          "exec",
+          "--output-format",
+          "acp-daemon"
+        ],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
           "FACTORY_DROID_AUTO_UPDATE_ENABLED": "false"
@@ -348,36 +416,42 @@
   {
     "id": "fast-agent",
     "name": "fast-agent",
-    "version": "0.9.28",
+    "version": "0.9.29",
     "description": "Code and build agents with comprehensive multi-provider support",
     "distribution": {
       "uvx": {
-        "package": "fast-agent-acp==0.9.28",
-        "args": ["-x"]
+        "package": "fast-agent-acp==0.9.29",
+        "args": [
+          "-x"
+        ]
       }
     }
   },
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.53.0",
+    "version": "0.53.1",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.53.0",
-        "args": ["--acp"]
+        "package": "@google/gemini-cli@0.53.1",
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
   {
     "id": "github-copilot-cli",
     "name": "GitHub Copilot",
-    "version": "1.0.76",
+    "version": "1.0.77",
     "description": "GitHub's AI pair programmer",
     "distribution": {
       "npx": {
-        "package": "@github/copilot@1.0.76",
-        "args": ["--acp"]
+        "package": "@github/copilot@1.0.77",
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
@@ -401,24 +475,34 @@
       "binary": {
         "darwin-aarch64": {
           "cmd": "./goose",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./goose",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./goose",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./goose",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./goose-package\\goose.exe",
           "archive": "https://github.com/block/goose/releases/download/v1.45.0/goose-x86_64-pc-windows-msvc.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -426,46 +510,64 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.117",
+    "version": "0.2.118",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.117",
-        "args": ["agent", "stdio"]
+        "package": "@xai-official/grok@0.2.118",
+        "args": [
+          "agent",
+          "stdio"
+        ]
       }
     }
   },
   {
     "id": "harn",
     "name": "Harn",
-    "version": "0.10.45",
+    "version": "0.10.47",
     "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-aarch64-apple-darwin.tar.gz",
-          "args": ["serve", "acp"]
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-aarch64-apple-darwin.tar.gz",
+          "args": [
+            "serve",
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-apple-darwin.tar.gz",
-          "args": ["serve", "acp"]
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-apple-darwin.tar.gz",
+          "args": [
+            "serve",
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-aarch64-unknown-linux-gnu.tar.gz",
-          "args": ["serve", "acp"]
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-aarch64-unknown-linux-gnu.tar.gz",
+          "args": [
+            "serve",
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-unknown-linux-gnu.tar.gz",
-          "args": ["serve", "acp"]
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-unknown-linux-gnu.tar.gz",
+          "args": [
+            "serve",
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "harn.exe",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-pc-windows-msvc.zip",
-          "args": ["serve", "acp"]
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-pc-windows-msvc.zip",
+          "args": [
+            "serve",
+            "acp"
+          ]
         }
       }
     }
@@ -480,32 +582,44 @@
         "darwin-aarch64": {
           "cmd": "./Applications/junie.app/Contents/MacOS/junie",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-macos-aarch64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./Applications/junie.app/Contents/MacOS/junie",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-macos-amd64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./junie-app/bin/junie",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-linux-aarch64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./junie-app/bin/junie",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-linux-amd64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./junie/junie.exe",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-windows-amd64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./junie/junie.exe",
           "archive": "https://github.com/JetBrains/junie/releases/download/2383.10/junie-release-2383.10-windows-aarch64.zip",
-          "args": ["--acp=true"]
+          "args": [
+            "--acp=true"
+          ]
         }
       }
     }
@@ -518,33 +632,45 @@
     "distribution": {
       "npx": {
         "package": "@kilocode/cli@7.4.17",
-        "args": ["acp"]
+        "args": [
+          "acp"
+        ]
       },
       "binary": {
         "darwin-aarch64": {
           "cmd": "./kilo",
           "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-darwin-arm64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./kilo",
           "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-darwin-x64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./kilo",
           "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-linux-arm64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./kilo",
           "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-linux-x64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./kilo.exe",
           "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-windows-x64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -559,27 +685,37 @@
         "darwin-aarch64": {
           "cmd": "./kimi",
           "archive": "https://github.com/MoonshotAI/kimi-cli/releases/download/1.49.0/kimi-1.49.0-aarch64-apple-darwin.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./kimi",
           "archive": "https://github.com/MoonshotAI/kimi-cli/releases/download/1.49.0/kimi-1.49.0-aarch64-unknown-linux-gnu.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./kimi",
           "archive": "https://github.com/MoonshotAI/kimi-cli/releases/download/1.49.0/kimi-1.49.0-x86_64-unknown-linux-gnu.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./kimi.exe",
           "archive": "https://github.com/MoonshotAI/kimi-cli/releases/download/1.49.0/kimi-1.49.0-aarch64-pc-windows-msvc.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./kimi.exe",
           "archive": "https://github.com/MoonshotAI/kimi-cli/releases/download/1.49.0/kimi-1.49.0-x86_64-pc-windows-msvc.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -592,7 +728,9 @@
     "distribution": {
       "uvx": {
         "package": "minion-code@0.1.44",
-        "args": ["acp"]
+        "args": [
+          "acp"
+        ]
       }
     }
   },
@@ -629,12 +767,14 @@
   {
     "id": "nova",
     "name": "Nova",
-    "version": "1.1.29",
+    "version": "1.1.30",
     "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
     "distribution": {
       "npx": {
-        "package": "@compass-ai/nova@1.1.29",
-        "args": ["acp"]
+        "package": "@compass-ai/nova@1.1.30",
+        "args": [
+          "acp"
+        ]
       }
     }
   },
@@ -648,32 +788,44 @@
         "darwin-aarch64": {
           "cmd": "./opencode",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-darwin-arm64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./opencode",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-darwin-x64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./opencode",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-linux-arm64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./opencode",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-linux-x64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./opencode",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-windows-arm64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./opencode.exe",
           "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.10/opencode-windows-x64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -692,39 +844,51 @@
   {
     "id": "poolside",
     "name": "Poolside",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "description": "Poolside's coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./pool-darwin-arm64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-darwin-arm64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-darwin-arm64.tar.gz",
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./pool-darwin-amd64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-darwin-amd64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-darwin-amd64.tar.gz",
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./pool-linux-arm64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-linux-arm64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-linux-arm64.tar.gz",
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./pool-linux-amd64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-linux-amd64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-linux-amd64.tar.gz",
+          "args": [
+            "acp"
+          ]
         },
         "windows-aarch64": {
           "cmd": "./pool-windows-arm64.exe",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-windows-arm64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-windows-arm64.tar.gz",
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./pool-windows-amd64.exe",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-windows-amd64.tar.gz",
-          "args": ["acp"]
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-windows-amd64.tar.gz",
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -737,19 +901,24 @@
     "distribution": {
       "npx": {
         "package": "@qoder-ai/qodercli@0.2.14",
-        "args": ["--acp"]
+        "args": [
+          "--acp"
+        ]
       }
     }
   },
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.1",
+    "version": "0.21.2",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.1",
-        "args": ["--acp", "--experimental-skills"]
+        "package": "@qwen-code/qwen-code@0.21.2",
+        "args": [
+          "--acp",
+          "--experimental-skills"
+        ]
       }
     }
   },
@@ -796,27 +965,37 @@
         "darwin-aarch64": {
           "cmd": "./stakpak",
           "archive": "https://github.com/stakpak/agent/releases/download/v0.3.88/stakpak-darwin-aarch64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "darwin-x86_64": {
           "cmd": "./stakpak",
           "archive": "https://github.com/stakpak/agent/releases/download/v0.3.88/stakpak-darwin-x86_64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-aarch64": {
           "cmd": "./stakpak",
           "archive": "https://github.com/stakpak/agent/releases/download/v0.3.88/stakpak-linux-aarch64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "linux-x86_64": {
           "cmd": "./stakpak",
           "archive": "https://github.com/stakpak/agent/releases/download/v0.3.88/stakpak-linux-x86_64.tar.gz",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         },
         "windows-x86_64": {
           "cmd": "./stakpak.exe",
           "archive": "https://github.com/stakpak/agent/releases/download/v0.3.88/stakpak-windows-x86_64.zip",
-          "args": ["acp"]
+          "args": [
+            "acp"
+          ]
         }
       }
     }
@@ -831,7 +1010,9 @@
         "darwin-aarch64": {
           "cmd": "./vtcode",
           "archive": "https://github.com/vinhnx/VTCode/releases/download/0.96.14/vtcode-0.96.14-aarch64-apple-darwin.tar.gz",
-          "args": ["acp"],
+          "args": [
+            "acp"
+          ],
           "env": {
             "VT_ACP_ENABLED": "1",
             "VT_ACP_ZED_ENABLED": "1"
@@ -840,7 +1021,9 @@
         "darwin-x86_64": {
           "cmd": "./vtcode",
           "archive": "https://github.com/vinhnx/VTCode/releases/download/0.96.14/vtcode-0.96.14-x86_64-apple-darwin.tar.gz",
-          "args": ["acp"],
+          "args": [
+            "acp"
+          ],
           "env": {
             "VT_ACP_ENABLED": "1",
             "VT_ACP_ZED_ENABLED": "1"
@@ -849,7 +1032,9 @@
         "linux-x86_64": {
           "cmd": "./vtcode",
           "archive": "https://github.com/vinhnx/VTCode/releases/download/0.96.14/vtcode-0.96.14-x86_64-unknown-linux-gnu.tar.gz",
-          "args": ["acp"],
+          "args": [
+            "acp"
+          ],
           "env": {
             "VT_ACP_ENABLED": "1",
             "VT_ACP_ZED_ENABLED": "1"
@@ -858,7 +1043,9 @@
         "windows-x86_64": {
           "cmd": "vtcode.exe",
           "archive": "https://github.com/vinhnx/VTCode/releases/download/0.96.14/vtcode-0.96.14-x86_64-pc-windows-msvc.zip",
-          "args": ["acp"],
+          "args": [
+            "acp"
+          ],
           "env": {
             "VT_ACP_ENABLED": "1",
             "VT_ACP_ZED_ENABLED": "1"
