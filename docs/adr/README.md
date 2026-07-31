@@ -26,16 +26,14 @@ original authors' rationale.
 
 ## Validation evidence
 
-The following checks were used before reconstruction:
+The following checks were used against the pre-reconstruction `dev` tree at
+`71dc12d55e7fa27d4cc97e733b559f0192ba641f`:
 
 ```text
-git ls-tree -r --name-only HEAD -- docs/adr
+git ls-tree -r --name-only 71dc12d55e7fa27d4cc97e733b559f0192ba641f -- docs/adr
 # no output
 
-git ls-tree -r --name-only origin/dev -- docs/adr
-# no output
-
-git log --all -- docs/adr '*/adr-003*' '*/adr-004*' '*spec-adr-003*'
+git log 71dc12d55e7fa27d4cc97e733b559f0192ba641f -- docs/adr '*/adr-003*' '*/adr-004*' '*spec-adr-003*'
 # only broad historical docs-folder commits; no authoritative ADR file path
 ```
 

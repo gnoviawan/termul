@@ -58,8 +58,10 @@ tmpclaude-*
 # Docs folder (local only, not tracked)
 # docs/
 
-# ADR documentation
+# ADR documentation (maintained records are explicitly tracked)
 docs/adr/
+!docs/adr/
+!docs/adr/**
 
 # Auto Claude generated files
 .auto-claude-security.json
