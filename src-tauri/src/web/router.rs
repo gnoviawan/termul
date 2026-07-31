@@ -64,6 +64,10 @@ pub fn router(
         .route("/fs/write", post(fs_api::write))
         .route("/fs/ls", get(fs_api::ls))
         .route("/fs/browse", get(fs_api::browse))
+        .route("/fs/read", get(fs_api::read))
+        .route("/fs/delete", post(fs_api::delete))
+        .route("/fs/rename", post(fs_api::rename))
+        .route("/fs/copy", post(fs_api::copy))
         .route("/git/init", post(fs_api::git_init))
         .route("/shells", get(fs_api::shells));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
@@ -102,6 +106,10 @@ pub fn router_with_static(
         .route("/fs/write", post(fs_api::write))
         .route("/fs/ls", get(fs_api::ls))
         .route("/fs/browse", get(fs_api::browse))
+        .route("/fs/read", get(fs_api::read))
+        .route("/fs/delete", post(fs_api::delete))
+        .route("/fs/rename", post(fs_api::rename))
+        .route("/fs/copy", post(fs_api::copy))
         .route("/git/init", post(fs_api::git_init))
         .route("/shells", get(fs_api::shells))
         .fallback_service(assets::static_service_from(static_dir))

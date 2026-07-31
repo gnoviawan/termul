@@ -238,6 +238,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async readFile(filePath: string): Promise<IpcResult<FileContent>> {
+      // Web/remote mode: route through the same-origin server. The server
+      // enforces size + binary checks (FILE_TOO_LARGE / BINARY_FILE) so this
+      // is a thin passthrough mirroring the desktop facade's behavior.
+      if (!isTauriContext()) {
+        return webServerFilesystem.readFile(filePath)
+      }
       try {
         const info = await stat(filePath)
         if (info.size > MAX_FILE_SIZE) {
@@ -641,6 +647,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async deletePath(path: string, options?: { recursive?: boolean }): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.deletePath(path, options)
+      }
       try {
         await remove(path, { recursive: options?.recursive ?? false })
         return { success: true, data: undefined }
@@ -650,6 +660,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async renameFile(oldPath: string, newPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.renameFile(oldPath, newPath)
+      }
       try {
         await rename(oldPath, newPath)
         return { success: true, data: undefined }
@@ -663,6 +677,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
      * Returns `COPY_ERROR` on failure (e.g. when the source is a directory).
      */
     async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.copyFile(srcPath, destPath)
+      }
       try {
         await copyFile(srcPath, destPath)
         return { success: true, data: undefined }
@@ -672,6 +690,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async watchDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: live file watchers are desktop-only (Tauri events).
+      // The mobile file explorer v1 re-fetches on action/refresh instead of
+      // subscribing to fs events, so watching is a no-op success on web.
+      if (!isTauriContext()) {
+        return { success: true, data: undefined }
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
 
@@ -721,6 +745,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async unwatchDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: nothing to unwatch (watchers are desktop-only).
+      if (!isTauriContext()) {
+        return { success: true, data: undefined }
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const unlisten = activeWatchers.get(normalizedDirPath)

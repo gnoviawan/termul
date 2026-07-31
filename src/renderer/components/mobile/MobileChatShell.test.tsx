@@ -70,6 +70,28 @@ vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
     ) : null
 }))
 
+// Stub the file-explorer drawer so the shell test focuses on the trigger
+// wiring (button → filesOpen → drawer `open` prop → onOpenChange close).
+// The drawer's own open/close + file-management is covered in
+// MobileFileExplorer.test.tsx.
+vi.mock('./MobileFileExplorer', () => ({
+  MobileFileExplorer: ({
+    open,
+    onOpenChange
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }) =>
+    open ? (
+      <div>
+        <span>files-drawer</span>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-files
+        </button>
+      </div>
+    ) : null
+}))
+
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriRef.current
 }))
@@ -171,5 +193,42 @@ describe('MobileChatShell', () => {
     // Closing via the drawer's onOpenChange(false) unmounts its content.
     fireEvent.click(screen.getByText('close-drawer'))
     expect(screen.queryByText('project-drawer')).not.toBeInTheDocument()
+  })
+
+  it('mounts the files drawer trigger in web mode and toggles it open/closed', async () => {
+    tauriRef.current = false
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    const filesBtn = screen.getByLabelText('Browse files')
+    expect(filesBtn).toBeInTheDocument()
+    // Drawer starts closed.
+    expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+
+    fireEvent.click(filesBtn)
+    expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+
+    // Closing via the drawer's onOpenChange(false) unmounts its content.
+    fireEvent.click(screen.getByText('close-files'))
+    expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+  })
+
+  it('hides the Browse files button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+    // Desktop never mounts the web/remote file explorer — the right-sidebar
+    // FileExplorer owns file browsing there.
+    expect(screen.queryByLabelText('Browse files')).not.toBeInTheDocument()
   })
 })
