@@ -1292,8 +1292,8 @@ async fn drive_connection(
     let term_output_sinks = sinks.clone();
     let term_output_agent_id = agent_id.clone();
     let term_wait = terminals.clone();
-    let term_wait_sinks = sinks.clone();
-    let term_wait_agent_id = agent_id.clone();
+    let term_wait_sinks = Arc::new(sinks.clone());
+    let term_wait_agent_id = Arc::new(agent_id.clone());
     let term_kill = terminals.clone();
     let term_release = terminals.clone();
     let loop_terminals = terminals.clone();
@@ -1480,6 +1480,8 @@ async fn drive_connection(
                         cx| {
                 use agent_client_protocol::schema::WaitForTerminalExitResponse;
                 let registry = term_wait.clone();
+                let wait_sinks = term_wait_sinks.clone();
+                let wait_agent_id = term_wait_agent_id.clone();
                 // Await off the dispatch path so other terminal ops stay
                 // responsive. The child handle is taken out from under the lock
                 // first, so the registry mutex is NOT held across the await.
@@ -1500,8 +1502,8 @@ async fn drive_connection(
                                 Ok(Some(status)) => {
                                     emit_terminal_snapshot(
                                         &registry,
-                                        &term_wait_sinks,
-                                        &term_wait_agent_id,
+                                        &wait_sinks,
+                                        &wait_agent_id,
                                         &session_id,
                                         &request.terminal_id,
                                     );
@@ -1528,8 +1530,8 @@ async fn drive_connection(
                                 );
                                 emit_terminal_snapshot(
                                     &registry,
-                                    &term_wait_sinks,
-                                    &term_wait_agent_id,
+                                    &wait_sinks,
+                                    &wait_agent_id,
                                     &session_id,
                                     &request.terminal_id,
                                 );
