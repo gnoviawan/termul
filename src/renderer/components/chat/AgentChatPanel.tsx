@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
@@ -437,6 +439,14 @@ export function AgentChatPanel({
         sessionId={session.id}
         agentId={session.agentId}
         showRunningIndicator={showRunningIndicator}
+        filePathContext={
+          isTauriContext()
+            ? {
+                cwd: session.cwd,
+                projectRoot: getDefaultCwdForProject(session.projectId) || session.cwd
+              }
+            : undefined
+        }
         onEditMessage={seedComposer}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />

@@ -77,6 +77,37 @@ function isUrlAdjacentPathMatch(line: string, start: number, text: string): bool
   return URI_SCHEME_REGEX.test(tokenPrefix)
 }
 
+export interface FilePathMatch {
+  text: string
+  start: number
+}
+
+/** Finds file-like path tokens while excluding URL host/path fragments. */
+export function findFilePathMatches(line: string): FilePathMatch[] {
+  if (!line.includes('/') && !line.includes('\\') && !line.includes(':')) {
+    return []
+  }
+
+  const matches: FilePathMatch[] = []
+
+  for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
+    const text = match[0]
+    const start = match.index ?? -1
+    if (
+      !text ||
+      !looksLikeFilePath(text) ||
+      start < 0 ||
+      isUrlAdjacentPathMatch(line, start, text)
+    ) {
+      continue
+    }
+
+    matches.push({ text, start })
+  }
+
+  return matches
+}
+
 /** Extracts file-like links from a rendered terminal line for Ctrl/Cmd+Click activation. */
 // Range x-coordinates are based on JavaScript string indices. Wide or combining
 // terminal characters can render to different cell widths, and this module only
@@ -86,34 +117,14 @@ export function buildTerminalPathLinks(
   lineNumber: number,
   onActivate: (event: MouseEvent, text: string) => void | Promise<void>
 ): TerminalPathLink[] {
-  if (!line.includes('/') && !line.includes('\\') && !line.includes(':')) {
-    return []
-  }
-
-  const links: TerminalPathLink[] = []
-
-  for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
-    const text = match[0]
-    if (!text || !looksLikeFilePath(text)) {
-      continue
-    }
-
-    const start = match.index ?? -1
-    if (start < 0 || isUrlAdjacentPathMatch(line, start, text)) {
-      continue
-    }
-
-    links.push({
-      range: {
-        start: { x: start + 1, y: lineNumber },
-        end: { x: start + text.length, y: lineNumber }
-      },
-      text,
-      activate: onActivate
-    })
-  }
-
-  return links
+  return findFilePathMatches(line).map(({ text, start }) => ({
+    range: {
+      start: { x: start + 1, y: lineNumber },
+      end: { x: start + text.length, y: lineNumber }
+    },
+    text,
+    activate: onActivate
+  }))
 }
 
 function normalizeAbsolutePath(value: string): string {

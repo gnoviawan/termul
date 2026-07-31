@@ -10,6 +10,7 @@ import {
   useMessageScroller
 } from '@/components/ui/message-scroller'
 import type { AgentId, SessionId } from '@/lib/acp-api'
+import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -41,6 +42,8 @@ interface ChatMessageListProps {
   onEditMessage?: (text: string) => void
   /** Re-run the latest user turn (regenerate affordance on agent replies). */
   onRetry?: () => void
+  /** Filesystem roots used for safe file-path links in agent prose. */
+  filePathContext?: FilePathResolutionContext
 }
 
 /** Index of the last visible message item in the turn-grouped timeline. */
@@ -88,6 +91,7 @@ interface TimelineRenderProps {
   shouldAnimateEnter: (id: string) => boolean
   onEditMessage?: (text: string) => void
   onRetry?: () => void
+  filePathContext?: FilePathResolutionContext
 }
 
 /**
@@ -101,7 +105,8 @@ function VirtualizedTimeline({
   lastMsgIndex,
   shouldAnimateEnter,
   onEditMessage,
-  onRetry
+  onRetry,
+  filePathContext
 }: TimelineRenderProps): React.JSX.Element {
   const { viewportEl, pinned } = useMessageScroller()
   const virtualizer = useVirtualizer({
@@ -207,6 +212,7 @@ function VirtualizedTimeline({
         animateEnter={item.isTurnTail ? false : shouldAnimateEnter(item.message.id)}
         onEdit={onEditMessage}
         onRetry={onRetry}
+        filePathContext={filePathContext}
       />
     )
   }
@@ -274,7 +280,8 @@ export function ChatMessageList({
   agentId,
   showRunningIndicator,
   onEditMessage,
-  onRetry
+  onRetry,
+  filePathContext
 }: ChatMessageListProps): React.JSX.Element {
   const groupedItems = useMemo(
     () => groupTurnActivity(items, showRunningIndicator),
@@ -301,6 +308,7 @@ export function ChatMessageList({
               groupedItems={groupedItems}
               lastMsgIndex={lastMsgIndex}
               shouldAnimateEnter={shouldAnimateEnter}
+              filePathContext={filePathContext}
               onEditMessage={onEditMessage}
               onRetry={onRetry}
             />
