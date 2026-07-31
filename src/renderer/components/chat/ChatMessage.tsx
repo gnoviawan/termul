@@ -232,6 +232,8 @@ function AgentProse({
           return (
             <a
               href={href}
+              target="_blank"
+              rel="noreferrer"
               {...props}
               onClick={(event) => {
                 event.preventDefault()
