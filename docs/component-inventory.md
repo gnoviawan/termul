@@ -52,15 +52,15 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 
 - `chat/AgentChatPanel.tsx` — top-level agent-chat pane body coordinating header, message thread, plan panel, permission dialog, and composer for a single ACP session
 - `chat/AgentHeader.tsx` / `chat/AgentBadge.tsx` / `chat/AgentConnectionLamp.tsx` — agent identity, setup state, and transport/session connectivity indicators
-- `chat/ChatMessage.tsx` / `chat/ChatMessageList.tsx` — user/agent message rows and timeline rendering, including streamed text and ACP media blocks
+- `chat/ChatMessage.tsx` / `chat/ChatMessageList.tsx` — user/agent message rows and timeline rendering, including sanitized Markdown, streamed text, ACP media blocks, inline-image lightbox behavior, and safe opening of path-backed resources
 - `chat/ChatInputBar.tsx` — composer with slash commands, `@`-file mentions, config/mode chips, prompt queue controls, and staged-attachment badges
-- `chat/AttachmentPreviewGroup.tsx` / `chat/AttachFilesButton.tsx` — staged attachment presentation and file/image selection
-- `chat/use-composer-attachments.ts` / `chat/chat-attachments.ts` — map OS-picked paths to `resource_link` blocks and drag/paste bytes to image or embedded-resource blocks
+- `chat/AttachmentPreviewGroup.tsx` / `chat/AttachFilesButton.tsx` — staged attachment presentation and file/image selection, including hover previews and path-backed opening
+- `chat/use-composer-attachments.ts` / `chat/chat-attachments.ts` — map OS-picked paths to `resource_link` blocks and drag/paste bytes to image or embedded-resource blocks; `pendingToAttachmentData` and `blockToAttachmentData` adapt ACP blocks to attachment UI data
 - `chat/FileMentionMenu.tsx` / `chat/use-composer-mentions.ts` — codebase filename discovery that stages a `file-ref` attachment
 - `chat/ToolCallCard.tsx` / `chat/ThoughtGroup.tsx` / `chat/TurnActivity.tsx` — streamed tool, reasoning, and turn-state views
 - `chat/PlanPanel.tsx` / `chat/ContextUsageIndicator.tsx` — agent plan and reported context-window usage surfaces
 - `chat/PermissionDialog.tsx` / `chat/PromptQueuePanel.tsx` — pending permission decisions and queued prompts
-- `components/ai-elements/attachments.tsx` — vendored AI SDK Elements attachment primitives adapted to the repository's shadcn primitives
+- `components/ai-elements/attachments.tsx` — vendored AI SDK Elements attachment primitives adapted to the repository's shadcn primitives, with grid/inline/list variants
 
 #### ACP state, hooks, and transport topology
 

@@ -4,16 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### ACP / Agent Chat
+### Documentation
 
-- Agent Chat now supports streamed ACP conversations with tool calls, plans,
-  permission decisions, session configuration, attachments, and persisted
-  session history.
-- ACP provider setup forwards advertised authentication methods and
-  authenticates before creating a session.
-- ACP Agent Chat reports agent-provided context usage and cost, bounds live
-  chat memory, and preserves web/remote sessions across mobile idle/background
-  transitions.
+- Document the existing ACP / Agent Chat architecture, command and event
+  contracts, renderer components, and state/transport boundaries.
 
 ## [0.4.0] - 2026-05-31
 
