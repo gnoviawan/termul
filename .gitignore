@@ -9,6 +9,7 @@ node_modules/
 dist/
 dist-ssr/
 dist-tauri/
+dist-web/
 out/
 *.tsbuildinfo
 
@@ -80,8 +81,17 @@ VERIFICATION_CHECKLIST.md
 .github/copilot-instructions.md
 /.pi
 /.pi-lens
+/.pi-subagents
 /.agents
 .pi-automator-active
 
 # Personal notes & specs (local only)
 /ntfd/
+.termul/
+
+# Local agent-skill installs & HyperFrames video-authoring artifacts
+# (kept out of the app repo; install locally via `skills add` / hyperframes)
+/agent/
+/video/
+/compositions/
+/plans

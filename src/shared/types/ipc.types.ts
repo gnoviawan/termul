@@ -117,6 +117,9 @@ export interface GitApi {
   commit: (cwd: string, summary: string, description?: string, amend?: boolean) => Promise<void>
   push: (cwd: string) => Promise<void>
   getCommitContext: (cwd: string) => Promise<GitCommitContext>
+  init: (cwd: string) => Promise<void>
+  checkoutBranch: (cwd: string, branch: string, isRemote?: boolean) => Promise<void>
+  createBranch: (cwd: string, branch: string, startRef?: string) => Promise<void>
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>
   stashList: (cwd: string) => Promise<GitStashInfo[]>
   stashApply: (cwd: string, index: number) => Promise<void>
@@ -205,6 +208,7 @@ export interface BranchInfo {
   isRemote: boolean
   isCurrent: boolean
   upstream?: string | null
+  hasOtherWorktree: boolean
 }
 
 export interface DirtyStatus {
@@ -331,27 +335,8 @@ export interface RemoteStatus {
   bindMode: RemoteBindMode | null
   /** `127.0.0.1` or `0.0.0.0` while running. */
   bindHost: string | null
-}
-
-// One terminal entry within a remote project tree (mirrors Rust RemoteTerminal)
-export interface RemoteTerminalEntry {
-  ptyId: string
-  name: string
-  cwd?: string
-}
-
-// One project with its terminals (mirrors Rust RemoteProject)
-export interface RemoteProjectEntry {
-  id: string
-  name: string
-  terminals: RemoteTerminalEntry[]
-}
-
-// Full project tree published to the remote server (mirrors Rust ProjectTree)
-export interface RemoteProjectTree {
-  projects: RemoteProjectEntry[]
-  // Index signature to satisfy Tauri's InvokeArgs constraint
-  [key: string]: unknown
+  /** Ephemeral `https://*.trycloudflare.com` tunnel URL (QR-encoded). */
+  tunnelUrl: string | null
 }
 
 // Remote terminal server control API
@@ -359,7 +344,6 @@ export interface RemoteServerApi {
   start: (options?: { bindMode?: RemoteBindMode }) => Promise<IpcResult<RemoteStatus>>
   stop: () => Promise<IpcResult<RemoteStatus>>
   status: () => Promise<IpcResult<RemoteStatus>>
-  publishProjects: (tree: RemoteProjectTree) => Promise<IpcResult<void>>
 }
 
 // Filesystem types re-exported for convenience
@@ -368,7 +352,8 @@ import type {
   FileChangeEvent,
   FileContent,
   FileInfo,
-  FileSearchResponse
+  FileSearchResponse,
+  SearchFileHit
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -420,11 +405,13 @@ export interface FilesystemApi {
     searchId: string,
     scopeRoot: string,
     rootPath: string,
-    query: string
+    query: string,
+    /** When true, surface ignored/hidden files with `ignored: true` (ADR 0003). */
+    includeIgnored?: boolean
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+    callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
@@ -449,6 +436,7 @@ export interface FilesystemApi {
   createDirectory: (dirPath: string) => Promise<IpcResult<void>>
   deletePath: (path: string, options?: { recursive?: boolean }) => Promise<IpcResult<void>>
   renameFile: (oldPath: string, newPath: string) => Promise<IpcResult<void>>
+  copyFile: (srcPath: string, destPath: string) => Promise<IpcResult<void>>
   watchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   unwatchDirectory: (dirPath: string) => Promise<IpcResult<void>>
   onFileChanged: (callback: FileChangeCallback) => () => void
@@ -456,7 +444,14 @@ export interface FilesystemApi {
   onFileDeleted: (callback: FileChangeCallback) => () => void
 }
 
-export type { DirectoryEntry, FileChangeEvent, FileContent, FileInfo, FileSearchResponse }
+export type {
+  DirectoryEntry,
+  FileChangeEvent,
+  FileContent,
+  FileInfo,
+  FileSearchResponse,
+  SearchFileHit
+}
 
 // ============================================================================
 // Session Persistence Types

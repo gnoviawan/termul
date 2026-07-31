@@ -1,5 +1,6 @@
 import { RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,
   formatKeyForDisplay,
@@ -111,7 +112,20 @@ export function ShortcutRecorder({
     [handleClick, isRecording]
   )
 
-  // Attach keydown listener when recording
+  // Suspend the native app menu while recording so its accelerators (e.g. ⌘W,
+  // ⌘R, ⌘C) stop intercepting keys before they reach the webview, letting the
+  // user record any combination. Keyed only on `isRecording` so a change in
+  // `handleKeyDown`'s identity does not churn the menu mid-recording.
+  useEffect(() => {
+    if (!isRecording) return
+    void beginShortcutCapture()
+    return () => {
+      void endShortcutCapture()
+    }
+  }, [isRecording])
+
+  // Attach the capture-phase keydown listener while recording. Re-binds when
+  // `handleKeyDown` changes identity (e.g. after the shortcut map updates).
   useEffect(() => {
     if (isRecording && inputRef.current) {
       inputRef.current.focus()
@@ -128,7 +142,7 @@ export function ShortcutRecorder({
             <div className="truncate text-xs font-medium text-secondary-foreground">
               {shortcut.label}
             </div>
-            <div className="truncate text-[11px] text-muted-foreground">{shortcut.description}</div>
+            <div className="truncate text-2xs text-muted-foreground">{shortcut.description}</div>
           </div>
 
           {isCustomized && (
@@ -153,7 +167,7 @@ export function ShortcutRecorder({
             onBlur={handleBlur}
             onKeyDown={handleKeyboardActivate}
             className={`
-              min-w-[88px] shrink-0 rounded-md border px-2 py-1 text-center font-mono text-[11px] transition-all cursor-pointer
+              min-w-[88px] shrink-0 rounded-md border px-2 py-1 text-center font-mono text-2xs transition-all cursor-pointer
               ${
                 isRecording
                   ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
@@ -172,7 +186,7 @@ export function ShortcutRecorder({
         </div>
 
         {conflict && (
-          <div className="mt-1 text-[11px] text-red-500">
+          <div className="mt-1 text-2xs text-red-500">
             Conflicts with "{conflict.label}".{' '}
             <button
               type="button"

@@ -780,23 +780,49 @@ impl PtyManager {
         // a) Drop writer first to close PTY input stream cleanly.
         let _ = instance.writer.blocking_lock().take();
 
-        // b) Wait flusher thread to finish naturally (max 2s)
+        // b) Kill the child FIRST and wait briefly for it to exit. Once the
+        //    child exits, the OS closes the PTY slave end and the reader
+        //    thread's blocking `reader.read()` returns Ok(0) (EOF), so it
+        //    exits naturally and the joins below complete fast.
+        //
+        //    The previous order (join reader, THEN kill child) left the reader
+        //    blocked because the child was still alive holding the PTY open.
+        //    Every cleanup hit the 3s join timeout, leaking the detached
+        //    watcher thread spawned by `join_reader_with_timeout` plus the
+        //    stuck reader thread. With N terminals, those leaked threads kept
+        //    the process alive in the task manager and spinning CPU after the
+        //    window was closed (issue #390).
+        if let Some(mut child) = instance.child.blocking_lock().take() {
+            let _ = child.kill();
+            // Best-effort wait: give the child up to ~2s to exit so the PTY
+            // EOF propagates to the reader before we join. If it doesn't exit
+            // (stubborn grandchild / ConPTY edge case), proceed anyway — the
+            // join timeout below is the safety net.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
+        }
+
+        // c) Wait flusher thread to finish naturally (max 2s). It observes the
+        //    reader's done_flag, which is set once the reader exits on EOF.
         if let Some(flusher_handle) = instance.flusher_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(flusher_handle, Duration::from_secs(2));
             }
         }
 
-        // c) Wait reader thread to finish naturally (max 3s)
+        // d) Wait reader thread to finish naturally (max 3s). With the child
+        //    already killed above, the reader should have hit EOF and exited;
+        //    this join is a safety net for slow/edge-case exits.
         if let Some(reader_handle) = instance.reader_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(reader_handle, Duration::from_secs(3));
             }
-        }
-
-        // d) Kill child process
-        if let Some(mut child) = instance.child.blocking_lock().take() {
-            let _ = child.kill();
         }
 
         // e) Drop ConPTY handles last
@@ -2206,8 +2232,8 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
             // KILL_ON_JOB_CLOSE only fires when the LAST handle closes, so an
             // extra duplicate is safe and does not terminate the tree early.
             let mut dup_job: *mut winapi::ctypes::c_void = std::ptr::null_mut();
-            if !self.job_handle.is_null() {
-                if winapi::um::handleapi::DuplicateHandle(
+            if !self.job_handle.is_null()
+                && winapi::um::handleapi::DuplicateHandle(
                     winapi::um::processthreadsapi::GetCurrentProcess(),
                     self.job_handle,
                     winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -2216,14 +2242,13 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
                     0,
                     winapi::um::winnt::DUPLICATE_SAME_ACCESS,
                 ) == 0
-                {
-                    log::warn!(
-                        "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
-                        self.pid,
-                        std::io::Error::last_os_error()
-                    );
-                    dup_job = std::ptr::null_mut();
-                }
+            {
+                log::warn!(
+                    "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
+                    self.pid,
+                    std::io::Error::last_os_error()
+                );
+                dup_job = std::ptr::null_mut();
             }
 
             Box::new(WindowsConPtyChild {
@@ -2791,8 +2816,8 @@ mod tests {
         // the candidates in lib.rs get_available_shells()
         // This test ensures the git_bash_paths constants stay in sync
 
-        // Verify primary paths are non-empty and well-formed
-        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty());
+        // Verify primary paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::PRIMARY_PATHS.is_empty()) };
         for path in git_bash_paths::PRIMARY_PATHS {
             assert!(
                 path.contains("bash.exe"),
@@ -2801,8 +2826,8 @@ mod tests {
             );
         }
 
-        // Verify fallback paths are non-empty and well-formed
-        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty());
+        // Verify fallback paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::FALLBACK_PATHS.is_empty()) };
         for path in git_bash_paths::FALLBACK_PATHS {
             assert!(
                 path.contains("bash.exe"),

@@ -2,6 +2,7 @@ import type { GitCommitContext, GitStashInfo, GitStatusDetail } from '@shared/ty
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { gitApi } from '@/lib/git-api'
+import { platform } from '@/lib/tauri-os'
 
 /** Build the staged-aware diff cache key so the staged and unstaged rows of the
  * same file (porcelain `MM`) do not collide. */
@@ -258,10 +259,7 @@ async function updateStoresWithBranch(cwd: string, branchName: string) {
     const normalizePath = (p?: string) => (p ? p.replace(/\\/g, '/') : '')
     const normalizedCwd = normalizePath(cwd)
 
-    const isWindows =
-      typeof process !== 'undefined'
-        ? process.platform === 'win32'
-        : navigator.platform.toLowerCase().includes('win')
+    const isWindows = platform() === 'windows'
     const matchPath = (otherPath?: string) => {
       const normalizedOther = normalizePath(otherPath)
       return isWindows

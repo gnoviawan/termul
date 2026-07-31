@@ -1,6 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import {
-  Bot,
   Edit2,
   GitBranch,
   Globe,
@@ -16,12 +15,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { ContextMenu } from '@/components/ContextMenu'
+import { AgentBadge } from '@/components/chat/AgentBadge'
+import { AgentConnectionLamp, isAgentConnected } from '@/components/chat/AgentConnectionLamp'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
 import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -171,12 +172,12 @@ function TerminalTabInline({
             }}
             onBlur={handleSave}
             onClick={(e) => e.stopPropagation()}
-            className="text-[11px] font-medium bg-transparent border-b border-primary outline-none w-full"
+            className="text-2xs font-medium bg-transparent border-b border-primary outline-none w-full"
           />
         ) : (
           <span
             onDoubleClick={handleDoubleClick}
-            className={cn('text-[11px] font-medium', isActive && 'text-foreground')}
+            className={cn('text-2xs font-medium', isActive && 'text-foreground')}
           >
             {terminal.name}
           </span>
@@ -394,7 +395,7 @@ function BrowserTabInline({
         )}
 
         <Globe size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
-        <span className={cn('text-[11px] font-medium truncate', isActive && 'text-foreground')}>
+        <span className={cn('text-2xs font-medium truncate', isActive && 'text-foreground')}>
           {label}
         </span>
         <button
@@ -484,11 +485,11 @@ function GitTabInline({
         )}
       >
         <GitBranch size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-[11px] font-medium flex-1">Git Changes</span>
+        <span className="truncate text-2xs font-medium flex-1">Git Changes</span>
         {totalChanges > 0 && (
           <span
             className={cn(
-              'px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-[9px] font-bold',
+              'px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-4xs font-bold',
               isActive
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-muted-foreground/20 text-muted-foreground'
@@ -580,7 +581,7 @@ function GitHistoryTabInline({
         )}
       >
         <History size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-[11px] font-medium flex-1">Git History</span>
+        <span className="truncate text-2xs font-medium flex-1">Git History</span>
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -641,8 +642,20 @@ function AgentChatTabInline({
   } | null>(null)
 
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
-  const label = session?.title ?? 'Agent Chat'
+  const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
+  const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
+  // The persisted index entry carries the effective title (agent-pushed title,
+  // first-message derivation, or "Untitled Chat N"). `session.title` stays null
+  // until an event sets it, so fall through to the index entry for the label.
+  const indexTitle = useAcpStore(
+    (s) => s.sessionIndex.find((e) => e.id === tab.sessionId)?.title ?? null
+  )
+  // Treat in-flight launcher handoff as connected so we don't flash a red
+  // disconnected lamp on the optimistic placeholder chat.
+  const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
+  const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 
   return (
     <>
@@ -657,25 +670,39 @@ function AgentChatTabInline({
           e.preventDefault()
           setContextMenu({ x: e.clientX, y: e.clientY })
         }}
+        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
         className={cn(
-          'group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
-            ? 'bg-secondary text-foreground'
+            ? 'bg-background border-b-primary text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
-          isDragging && 'opacity-50',
+          isDragging && 'opacity-50 scale-[0.98]',
           isDropTarget && dropPosition === 'before' && 'border-l-2 border-l-primary',
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        <Bot size={12} className={isActive ? 'text-primary' : ''} />
-        <span
-          className={cn(
-            'truncate text-[11px] font-medium flex-1',
-            isClosed && 'line-through opacity-60'
-          )}
-        >
-          {label}
-        </span>
+        {session ? (
+          <>
+            <AgentBadge
+              agentId={session.agentId}
+              showName={false}
+              iconSize={12}
+              className="shrink-0"
+            />
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-2xs font-medium',
+                isClosed && 'line-through opacity-60',
+                isActive ? 'text-foreground' : 'text-inherit'
+              )}
+            >
+              {tabLabel}
+            </span>
+            <AgentConnectionLamp connected={connected} />
+          </>
+        ) : (
+          <span className="truncate text-2xs font-medium flex-1">Agent Chat</span>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -685,8 +712,6 @@ function AgentChatTabInline({
         >
           <XIcon size={10} />
         </button>
-
-        {isActive && <div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />}
       </div>
 
       {contextMenu && (
@@ -1157,7 +1182,7 @@ export function WorkspaceTabBar({
 
             {isTerminalMenuOpen && (
               <div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
-                <div className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground bg-secondary/30">
+                <div className="px-2.5 py-1 text-2xs font-medium text-muted-foreground bg-secondary/30">
                   Terminal
                 </div>
                 {loading ? (
@@ -1172,22 +1197,20 @@ export function WorkspaceTabBar({
                         key={shell.name}
                         onClick={() => handleSelectShell(shell)}
                         className={cn(
-                          'w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-secondary flex items-center gap-2 leading-none',
+                          'w-full px-2.5 py-1.5 text-left text-2xs hover:bg-secondary flex items-center gap-2 leading-none',
                           shell.name === defaultShell && 'text-primary'
                         )}
                       >
                         <TerminalIcon size={11} />
                         <span className="truncate">{shell.displayName}</span>
                         {shell.name === defaultShell && (
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            (default)
-                          </span>
+                          <span className="ml-auto text-3xs text-muted-foreground">(default)</span>
                         )}
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  <div className="px-2.5 py-1.5 text-2xs text-muted-foreground">
                     No shells detected
                   </div>
                 )}

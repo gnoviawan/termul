@@ -12,22 +12,24 @@ function isPathWithinRoot(path: string, rootPath: string): boolean {
 }
 
 /**
- * Copy a file or directory to a new location
+ * Copy a file or directory to a new location.
+ *
+ * Uses binary-safe `copyFile` to avoid UTF-8 round-trip corruption on binary
+ * files (images, fonts, compiled artifacts). When `copyFile` fails, verifies
+ * the source is actually a directory before creating one at the destination —
+ * this avoids masking real failures (permissions, missing source, disk full)
+ * behind an empty directory. Note: recursive directory copy is not yet
+ * supported; only an empty directory is created.
  */
 async function copyPath(srcPath: string, destPath: string): Promise<void> {
-  // For now, we implement copy by reading and writing
-  // This is a simplified implementation - a production version would need
-  // to handle directories recursively and be more efficient
-  try {
-    // Try to read the source as a file first
-    const readResult = await filesystemApi.readFile(srcPath)
-    if (readResult.success) {
-      await filesystemApi.writeFile(destPath, readResult.data.content)
+  const result = await filesystemApi.copyFile(srcPath, destPath)
+  if (!result.success) {
+    // copyFile fails on directories — confirm the source is actually a
+    // directory before creating one, so we don't mask real copy failures.
+    const info = await filesystemApi.getFileInfo(srcPath)
+    if (info.success && info.data.type === 'directory') {
+      await filesystemApi.createDirectory(destPath)
     }
-  } catch {
-    // If it's a directory, we'd need recursive copy
-    // For simplicity, we'll create the directory
-    await filesystemApi.createDirectory(destPath)
   }
 }
 
@@ -169,7 +171,7 @@ function ensureFileNameStreamSubscription(
     if (event.searchId !== activeId) return
 
     set({
-      searchFileNameMatches: event.files,
+      searchFileNameMatches: event.files.map((f) => f.path),
       searchTruncated: event.truncated || state.searchTruncated
     })
   })

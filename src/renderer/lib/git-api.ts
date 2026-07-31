@@ -5,6 +5,8 @@ import type {
   GitStatusDetail
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
+import { isTauriContext } from './tauri-runtime'
+import { webServerGit } from './web-server-api'
 
 export const gitApi = {
   getStatus: (cwd: string) => invoke<GitStatusDetail[]>('git_get_status', { cwd }),
@@ -27,7 +29,16 @@ export const gitApi = {
 
   getCommitContext: (cwd: string) => invoke<GitCommitContext>('git_get_commit_context', { cwd }),
 
-  init: (cwd: string) => invoke<void>('git_init', { cwd }),
+  // Web/remote mode: route through the same-origin server (Story: Web/remote
+  // project creation). Desktop stays on invoke('git_init').
+  init: (cwd: string) =>
+    isTauriContext() ? invoke<void>('git_init', { cwd }) : webServerGit.init(cwd),
+
+  checkoutBranch: (cwd: string, branch: string, isRemote = false) =>
+    invoke<void>('git_checkout_branch', { cwd, branch, isRemote }),
+
+  createBranch: (cwd: string, branch: string, startRef?: string) =>
+    invoke<void>('git_create_branch', { cwd, branch, startRef }),
 
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) =>
     invoke<void>('git_stash_save', { cwd, message, includeUntracked }),

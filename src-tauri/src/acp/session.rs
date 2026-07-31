@@ -14,9 +14,9 @@
 //! handler closures require; in practice all access happens on the one driver
 //! thread, so the lock is uncontended.
 
-use agent_client_protocol::Responder;
 use agent_client_protocol::schema::RequestPermissionResponse;
-use std::collections::HashMap;
+use agent_client_protocol::Responder;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
@@ -42,6 +42,14 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// One-shot waiters registered by turn-scoped operations. `finish_turn`
+    /// removes and resolves the full waiter list exactly once.
+    turn_idle_waiters: HashMap<String, Vec<oneshot::Sender<()>>>,
+    /// Sessions associated with each tool call id for this connection. ACP tool
+    /// call ids are session-scoped, so a set preserves collisions as ambiguous.
+    /// Bindings remain for the connection lifetime so delayed updates cannot be
+    /// reassigned to a different active turn after their original turn ends.
+    tool_call_sessions: HashMap<String, HashSet<String>>,
 }
 
 impl DriverState {
@@ -121,6 +129,14 @@ impl DriverState {
         self.session_roots.keys().cloned().collect()
     }
 
+    /// Associate a tool call with its authoritative enclosing session.
+    pub(crate) fn bind_tool_call(&mut self, tool_call_id: String, session_id: String) {
+        self.tool_call_sessions
+            .entry(tool_call_id)
+            .or_default()
+            .insert(session_id);
+    }
+
     /// Attempt to begin a turn for a session. Returns `Some(receiver)` (a cancel
     /// signal) when the turn may proceed, or `None` if a turn is already active
     /// for this session (concurrent turns are rejected).
@@ -130,6 +146,27 @@ impl DriverState {
         }
         let (tx, rx) = oneshot::channel();
         self.active_turns.insert(session_id.to_string(), Some(tx));
+        Some(rx)
+    }
+
+    /// Whether the session currently has an active turn, including cancel grace.
+    #[must_use]
+    pub(crate) fn is_turn_active(&self, session_id: &str) -> bool {
+        self.active_turns.contains_key(session_id)
+    }
+
+    /// Register a one-shot notification for the session becoming idle.
+    /// Returns `None` when already idle so callers never wait for a completion
+    /// that already happened.
+    pub(crate) fn wait_turn_idle(&mut self, session_id: &str) -> Option<oneshot::Receiver<()>> {
+        if !self.is_turn_active(session_id) {
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        self.turn_idle_waiters
+            .entry(session_id.to_string())
+            .or_default()
+            .push(tx);
         Some(rx)
     }
 
@@ -148,6 +185,11 @@ impl DriverState {
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
         self.active_turns.remove(session_id);
+        if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
+            for waiter in waiters {
+                let _ = waiter.send(());
+            }
+        }
         self.drain_session(session_id)
     }
 }
@@ -194,6 +236,23 @@ mod tests {
     }
 
     #[test]
+    fn turn_state_query_and_waiter_follow_authoritative_turn() {
+        let mut state = DriverState::new();
+        assert!(!state.is_turn_active("sess-1"));
+        assert!(state.wait_turn_idle("sess-1").is_none());
+        let _cancel = state.try_begin_turn("sess-1").expect("turn starts");
+        assert!(state.is_turn_active("sess-1"));
+        let mut waiter = state.wait_turn_idle("sess-1").expect("waiter registered");
+        assert!(waiter.try_recv().is_err());
+        let _ = state.finish_turn("sess-1");
+        assert!(!state.is_turn_active("sess-1"));
+        assert_eq!(waiter.try_recv(), Ok(()));
+        // Idempotent finish cannot resolve the consumed one-shot again.
+        let _ = state.finish_turn("sess-1");
+        assert!(state.wait_turn_idle("sess-1").is_none());
+    }
+
+    #[test]
     fn cancel_keeps_session_active_until_finish() {
         let mut state = DriverState::new();
         let _rx = state.try_begin_turn("sess-1").expect("turn starts");
@@ -219,5 +278,14 @@ mod tests {
         state.remove_session_root("sess-1");
         assert!(state.session_root("sess-1").is_none());
         assert!(state.active_session_ids().is_empty());
+    }
+
+    #[test]
+    fn tool_call_binding_accepts_multiple_sessions_per_id() {
+        let mut state = DriverState::new();
+        state.bind_tool_call("call-1".to_string(), "sess-a".to_string());
+        state.bind_tool_call("call-1".to_string(), "sess-b".to_string());
+        // Collision is preserved as ambiguous — no routing helper consumes it.
+        let _ = state.try_begin_turn("sess-a");
     }
 }

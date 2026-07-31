@@ -279,14 +279,19 @@ impl<Counterpart: AcpAgentCounterpartRole> crate::ConnectTo<Counterpart> for Acp
             let mut stderr_lines = stderr_reader.lines();
             let mut collected = String::new();
             while let Some(line_result) = stderr_lines.next().await {
-                if let Ok(line) = line_result {
-                    if let Some(ref callback) = debug_callback {
-                        callback(&line, LineDirection::Stderr);
+                match line_result {
+                    Ok(line) => {
+                        if let Some(ref callback) = debug_callback {
+                            callback(&line, LineDirection::Stderr);
+                        }
+                        if !collected.is_empty() {
+                            collected.push('\n');
+                        }
+                        collected.push_str(&line);
                     }
-                    if !collected.is_empty() {
-                        collected.push('\n');
+                    Err(_) => {
+                        break;
                     }
-                    collected.push_str(&line);
                 }
             }
             drop(stderr_tx.send(collected));

@@ -17,6 +17,7 @@
     "tailwind.config.ts",
     "vite.config.ts",
     "vite.config.tauri.ts",
+    "vite.config.web.ts",
     "vitest.config.ts",
     "vitest.setup.ts"
   ]

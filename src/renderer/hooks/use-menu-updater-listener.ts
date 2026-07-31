@@ -1,5 +1,5 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
+import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
 import { useUpdaterActions } from '@/stores/updater-store'
 

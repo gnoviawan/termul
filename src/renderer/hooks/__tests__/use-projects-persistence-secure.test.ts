@@ -30,6 +30,10 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 import {
   usePersistProjectsImmediate,
   useProjectsAutoSave,

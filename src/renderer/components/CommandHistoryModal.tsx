@@ -228,7 +228,7 @@ export function CommandHistoryModal({
             )}
 
             {/* Footer */}
-            <div className="bg-background px-4 py-2 border-t border-border flex items-center justify-between text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+            <div className="label-group bg-background px-4 py-2 border-t border-border flex items-center justify-between text-muted-foreground">
               <div className="flex items-center space-x-4">
                 <span className="flex items-center">
                   <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to

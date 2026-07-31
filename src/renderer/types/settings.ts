@@ -62,7 +62,15 @@ export interface AppSettings {
   colorTheme: string
   /** Light, dark, or follow OS (maps to `{colorTheme}` / `{colorTheme}-light`). */
   appearanceMode: 'light' | 'dark'
+  /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
+  uiZoomLevel: number
 }
+
+/** Whole-UI zoom bounds — match the native View menu semantics (0.5x–3.0x, 10% steps). */
+export const UI_ZOOM_DEFAULT = 1.0
+export const UI_ZOOM_MIN = 0.5
+export const UI_ZOOM_MAX = 3.0
+export const UI_ZOOM_STEP = 0.1
 
 export type AppPanelVisibilitySettingKey =
   | 'sidebarVisible'
@@ -160,7 +168,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sshPanelVisible: true,
   remoteBindMode: 'localhost',
   colorTheme: 'termul',
-  appearanceMode: 'dark'
+  appearanceMode: 'dark',
+  uiZoomLevel: UI_ZOOM_DEFAULT
 }
 
 // Persistence key for app settings
@@ -237,19 +246,19 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   zoomIn: {
     id: 'zoomIn',
     label: 'Zoom In',
-    description: 'Increase terminal font size',
+    description: 'Zoom in the entire UI',
     defaultKey: 'ctrl+='
   },
   zoomOut: {
     id: 'zoomOut',
     label: 'Zoom Out',
-    description: 'Decrease terminal font size',
+    description: 'Zoom out the entire UI',
     defaultKey: 'ctrl+-'
   },
   zoomReset: {
     id: 'zoomReset',
     label: 'Reset Zoom',
-    description: 'Reset terminal font size to default',
+    description: 'Reset the whole-UI zoom to 100%',
     defaultKey: 'ctrl+0'
   },
   sidebarToggle: {

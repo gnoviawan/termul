@@ -28,6 +28,10 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 describe('use-projects-persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks()

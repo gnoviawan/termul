@@ -197,6 +197,55 @@ Renderer browser adapters subscribe to:
 ### Updater/Menu Event Flow
 The app also emits menu/updater-related events such as the updater check trigger from the native menu.
 
+### ACP Agent Setup & Authentication Flow
+
+ACP provider setup follows the stable ACP handshake ordering. The renderer facade
+(`src/renderer/lib/acp-api.ts`) → Tauri command → ACP manager
+(`src-tauri/src/acp/manager.rs`) boundary is preserved end to end.
+
+**1. Initialize → auth-method propagation.** When an agent completes `initialize`,
+the manager forwards **every** advertised authentication method to the renderer on
+the `acp:agent_spawned` event as an opaque descriptor:
+
+- `authMethods: { id: string; name: string; description?: string }[]`
+
+Methods are propagated verbatim — there is no agent-type filtering. An agent that
+advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
+types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
+the stable `id`/`name`/optional `description` surface is carried.
+
+**2. Authenticate before `session/new`.** The store retains the advertised methods
+and, before creating a session (`acp_new_session`), runs `acp_authenticate`
+(`authenticate(methodId)`) when the agent advertises auth:
+
+- exactly one method → authenticate that method, then create the session;
+- more than one method → **do not choose one**; surface an actionable
+  "multiple sign-in methods" failure that lists the method names (there is no
+  automatic "unambiguous default" pick);
+- no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
+
+For the default `agent` auth type the provider owns the login UX (it may open its
+own browser); Termul never invents a client-side login-URL redirect and never
+stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**3. Recoverable setup failures.** Setup failures are classified deterministically
+(`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with
+distinct, actionable launcher labels — order: `multi-auth` → `spawn` → `transport`
+→ `auth` → `timeout` → `unknown`:
+
+- `transport` (destroyed stream / refused / reset connection, incl. "connection
+  timed out"): the live process is **killed and evicted** from reuse before a
+  retry, so exactly one fresh spawn follows;
+- `auth`: the launcher shows "Authentication required" plus the diagnostic and a
+  Sign-in action (only when exactly one method is advertised); a failed
+  session/new that is auth-classified clears the authenticated flag so a manual
+  Sign-in + retry can re-authenticate;
+- `timeout`: "Session setup timed out" (the alive-but-slow agent is not killed);
+- `spawn`: a missing/unresolvable binary (ENOENT), rewritten into actionable
+  guidance;
+- only a genuine empty-model state uses the neutral model pill / "Model
+  unavailable" text — a setup failure never masquerades as a model-list problem.
+
 ## Shared TypeScript Contracts
 
 Key shared contract areas include:
@@ -224,6 +273,71 @@ Representative error codes include:
 - `SESSION_INVALID`
 - `MIGRATION_*`
 - `ROLLBACK_FAILED`
+
+## ACP Agent Chat Events
+
+ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/acp/events.rs` and `src/renderer/lib/acp-api.ts`).
+
+### `acp:plan_update`
+
+**Purpose:** Agent execution plan changed ([Agent Plan spec](https://agentclientprotocol.com/protocol/v1/agent-plan)).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  plan: {
+    entries: Array<{
+      content: string
+      priority?: 'high' | 'medium' | 'low'
+      status?: 'pending' | 'in_progress' | 'completed'
+    }>
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent sends `session/update` with `sessionUpdate: "plan"`.
+- Each event replaces the session plan entirely (full list).
+- Empty `entries` clears the plan in the renderer (`PlanPanel` hidden).
+
+See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
+
+### `acp:usage_update`
+
+**Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  used: number
+  size: number
+  cost?: {
+    amount: number
+    currency: string
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent pushes a usage update; Rust forwards `used`/`size`/`cost` without additional gating (`UsageUpdateEvent` in `src-tauri/src/acp/events.rs`).
+- Each event **replaces** the renderer’s current usage state for that session (`used`/`size`; optional `cost` when accepted).
+- Renderer validation (`_onUsageUpdate` in `acp-store.ts`):
+  - Drops the update when `used` or `size` is non-finite, or when `used <= 0` or `size <= 0`.
+  - Ignores updates for unknown sessions.
+  - Keeps optional `cost` only when `amount` is finite and `> 0` and `currency` is non-empty; otherwise omits cost (zero/placeholder costs are not stored).
+- TypeScript mirror: `UsageUpdateEvent` / `ACP_EVENTS.usageUpdate` in `src/renderer/lib/acp-api.ts`. Keep Rust and TypeScript field names (`agentId`, `sessionId`, `used`, `size`, `cost`) aligned.
+
+### `acp_send_prompt` errors
+
+When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
 
 ## Notes
 

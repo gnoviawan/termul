@@ -8,12 +8,15 @@
 //! P1+. See `docs/adr/adr-003-acp-agent-chat-ui-architecture.md` and
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
+pub mod atomic_file;
 pub mod client;
 pub mod commands;
 pub mod config;
 pub mod events;
 pub mod manager;
+pub mod project_registry;
 pub mod session;
+pub mod session_persistence;
 pub mod terminal;
 
 // Re-exported for the renderer bridge (P1+) and `lib.rs` wiring. `AcpManager`
@@ -22,7 +25,13 @@ pub mod terminal;
 // though nothing inside the crate references them through this path yet.
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
-pub use manager::AcpManager;
+pub use manager::{AcpManager, SessionCreationContext};
+pub use project_registry::{FileProjectRegistry, VfsRoot};
+#[allow(unused_imports)]
+pub use session_persistence::{
+    PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,
+    SessionRegistration,
+};
 
 #[cfg(test)]
 mod tests;

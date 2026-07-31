@@ -1,21 +1,45 @@
 [package]
 name = "termul-manager"
-version = "0.4.7"
+version = "0.4.8"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
-rust-version = "1.77"
+# ACP 0.12.1 (vendored) is edition 2024 and requires Rust ≥ 1.85; bump MSRV to match.
+rust-version = "1.85"
+# Two binaries live in this crate: the desktop app (`termul-manager`, the
+# implicit src/main.rs) and the standalone headless server (`termul-server`).
+# Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
+# ambiguity. The standalone binary is built explicitly via
+# `cargo build --bin termul-server --features standalone-server`.
+default-run = "termul-manager"
 
 [lib]
 name = "termul_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
+# build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
+# discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
+# disk scan cannot re-add it. Build with:
+#   cargo build --bin termul-server --features standalone-server
+[[bin]]
+name = "termul-server"
+path = "src/server_main.rs"
+required-features = ["standalone-server"]
+
+[features]
+default = []
+# Enables the termul-server binary entry. rust-embed is now always-on (the
+# desktop's in-process shared-live server serves the SAME embedded bundle in a
+# release install without dist-web/ on disk).
+standalone-server = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools"] }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
@@ -28,6 +52,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -46,6 +71,9 @@ portable-pty = "0.9"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
+futures = "0.3"
+futures-concurrency = "7"
+async-process = "2"
 
 # ACP (Agent Client Protocol) — ADR-003 P0
 # NOTE: agent-client-protocol 0.12 ships its own `AcpAgent`/`Stdio` transport
@@ -53,7 +81,7 @@ parking_lot = "0.12"
 # is NOT used — it depends on acp 0.11, which would pull a second, incompatible
 # copy of the protocol crate into the tree. See Spec Change Log in
 # spec-adr-003-p0-rust-acp-core.md.
-agent-client-protocol = "0.12"
+agent-client-protocol = { version = "0.12", features = ["unstable_session_model", "unstable_session_usage"] }
 
 # Regex and parsing
 regex = "1"
@@ -62,11 +90,8 @@ lazy_static = "1.4"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# SSH
-# Keep ssh2 on system OpenSSL for now. Enabling ssh2/vendored-openssl forces a
-# local OpenSSL source build that fails in common Windows/MSYS dev environments
-# without a full Perl module setup; see README SSH development notes.
-ssh2 = "0.9"
+# SSH linkage is selected per target below: macOS vendors OpenSSL for portable
+# app bundles, while Windows/Linux retain the system/default behavior.
 
 # Secure storage (OS keychain for secure credential storage).
 # IMPORTANT: keyring selects its backend at COMPILE TIME via cargo features.
@@ -91,6 +116,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
 
+# Embed the Vite web bundle (dist-web/) into the binary so the standalone
+# termul-server AND the desktop's in-process shared-live server serve the web
+# client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
+# green when the bundle is absent; the release build fails clearly via
+# build.rs when it is missing.
+rust-embed = { version = "8.12", features = ["mime-guess"] }
+
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
@@ -100,14 +132,21 @@ tower = { version = "0.5", features = ["util"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
 
-# macOS Keychain
+# macOS Keychain and self-contained SSH/OpenSSL linkage for packaged apps
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+# Preserve the existing system/default SSH native dependency behavior outside
+# macOS. Global vendoring breaks common Windows/MSYS development environments.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ssh2 = "0.9"
 
 # Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
@@ -134,3 +173,8 @@ winapi = { version = "0.3", features = [
 # Keep the `= "0.12"` requirement above; this only redirects where it resolves.
 [patch.crates-io]
 agent-client-protocol = { path = "vendor/agent-client-protocol" }
+
+
+
+
+

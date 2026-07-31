@@ -13,7 +13,7 @@ use agent_client_protocol::schema::{
 use tauri::State;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
-use crate::acp::manager::{AcpManager, NewSessionOutcome};
+use crate::acp::manager::{AcpManager, NewSessionOutcome, SessionReopenOutcome};
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 #[tauri::command]
@@ -59,7 +59,7 @@ pub async fn acp_load_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionReopenOutcome, String> {
     manager.load_session(&agent_id, session_id, cwd).await
 }
 
@@ -70,7 +70,7 @@ pub async fn acp_resume_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<SessionReopenOutcome, String> {
     manager.resume_session(&agent_id, session_id, cwd).await
 }
 
@@ -84,13 +84,16 @@ pub async fn acp_close_session(
     manager.close_session(&agent_id, session_id).await
 }
 
-/// List sessions on an agent.
+/// List sessions on an agent (requires `sessionCapabilities.list`).
+/// Pass `cwd` to filter by working directory; `cursor` for pagination.
 #[tauri::command]
 pub async fn acp_list_sessions(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
+    cwd: Option<String>,
+    cursor: Option<String>,
 ) -> Result<ListSessionsResponse, String> {
-    manager.list_sessions(&agent_id).await
+    manager.list_sessions(&agent_id, cwd, cursor).await
 }
 
 /// Send a prompt turn. Accepts either structured ACP content blocks or, for
@@ -110,7 +113,9 @@ pub async fn acp_send_prompt(
         (Some(_), None) => return Err("prompt content must not be empty".to_string()),
         (None, None) => return Err("send_prompt requires either content or text".to_string()),
     };
-    manager.send_prompt(&agent_id, session_id, blocks).await
+    // Desktop path: no client turn-id (the renderer's dedup is Tauri-event-
+    // based; the WS `turnId` field is Story 1.8's web concern). Pass `None`.
+    manager.send_prompt(&agent_id, session_id, blocks, None).await
 }
 
 /// Cancel the active turn for a session.
@@ -148,8 +153,19 @@ pub async fn acp_set_mode(
     manager.set_mode(&agent_id, session_id, mode_id).await
 }
 
+/// Set the active session model.
+#[tauri::command]
+pub async fn acp_set_model(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+    model_id: String,
+) -> Result<(), String> {
+    manager.set_model(&agent_id, session_id, model_id).await
+}
+
 /// Run the ACP `authenticate` method for an agent. `methodId` must be one of
-/// the ids surfaced in the `acp:auth_required` event.
+/// the ids advertised in the agent's `initialize` response.
 #[tauri::command]
 pub async fn acp_authenticate(
     manager: State<'_, Arc<AcpManager>>,
@@ -160,6 +176,18 @@ pub async fn acp_authenticate(
 }
 
 /// Respond to a pending permission request. `optionId == None` cancels it.
+///
+/// Two paths can resolve the same permission: the desktop renderer (this
+/// command, direct `AcpManager::respond_permission`) and a phone over WS (the
+/// `respond_permission` handler → `PermissionRendezvous::try_respond` →
+/// `AcpManager::respond_permission`). Both converge on the agent driver's
+/// single-use `take_permission` gate, so whichever responds first wins.
+///
+/// When this command loses the race (the phone resolved first, or the user
+/// clicked twice), `take_permission` returns `None` and the driver replies
+/// `Err("unknown permission request: …")`. That is a benign "already resolved"
+/// outcome, not a real error — surface it as `Ok(())` so the renderer doesn't
+/// show a confusing error for the loser of a race the user intended to win.
 #[tauri::command]
 pub async fn acp_respond_permission(
     manager: State<'_, Arc<AcpManager>>,
@@ -167,7 +195,20 @@ pub async fn acp_respond_permission(
     request_id: String,
     option_id: Option<String>,
 ) -> Result<(), String> {
-    manager
+    match manager
         .respond_permission(&agent_id, request_id, option_id)
         .await
+    {
+        Ok(()) => Ok(()),
+        // Loser of a first-response-wins race: the permission was already
+        // resolved by the other path. Treat as success (idempotent resolve).
+        Err(e) if e.starts_with("unknown permission request") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.
+#[tauri::command]
+pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
+    crate::acp::config::probe_registry_runtime()
 }

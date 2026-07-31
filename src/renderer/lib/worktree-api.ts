@@ -14,10 +14,22 @@ export interface MergePreviewInfo {
   direction: string
   sourceBranch: string
   targetBranch: string
-  conflictFiles: { path: string; severity: string; conflictCount: number; isLockFile: boolean }[]
+  conflictFiles: {
+    path: string
+    severity: string
+    conflictCount: number
+    isLockFile: boolean
+    suggestions: {
+      strategy: string
+      confidence: string
+      reason: string
+      description: string
+    }[]
+  }[]
   changedFiles: string[]
   totalChanges: number
   detectionMode: string
+  hasAutoResolvable: boolean
 }
 
 export const worktreeApi = {

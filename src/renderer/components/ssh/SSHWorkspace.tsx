@@ -23,17 +23,17 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-xs font-medium">SSH: {profile.name}</span>
             {conn.isConnected ? (
-              <span className="flex items-center gap-1 text-[10px] text-green-500">
+              <span className="flex items-center gap-1 text-3xs text-green-500">
                 <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
                 Connected
               </span>
             ) : conn.isConnectingStatus || conn.isConnecting ? (
-              <span className="flex items-center gap-1 text-[10px] text-yellow-500">
+              <span className="flex items-center gap-1 text-3xs text-yellow-500">
                 <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />
                 Connecting
               </span>
             ) : (
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1 text-3xs text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
                 Disconnected
               </span>
@@ -43,7 +43,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             {conn.isConnected || conn.localTerminalPtyId ? (
               <button
                 onClick={conn.handleDisconnect}
-                className="px-2 py-0.5 text-[10px] rounded border border-border hover:bg-destructive/10 hover:text-destructive flex items-center gap-1"
+                className="px-2 py-0.5 text-3xs rounded border border-border hover:bg-destructive/10 hover:text-destructive flex items-center gap-1"
               >
                 <WifiOff className="h-3 w-3" />
                 Disconnect
@@ -52,7 +52,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
               <button
                 onClick={conn.handleConnect}
                 disabled={conn.isConnecting}
-                className="px-2 py-0.5 text-[10px] rounded bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1 disabled:opacity-50"
+                className="px-2 py-0.5 text-3xs rounded bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1 disabled:opacity-50"
               >
                 <Terminal className="h-3 w-3" />
                 {conn.isConnecting ? 'Connecting...' : 'Connect'}

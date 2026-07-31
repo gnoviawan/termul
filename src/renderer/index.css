@@ -2,9 +2,15 @@
 @import "@fontsource-variable/inter/index.css";
 @import "@fontsource-variable/jetbrains-mono/index.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@config "../../tailwind.config.ts";
+
+/* Streamdown ships Tailwind utility classes in its dist bundles; Tailwind v4
+   must scan them to generate the matching CSS (chat markdown renderer). */
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
 
 @layer base {
   :root {
@@ -52,6 +58,16 @@
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
+    /* Transitions.dev tooltip open/close tokens (Radix maps delay via
+       TooltipProvider delayDuration — do not also set CSS transition-delay
+       on open, or tips double-wait). */
+    --tt-in-dur: 150ms;
+    --tt-out-dur: 50ms;
+    --tt-scale: 0.98;
+    --tt-delay: 80ms;
+    --tt-in-ease: ease-out;
+    --tt-out-ease: ease-out;
+
     /* Terminal-specific */
     --terminal-bg: 0 0% 7%; /* #121212 */
     --terminal-fg: 0 0% 85%;
@@ -62,6 +78,13 @@
 
     /* Status bar (VS Code style) */
     --status-bar: 217 91% 40%; /* #007acc */
+
+    /* Shimmer text (transitions.dev) — demo hex defaults */
+    --shimmer-dur: 2000ms;
+    --shimmer-base: #6e6e6e;
+    --shimmer-highlight: #ededed;
+    --shimmer-band: 400%;
+    --shimmer-ease: linear;
 
     /* Project colors */
     --project-blue: 217 91% 60%;
@@ -143,7 +166,7 @@
     button:not(:disabled):not([data-press-feedback="off"]):active,
     [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]):active,
     summary:not([data-press-feedback="off"]):active {
-      transform: scale(0.97);
+      transform: scale(0.96);
     }
   }
 
@@ -334,6 +357,49 @@
     animation-timing-function: var(--ease-drawer);
     animation-duration: 200ms;
   }
+
+  /* ------------------------------------------------------------
+   * Tooltip open/close (transitions.dev recipe, Radix-adapted).
+   * Appear-only delay lives on TooltipProvider (--tt-delay / 80ms).
+   * Default rule = LEAVE (50ms, no delay). Open = 150ms fade+scale.
+   * Radix open states are delayed-open | instant-open (not "open").
+   * @starting-style so first mount still plays the enter transition.
+   * ------------------------------------------------------------ */
+  .animate-tooltip-in {
+    opacity: 0;
+    transform: scale(var(--tt-scale));
+    transition:
+      opacity var(--tt-out-dur) var(--tt-out-ease),
+      transform var(--tt-out-dur) var(--tt-out-ease);
+  }
+
+  .animate-tooltip-in[data-state="delayed-open"],
+  .animate-tooltip-in[data-state="instant-open"] {
+    opacity: 1;
+    transform: scale(1);
+    transition-duration: var(--tt-in-dur);
+    transition-timing-function: var(--tt-in-ease);
+  }
+
+  @starting-style {
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 0;
+      transform: scale(var(--tt-scale));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-tooltip-in {
+      transition: none !important;
+    }
+
+    .animate-tooltip-in[data-state="delayed-open"],
+    .animate-tooltip-in[data-state="instant-open"] {
+      opacity: 1;
+      transform: none;
+    }
+  }
 }
 
 @layer utilities {
@@ -366,10 +432,45 @@
   }
 }
 
+/* ------------------------------------------------------------
+ * Uppercase label scale.
+ *
+ * Two canonical typography-only roles for the uppercase tracked
+ * label element that previously drifted across ~25 call sites
+ * (sizes 10/12px, weights normal/medium/semibold/bold, tracking
+ * wide/wider). The two classes intentionally NORMALIZE weight and
+ * tracking to a single value per role — this is a deliberate
+ * unification, so some migrated labels render slightly lighter or
+ * heavier than before by design.
+ *
+ *   .label-section -> 12px panel / section headers
+ *                     (Projects, Explorer, SSH, Terminal, settings)
+ *   .label-group   -> 10px menu / group / field micro-labels
+ *                     (command palette groups, dialog field labels)
+ *
+ * These set size / weight / tracking / transform / line-height
+ * ONLY. Color and opacity stay at the call site because sidebar
+ * chrome (text-sidebar-foreground) and content surfaces
+ * (text-muted-foreground) legitimately differ. Behavioral classes
+ * (padding, hover, focus, truncate, cmdk selectors) also stay at
+ * the call site.
+ * ------------------------------------------------------------ */
+@layer components {
+  .label-section {
+    @apply text-xs font-normal uppercase tracking-wider;
+    line-height: 1.4;
+  }
+  .label-group {
+    @apply text-3xs font-semibold uppercase tracking-wider;
+    line-height: 1.4;
+  }
+}
+
 /* Agent chat markdown prose (ref: key-agent-chat-pane mockup) */
 @layer components {
   .chat-prose {
     word-break: break-word;
+    text-wrap: pretty;
   }
   .chat-prose > :first-child {
     margin-top: 0;
@@ -385,6 +486,7 @@
     line-height: 1.3;
     margin: 0.75em 0 0.4em;
     color: hsl(var(--foreground));
+    text-wrap: balance;
   }
   .chat-prose h1 {
     font-size: 1.25em;
@@ -435,9 +537,23 @@
   .chat-prose code {
     font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
     font-size: 0.85em;
-    background: hsl(var(--muted) / 0.6);
-    padding: 0.12em 0.4em;
-    border-radius: 4px;
+    font-weight: 500;
+    padding: 0.1em 0.45em;
+    border-radius: 6px;
+    border: 1px solid hsl(var(--border) / 0.4);
+  }
+  .chat-prose code.chat-code-token {
+    background: hsl(var(--muted) / 0.55);
+    color: hsl(var(--foreground));
+  }
+  .chat-prose code.chat-code-path {
+    background: hsl(142 71% 45% / 0.12);
+    color: hsl(142 45% 32%);
+    border-color: hsl(142 40% 40% / 0.25);
+  }
+  .dark .chat-prose code.chat-code-path {
+    color: hsl(142 55% 62%);
+    border-color: hsl(142 40% 50% / 0.3);
   }
   .chat-prose pre {
     background: hsl(var(--muted) / 0.5);
@@ -453,6 +569,43 @@
     background: none;
     padding: 0;
     font-size: inherit;
+  }
+  /* Icon copy button injected onto code blocks by ChatMessage. */
+  .chat-code-copy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    padding: 0;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--background) / 0.85);
+    border: 1px solid hsl(var(--border));
+    border-radius: 4px;
+    opacity: 0;
+    transition:
+      opacity 150ms var(--ease-out),
+      color 150ms var(--ease-out);
+    cursor: pointer;
+  }
+  .chat-code-copy svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .chat-prose pre:hover .chat-code-copy,
+  .chat-code-copy:focus-visible {
+    opacity: 1;
+  }
+  .chat-code-copy:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-code-copy.is-copied {
+    opacity: 1;
+    color: hsl(142 71% 45%);
   }
   .chat-prose table {
     width: 100%;
@@ -474,5 +627,428 @@
     border: none;
     border-top: 1px solid hsl(var(--border) / 0.6);
     margin: 1em 0;
+  }
+}
+
+/* Streamdown code blocks (agent chat): looser line-height for readable code,
+   and a comfortable min-height so short snippets don't feel cramped. */
+@layer components {
+  @keyframes tool-card-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  .tool-call-card-running::before {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    z-index: 0;
+    width: 45%;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
+    animation: tool-card-shimmer 1.8s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tool-call-card-running::before {
+      width: 100%;
+      transform: none;
+      animation: none;
+    }
+  }
+
+  /* transitions.dev shimmer-text — highlight band sweeps across muted label */
+  .t-shimmer {
+    position: relative;
+    display: inline-block;
+    color: var(--shimmer-base);
+  }
+  .t-shimmer::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      var(--shimmer-highlight) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    background-size: var(--shimmer-band) 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+  }
+  @keyframes t-shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: 0% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-shimmer::before {
+      animation: none !important;
+    }
+  }
+
+  .chat-streamdown {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+  .chat-streamdown > :first-child {
+    margin-top: 0;
+  }
+  .chat-streamdown > :last-child {
+    margin-bottom: 0;
+  }
+  .chat-streamdown [data-streamdown^="heading-"] {
+    margin-block: 0.75em 0.3em;
+    font-size: 1em;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  .chat-streamdown [data-streamdown="heading-1"] {
+    font-size: 1.08em;
+  }
+  .chat-streamdown p,
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"],
+  .chat-streamdown [data-streamdown="blockquote"],
+  .chat-streamdown pre {
+    margin-block: 0 0.55em;
+  }
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"] {
+    padding-left: 1.25rem;
+  }
+  .chat-streamdown [data-streamdown="list-item"] {
+    padding-block: 0.08em;
+  }
+  .chat-streamdown [data-streamdown="blockquote"] {
+    border-left-width: 2px;
+    padding-left: 0.65rem;
+  }
+  .chat-streamdown [data-streamdown="horizontal-rule"] {
+    margin-block: 0.8rem;
+  }
+  .chat-streamdown :not(pre) > code {
+    border-radius: 0.25rem;
+    background: hsl(var(--muted) / 0.55);
+    padding: 0.08em 0.3em;
+    font-size: 0.88em;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] {
+    line-height: 1.55;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"] pre,
+  .chat-streamdown [data-streamdown="code-block-body"] code {
+    line-height: inherit;
+  }
+
+  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  .chat-streamdown [data-streamdown="table-toolbar"] .relative {
+    display: contents;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .chat-streamdown [data-streamdown="table-toolbar"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  .chat-streamdown [data-streamdown="table"] {
+    min-width: max-content;
+    font-size: 0.875rem;
+  }
+  .chat-streamdown [data-streamdown="table"] th {
+    background: hsl(var(--muted) / 0.35);
+    font-weight: 600;
+  }
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    border-color: hsl(var(--border) / 0.45);
+    padding: 0.3rem 0.5rem;
+    text-align: left;
+  }
+}
+
+/* BlockNote ships unlayered defaults, so these locally scoped overrides remain
+   unlayered as well. This prevents the markdown document theme from leaking to
+   chat or any future BlockNote surfaces. */
+.markdown-editor {
+  container-name: markdown-editor;
+  container-type: inline-size;
+  --markdown-document-width: 48rem;
+  --markdown-document-gutter: clamp(1.25rem, 5cqi, 3.5rem);
+}
+
+.markdown-editor-document {
+  min-width: 0;
+  padding-bottom: 5rem;
+}
+
+.markdown-editor .frontmatter-properties-inner,
+.markdown-editor .bn-editor {
+  width: min(100%, calc(var(--markdown-document-width) + 2 * var(--markdown-document-gutter)));
+  margin-inline: auto;
+  padding-inline: var(--markdown-document-gutter);
+}
+
+.markdown-editor .frontmatter-properties-grid {
+  max-width: 40rem;
+}
+
+.markdown-editor .bn-container,
+.markdown-editor .bn-editor {
+  min-width: 0;
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.markdown-editor .bn-editor {
+  padding-top: 2.25rem;
+  padding-bottom: 1rem;
+  border-radius: 0;
+}
+
+.markdown-editor .bn-default-styles {
+  font-family: "Inter Variable", Inter, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.markdown-editor .bn-block-outer {
+  line-height: inherit;
+}
+
+.markdown-editor .bn-block-content {
+  min-width: 0;
+  padding-block: 0.16rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="paragraph"] {
+  padding-block: 0.32rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"],
+.markdown-editor .bn-block-outer[data-prev-type="heading"] > .bn-block > .bn-block-content {
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="2"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="2"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.5rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="3"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"][data-prev-level="3"]
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1.2rem;
+}
+
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="4"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="5"],
+.markdown-editor .bn-block-content[data-content-type="heading"][data-level="6"],
+.markdown-editor
+  .bn-block-outer[data-prev-type="heading"]:is(
+    [data-prev-level="4"],
+    [data-prev-level="5"],
+    [data-prev-level="6"]
+  )
+  > .bn-block
+  > .bn-block-content {
+  font-size: 1rem;
+}
+
+.markdown-editor .bn-block-outer:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 1.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.markdown-editor
+  .bn-block-group
+  > .bn-block-outer:first-child:has(> .bn-block > [data-content-type="heading"]) {
+  margin-top: 0;
+}
+
+.markdown-editor
+  .bn-block-outer:has(
+    > .bn-block
+      > :is(
+        [data-content-type="bulletListItem"],
+        [data-content-type="numberedListItem"],
+        [data-content-type="checkListItem"]
+      )
+  ) {
+  margin-block: 0.08rem;
+}
+
+.markdown-editor
+  .bn-block-content:is(
+    [data-content-type="bulletListItem"],
+    [data-content-type="numberedListItem"],
+    [data-content-type="checkListItem"]
+  )::before {
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+
+.markdown-editor .bn-block-group .bn-block-group {
+  margin-left: 1.25rem;
+}
+
+.markdown-editor [data-content-type="quote"] blockquote {
+  margin-block: 0.45rem;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left-color: hsl(var(--primary) / 0.55);
+  color: hsl(var(--muted-foreground));
+}
+
+.markdown-editor [data-content-type="divider"] hr {
+  margin-block: 1.5rem;
+  border-top-color: hsl(var(--border) / 0.8);
+}
+
+.markdown-editor .bn-inline-content a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-editor .bn-inline-content code {
+  padding: 0.12em 0.38em;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: 0.3rem;
+  background: hsl(var(--muted) / 0.55);
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] {
+  margin-block: 0.7rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: calc(var(--radius) + 0.125rem);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+
+.markdown-editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  padding: 1.1rem 1.25rem;
+  line-height: 1.62;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88rem;
+}
+
+.markdown-editor [data-content-type="table"] .tableWrapper {
+  max-width: 100%;
+  margin-block: 0.8rem;
+  overflow-x: auto;
+  padding: 0;
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: var(--radius);
+}
+
+.markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  width: max-content !important;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th,
+.markdown-editor .bn-editor [data-content-type="table"] td {
+  padding: 0.55rem 0.75rem;
+  border-color: hsl(var(--border) / 0.65);
+  vertical-align: top;
+}
+
+.markdown-editor .bn-editor [data-content-type="table"] th {
+  background: hsl(var(--muted) / 0.45);
+  font-weight: 600;
+}
+
+@container markdown-editor (max-width: 560px) {
+  .markdown-editor {
+    --markdown-document-gutter: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-inner {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .markdown-editor .frontmatter-properties-grid > div {
+    flex-wrap: wrap;
+  }
+
+  .markdown-editor .frontmatter-properties-grid label {
+    width: calc(100% - 3.5rem);
+  }
+
+  .markdown-editor .frontmatter-properties-grid label + div {
+    flex-basis: calc(100% - 1.375rem);
+    margin-left: 1.375rem;
+  }
+
+  .markdown-editor .bn-editor {
+    padding-top: 1.5rem;
+  }
+
+  .markdown-editor .bn-block-content[data-content-type="heading"][data-level="1"],
+  .markdown-editor
+    .bn-block-outer[data-prev-type="heading"][data-prev-level="1"]
+    > .bn-block
+    > .bn-block-content {
+    font-size: 1.75rem;
   }
 }

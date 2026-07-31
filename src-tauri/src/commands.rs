@@ -9,8 +9,8 @@ use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, 
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -138,6 +138,79 @@ pub struct RendererRefRequest {
 pub struct SetTerminalProtectedRequest {
     pub terminal_id: String,
     pub protected: bool,
+}
+
+// ==================== Attachment Commands ====================
+
+/// Maximum attachment image size the renderer may read through this command.
+/// Mirrors the renderer's `MAX_IMAGE_BYTES` (10 MB) so the brokered read can
+/// reject oversized files before transferring them across IPC.
+const ATTACHMENT_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Image extensions the attachment flow is allowed to read by path. The
+/// generic `fs:allow-read-file` permission was removed from the renderer
+/// capability; this command is the only binary-read path left, and it is
+/// intentionally restricted to images (the only content type the composer and
+/// chat preview need to read by path) to limit the confidentiality surface.
+const ATTACHMENT_IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg", "ico",
+];
+
+fn attachment_is_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ATTACHMENT_IMAGE_EXTENSIONS
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+
+/// Read attachment image bytes by path. Replaces direct renderer
+/// `fs:allow-read-file` access so binary reads go through one validated,
+/// size- and type-constrained command instead of the generic fs plugin.
+///
+/// Returns the raw bytes via `Response::new`, which arrives on the JS side as
+/// an `ArrayBuffer`. Rejects (throws on JS) when the path is not absolute,
+/// does not exist, is not a regular file, exceeds the size cap, or is not an
+/// image — callers fall back to a file-icon preview on rejection.
+#[tauri::command]
+pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
+    let stripped = path_validation::strip_verbatim_prefix(&path);
+    let candidate = PathBuf::from(stripped.as_ref());
+
+    if !candidate.is_absolute() {
+        return Err("Attachment path must be absolute".to_string());
+    }
+
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|e| format!("Invalid or inaccessible attachment path: {}", e))?;
+
+    if !attachment_is_image_extension(&canonical) {
+        return Err("Attachment path is not an image".to_string());
+    }
+
+    let mut file = std::fs::File::open(&canonical)
+        .map_err(|e| format!("Failed to open attachment: {}", e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
+    if !metadata.is_file() {
+        return Err("Attachment path is not a regular file".to_string());
+    }
+    if metadata.len() > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read attachment: {}", e))?;
+    if bytes.len() as u64 > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
+    Ok(Response::new(bytes))
 }
 
 // ==================== Terminal Commands ====================
@@ -413,6 +486,7 @@ pub async fn worktree_branches(
                     is_remote: e.is_remote,
                     is_current: e.is_current,
                     upstream: e.upstream,
+                    has_other_worktree: e.has_other_worktree,
                 })
                 .collect();
             Ok(IpcResult::success(infos))
@@ -647,6 +721,7 @@ pub struct BranchInfo {
     pub is_current: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    pub has_other_worktree: bool,
 }
 
 impl From<BranchEntry> for BranchInfo {
@@ -656,6 +731,7 @@ impl From<BranchEntry> for BranchInfo {
             is_remote: entry.is_remote,
             is_current: entry.is_current,
             upstream: entry.upstream,
+            has_other_worktree: entry.has_other_worktree,
         }
     }
 }
@@ -712,7 +788,7 @@ pub async fn browser_tab_create(
     bounds: BrowserBounds,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<BrowserTabInfo>, String> {
-    match browser_manager.create(tab_id, url, bounds) {
+    match browser_manager.create(tab_id, url, bounds).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
     }
@@ -1169,13 +1245,30 @@ pub struct SearchFileNamesStreamRequest {
     pub root_path: String,
     pub query: String,
     pub search_id: String,
+    /// When true, run `rg --no-ignore --hidden` and emit ignored/hidden files
+    /// with `ignored: true` so the @-mention picker can dim them. When false
+    /// (the default), the common-ignore exclusions are applied and every hit
+    /// carries `ignored: false`. See ADR 0003.
+    #[serde(default)]
+    pub include_ignored: bool,
+}
+
+/// One filename-search hit. `ignored` is set when the path runs through a
+/// commonly-ignored directory or a hidden/cruft segment, so the @-mention
+/// picker can dim it. `ignored: false` for every hit when the caller did not
+/// request `include_ignored`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileHit {
+    pub path: String,
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesBatchEvent {
     pub search_id: String,
-    pub files: Vec<String>,
+    pub files: Vec<SearchFileHit>,
     /// `None` on mid-stream batches (final truncation state is not yet known).
     /// `Some(true)` is set on the trailing batch if the result was capped, and
     /// `Some(false)` otherwise. `serde` skips `None` so the field is omitted
@@ -1381,6 +1474,80 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
     args
 }
 
+/// Directory basenames that are commonly git-ignored. Entries under these are
+/// still walked when `include_ignored` is set, but classified as `ignored` so
+/// the @-mention picker can dim them. Mirrors the renderer's `ALWAYS_IGNORE`
+/// list in `tauri-filesystem-api.ts` so the two sides agree on "ignored".
+const COMMONLY_IGNORED_NAMES: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".next",
+    ".cache",
+    ".turbo",
+    "dist",
+    "build",
+    ".output",
+    ".nuxt",
+    ".svelte-kit",
+    "__pycache__",
+    ".pytest_cache",
+    "venv",
+    "coverage",
+    ".nyc_output",
+];
+
+/// Cruft file basenames (not dir names) that should be dimmed when surfaced.
+const COMMONLY_IGNORED_FILES: &[&str] = &["Thumbs.db", "desktop.ini", ".DS_Store"];
+
+/// True when a (slash-normalized, relative) path runs through a
+/// commonly-ignored directory, a hidden segment, or a cruft basename. Used to
+/// tag `SearchFileHit.ignored` for the @-mention picker. Pure so it can be
+/// unit-tested directly.
+fn path_is_ignored(rel_path: &str) -> bool {
+    let segments: Vec<&str> = rel_path.split(['/', '\\']).collect();
+    for seg in &segments {
+        if seg.is_empty() {
+            continue;
+        }
+        if seg.starts_with('.') || COMMONLY_IGNORED_NAMES.contains(seg) {
+            return true;
+        }
+    }
+    if let Some(basename) = segments.last() {
+        if COMMONLY_IGNORED_FILES.contains(basename) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Concatenate non-ignored hits first, then ignored hits up to `cap`. Pure so
+/// it can be unit-tested directly. The caller is expected to have already
+/// capped `non_ignored` at `cap`; this extends with ignored only into the
+/// remaining slots so ignored files can never crowd out non-ignored ones.
+/// Reap an rg child after stdout reading stops. When the reader breaks early
+/// (cap hit) stdout is no longer drained; kill first so rg cannot block on a
+/// full pipe before `wait()` returns.
+fn reap_rg_child_after_stdout(child: &mut Child, stdout_stopped_early: bool) -> Option<std::process::ExitStatus> {
+    if stdout_stopped_early {
+        let _ = child.kill();
+    }
+    child.wait().ok()
+}
+
+fn rank_search_hits(
+    non_ignored: Vec<SearchFileHit>,
+    ignored: Vec<SearchFileHit>,
+    cap: usize,
+) -> Vec<SearchFileHit> {
+    let mut out = non_ignored;
+    let remaining = cap.saturating_sub(out.len());
+    if remaining > 0 {
+        out.extend(ignored.into_iter().take(remaining));
+    }
+    out
+}
+
 /// Build the ripgrep argv for a streaming filename search.
 ///
 /// We rely on `rg --files --iglob` so we get the same multi-threaded tree walk
@@ -1390,7 +1557,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
 /// default is already case-insensitive on Windows, but Linux/macOS would
 /// otherwise be sensitive). Glob metacharacters in the query are escaped so
 /// they match literally, mirroring the old `contains` semantics.
-fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
+///
+/// When `include_ignored` is true, the common-ignore exclusions are dropped
+/// and `--no-ignore --hidden` are added so ignored/hidden files surface;
+/// classification + non-ignored-first ranking happen after the walk. See ADR
+/// 0003.
+fn build_file_name_search_args(query: &str, root_path: &str, include_ignored: bool) -> Vec<String> {
     // Escape glob metacharacters that ripgrep would otherwise interpret as
     // wildcards (`*`, `?`, `[`, `]`, `{`, `}`, `\`) so the query is matched
     // as a substring of the basename. `{`/`}` are alternation in globset.
@@ -1412,42 +1584,34 @@ fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
         format!("**/*{}*", escaped),
     ];
 
-    // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
-    // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
-    // `!**/name/**` form that `build_search_args` uses for content search
-    // is silently dropped here, so we explicitly use the basename form.
-    for ignored in [
-        "node_modules",
-        ".git",
-        ".next",
-        ".cache",
-        ".turbo",
-        "dist",
-        "build",
-        ".output",
-        ".nuxt",
-        ".svelte-kit",
-        "__pycache__",
-        ".pytest_cache",
-        "venv",
-        "coverage",
-        ".nyc_output",
-    ] {
+    if include_ignored {
+        // Surface ignored + hidden files so they can be mentioned and dimmed.
+        // No `-g !<name>` exclusions; per-hit classification and non-ignored-
+        // first ranking happen after the walk.
+        args.push("--no-ignore".to_string());
+        args.push("--hidden".to_string());
+    } else {
+        // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
+        // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
+        // `!**/name/**` form that `build_search_args` uses for content search
+        // is silently dropped here, so we explicitly use the basename form.
+        for ignored in COMMONLY_IGNORED_NAMES {
+            args.push("-g".to_string());
+            args.push(format!("!{}", ignored));
+        }
+        // Exclude platform cruft and common dotenv secrets. The exact `.env`
+        // exclusion matches the spec; `.env.local` / `.env.production` are
+        // deliberately left to `.gitignore` so a project's own ignore list is
+        // honored.
         args.push("-g".to_string());
-        args.push(format!("!{}", ignored));
+        args.push("!.env".to_string());
+        args.push("-g".to_string());
+        args.push("!Thumbs.db".to_string());
+        args.push("-g".to_string());
+        args.push("!desktop.ini".to_string());
+        args.push("-g".to_string());
+        args.push("!.DS_Store".to_string());
     }
-    // Exclude platform cruft and common dotenv secrets. The exact `.env`
-    // exclusion matches the spec; `.env.local` / `.env.production` are
-    // deliberately left to `.gitignore` so a project's own ignore list is
-    // honored.
-    args.push("-g".to_string());
-    args.push("!.env".to_string());
-    args.push("-g".to_string());
-    args.push("!Thumbs.db".to_string());
-    args.push("-g".to_string());
-    args.push("!desktop.ini".to_string());
-    args.push("-g".to_string());
-    args.push("!.DS_Store".to_string());
 
     args.push(root_path.to_string());
     args
@@ -1595,6 +1759,7 @@ pub async fn search_content_stream(
         let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
+        let mut stdout_stopped_early = false;
         let mut stream_error: Option<String> = None;
 
         let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
@@ -1674,6 +1839,7 @@ pub async fn search_content_stream(
             if !grouped.contains_key(&file_path) {
                 if grouped.len() >= max_files_with_matches {
                     truncated = true;
+                    stdout_stopped_early = true;
                     break;
                 }
                 grouped.insert(file_path.clone(), Vec::new());
@@ -1714,7 +1880,7 @@ pub async fn search_content_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = search_processes().lock() {
             guard.remove(&search_id);
@@ -1852,7 +2018,7 @@ pub async fn search_file_names_stream(
         }
     };
 
-    let args = build_file_name_search_args(&trimmed_query, &validated_root);
+    let args = build_file_name_search_args(&trimmed_query, &validated_root, request.include_ignored);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -1908,13 +2074,26 @@ pub async fn search_file_names_stream(
         guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
 
+    let include_ignored = request.include_ignored;
+
     tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
-        let mut files: Vec<String> = Vec::new();
         let max_files: usize = 100;
         let batch_size: usize = 25;
         let mut truncated = false;
         let mut stream_error: Option<String> = None;
+
+        // `files` is the default-path bucket (mid-stream batched).
+        // `non_ignored` + `ignored_bucket` are the `include_ignored`-path
+        // buckets, ranked after the walk so node_modules can't crowd out
+        // source files. See ADR 0003.
+        let mut files: Vec<SearchFileHit> = Vec::new();
+        let mut non_ignored: Vec<SearchFileHit> = Vec::new();
+        let mut ignored_bucket: Vec<SearchFileHit> = Vec::new();
+        const IGNORED_CAP: usize = 20;
+        let mut ignored_dropped: usize = 0;
+        let mut broke_at_cap = false;
+        let mut stdout_stopped_early = false;
         let mut last_batch_count: usize = 0;
 
         // Collect output until we hit the cap, EOF, or a pipe error. The
@@ -1924,35 +2103,64 @@ pub async fn search_file_names_stream(
         loop {
             match iter.next() {
                 Some(Ok(line)) => {
-                    if files.len() >= max_files {
-                        truncated = true;
-                        break;
-                    }
                     // ripgrep on Windows may emit verbatim paths
                     // (e.g. `\\?\C:\...`) when the root is canonicalized.
                     // Strip the prefix before the slash-normalization so the
                     // renderer never sees a `\\?\` blob in click paths.
                     let normalized =
                         path_validation::strip_verbatim_prefix(&line).replace('\\', "/");
-                    files.push(normalized);
-
-                    // Emit a mid-stream batch when we cross a batch
-                    // boundary, but skip the trailing batch below if we
-                    // already published this exact count.
-                    if files.len() % batch_size == 0 {
-                        // Mid-stream batch — final truncation state is not
-                        // known yet, so the field is `None` (serde omits it
-                        // from the wire). The trailing batch below carries
-                        // the authoritative value.
-                        let _ = app_handle.emit(
-                            "search-file-names-batch",
-                            SearchFileNamesBatchEvent {
-                                search_id: search_id.clone(),
-                                files: files.clone(),
-                                truncated: None,
-                            },
-                        );
-                        last_batch_count = files.len();
+                    if include_ignored {
+                        // Stop as soon as the non-ignored bucket is full: later
+                        // ignored hits can no longer survive `rank_search_hits`,
+                        // so walking further just wastes time in large repos.
+                        if non_ignored.len() >= max_files {
+                            broke_at_cap = true;
+                            stdout_stopped_early = true;
+                            break;
+                        }
+                        if path_is_ignored(&normalized) {
+                            if ignored_bucket.len() < IGNORED_CAP {
+                                ignored_bucket.push(SearchFileHit {
+                                    path: normalized,
+                                    ignored: true,
+                                });
+                            } else {
+                                ignored_dropped += 1;
+                            }
+                        } else {
+                            non_ignored.push(SearchFileHit {
+                                path: normalized,
+                                ignored: false,
+                            });
+                        }
+                    } else {
+                        if files.len() >= max_files {
+                            truncated = true;
+                            stdout_stopped_early = true;
+                            break;
+                        }
+                        files.push(SearchFileHit {
+                            path: normalized,
+                            ignored: false,
+                        });
+                        // Emit a mid-stream batch when we cross a batch
+                        // boundary, but skip the trailing batch below if we
+                        // already published this exact count.
+                        if files.len() % batch_size == 0 {
+                            // Mid-stream batch — final truncation state is
+                            // not known yet, so the field is `None` (serde
+                            // omits it from the wire). The trailing batch
+                            // below carries the authoritative value.
+                            let _ = app_handle.emit(
+                                "search-file-names-batch",
+                                SearchFileNamesBatchEvent {
+                                    search_id: search_id.clone(),
+                                    files: files.clone(),
+                                    truncated: None,
+                                },
+                            );
+                            last_batch_count = files.len();
+                        }
                     }
                 }
                 Some(Err(e)) => {
@@ -1963,19 +2171,35 @@ pub async fn search_file_names_stream(
             }
         }
 
-        // Always publish a final batch with the authoritative list so the
-        // renderer converges to the same total. Skip if the count is exactly
-        // what the last mid-stream batch carried.
-        if files.len() != last_batch_count {
+        // Publish the authoritative final batch. For `include_ignored`, emit
+        // a single ranked batch (non-ignored first) so the picker never
+        // flickers between mid-stream order and the ranked order. For the
+        // default path, skip if the count matches the last mid-stream batch.
+        let final_files: Vec<SearchFileHit> = if include_ignored {
+            truncated = broke_at_cap || ignored_dropped > 0;
+            let ranked = rank_search_hits(non_ignored, ignored_bucket, max_files);
             let _ = app_handle.emit(
                 "search-file-names-batch",
                 SearchFileNamesBatchEvent {
                     search_id: search_id.clone(),
-                    files: files.clone(),
+                    files: ranked.clone(),
                     truncated: Some(truncated),
                 },
             );
-        }
+            ranked
+        } else {
+            if files.len() != last_batch_count {
+                let _ = app_handle.emit(
+                    "search-file-names-batch",
+                    SearchFileNamesBatchEvent {
+                        search_id: search_id.clone(),
+                        files: files.clone(),
+                        truncated: Some(truncated),
+                    },
+                );
+            }
+            files
+        };
 
         // Reap the child and propagate a non-zero exit status (other than 1,
         // which rg uses for "no matches") as a surfaced error. The previous
@@ -1989,7 +2213,7 @@ pub async fn search_file_names_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = filename_search_processes().lock() {
             guard.remove(&search_id);
@@ -2020,7 +2244,7 @@ pub async fn search_file_names_stream(
             SearchFileNamesDoneEvent {
                 search_id,
                 truncated,
-                total_files: files.len(),
+                total_files: final_files.len(),
                 code: final_code,
                 error: final_error,
             },
@@ -2761,39 +2985,115 @@ pub async fn sftp_create_file(
 
 // ==================== Remote Server Commands ====================
 
-/// Start the remote terminal server
+/// Start the desktop-hosted shared-live web server.
+///
+/// Shares the desktop's live `AcpManager` sessions with a phone/browser client.
+///
+/// Starts the in-process localhost web server (the same one the standalone
+/// `termul-server` binary uses), then brings up a built-in cloudflared
+/// quick-tunnel so the phone can reach it on any network — the popover renders
+/// the ephemeral `https://*.trycloudflare.com` URL as a QR. The `bind_mode`
+/// param is accepted for API stability but ignored (the tunnel targets
+/// localhost). App auth / token-gating land in Epic 2.
 #[tauri::command]
 pub async fn remote_server_start(
-    app_handle: AppHandle,
-    pty_manager: State<'_, Arc<PtyManager>>,
+    acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let bind_mode = bind_mode
-        .as_deref()
-        .and_then(remote::server::RemoteBindMode::parse)
-        .unwrap_or(remote::server::RemoteBindMode::Localhost);
-    match remote_state
-        .start(pty_manager.inner().clone(), app_handle, bind_mode)
-        .await
-    {
-        Ok(status) => Ok(IpcResult::success(status)),
+    // Default to localhost only when the caller omits the bind mode; an
+    // explicit-but-unrecognized value (e.g. a typo of "all") is an error — do
+    // not silently downgrade to localhost (the phone would silently fail to
+    // connect).
+    let bind_mode = match bind_mode.as_deref() {
+        None => remote::RemoteBindMode::Localhost,
+        Some(s) => remote::RemoteBindMode::parse(s).ok_or_else(|| {
+            format!(
+                "invalid bind mode '{s}': use 'localhost' or 'all'",
+            )
+        })?,
+    };
+    let started = remote_state
+        .start(
+            acp_manager.inner().clone(),
+            ws_relay.inner().clone(),
+            project_registry.inner().clone(),
+            chat_history_cache.inner().clone(),
+            bind_mode,
+        )
+        .await;
+    match started {
+        Ok(status) => {
+            // Server is up on localhost. Bring up the cloudflared quick-tunnel so
+            // the phone can reach it on any network — the QR encodes the resulting
+            // ephemeral HTTPS URL (edge TLS via cloudflared; app auth is Epic 2).
+            // On tunnel failure, drain the server and surface the error so the
+            // popover never holds a localhost-only server + a stale toggle.
+            let port = match status.port {
+                Some(p) => p,
+                None => {
+                    return Ok(IpcResult::error(
+                        "started remote server reported no port".to_string(),
+                        "REMOTE_START_FAILED",
+                    ))
+                }
+            };
+            match remote::cloudflared::start_quick_tunnel(port).await {
+                Ok(tunnel) => {
+                    // Clone the URL before attach consumes it, so the background
+                    // probe can log reachability without blocking the QR.
+                    let probe_url = tunnel.url.clone();
+                    if let Err(e) = remote_state.attach_tunnel(tunnel.url, tunnel.child) {
+                        // Server stopped between start and attach; attach already
+                        // killed the orphan child. Surface the error.
+                        return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
+                    }
+                    // Best-effort reachability probe in the background — logs
+                    // whether the edge routes to the origin. Non-blocking so the
+                    // QR appears immediately; never hides the QR on probe timeout
+                    // (a slow edge / cold start must not block the connect UI).
+                    tokio::spawn(remote::cloudflared::log_tunnel_reachability(probe_url));
+                    Ok(IpcResult::success(remote_state.status()))
+                }
+                Err(e) => {
+                    let _ = remote_state.stop().await;
+                    Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"))
+                }
+            }
+        }
         Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
     }
 }
 
-/// Stop the remote terminal server
+/// Stop the desktop-hosted web server.
+///
+/// Signals graceful shutdown to the serve task. The desktop's live agents are
+/// NOT killed — they survive a shared-live toggle-off. The in-memory project
+/// registry is cleared (it lives only while the server runs — Epic-4 bridge).
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    match remote_state.stop().await {
+    let result = remote_state.stop().await;
+    // Clear the in-memory project mirror so a stale list does not linger after
+    // the server is off (the registry is renderer-fed; it is repopulated on the
+    // next server start via `remote_sync_projects`).
+    project_registry.clear();
+    // Clear the chat-history cache too (mirrors the registry — it lives only
+    // while the server runs and is re-fed on the next start).
+    chat_history_cache.clear();
+    match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
     }
 }
 
-/// Get remote server status
+/// Get the desktop-hosted web server status.
 #[tauri::command]
 pub async fn remote_server_status(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
@@ -2801,16 +3101,82 @@ pub async fn remote_server_status(
     Ok(IpcResult::success(remote_state.status()))
 }
 
-/// Publish the renderer's project → terminal tree to the remote server.
-///
-/// The web client reads this tree from `GET /api/projects`. The renderer should
-/// call this whenever its projects/terminals change (and once on server start).
+/// Push the desktop renderer's current project list into the in-memory
+/// `ProjectRegistry` (Epic-4 bridge) and broadcast a `projects_changed` WS event
+/// so connected web clients refetch `GET /projects`. Called by the renderer
+/// on server-start success + on every project-store mutation while the server
+/// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProjectsPayload {
+    pub projects: Vec<crate::web::ProjectSummary>,
+    #[serde(default)]
+    pub active_project_id: Option<String>,
+}
+
 #[tauri::command]
-pub async fn remote_publish_projects(
-    tree: remote::ProjectTree,
+pub async fn remote_sync_projects(
+    payload: SyncProjectsPayload,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    project_registry.set(payload.projects, payload.active_project_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.active_project_id.as_deref());
+    Ok(IpcResult::success(()))
+}
+
+/// Push the desktop renderer's chat-history index + payloads into the
+/// in-memory `ChatHistoryCache` (Epic-4 bridge) and broadcast a
+/// `chat_history_changed` WS event so connected web clients refetch the
+/// session index. Called by the renderer on server-start success + on every
+/// session-index/payload mutation while the server runs. No secrets,
+/// permission tickets, or auth data cross the wire (redact-by-omission — the
+/// cache holds only transcript metadata + messages).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncChatHistoryPayload {
+    /// The full session index (wire `PersistedSessionSummary[]` shape).
+    /// `None` on a payload-only sync (the `useAcpHistorySync` hook owns the
+    /// index push; `persistSession` pushes only its payload to avoid a
+    /// double `set_index` + double broadcast per mutation).
+    #[serde(default)]
+    pub index: Option<Vec<crate::acp::SessionIndexEntry>>,
+    /// Monotonic revision stamped by the renderer on each index push
+    /// (`useAcpHistorySync` increments it; the seed in `RemoteAccessPopover`
+    /// omits it → `0`). `set_index` rejects a push whose revision is strictly
+    /// lower than the current one so a delayed older index cannot replace a
+    /// newer snapshot. Absent on a payload-only sync (unused).
+    #[serde(default)]
+    pub revision: Option<u64>,
+    /// Optional per-session payloads (`{ metadata, messages }`) — pushed lazily
+    /// (only sessions the renderer has in memory). Omitted on an index-only sync.
+    #[serde(default)]
+    pub payloads: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[tauri::command]
+pub async fn remote_sync_chat_history(
+    payload: SyncChatHistoryPayload,
+    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<()>, String> {
-    remote_state.registry.replace(tree);
+    // Defense in depth: the TS caller already gates on `running`, but the
+    // server may have just been stopped (`remote_server_stop` clears the
+    // cache). Early-return so a late push does not repopulate a cache that
+    // was just cleared.
+    if !remote_state.status().running {
+        return Ok(IpcResult::success(()));
+    }
+    if let Some(index) = payload.index {
+        chat_history_cache.set_index(payload.revision.unwrap_or(0), index);
+    }
+    if let Some(payloads) = payload.payloads {
+        for (id, p) in payloads {
+            chat_history_cache.set_payload(&id, p);
+        }
+    }
+    crate::web::broadcast_chat_history_changed(ws_relay.inner());
     Ok(IpcResult::success(()))
 }
 
@@ -2919,6 +3285,39 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("git init task failed: {e}"))?
+}
+
+/// Check out an existing local or remote-tracking branch.
+#[tauri::command]
+pub async fn git_checkout_branch(
+    cwd: String,
+    branch: String,
+    is_remote: Option<bool>,
+) -> Result<(), String> {
+    let is_remote = is_remote.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_checkout_branch(&cwd, &branch, is_remote)
+    })
+    .await
+    .map_err(|e| format!("git checkout task failed: {e}"))?
+}
+
+/// Create a new branch from `start_ref` (defaults to HEAD) and check it out.
+#[tauri::command]
+pub async fn git_create_branch(
+    cwd: String,
+    branch: String,
+    start_ref: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_create_branch(
+            &cwd,
+            &branch,
+            start_ref.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("git create branch task failed: {e}"))?
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -3273,7 +3672,7 @@ mod tests {
         // interpreted as a glob wildcard or alternation. Each metacharacter
         // should be prefixed with a backslash so rg treats it as a literal
         // substring match.
-        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp");
+        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp", false);
         let iglob_idx = args
             .iter()
             .position(|a| a == "--iglob")
@@ -3286,7 +3685,7 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_includes_ignore_list_and_excludes() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         // The hardcoded ignore list must show up as bare-basename `-g !<name>`
         // entries so rg actually skips those directories in `--files` mode.
         for ignored in [
@@ -3307,14 +3706,14 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_appends_root_path() {
-        let args = build_file_name_search_args("term", "/some/root path");
+        let args = build_file_name_search_args("term", "/some/root path", false);
         // Root paths with spaces should appear verbatim, not split.
         assert_eq!(args.last().map(String::as_str), Some("/some/root path"));
     }
 
     #[test]
     fn build_file_name_search_args_starts_with_files_and_case_insensitive() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         assert_eq!(args[0], "--files");
         assert_eq!(args[1], "-i");
     }
@@ -3351,7 +3750,10 @@ mod tests {
         // unknown; serde should drop the field from the wire.
         let mid_stream = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: None,
         };
         let json = serde_json::to_string(&mid_stream).unwrap();
@@ -3359,11 +3761,89 @@ mod tests {
 
         let final_batch = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: Some(true),
         };
         let json = serde_json::to_string(&final_batch).unwrap();
         assert!(json.contains("\"truncated\":true"));
+        // The per-hit `ignored` flag is on the wire.
+        assert!(json.contains("\"ignored\":false"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_include_ignored_surfaces_hidden_and_drops_exclusions() {
+        let args = build_file_name_search_args("foo", "/tmp", true);
+        assert!(args.contains(&"--no-ignore".to_string()));
+        assert!(args.contains(&"--hidden".to_string()));
+        // The common-ignore exclusions must be absent so ignored/hidden files
+        // are actually walked.
+        for needle in ["!node_modules", "!.env", "!Thumbs.db", "!.DS_Store"] {
+            let has = args.windows(2).any(|w| w[0] == "-g" && w[1] == needle);
+            assert!(!has, "include_ignored must not exclude `{}`", needle);
+        }
+        assert_eq!(args.last().map(String::as_str), Some("/tmp"));
+    }
+
+    #[test]
+    fn path_is_ignored_classifies_commonly_ignored_paths() {
+        assert!(path_is_ignored("node_modules/pkg/index.js"));
+        assert!(path_is_ignored(".git/HEAD"));
+        assert!(path_is_ignored("dist/bundle.js"));
+        assert!(path_is_ignored(".env"));
+        assert!(path_is_ignored("src/.hidden.ts"));
+        assert!(path_is_ignored("assets/Thumbs.db"));
+        assert!(path_is_ignored("assets/.DS_Store"));
+        // Source files and non-cruft paths are not ignored.
+        assert!(!path_is_ignored("src/auth.ts"));
+        assert!(!path_is_ignored("README.md"));
+        assert!(!path_is_ignored("lib/router/index.ts"));
+    }
+
+    #[test]
+    fn rank_search_hits_puts_non_ignored_first_and_caps_total() {
+        let non_ignored = vec![
+            SearchFileHit { path: "a".to_string(), ignored: false },
+            SearchFileHit { path: "b".to_string(), ignored: false },
+        ];
+        let ignored = vec![
+            SearchFileHit { path: "c".to_string(), ignored: true },
+            SearchFileHit { path: "d".to_string(), ignored: true },
+            SearchFileHit { path: "e".to_string(), ignored: true },
+        ];
+        // cap=3 → all non-ignored (2) + one ignored.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 3);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        // cap=2 → only non-ignored; ignored never crowds them out.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 2);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        // No non-ignored → ignored fills up to cap.
+        let ranked = rank_search_hits(vec![], ignored.clone(), 100);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["c", "d", "e"]
+        );
+        // No ignored → non-ignored only, untruncated when under cap.
+        let ranked = rank_search_hits(
+            vec![
+                SearchFileHit { path: "a".to_string(), ignored: false },
+                SearchFileHit { path: "b".to_string(), ignored: false },
+            ],
+            vec![],
+            100,
+        );
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 
     #[test]

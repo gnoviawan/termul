@@ -1,16 +1,111 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
-import { ChevronDown, Info, Link2, Plus, RefreshCw, Save, Settings, Upload, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  ChevronDown,
+  Info,
+  KeySquare,
+  Link2,
+  Plus,
+  RefreshCw,
+  Save,
+  Settings,
+  ShieldAlert,
+  TerminalSquare,
+  Upload,
+  X
+} from 'lucide-react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import {
+  type SettingsCategory,
+  SettingsLayout,
+  SettingsSection
+} from '@/components/settings/SettingsLayout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
-import { mergeEnvVars, parseEnvFile } from '@/lib/env-parser'
+import { mergeEnvVars, parseEnvFile, resolveProjectEnvPath } from '@/lib/env-parser'
+import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
-import { useActiveProject, useActiveProjectId, useProjectActions } from '@/stores/project-store'
+import {
+  useActiveProject,
+  useActiveProjectId,
+  useProjectActions,
+  useProjectStore
+} from '@/stores/project-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
+
+const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
+  { id: 'general', label: 'General', icon: <Settings size={16} /> },
+  { id: 'env-vars', label: 'Environment Variables', icon: <KeySquare size={16} /> },
+  { id: 'shell', label: 'Shell Settings', icon: <TerminalSquare size={16} /> },
+  { id: 'symlinks', label: 'Worktree Symlinks', icon: <Link2 size={16} /> },
+  { id: 'emergency', label: 'Emergency Mode', icon: <ShieldAlert size={16} /> }
+]
+
+const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    categoryId: 'general',
+    label: 'Project Name',
+    description: 'Basic project identification.',
+    keywords: ['rename', 'title']
+  },
+  {
+    categoryId: 'general',
+    label: 'Root Directory',
+    description: 'Project location on disk.',
+    keywords: ['path', 'folder', 'location']
+  },
+  {
+    categoryId: 'general',
+    label: 'Color & Appearance',
+    description: 'Project color and appearance.',
+    keywords: ['theme', 'color']
+  },
+  {
+    categoryId: 'env-vars',
+    label: 'Environment Variables',
+    description: 'Secrets and config injected into your shell session.',
+    keywords: ['env', 'secrets', 'config', 'dotenv']
+  },
+  {
+    categoryId: 'shell',
+    label: 'Default Shell',
+    description: 'Customize the terminal experience for this workspace.',
+    keywords: ['bash', 'zsh', 'powershell']
+  },
+  {
+    categoryId: 'shell',
+    label: 'Startup Command',
+    description: 'Command to execute when a new terminal session starts.',
+    keywords: ['init', 'startup', 'command']
+  },
+  {
+    categoryId: 'symlinks',
+    label: 'Worktree Symlinks',
+    description: 'Directories to symlink from the project root into worktrees.',
+    keywords: ['node_modules', 'gitignore', 'shared dependencies']
+  },
+  {
+    categoryId: 'emergency',
+    label: 'Skip Confirmation Dialogs',
+    description: 'Bypass non-essential prompts during worktree operations.',
+    keywords: ['emergency', 'confirm']
+  },
+  {
+    categoryId: 'emergency',
+    label: 'Skip .gitignore Selection',
+    description: 'Use default symlink settings when creating worktrees.',
+    keywords: ['emergency', 'gitignore']
+  },
+  {
+    categoryId: 'emergency',
+    label: 'Default Branch Prefix',
+    description: 'Prefix for new branch naming.',
+    keywords: ['branch', 'feature', 'hotfix']
+  }
+]
 
 export default function ProjectSettings() {
   const navigate = useNavigate()
@@ -23,9 +118,10 @@ export default function ProjectSettings() {
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
   const [rootPath, setRootPath] = useState(activeProject?.path || '')
+  const rootPathRef = useRef(rootPath)
+  rootPathRef.current = rootPath
   const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
   const [shell, setShell] = useState(activeProject?.defaultShell || '')
-  const [startupCommand, setStartupCommand] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
   const [symlinkDirs, setSymlinkDirs] = useState<string[]>(activeProject?.symlinkDirs ?? [])
   const [symlinkLoading, setSymlinkLoading] = useState(false)
@@ -64,6 +160,7 @@ export default function ProjectSettings() {
   // user — or the D5 auto-fill — has since changed.
   const symlinkInitProjectRef = useRef<string | null>(null)
   const autoFilledSymlinkRef = useRef<string | null>(null)
+  const envImportRequestRef = useRef(0)
 
   // Sync state when activeProject changes
   useEffect(() => {
@@ -80,8 +177,11 @@ export default function ProjectSettings() {
         setProjectName(activeProject.name)
         setSelectedColor(activeProject.color)
         setRootPath(activeProject.path || '')
+        envImportRequestRef.current += 1
         setEnvVars(activeProject.envVars || [])
         setSymlinkDirs(activeProject.symlinkDirs ?? [])
+        setImportError(null)
+        setImportWarnings(null)
         setHasChanges(false)
       }
     }
@@ -205,61 +305,80 @@ export default function ProjectSettings() {
   }
 
   const handleImportEnvFile = async () => {
-    // Capture the current project ID to detect concurrent project switches
+    // Capture enough form identity to reject stale and out-of-order reads.
     const projectIdAtStart = activeProjectId
+    const normalizedRoot = rootPath.trim()
+    const requestId = envImportRequestRef.current + 1
+    envImportRequestRef.current = requestId
 
     setImportError(null)
     setImportWarnings(null)
 
-    const fileResult = await dialogApi.selectFile({
-      filters: [{ name: 'Environment Files', extensions: ['env'] }],
-      title: 'Select .env File'
-    })
-
-    // Check if project switched during dialog
-    if (projectIdAtStart !== activeProjectId) {
+    if (normalizedRoot === '') {
+      setImportError('Project root is required to import .env.')
       return
     }
 
-    if (!fileResult.success) {
-      // User cancelled - not an error
-      return
-    }
+    const envPath = resolveProjectEnvPath(normalizedRoot)
 
-    const readResult = await filesystemApi.readFile(fileResult.data)
+    try {
+      const readResult = await filesystemApi.readFile(envPath)
 
-    // Check if project switched during file read
-    if (projectIdAtStart !== activeProjectId) {
-      return
-    }
+      // Read the store directly because this async callback retains values from
+      // the render in which it started. The request/root checks also reject
+      // overlapping reads and edits made while the adapter call is pending.
+      if (
+        requestId !== envImportRequestRef.current ||
+        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        normalizedRoot !== rootPathRef.current.trim()
+      ) {
+        return
+      }
 
-    if (!readResult.success) {
-      setImportError(`Failed to read file: ${readResult.error}`)
-      return
-    }
+      if (!readResult.success) {
+        setImportError(`Failed to read .env: ${readResult.error}`)
+        return
+      }
 
-    const parseResult = parseEnvFile(readResult.data.content)
+      const parseResult = parseEnvFile(readResult.data.content)
 
-    if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
-      setImportError('The .env file is empty.')
-      return
-    }
+      if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
+        setImportError('The .env file is empty.')
+        return
+      }
 
-    // Merge with existing env vars using functional update to avoid stale state
-    setEnvVars((prevEnvVars) => mergeEnvVars(prevEnvVars, parseResult.vars))
-    setHasChanges(true)
+      // Merge only when at least one variable parsed successfully. An invalid-only
+      // file should report its skipped lines without claiming unsaved changes.
+      if (parseResult.vars.length > 0) {
+        setEnvVars((prevEnvVars) => mergeEnvVars(prevEnvVars, parseResult.vars))
+        setHasChanges(true)
+      }
 
-    // Show warnings for invalid lines if any
-    if (parseResult.invalidLines.length > 0) {
-      const warningDetails = parseResult.invalidLines
-        .slice(0, 3)
-        .map((l) => `Line ${l.line}: ${l.content}`)
-        .join('\n')
-      const moreCount =
-        parseResult.invalidLines.length > 3 ? ` (+${parseResult.invalidLines.length - 3} more)` : ''
-      setImportWarnings(
-        `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
-      )
+      // Show warnings for invalid lines if any.
+      if (parseResult.invalidLines.length > 0) {
+        const warningDetails = parseResult.invalidLines
+          .slice(0, 3)
+          .map((l) => `Line ${l.line}: ${l.content}`)
+          .join('\n')
+        const moreCount =
+          parseResult.invalidLines.length > 3
+            ? ` (+${parseResult.invalidLines.length - 3} more)`
+            : ''
+        setImportWarnings(
+          `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
+        )
+      }
+    } catch (error) {
+      if (
+        requestId !== envImportRequestRef.current ||
+        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        normalizedRoot !== rootPathRef.current.trim()
+      ) {
+        return
+      }
+
+      const message = error instanceof Error ? error.message : String(error)
+      setImportError(`Failed to read .env: ${message}`)
     }
   }
 
@@ -301,394 +420,369 @@ export default function ProjectSettings() {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-8 pb-32">
-          <div className="max-w-4xl mx-auto space-y-12">
-            {/* General Section */}
-            <section>
-              <div className="flex items-start gap-6 border-b border-border pb-8">
-                <div className="w-1/3 pt-1">
-                  <h2 className="text-lg font-medium text-foreground">General</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Basic project identification and location.
-                  </p>
+        <SettingsLayout
+          categories={PROJECT_SETTINGS_CATEGORIES}
+          searchIndex={PROJECT_SETTINGS_SEARCH_INDEX}
+        >
+          {/* General Section */}
+          <SettingsSection id="general">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">General</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Basic project identification and location.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Project Name
+                  </label>
+                  <input
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => {
+                      setProjectName(e.target.value)
+                      setHasChanges(true)
+                    }}
+                    className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                  />
                 </div>
-                <div className="w-2/3 space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Project Name
-                    </label>
+
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Root Directory
+                  </label>
+                  <div className="flex gap-2">
                     <input
                       type="text"
-                      value={projectName}
+                      value={rootPath}
                       onChange={(e) => {
-                        setProjectName(e.target.value)
+                        setRootPath(e.target.value)
                         setHasChanges(true)
                       }}
-                      className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                      className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
                     />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Root Directory
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={rootPath}
-                        onChange={(e) => {
-                          setRootPath(e.target.value)
+                    <button
+                      onClick={async () => {
+                        const result = await dialogApi.selectDirectory()
+                        if (result.success) {
+                          setRootPath(result.data)
                           setHasChanges(true)
-                        }}
-                        className="flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm text-foreground font-mono focus:ring-2 focus:ring-primary outline-none"
-                      />
-                      <button
-                        onClick={async () => {
-                          const result = await dialogApi.selectDirectory()
-                          if (result.success) {
-                            setRootPath(result.data)
-                            setHasChanges(true)
-                          }
-                        }}
-                        className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm"
-                      >
-                        Browse
-                      </button>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Changing the root directory only affects new terminals.
-                    </p>
+                        }
+                      }}
+                      className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm"
+                    >
+                      Browse
+                    </button>
                   </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-3">
-                      Color & Appearance
-                    </label>
-                    <div className="flex gap-2 flex-wrap">
-                      {availableColors.map((color) => {
-                        const colors = getColorClasses(color)
-                        return (
-                          <button
-                            key={color}
-                            onClick={() => {
-                              setSelectedColor(color)
-                              setHasChanges(true)
-                            }}
-                            className={cn(
-                              'w-8 h-8 rounded-full transition-all',
-                              colors.bg,
-                              selectedColor === color
-                                ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
-                                : 'border-2 border-transparent hover:opacity-80'
-                            )}
-                          />
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Environment Variables Section */}
-            <section>
-              <div className="flex items-start gap-6 border-b border-border pb-8">
-                <div className="w-1/3 pt-1">
-                  <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Secrets and config injected into your shell session. Secret values are cleared
-                    on app restart until secure storage is added.
-                  </p>
-                  <button
-                    onClick={addEnvVar}
-                    className="mt-4 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
-                  >
-                    <Plus size={14} className="mr-1" /> Add Variable
-                  </button>
-                  <button
-                    onClick={handleImportEnvFile}
-                    className="mt-2 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
-                  >
-                    <Upload size={14} className="mr-1" /> Import from .env
-                  </button>
-                  {importError && <p className="mt-2 text-xs text-destructive">{importError}</p>}
-                  {importWarnings && (
-                    <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">
-                      {importWarnings}
-                    </p>
-                  )}
-                </div>
-                <div className="w-2/3">
-                  <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">
-                    <div className="grid grid-cols-[1fr_1.5fr_auto] gap-px bg-border">
-                      <div className="bg-secondary/80 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        Key
-                      </div>
-                      <div className="bg-secondary/80 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        Value
-                      </div>
-                      <div className="bg-secondary/80 w-10"></div>
-
-                      {envVars.map((envVar, index) => (
-                        <>
-                          <div key={`key-${index}`} className="bg-card p-2">
-                            <input
-                              type="text"
-                              value={envVar.key}
-                              onChange={(e) => {
-                                const newVars = [...envVars]
-                                newVars[index].key = e.target.value
-                                setEnvVars(newVars)
-                                setHasChanges(true)
-                              }}
-                              placeholder="KEY"
-                              className="w-full bg-transparent border-none text-sm font-mono text-primary focus:ring-0 px-2 py-1"
-                            />
-                          </div>
-                          <div key={`val-${index}`} className="bg-card p-2 relative group">
-                            <input
-                              type={envVar.isSecret ? 'password' : 'text'}
-                              value={envVar.value}
-                              onChange={(e) => {
-                                const newVars = [...envVars]
-                                newVars[index].value = e.target.value
-                                setEnvVars(newVars)
-                                setHasChanges(true)
-                              }}
-                              placeholder="Value"
-                              className={cn(
-                                'w-full bg-transparent border-none text-sm font-mono focus:ring-0 px-2 py-1',
-                                envVar.isSecret ? 'text-muted-foreground' : 'text-green-400'
-                              )}
-                            />
-                          </div>
-                          <div
-                            key={`action-${index}`}
-                            className="bg-card flex items-center justify-center"
-                          >
-                            <button
-                              onClick={() => removeEnvVar(index)}
-                              className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
-                            >
-                              <X size={18} />
-                            </button>
-                          </div>
-                        </>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Shell Settings Section */}
-            <section>
-              <div className="flex items-start gap-6">
-                <div className="w-1/3 pt-1">
-                  <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Customize the terminal experience for this workspace.
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Changing the root directory only affects new terminals.
                   </p>
                 </div>
-                <div className="w-2/3 space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Default Shell
-                    </label>
-                    {shellsLoading ? (
-                      <Skeleton className="w-full h-10" />
-                    ) : (
-                      <div className="relative">
-                        <select
-                          value={shell}
-                          onChange={(e) => {
-                            setShell(e.target.value)
+
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-3">
+                    Color & Appearance
+                  </label>
+                  <div className="flex gap-2 flex-wrap">
+                    {availableColors.map((color) => {
+                      const colors = getColorClasses(color)
+                      return (
+                        <button
+                          key={color}
+                          onClick={() => {
+                            setSelectedColor(color)
                             setHasChanges(true)
                           }}
-                          className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm"
-                        >
-                          {availableShells?.available && availableShells.available.length > 0 ? (
-                            availableShells.available.map((s) => (
-                              <option key={s.name} value={s.name}>
-                                {s.displayName}
-                              </option>
-                            ))
-                          ) : (
-                            <option value="">No shells detected</option>
+                          className={cn(
+                            'w-8 h-8 rounded-full transition-all',
+                            colors.bg,
+                            selectedColor === color
+                              ? 'ring-2 ring-offset-2 ring-offset-background ring-current shadow-sm'
+                              : 'border-2 border-transparent hover:opacity-80'
                           )}
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
-                          <ChevronDown size={14} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                      Startup Command
-                    </label>
-                    <input
-                      type="text"
-                      value={startupCommand}
-                      onChange={(e) => {
-                        setStartupCommand(e.target.value)
-                        setHasChanges(true)
-                      }}
-                      placeholder="e.g. nvm use 16"
-                      className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none shadow-sm"
-                    />
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Command to execute immediately when a new terminal session starts.
-                    </p>
+                        />
+                      )
+                    })}
                   </div>
                 </div>
               </div>
-            </section>
+            </div>
+          </SettingsSection>
 
-            {/* Worktree Symlink Directories Section */}
-            <section>
-              <div className="flex items-start gap-6">
-                <div className="w-1/3 pt-1">
-                  <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Directories to symlink from the project root into worktrees. This allows shared
-                    dependencies (like{' '}
-                    <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>)
-                    across worktrees without reinstalling.
+          {/* Environment Variables Section */}
+          <SettingsSection id="env-vars">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Secrets and config injected into your shell session. Secret values are cleared on
+                  app restart until secure storage is added.
+                </p>
+                <button
+                  onClick={addEnvVar}
+                  className="mt-4 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
+                >
+                  <Plus size={14} className="mr-1" /> Add Variable
+                </button>
+                <button
+                  onClick={handleImportEnvFile}
+                  className="mt-2 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
+                >
+                  <Upload size={14} className="mr-1" /> Import from .env
+                </button>
+                {importError && <p className="mt-2 text-xs text-destructive">{importError}</p>}
+                {importWarnings && (
+                  <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">
+                    {importWarnings}
                   </p>
-                  <div className="mt-4 space-y-2">
-                    <button
-                      onClick={() => void syncFromGitignore()}
-                      disabled={symlinkLoading || !activeProject?.isGitRepo}
-                      className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <RefreshCw
-                        size={14}
-                        className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`}
-                      />
-                      Sync from .gitignore
-                    </button>
-                    <button
-                      onClick={addSymlinkDir}
-                      className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
-                    >
-                      <Plus size={14} className="mr-1" /> Add Directory
-                    </button>
-                  </div>
-                </div>
-                <div className="w-2/3">
-                  <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
-                    {symlinkDirs.length === 0 ? (
-                      <p className="text-xs text-muted-foreground text-center py-4">
-                        No symlink directories configured. Click "Sync from .gitignore" to
-                        auto-detect.
-                      </p>
-                    ) : (
-                      symlinkDirs.map((dir, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Link2 size={12} className="text-muted-foreground flex-shrink-0" />
+                )}
+              </div>
+              <div className="w-2/3">
+                <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">
+                  <div className="grid grid-cols-[1fr_1.5fr_auto] gap-px bg-border">
+                    <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
+                      Key
+                    </div>
+                    <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
+                      Value
+                    </div>
+                    <div className="bg-secondary/80 w-10"></div>
+
+                    {envVars.map((envVar, index) => (
+                      <Fragment key={index}>
+                        <div className="bg-card p-2">
                           <input
                             type="text"
-                            value={dir}
-                            onChange={(e) => updateSymlinkDir(index, e.target.value)}
-                            placeholder="e.g. node_modules"
-                            className="flex-1 bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                            value={envVar.key}
+                            onChange={(e) => {
+                              const newVars = [...envVars]
+                              newVars[index].key = e.target.value
+                              setEnvVars(newVars)
+                              setHasChanges(true)
+                            }}
+                            placeholder="KEY"
+                            className="w-full bg-transparent border-none text-sm font-mono text-primary focus:ring-0 px-2 py-1"
                           />
+                        </div>
+                        <div className="bg-card p-2 relative group">
+                          <input
+                            type={envVar.isSecret ? 'password' : 'text'}
+                            value={envVar.value}
+                            onChange={(e) => {
+                              const newVars = [...envVars]
+                              newVars[index].value = e.target.value
+                              setEnvVars(newVars)
+                              setHasChanges(true)
+                            }}
+                            placeholder="Value"
+                            className={cn(
+                              'w-full bg-transparent border-none text-sm font-mono focus:ring-0 px-2 py-1',
+                              envVar.isSecret ? 'text-muted-foreground' : 'text-green-400'
+                            )}
+                          />
+                        </div>
+                        <div className="bg-card flex items-center justify-center">
                           <button
-                            onClick={() => removeSymlinkDir(index)}
+                            onClick={() => removeEnvVar(index)}
                             className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
                           >
-                            <X size={14} />
+                            <X size={18} />
                           </button>
                         </div>
-                      ))
-                    )}
+                      </Fragment>
+                    ))}
                   </div>
                 </div>
               </div>
-            </section>
+            </div>
+          </SettingsSection>
 
-            {/* Emergency Mode & Expert Workflows Section */}
-            <section>
-              <div className="flex items-start gap-6">
-                <div className="w-1/3 pt-1">
-                  <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Power-user workflow settings for incident response and rapid worktree
-                    operations.
-                  </p>
-                </div>
-                <div className="w-2/3">
-                  <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          Skip Confirmation Dialogs
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Bypass non-essential prompts during worktree operations.
-                        </p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="sr-only peer"
-                          checked={skipConfirmations}
-                          onChange={(e) => {
-                            setSkipConfirmations(e.target.checked)
-                            setHasChanges(true)
-                          }}
-                        />
-                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-                      </label>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          Skip .gitignore Selection
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Use default symlink settings when creating worktrees.
-                        </p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="sr-only peer"
-                          checked={skipGitignoreSelection}
-                          onChange={(e) => {
-                            setSkipGitignoreSelection(e.target.checked)
-                            setHasChanges(true)
-                          }}
-                        />
-                        <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-                      </label>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-1">
-                        Default Branch Prefix
-                      </label>
-                      <input
-                        type="text"
-                        value={defaultBranchPrefix}
+          {/* Shell Settings Section */}
+          <SettingsSection id="shell">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Customize the terminal experience for this workspace.
+                </p>
+              </div>
+              <div className="w-2/3 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Default Shell
+                  </label>
+                  {shellsLoading ? (
+                    <Skeleton className="w-full h-10" />
+                  ) : (
+                    <div className="relative">
+                      <select
+                        value={shell}
                         onChange={(e) => {
-                          setDefaultBranchPrefix(e.target.value)
+                          setShell(e.target.value)
                           setHasChanges(true)
                         }}
-                        placeholder="feature/"
-                        className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Prefix for new branch naming (e.g. "feature/", "hotfix/").
+                        className="w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none cursor-pointer shadow-sm"
+                      >
+                        {availableShells?.available && availableShells.available.length > 0 ? (
+                          availableShells.available.map((s) => (
+                            <option key={s.name} value={s.name}>
+                              {s.displayName}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">No shells detected</option>
+                        )}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
+                        <ChevronDown size={14} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          {/* Worktree Symlink Directories Section */}
+          <SettingsSection id="symlinks">
+            <div className="flex items-start gap-6 border-b border-border pb-6">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Directories to symlink from the project root into worktrees. This allows shared
+                  dependencies (like{' '}
+                  <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>) across
+                  worktrees without reinstalling.
+                </p>
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={() => void syncFromGitignore()}
+                    disabled={symlinkLoading || !activeProject?.isGitRepo}
+                    className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`}
+                    />
+                    Sync from .gitignore
+                  </button>
+                  <button
+                    onClick={addSymlinkDir}
+                    className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
+                  >
+                    <Plus size={14} className="mr-1" /> Add Directory
+                  </button>
+                </div>
+              </div>
+              <div className="w-2/3">
+                <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
+                  {symlinkDirs.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4">
+                      No symlink directories configured. Click "Sync from .gitignore" to
+                      auto-detect.
+                    </p>
+                  ) : (
+                    symlinkDirs.map((dir, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <Link2 size={12} className="text-muted-foreground flex-shrink-0" />
+                        <input
+                          type="text"
+                          value={dir}
+                          onChange={(e) => updateSymlinkDir(index, e.target.value)}
+                          placeholder="e.g. node_modules"
+                          className="flex-1 bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                        />
+                        <button
+                          onClick={() => removeSymlinkDir(index)}
+                          className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          {/* Emergency Mode & Expert Workflows Section */}
+          <SettingsSection id="emergency">
+            <div className="flex items-start gap-6">
+              <div className="w-1/3 pt-1">
+                <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Power-user workflow settings for incident response and rapid worktree operations.
+                </p>
+              </div>
+              <div className="w-2/3">
+                <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Skip Confirmation Dialogs
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Bypass non-essential prompts during worktree operations.
                       </p>
                     </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={skipConfirmations}
+                        onChange={(e) => {
+                          setSkipConfirmations(e.target.checked)
+                        }}
+                      />
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Skip .gitignore Selection
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Use default symlink settings when creating worktrees.
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={skipGitignoreSelection}
+                        onChange={(e) => {
+                          setSkipGitignoreSelection(e.target.checked)
+                        }}
+                      />
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1">
+                      Default Branch Prefix
+                    </label>
+                    <input
+                      type="text"
+                      value={defaultBranchPrefix}
+                      onChange={(e) => {
+                        setDefaultBranchPrefix(e.target.value)
+                      }}
+                      placeholder="feature/"
+                      className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Prefix for new branch naming (e.g. "feature/", "hotfix/").
+                    </p>
                   </div>
                 </div>
               </div>
-            </section>
-          </div>
-        </div>
+            </div>
+          </SettingsSection>
+        </SettingsLayout>
 
         {/* Save Bar */}
         {hasChanges && (

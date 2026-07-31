@@ -541,12 +541,11 @@ describe('useTerminalRestore', () => {
     })
   })
 
-  it('does not loop default-terminal restore retries when a default spawn succeeds', async () => {
+  it('does not auto-spawn a terminal for a project with no persisted terminals', async () => {
     vi.useFakeTimers()
     mockTerminalStoreState.terminals = []
     mockLoadPersistedTerminals.mockResolvedValue(null)
     mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-default' } })
-    mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'terminal-a' }))
 
     renderHook(() => {
       mockProjectState.activeProjectId = 'project-a'
@@ -555,19 +554,20 @@ describe('useTerminalRestore', () => {
 
     await vi.runOnlyPendingTimersAsync()
 
-    expect(mockTerminalSpawn).toHaveBeenCalledTimes(1)
+    // No terminal should be spawned; the empty-state launcher is shown instead.
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
     expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'restore-path-selected',
         projectId: 'project-a',
-        details: expect.objectContaining({ path: 'default-terminal' })
+        details: expect.objectContaining({ path: 'empty-state' })
       })
     )
     expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'restore-complete',
         projectId: 'project-a',
-        terminalId: 'terminal-a'
+        details: expect.objectContaining({ path: 'empty-state', restoredTerminalCount: 0 })
       })
     )
     expect(mockSetTerminalRestoreInProgress).toHaveBeenCalledWith(
@@ -575,43 +575,6 @@ describe('useTerminalRestore', () => {
       true,
       expect.stringContaining('project-a:')
     )
-    vi.useRealTimers()
-  })
-
-  it('kills a spawned default terminal pty when restore is cancelled after spawn succeeds', async () => {
-    vi.useFakeTimers()
-    const spawnGate = {
-      resolve: undefined as ((value: { success: true; data: { id: string } }) => void) | undefined
-    }
-
-    mockTerminalStoreState.terminals = []
-    mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
-    mockLoadPersistedTerminals.mockResolvedValue(null)
-    mockTerminalSpawn.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          spawnGate.resolve = resolve as (value: { success: true; data: { id: string } }) => void
-        })
-    )
-
-    const { rerender } = renderHook(
-      ({ projectId }) => {
-        mockProjectState.activeProjectId = projectId
-        useTerminalRestore()
-      },
-      { initialProps: { projectId: 'project-a' } }
-    )
-
-    await vi.runOnlyPendingTimersAsync()
-    expect(mockTerminalSpawn).toHaveBeenCalled()
-
-    rerender({ projectId: 'project-b' })
-    await vi.runOnlyPendingTimersAsync()
-
-    spawnGate.resolve?.({ success: true, data: { id: 'pty-default-orphan' } })
-    await vi.runOnlyPendingTimersAsync()
-
-    expect(mockTerminalSpawn).toHaveBeenCalled()
     vi.useRealTimers()
   })
 

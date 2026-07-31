@@ -5,11 +5,13 @@ import type {
   FileContent,
   FileInfo,
   FilesystemApi,
-  IpcResult
+  IpcResult,
+  SearchFileHit
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
+  copyFile,
   mkdir,
   open,
   readDir,
@@ -22,6 +24,7 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+import { webServerFilesystem } from './web-server-api'
 
 // Names that are commonly git-ignored. Entries matching these are still shown in
 // the file tree but rendered dimmed (and skipped during recursive walks for perf).
@@ -187,36 +190,44 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
 export function createTauriFilesystemApi(): FilesystemApi {
   return {
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
+      // Web/remote mode: route through the same-origin server (Story: Web/
+      // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
+      if (!isTauriContext()) {
+        return webServerFilesystem.readDirectory(dirPath)
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
 
-        const filtered: DirectoryEntry[] = []
-        for (const entry of entries) {
-          const name = entry.name
+        // Stat all entries in parallel instead of sequentially — a directory
+        // with N entries previously incurred N sequential IPC round-trips,
+        // which dominated tree-expansion latency for large directories (#378).
+        const filtered = await Promise.all(
+          entries.map(async (entry): Promise<DirectoryEntry> => {
+            const name = entry.name
+            const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
+            let size = 0
+            let modified = Date.now()
+            try {
+              const info = await stat(fullPath)
+              size = info.size
+              modified = info.mtime?.getTime() ?? Date.now()
+            } catch {
+              // Ignore stat errors, use defaults
+            }
 
-          const fullPath = `${normalizedDirPath}/${name}`.replace(/\/+/g, '/')
-          let size = 0
-          let modified = Date.now()
-          try {
-            const info = await stat(fullPath)
-            size = info.size
-            modified = info.mtime?.getTime() ?? Date.now()
-          } catch {
-            // Ignore stat errors, use defaults
-          }
-
-          const isDir = entry.isDirectory ?? false
-          filtered.push({
-            name,
-            path: fullPath,
-            type: isDir ? 'directory' : 'file',
-            extension: isDir ? null : getExtension(name),
-            size,
-            modifiedAt: modified,
-            ignored: shouldIgnore(name)
+            const isDir = entry.isDirectory ?? false
+            return {
+              name,
+              path: fullPath,
+              type: isDir ? 'directory' : 'file',
+              extension: isDir ? null : getExtension(name),
+              size,
+              modifiedAt: modified,
+              ignored: shouldIgnore(name)
+            }
           })
-        }
+        )
 
         // Sort: directories first, then files, both A-Z
         const sorted = sortDirectoryEntries(filtered)
@@ -238,7 +249,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
         }
 
         const content = await readTextFile(filePath)
-        const _isBinary = isBinaryFile(content)
+
+        // Binary detection on already-read content: avoids a separate
+        // open()/read()/close() round-trip that getFileInfo() used to perform.
+        if (isBinaryFile(content)) {
+          return {
+            success: false,
+            error: 'Binary file cannot be displayed',
+            code: 'BINARY_FILE'
+          }
+        }
 
         return {
           success: true,
@@ -471,12 +491,21 @@ export function createTauriFilesystemApi(): FilesystemApi {
       searchId: string,
       scopeRoot: string,
       rootPath: string,
-      query: string
+      query: string,
+      includeIgnored?: boolean
     ) {
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_stream',
-          { request: { searchId, scopeRoot, rootPath, query } }
+          {
+            request: {
+              searchId,
+              scopeRoot,
+              rootPath,
+              query,
+              ...(includeIgnored ? { includeIgnored } : {})
+            }
+          }
         )
         if (!response?.success) {
           return {
@@ -519,12 +548,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onSearchFileNamesBatch(
-      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+      callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
     ) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
+        unlisten = listen<{ searchId: string; files: SearchFileHit[]; truncated?: boolean }>(
           'search-file-names-batch',
           ({ payload }) => callback(payload)
         )
@@ -586,6 +615,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -595,6 +628,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createDirectory(dirPath)
+      }
       try {
         await mkdir(dirPath, { recursive: true })
         return { success: true, data: undefined }
@@ -618,6 +655,19 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return { success: true, data: undefined }
       } catch (err) {
         return { success: false, error: String(err), code: 'RENAME_ERROR' }
+      }
+    },
+
+    /**
+     * Copy a file to a new path using a binary-safe native copy.
+     * Returns `COPY_ERROR` on failure (e.g. when the source is a directory).
+     */
+    async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+      try {
+        await copyFile(srcPath, destPath)
+        return { success: true, data: undefined }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'COPY_ERROR' }
       }
     },
 

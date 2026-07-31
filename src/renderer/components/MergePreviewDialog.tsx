@@ -97,7 +97,7 @@ export function MergePreviewDialog({
                 </div>
                 <span
                   className={cn(
-                    'text-[10px] px-1.5 py-0.5 rounded font-medium',
+                    'text-3xs px-1.5 py-0.5 rounded font-medium',
                     preview.detectionMode === 'accurate'
                       ? 'bg-green-500/10 text-green-500'
                       : 'bg-yellow-500/10 text-yellow-500'
@@ -129,9 +129,7 @@ export function MergePreviewDialog({
               {/* Conflict files list */}
               {preview.conflictFiles.length > 0 && (
                 <div className="space-y-1 max-h-[180px] overflow-auto">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                    Conflicted Files
-                  </p>
+                  <p className="label-group text-muted-foreground">Conflicted Files</p>
                   {preview.conflictFiles.map((file) => (
                     <div
                       key={file.path}
@@ -141,7 +139,7 @@ export function MergePreviewDialog({
                       <span className="flex-1 truncate text-foreground">{file.path}</span>
                       <span
                         className={cn(
-                          'text-[9px] px-1 rounded font-medium',
+                          'text-4xs px-1 rounded font-medium',
                           file.severity === 'high'
                             ? 'bg-destructive/10 text-destructive'
                             : file.severity === 'medium'
@@ -159,9 +157,7 @@ export function MergePreviewDialog({
               {/* Changed files list (no conflict) */}
               {preview.changedFiles.length > 0 && (
                 <div className="space-y-1 max-h-[100px] overflow-auto">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                    Files that will change
-                  </p>
+                  <p className="label-group text-muted-foreground">Files that will change</p>
                   {preview.changedFiles.map((file) => (
                     <div
                       key={file}

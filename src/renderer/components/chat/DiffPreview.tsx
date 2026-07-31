@@ -20,24 +20,26 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
     <div className="rounded border border-border/50 bg-background/50 text-xs">
       <div className="flex items-center gap-2 border-b border-border/40 px-2 py-1">
         <FileDiff size={12} className="text-muted-foreground" />
-        <span className="truncate font-mono text-[11px]">{diff.path}</span>
+        <span className="truncate font-mono text-2xs">{diff.path}</span>
         {isNewFile && (
-          <span className="rounded bg-green-400/10 px-1 text-[10px] text-green-400">new</span>
+          <span className="rounded bg-green-500/15 px-1 text-3xs text-green-700 dark:bg-green-400/10 dark:text-green-400">
+            new
+          </span>
         )}
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-          <span className="text-green-400">+{added}</span>{' '}
-          <span className="text-red-400">−{removed}</span>
+        <span className="ml-auto font-mono text-3xs text-muted-foreground">
+          <span className="text-green-700 dark:text-green-400">+{added}</span>{' '}
+          <span className="text-red-700 dark:text-red-400">−{removed}</span>
         </span>
       </div>
-      <div className="max-h-48 overflow-auto p-2 font-mono text-[11px] leading-snug">
+      <div className="max-h-48 overflow-auto p-2 font-mono text-2xs leading-snug">
         {lines.map((line, i) => (
           <div
             key={i}
             className={cn(
               'whitespace-pre-wrap',
               line.type === 'added'
-                ? 'bg-green-400/10 text-green-300'
-                : 'bg-red-400/10 text-red-300'
+                ? 'bg-green-500/10 text-green-800 dark:bg-green-400/10 dark:text-green-300'
+                : 'bg-red-500/10 text-red-800 dark:bg-red-400/10 dark:text-red-300'
             )}
           >
             <span className="select-none opacity-60">{line.type === 'added' ? '+' : '−'} </span>

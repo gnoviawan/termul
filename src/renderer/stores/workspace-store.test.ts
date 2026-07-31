@@ -583,3 +583,67 @@ describe('workspace-store same-direction collapse (ADR-002.6)', () => {
     expect(Math.abs(sizeSum - 100)).toBeLessThan(1)
   })
 })
+
+describe('workspace-store agent launcher auto-dismiss', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  it('clears the launcher when a tab is added to the same pane', () => {
+    const store = useWorkspaceStore.getState()
+    store.showAgentLauncher('pane-root')
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe('pane-root')
+
+    store.addEditorTab('/a.ts', 'pane-root')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+
+  it('clears the launcher when activating a duplicate tab in the same pane', () => {
+    const store = useWorkspaceStore.getState()
+    store.addEditorTab('/a.ts', 'pane-root')
+    store.showAgentLauncher('pane-root')
+
+    // Re-adding the same file activates the existing tab and must still dismiss.
+    store.addEditorTab('/a.ts', 'pane-root')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+
+  it('clears the launcher when switching the active tab in the same pane', () => {
+    const store = useWorkspaceStore.getState()
+    store.addEditorTab('/a.ts', 'pane-root')
+    store.addEditorTab('/b.ts', 'pane-root')
+    store.showAgentLauncher('pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    store.setActiveTab('pane-root', leaf.tabs[0].id)
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+
+  it('leaves the launcher open when a tab is added to a different pane', () => {
+    const store = useWorkspaceStore.getState()
+    const tabA = createEditorTab('edit-/a.ts')
+    store.addTabToPane('pane-root', tabA)
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/b.ts'), 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const leftPaneId = (split.children[0] as LeafNode).id
+    const rightPaneId = (split.children[1] as LeafNode).id
+
+    store.showAgentLauncher(leftPaneId)
+    store.addEditorTab('/c.ts', rightPaneId)
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe(leftPaneId)
+  })
+})

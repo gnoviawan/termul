@@ -1,5 +1,4 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -7,8 +6,14 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWindowState } from '@/hooks/use-window-state'
+import { getCurrentWindow } from '@/lib/tauri-window'
 import { useUpdateToast } from './components/UpdateAvailableToast'
+import { WhatsNewModal } from './components/WhatsNewModal'
+import { useAcpAgents } from './hooks/use-acp-agents'
+import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpHistorySync } from './hooks/use-acp-history-sync'
 import { useAcpListeners } from './hooks/use-acp-listeners'
+import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -25,8 +30,10 @@ import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
+import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
@@ -51,6 +58,7 @@ function AppEffects(): null {
   useContextBarSettings()
   useAppSettingsLoader()
   useAppliedColorThemeSync()
+  useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
   useProjectsLoader()
   useProjectsAutoSave()
@@ -61,6 +69,10 @@ function AppEffects(): null {
   useTerminalExitNotification()
   useRemoteProjects()
   useAcpListeners()
+  useAcpAgents()
+  useAcpHistory()
+  useAcpHistorySync()
+  useAcpMcp()
   usePreventFileDropNavigation()
 
   // Initialize desktop notification permissions once at app startup
@@ -95,6 +107,7 @@ const router = createHashRouter(
 
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
+  const whatsNew = useWhatsNew()
 
   useEffect(() => {
     if (!isWindowStateReady) return
@@ -121,6 +134,13 @@ export default function TauriApp(): React.JSX.Element {
           <Toaster />
           <Sonner />
           <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          <WhatsNewModal
+            isOpen={whatsNew.isOpen}
+            version={whatsNew.version}
+            notes={whatsNew.notes}
+            htmlUrl={whatsNew.htmlUrl}
+            onClose={whatsNew.close}
+          />
         </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>

@@ -1,4 +1,7 @@
 import { PersistenceKeys, type WindowState } from '@shared/types/persistence.types'
+import { useEffect, useRef, useState } from 'react'
+import { persistenceApi } from '@/lib/api'
+import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
 import {
   availableMonitors,
   getCurrentWindow,
@@ -6,10 +9,7 @@ import {
   LogicalSize,
   type Monitor,
   primaryMonitor
-} from '@tauri-apps/api/window'
-import { useEffect, useRef, useState } from 'react'
-import { persistenceApi } from '@/lib/api'
-import { cleanupTauriListener, isTauriContext } from '@/lib/tauri-runtime'
+} from '@/lib/tauri-window'
 
 const DEFAULT_WIDTH = 1200
 const DEFAULT_HEIGHT = 800

@@ -1,6 +1,6 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Copy, Minus, Square, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { getCurrentWindow } from '@/lib/tauri-window'
 
 const focusableButtonClass =
   'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
@@ -44,10 +44,7 @@ export function TauriTitleBar(): React.JSX.Element {
       className="h-8 flex items-center justify-between bg-card border-b border-border select-none shrink-0"
       data-tauri-drag-region
     >
-      <span
-        className="text-xs font-semibold text-muted-foreground tracking-wider uppercase px-3"
-        data-tauri-drag-region
-      >
+      <span className="label-section text-muted-foreground px-3" data-tauri-drag-region>
         termul
       </span>
 

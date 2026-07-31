@@ -5,6 +5,12 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// Process-lifetime cache for the OS-probed PATH, so `fresh_path()` does not
+/// spawn a login shell (Unix) or read the registry (Windows) on every agent
+/// launch. Matches the `RG_PATH_CACHE` pattern in `commands.rs`.
+static FRESH_PATH_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
 #[cfg(target_os = "windows")]
 fn has_path_key(env: &HashMap<String, String>) -> bool {
@@ -123,16 +129,23 @@ pub fn path_for_resolution() -> std::ffi::OsString {
 }
 
 /// Returns the refreshed PATH string for the current platform, if obtainable.
+/// Cached for the process lifetime via `FRESH_PATH_CACHE` so the probe runs at
+/// most once; subsequent calls return the cached result without spawning a
+/// login shell or reading the registry.
 pub fn fresh_path() -> Option<String> {
-    #[cfg(target_os = "windows")]
-    {
-        return read_windows_registry_path();
-    }
+    FRESH_PATH_CACHE
+        .get_or_init(|| {
+            #[cfg(target_os = "windows")]
+            {
+                read_windows_registry_path()
+            }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        probe_unix_login_path()
-    }
+            #[cfg(not(target_os = "windows"))]
+            {
+                probe_unix_login_path()
+            }
+        })
+        .clone()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -204,6 +217,9 @@ pub fn apply_fresh_path(env: &mut HashMap<String, String>) {
 }
 
 /// Whether an interactive shell spawn should pass a login-shell flag.
+// Only invoked from the non-Windows PTY spawn path; on Windows it is exercised
+// solely by unit tests, so a non-test Windows build sees it as unused.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn shell_wants_login_arg(shell_path: &str) -> Option<&'static str> {
     let name = Path::new(shell_path)
         .file_name()

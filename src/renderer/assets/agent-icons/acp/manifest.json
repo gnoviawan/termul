@@ -36,7 +36,7 @@
   },
   {
     "id": "codex-acp",
-    "name": "Codex CLI",
+    "name": "Codex",
     "file": "codex-acp.svg"
   },
   {
@@ -63,6 +63,11 @@
     "id": "deepagents",
     "name": "DeepAgents",
     "file": "deepagents.svg"
+  },
+  {
+    "id": "devin",
+    "name": "Devin",
+    "file": "devin.svg"
   },
   {
     "id": "dimcode",
@@ -108,6 +113,11 @@
     "id": "grok-build",
     "name": "Grok Build",
     "file": "grok-build.svg"
+  },
+  {
+    "id": "harn",
+    "name": "Harn",
+    "file": "harn.svg"
   },
   {
     "id": "junie",
