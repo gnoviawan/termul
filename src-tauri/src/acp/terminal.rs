@@ -233,7 +233,6 @@ impl TerminalRegistry {
     }
 
     /// The cached exit status for a terminal, if known.
-    #[must_use]
     pub fn cached_exit(
         &self,
         session_id: &str,
