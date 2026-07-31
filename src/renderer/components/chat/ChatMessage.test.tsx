@@ -5,11 +5,16 @@ import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
 
 vi.mock('@/lib/api', () => ({
   openerApi: {
     openUrlWithSystemBrowser: (...args: unknown[]) => openUrlWithSystemBrowser(...args)
   }
+}))
+
+vi.mock('@/lib/file-path-links', () => ({
+  openFilePathFromTerminal: (...args: unknown[]) => openFilePathFromTerminal(...args)
 }))
 
 vi.mock('streamdown', async () => {
@@ -42,6 +47,7 @@ vi.mock('streamdown', async () => {
     const url = 'https://example.com/docs'
     const markdown = typeof children === 'string' ? children : ''
     const CustomTable = components?.table as React.ElementType | undefined
+    const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
 
     return (
@@ -63,7 +69,14 @@ vi.mock('streamdown', async () => {
         >
           docs
         </button>
-        {semanticFixture ? (
+        {markdown.startsWith('FILE_PATH:') && CustomLink ? (
+          <CustomLink
+            href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"
+            data-testid="file-path-link"
+          >
+            src/renderer/App.tsx:42
+          </CustomLink>
+        ) : semanticFixture ? (
           <>
             <h1 data-streamdown="heading-1">Compact heading</h1>
             <ul data-streamdown="unordered-list">
@@ -110,6 +123,7 @@ vi.mock('streamdown', async () => {
   const StreamdownContext = React.createContext({ controls: false, isAnimating: false })
   return {
     Streamdown: MockStreamdown,
+    defaultRemarkPlugins: {},
     StreamdownContext,
     TableCopyDropdown: ({ children }: { children: ReactNode }) => <>{children}</>,
     TableDownloadDropdown: ({ children }: { children: ReactNode }) => <>{children}</>
@@ -137,6 +151,7 @@ function agentMessage(streaming: boolean): ChatMessageType {
 describe('ChatMessage', () => {
   beforeEach(() => {
     openUrlWithSystemBrowser.mockClear()
+    openFilePathFromTerminal.mockClear()
   })
 
   it('shows the Streamdown caret while the live agent message is streaming', () => {
@@ -227,6 +242,24 @@ describe('ChatMessage', () => {
 
     expect(screen.queryByTestId('streamdown')).not.toBeInTheDocument()
     expect(container.querySelector('.animate-caret-blink')).toBeInTheDocument()
+  })
+
+  it('opens file citations only on Ctrl/Cmd-click', async () => {
+    const message: ChatMessageType = {
+      ...agentMessage(false),
+      blocks: [{ type: 'text', text: 'FILE_PATH:src/renderer/App.tsx:42' }]
+    }
+    render(<ChatMessage message={message} filePathContext={{ cwd: '/project' }} />)
+
+    const filePathLink = screen.getByTitle('Ctrl/Cmd-click to open in editor')
+    fireEvent.click(filePathLink)
+    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
+
+    fireEvent.click(filePathLink, { ctrlKey: true })
+    await act(async () => undefined)
+    expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx:42', {
+      cwd: '/project'
+    })
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {

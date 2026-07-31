@@ -18,6 +18,7 @@ import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import { MediaBlocks } from './ChatMessage'
 import { bubbleEnter, CHAT_SPRING } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
 import { type ToolIconName, toolIconName } from './tool-call-format'
@@ -74,11 +75,7 @@ function renderContentBlock(block: ContentBlock, key: number): React.JSX.Element
       </div>
     )
   }
-  return (
-    <div key={key} className="text-xs italic text-muted-foreground">
-      [{block.type}]
-    </div>
-  )
+  return <MediaBlocks key={key} blocks={[block]} />
 }
 
 function renderContentItem(item: ToolCallContent, key: number): React.JSX.Element {

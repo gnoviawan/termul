@@ -39,7 +39,7 @@ export interface TerminalPathLink {
 }
 
 const FILE_PATH_LINK_REGEX =
-  /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])*[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
+  /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])+[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
 
 const URI_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 
@@ -63,18 +63,67 @@ function looksLikeFilePath(text: string): boolean {
   return text.includes('/') || text.includes('\\') || /^[A-Za-z]:/.test(text)
 }
 
-function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
-  if (!text.startsWith('/')) {
-    return false
+function trimTrailingPathPunctuation(value: string): string {
+  let result = value.replace(/[.,;!?]+$/, '')
+
+  for (const [opening, closing] of WRAPPER_PAIRS) {
+    while (result.endsWith(closing) && !result.includes(opening)) {
+      result = result.slice(0, -1)
+    }
   }
 
+  return result
+}
+
+function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
   const tokenStart = line.slice(0, start).search(/\S+$/)
   if (tokenStart < 0) {
     return false
   }
 
-  const tokenPrefix = line.slice(tokenStart, start + 1).replace(/^[`"'([{]+/, '')
+  const tokenPrefix = line
+    .slice(tokenStart, start + (text.startsWith('/') ? 1 : 0))
+    .replace(/^[`"'([{]+/, '')
   return URI_SCHEME_REGEX.test(tokenPrefix)
+}
+
+export interface FilePathMatch {
+  text: string
+  start: number
+}
+
+/** Finds file-like path tokens while excluding URL host/path fragments. */
+export function findFilePathMatches(line: string): FilePathMatch[] {
+  if (!line.includes('/') && !line.includes('\\') && !line.includes(':')) {
+    return []
+  }
+
+  const matches: FilePathMatch[] = []
+
+  for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
+    let text = trimTrailingPathPunctuation(match[0])
+    let start = match.index ?? -1
+    const wrapper = WRAPPER_PAIRS.find(
+      ([opening, closing]) => text.startsWith(opening) && line[start + text.length] === closing
+    )
+    if (wrapper) {
+      text = text.slice(wrapper[0].length)
+      start += wrapper[0].length
+    }
+
+    if (
+      !text ||
+      !looksLikeFilePath(text) ||
+      start < 0 ||
+      isUrlAdjacentPathMatch(line, start, text)
+    ) {
+      continue
+    }
+
+    matches.push({ text, start })
+  }
+
+  return matches
 }
 
 /** Extracts file-like links from a rendered terminal line for Ctrl/Cmd+Click activation. */
@@ -86,34 +135,14 @@ export function buildTerminalPathLinks(
   lineNumber: number,
   onActivate: (event: MouseEvent, text: string) => void | Promise<void>
 ): TerminalPathLink[] {
-  if (!line.includes('/') && !line.includes('\\') && !line.includes(':')) {
-    return []
-  }
-
-  const links: TerminalPathLink[] = []
-
-  for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
-    const text = match[0]
-    if (!text || !looksLikeFilePath(text)) {
-      continue
-    }
-
-    const start = match.index ?? -1
-    if (start < 0 || isUrlAdjacentPathMatch(line, start, text)) {
-      continue
-    }
-
-    links.push({
-      range: {
-        start: { x: start + 1, y: lineNumber },
-        end: { x: start + text.length, y: lineNumber }
-      },
-      text,
-      activate: onActivate
-    })
-  }
-
-  return links
+  return findFilePathMatches(line).map(({ text, start }) => ({
+    range: {
+      start: { x: start + 1, y: lineNumber },
+      end: { x: start + text.length, y: lineNumber }
+    },
+    text,
+    activate: onActivate
+  }))
 }
 
 function normalizeAbsolutePath(value: string): string {
