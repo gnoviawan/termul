@@ -1,6 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { TooltipProvider } from '@/components/ui/tooltip'
 import { AgentCapabilitiesBadge } from './AgentCapabilitiesBadge'
 
 describe('AgentCapabilitiesBadge', () => {
@@ -11,14 +10,12 @@ describe('AgentCapabilitiesBadge', () => {
 
   it('summarizes supported prompt and MCP transports without inventing unsupported features', async () => {
     render(
-      <TooltipProvider>
-        <AgentCapabilitiesBadge
-          image
-          audio
-          embeddedContext
-          mcpCapabilities={{ http: true, sse: true }}
-        />
-      </TooltipProvider>
+      <AgentCapabilitiesBadge
+        image
+        audio
+        embeddedContext
+        mcpCapabilities={{ http: true, sse: true }}
+      />
     )
 
     const trigger = screen.getByLabelText(
