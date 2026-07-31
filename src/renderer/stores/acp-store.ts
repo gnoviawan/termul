@@ -773,6 +773,7 @@ function dropRecordKey<T>(
  * `loadOlderMessages` on scroll-up.
  */
 export const MAX_LIVE_WINDOW_MESSAGES = 300
+export const MAX_PENDING_TERMINAL_OUTPUTS = 128
 
 /**
  * Trim a session's messages to the live window: keep the most recent
@@ -2307,8 +2308,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       for (const cid of Object.keys(configToLiveAgent)) {
         if (configToLiveAgent[cid] === agentId) delete configToLiveAgent[cid]
       }
-      // mark this agent's sessions closed
+      // Mark this agent's sessions closed and clear any unmatched terminal
+      // snapshots even if later disconnect cleanup is skipped.
       const sessions = { ...s.sessions }
+      const terminalOutputs = { ...s.terminalOutputs }
+      for (const sessionId of Object.keys(sessions)) {
+        if (sessions[sessionId].agentId === agentId) delete terminalOutputs[sessionId]
+      }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === agentId) {
           sessions[id] = {
@@ -2325,6 +2331,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus,
         configToLiveAgent,
         sessions,
+        terminalOutputs,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
       }
     })
@@ -4138,14 +4145,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (matched) return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
       // ACP may deliver terminal/output before the session/update tool call.
       // Keep the bounded snapshot until that tool call lands, then attach it.
-      return {
-        terminalOutputs: {
-          ...s.terminalOutputs,
-          [e.sessionId]: {
-            ...(s.terminalOutputs[e.sessionId] ?? {}),
-            [e.terminalId]: e
-          }
+      const sessionOutputs = { ...(s.terminalOutputs[e.sessionId] ?? {}) }
+      sessionOutputs[e.terminalId] = e
+      const pendingIds = Object.keys(sessionOutputs)
+      if (pendingIds.length > MAX_PENDING_TERMINAL_OUTPUTS) {
+        for (const terminalId of pendingIds.slice(
+          0,
+          pendingIds.length - MAX_PENDING_TERMINAL_OUTPUTS
+        )) {
+          delete sessionOutputs[terminalId]
         }
+      }
+      return {
+        terminalOutputs: { ...s.terminalOutputs, [e.sessionId]: sessionOutputs }
       }
     })
   },

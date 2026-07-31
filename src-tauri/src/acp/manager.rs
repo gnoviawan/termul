@@ -1191,6 +1191,32 @@ fn run_agent(
     }
 }
 
+fn emit_terminal_snapshot(
+    registry: &Arc<Mutex<crate::acp::terminal::TerminalRegistry>>,
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    session_id: &str,
+    terminal_id: &agent_client_protocol::schema::TerminalId,
+) {
+    let snapshot = registry.lock().output(session_id, terminal_id);
+    if let Ok((output, truncated, exit_status)) = snapshot {
+        let event = TerminalOutputEvent {
+            agent_id: agent_id.clone(),
+            session_id: SessionId::new(session_id),
+            terminal_id: terminal_id.0.to_string(),
+            output,
+            truncated,
+            exit_status,
+        };
+        events::fan_out(
+            sinks,
+            Some(session_id),
+            events::EVENT_TERMINAL_OUTPUT,
+            &event,
+        );
+    }
+}
+
 /// Build the client connection and run it until the command loop ends.
 #[allow(clippy::too_many_arguments)]
 async fn drive_connection(
@@ -1266,6 +1292,8 @@ async fn drive_connection(
     let term_output_sinks = sinks.clone();
     let term_output_agent_id = agent_id.clone();
     let term_wait = terminals.clone();
+    let term_wait_sinks = sinks.clone();
+    let term_wait_agent_id = agent_id.clone();
     let term_kill = terminals.clone();
     let term_release = terminals.clone();
     let loop_terminals = terminals.clone();
@@ -1463,12 +1491,22 @@ async fn drive_connection(
                     let result = match taken {
                         Err(e) => Err(agent_client_protocol::Error::internal_error().data(e)),
                         Ok(None) => {
-                            // Already exited: return the cached status.
+                            // Already exited: return the cached status and publish
+                            // the settled snapshot before the caller can release it.
                             match registry
                                 .lock()
                                 .cached_exit(&session_id, &request.terminal_id)
                             {
-                                Ok(Some(status)) => Ok(WaitForTerminalExitResponse::new(status)),
+                                Ok(Some(status)) => {
+                                    emit_terminal_snapshot(
+                                        &registry,
+                                        &term_wait_sinks,
+                                        &term_wait_agent_id,
+                                        &session_id,
+                                        &request.terminal_id,
+                                    );
+                                    Ok(WaitForTerminalExitResponse::new(status))
+                                }
                                 Ok(None) => Err(agent_client_protocol::Error::internal_error()
                                     .data("terminal has no exit status")),
                                 Err(e) => {
@@ -1487,6 +1525,13 @@ async fn drive_connection(
                                     &session_id,
                                     &request.terminal_id,
                                     exit.clone(),
+                                );
+                                emit_terminal_snapshot(
+                                    &registry,
+                                    &term_wait_sinks,
+                                    &term_wait_agent_id,
+                                    &session_id,
+                                    &request.terminal_id,
                                 );
                                 Ok(WaitForTerminalExitResponse::new(exit))
                             }

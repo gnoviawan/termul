@@ -68,6 +68,7 @@ vi.mock('@/lib/web-tab-session', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
+import { acpApi } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   getCachedSessionPayload,
@@ -94,6 +95,7 @@ import {
   discoveryKey,
   initAcpEventListeners,
   MAX_LIVE_WINDOW_MESSAGES,
+  MAX_PENDING_TERMINAL_OUTPUTS,
   prepareChatKey,
   selectAgentIdentity,
   selectConfigWarmState,
@@ -1112,6 +1114,24 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
   })
 
+  it('_onTerminalOutput evicts the oldest unmatched snapshots per session', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    for (let i = 0; i < 129; i++) {
+      store._onTerminalOutput({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        terminalId: `term-${i}`,
+        output: `${i}`,
+        truncated: false
+      })
+    }
+    const pending = useAcpStore.getState().terminalOutputs.s1
+    expect(Object.keys(pending ?? {})).toHaveLength(MAX_PENDING_TERMINAL_OUTPUTS)
+    expect(pending?.['term-0']).toBeUndefined()
+    expect(pending?.['term-128']?.output).toBe('128')
+  })
+
   it('_onTerminalOutput ignores the wrong agent and closed session', () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()
@@ -1132,6 +1152,23 @@ describe('acp-store', () => {
       }
     })
     store._onTerminalOutput({ ...event, agentId: 'agent-1' })
+    expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
+  })
+
+  it('killAgent clears unmatched terminal snapshots for its sessions', async () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onTerminalOutput({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      terminalId: 'term-1',
+      output: 'pending',
+      truncated: false
+    })
+    _setAcpTransportForTests({
+      killAgent: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await useAcpStore.getState().killAgent('agent-1')
     expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
   })
 
