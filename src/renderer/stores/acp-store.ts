@@ -2279,6 +2279,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   killAgent: async (agentId) => {
     await acpApi.killAgent(agentId)
+    // Drop cached auth for the torn-down process so a re-spawn re-authenticates
+    // (the new subprocess has unknown auth state; a stale `authenticatedAgents`
+    // entry would make `authenticateBeforeSession` skip `authenticate`).
+    authenticatedAgents.delete(agentId)
+    inFlightAuth.delete(agentId)
     set((s) => {
       const agents = { ...s.agents }
       const agentStatus = { ...s.agentStatus }
@@ -4236,6 +4241,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onAgentDisconnected: (e) => {
     // Flush coalesced updates so the disconnect reflects the final transcript state.
     flushCoalescedSync()
+    // The process is gone — drop its cached auth so a re-spawn re-authenticates
+    // (a disconnected subprocess's auth state is no longer known; without this
+    // a same-id re-spawn would skip `authenticate` and a stopped agent would
+    // accumulate a stale auth entry).
+    authenticatedAgents.delete(e.agentId)
+    inFlightAuth.delete(e.agentId)
     const affected: SessionId[] = []
     const dropTranscriptIds: SessionId[] = []
     set((s) => {
