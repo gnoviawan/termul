@@ -886,7 +886,7 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
     () => useAcpStore.getState(),
     sessionId,
     next.blocks,
-    (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks),
+    (s, turnId) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks, turnId),
     next
   ).catch((err) => {
     // Busy recovery is handled inside runPromptTurn (FIFO restore via queuedOrigin).
@@ -1948,7 +1948,7 @@ async function runPromptTurn(
   get: () => AcpState,
   sessionId: SessionId,
   userBlocks: ContentBlock[],
-  dispatch: (session: AcpSession) => Promise<StopReason>,
+  dispatch: (session: AcpSession, turnId: string) => Promise<StopReason>,
   queuedOrigin?: QueuedPrompt,
   options?: { skipUserAppend?: boolean }
 ): Promise<void> {
@@ -1962,6 +1962,12 @@ async function runPromptTurn(
   let openTurnId = ''
   const previousOpenTurnId = session.openTurnId
   const skipUserAppend = Boolean(options?.skipUserAppend)
+  // Mint the client turn-id HERE (not inside the transport) so the optimistic
+  // user message below can share the same `turn:<turnId>` id as the server's
+  // `user_prompt` echo → reliable dedup in `_onUserPrompt` regardless of block
+  // differences (the bug: the echo rendered a second user bubble because the
+  // optimistic id (`msg-<uuid>`) never matched the echo's `turn:<uuid>`).
+  const turnId = crypto.randomUUID()
 
   // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
   set((s) => {
@@ -1990,7 +1996,7 @@ async function runPromptTurn(
         [...(s.messages[sessionId] ?? [])].reverse().find((m) => m.role === 'user') ?? null
       if (!userMessage) {
         userMessage = {
-          id: newId('msg'),
+          id: `turn:${turnId}`,
           role: 'user',
           blocks: userBlocks,
           streaming: false,
@@ -2018,7 +2024,7 @@ async function runPromptTurn(
     }
 
     userMessage = {
-      id: newId('msg'),
+      id: `turn:${turnId}`,
       role: 'user',
       blocks: userBlocks,
       streaming: false,
@@ -2048,7 +2054,7 @@ async function runPromptTurn(
     // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
     const liveSession = get().sessions[sessionId]
     if (!liveSession) throw new Error(`unknown session ${sessionId}`)
-    const stopReason = await dispatch(liveSession)
+    const stopReason = await dispatch(liveSession, turnId)
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
@@ -3067,12 +3073,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           get,
           sessionId,
           blocks,
-          (session) => {
+          (session, turnId) => {
             const only = blocks.length === 1 ? blocks[0] : null
             if (only?.type === 'text' && typeof only.text === 'string') {
-              return acpApi.sendPrompt(session.agentId, sessionId, only.text)
+              return acpApi.sendPrompt(session.agentId, sessionId, only.text, turnId)
             }
-            return acpApi.sendPromptBlocks(session.agentId, sessionId, blocks)
+            return acpApi.sendPromptBlocks(session.agentId, sessionId, blocks, turnId)
           },
           undefined,
           { skipUserAppend: hadOptimisticUser }
@@ -3230,10 +3236,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         get,
         sessionId,
         lastUserBlocks,
-        (s) =>
+        (s, turnId) =>
           only?.type === 'text' && typeof only.text === 'string'
-            ? acpApi.sendPrompt(s.agentId, sessionId, only.text)
-            : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!),
+            ? acpApi.sendPrompt(s.agentId, sessionId, only.text, turnId)
+            : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!, turnId),
         undefined,
         { skipUserAppend: true }
       )
@@ -3595,8 +3601,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   sendPrompt: (sessionId, text) =>
-    runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session) =>
-      acpApi.sendPrompt(session.agentId, sessionId, text)
+    runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session, turnId) =>
+      acpApi.sendPrompt(session.agentId, sessionId, text, turnId)
     ),
 
   sendPromptBlocks: (sessionId, blocks, options) =>
@@ -3605,7 +3611,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       get,
       sessionId,
       blocks,
-      (session) => acpApi.sendPromptBlocks(session.agentId, sessionId, blocks),
+      (session, turnId) => acpApi.sendPromptBlocks(session.agentId, sessionId, blocks, turnId),
       undefined,
       options
     ),
@@ -3653,7 +3659,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         get,
         sessionId,
         item.blocks,
-        (s) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks),
+        (s, turnId) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks, turnId),
         item
       )
     } catch (err) {

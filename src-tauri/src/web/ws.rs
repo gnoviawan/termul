@@ -365,6 +365,15 @@ const PONG_TIMEOUT: Duration = Duration::from_secs(75);
 /// Must stay under 125 bytes per RFC 6455 control-frame limits.
 const PING_PAYLOAD: &[u8] = b"keepalive";
 
+/// Pure keepalive-watchdog decision: returns true when no inbound frame
+/// (text request, Pong, or client Ping) has arrived for longer than
+/// `PONG_TIMEOUT`. Extracted from the write task so the threshold semantics
+/// (strict `>`) are unit-testable without spinning up a real socket. The write
+/// task calls this with `last_activity.load()` + `now_ms()` on each ping tick.
+fn watchdog_is_stale(last_activity_ms: u64, now_ms_value: u64) -> bool {
+    now_ms_value.saturating_sub(last_activity_ms) > PONG_TIMEOUT.as_millis() as u64
+}
+
 /// Epoch-millis timestamp for the keepalive watchdog. Uses `SystemTime` (not
 /// `Instant`) so it fits an `AtomicU64`; clock skew inside one process over a
 /// ~minute window is negligible, and `saturating_sub` keeps the compare safe
@@ -468,9 +477,10 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     // instead of the server silently holding a dead socket
                     // (which would otherwise leak subscriptions + pending
                     // permissions and stall the chat UI mid-response).
-                    let stale = now_ms()
-                        .saturating_sub(write_last_activity.load(Ordering::Relaxed));
-                    if stale > PONG_TIMEOUT.as_millis() as u64 {
+                    let last = write_last_activity.load(Ordering::Relaxed);
+                    let now = now_ms();
+                    let stale = now.saturating_sub(last);
+                    if watchdog_is_stale(last, now) {
                         warn!(
                             "[ws] keepalive: no client activity for {stale} ms \
                              (>{PONG_TIMEOUT:?}); closing connection"
@@ -648,6 +658,13 @@ async fn handle_request(
             // Idempotent re-auth — accept and succeed.
             WsReply::ok(id, Some(json!({})))
         }
+        // Application-level heartbeat: a client-emitted `ping` request keeps
+        // the keepalive watchdog (`last_activity`) fresh through proxies that
+        // strip WS-level Ping/Pong control frames (Cloudflare tunnels, etc.).
+        // The read loop stamps `last_activity` on every inbound text frame
+        // before routing, so this handler only needs to round-trip a reply so
+        // the client's request promise resolves (no timeout).
+        "ping" => WsReply::ok(id, Some(json!({}))),
         "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients).await,
         "list_persisted_sessions" => {
             handle_list_persisted_sessions(id, relay, chat_history_cache, history_mode)
@@ -2579,6 +2596,46 @@ mod tests {
         );
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    #[test]
+    fn ping_request_replies_ok_post_auth() {
+        // Heartbeat handler: a post-auth `ping` round-trips an ok reply so the
+        // client's request promise resolves (no timeout). The keepalive value
+        // is that the read loop stamps `last_activity` on the inbound text
+        // frame before routing — that refresh happens regardless of the reply.
+        let mut authed = true;
+        let reply = handle_sync(r#"{"id":"r1","type":"ping","payload":{}}"#, &mut authed);
+        assert!(reply.ok, "ping must round-trip an ok reply");
+        assert_eq!(reply.id, "r1");
+    }
+
+    #[test]
+    fn ping_request_pre_auth_rejected_unauthorized() {
+        // A pre-auth `ping` is gated like every other non-`authenticate` type —
+        // the heartbeat only refreshes the watchdog on an already-authed socket.
+        let mut authed = false;
+        let reply = handle_sync(r#"{"id":"r1","type":"ping","payload":{}}"#, &mut authed);
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unauthorized");
+    }
+
+    #[test]
+    fn watchdog_is_stale_only_past_pong_timeout() {
+        // Pure threshold semantics for the keepalive watchdog: a connection is
+        // torn down only after strictly more than PONG_TIMEOUT with no inbound
+        // frame. Tests the decision the write task consults on each ping tick
+        // (the false-positive symptom behind issue: a focused tab through a
+        // proxy dropped every ~75s because Pongs didn't round-trip; a client
+        // `ping` text frame refreshes this and stays open).
+        let base = 1_000_000_u64;
+        let timeout = PONG_TIMEOUT.as_millis() as u64;
+        assert!(!watchdog_is_stale(base, base), "fresh connection is not stale");
+        assert!(!watchdog_is_stale(base, base + timeout), "exactly at timeout is not stale (strict >)");
+        assert!(!watchdog_is_stale(base, base + timeout - 1), "just under timeout is not stale");
+        assert!(watchdog_is_stale(base, base + timeout + 1), "just past timeout is stale");
+        // Clock-skew safe: a future `last_activity` saturates to 0 (not stale).
+        assert!(!watchdog_is_stale(base + 10_000, base));
     }
 
     #[test]
