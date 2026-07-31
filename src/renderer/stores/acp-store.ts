@@ -108,6 +108,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { syncChatHistory } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { logFrontendError } from '@/lib/log-api'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
@@ -1813,6 +1814,29 @@ async function openHistorySessionInner(
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
   // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
+  // The history index and agent-config loader run concurrently at startup, so a
+  // restored tab can reach this path before `useAcpAgents` has populated the
+  // store. Reload the configs here rather than silently downgrading that chat
+  // to read-only on this cold-start race.
+  if (meta.agentConfigId && !get().agentConfigs.some((c) => c.id === meta.agentConfigId)) {
+    try {
+      const configs = await loadAgentConfigsFromDisk()
+      if (
+        !get().agentConfigs.some((c) => c.id === meta.agentConfigId) &&
+        configs.some((c) => c.id === meta.agentConfigId)
+      ) {
+        set({ agentConfigs: configs })
+      }
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.openHistorySession',
+        message: `Failed to reload config ${meta.agentConfigId} for history session ${id}: ${String(error)}`
+      })
+    }
+  }
+  if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+
   let liveAgentId: AgentId = meta.agentId
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through

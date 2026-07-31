@@ -2849,6 +2849,61 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
   })
 
+  it('reloads the configured agent before reopening a cold-start history tab', async () => {
+    // The history index and agent-config hook mount independently. A restored
+    // tab can open before the config hook finishes, but it should still resume
+    // against the already-connected config+cwd agent instead of becoming local.
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-restart', '/w')]: 'fresh-agent'
+      },
+      agents: {
+        ...s.agents,
+        'fresh-agent': { id: 'fresh-agent', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'fresh-agent': 'connected' }
+    }))
+    const { loadAgentConfigs } = await import('@/lib/acp-agents-persistence')
+    vi.mocked(loadAgentConfigs).mockResolvedValueOnce([
+      { id: 'cfg-restart', name: 'Restarted', command: 'agent', args: [], env: {} }
+    ])
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-cold-start',
+        agentId: 'stale-dead-uuid',
+        agentConfigId: 'cfg-restart',
+        title: 'Cold start',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'prior' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockResolvedValueOnce(undefined)
+
+    await useAcpStore.getState().openHistorySession('s-cold-start')
+
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'fresh-agent',
+      sessionId: 's-cold-start',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().sessions['s-cold-start'].status).toBe('active')
+  })
+
   it('spawnAgent keeps capabilities delivered by acp:agent_spawned during its own await', async () => {
     // Real backend ordering: `acp:agent_spawned` (carrying capabilities) is
     // emitted BEFORE `acp_spawn_agent` returns, so `_onAgentSpawned` runs while
