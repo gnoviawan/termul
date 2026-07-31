@@ -3,6 +3,25 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileFileExplorer } from './MobileFileExplorer'
 
+let mockReducedMotion = false
+
+vi.mock('framer-motion', async () => {
+  const React = await import('react')
+  return {
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+    motion: {
+      div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+        ({ children, ...props }, ref) => (
+          <div ref={ref} {...props}>
+            {children}
+          </div>
+        )
+      )
+    },
+    useReducedMotion: () => mockReducedMotion
+  }
+})
+
 const mockToggleDirectory = vi.fn().mockResolvedValue(undefined)
 const mockRefreshDirectory = vi.fn().mockResolvedValue(undefined)
 const mockSelectPath = vi.fn()
@@ -84,7 +103,12 @@ vi.mock('@/components/file-explorer/MaterialFileIcon', () => ({
   MaterialFileIcon: () => <span data-testid="mfi" />
 }))
 
-function entry(name: string, type: 'file' | 'directory', path?: string): DirectoryEntry {
+function entry(
+  name: string,
+  type: 'file' | 'directory',
+  path?: string,
+  ignored = false
+): DirectoryEntry {
   return {
     name,
     path: path ?? `/proj/${name}`,
@@ -92,7 +116,7 @@ function entry(name: string, type: 'file' | 'directory', path?: string): Directo
     extension: type === 'file' && name.includes('.') ? name.split('.').pop()! : null,
     size: 0,
     modifiedAt: 0,
-    ignored: false
+    ignored
   }
 }
 
@@ -107,6 +131,7 @@ function setRoot(entries: DirectoryEntry[]): void {
 describe('MobileFileExplorer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReducedMotion = false
     mockExplorerState.rootPath = '/proj'
     mockExplorerState.directoryContents = new Map()
     mockExplorerState.expandedDirs = new Set()
@@ -121,14 +146,16 @@ describe('MobileFileExplorer', () => {
     mockEditorStore.openFiles.clear()
   })
 
-  it('renders the Files header and lists root entries when open with a loaded root', async () => {
+  it('renders the project folder context and lists root entries when open', async () => {
     setRoot([entry('a.txt', 'file'), entry('sub', 'directory')])
 
     render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
 
-    expect(await screen.findByText('Files')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(screen.getByText('Project files')).toBeInTheDocument()
     expect(await screen.findByText('a.txt')).toBeInTheDocument()
     expect(screen.getByText('sub')).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
   })
 
   it('lazy-loads the root listing via toggleDirectory when opening with an empty root', async () => {
@@ -141,13 +168,107 @@ describe('MobileFileExplorer', () => {
     await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/proj'))
   })
 
-  it('tapping a directory row calls toggleDirectory with its path', async () => {
+  it('drills into a directory, loads it, and slides forward', async () => {
     setRoot([entry('sub', 'directory')])
 
     render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
 
     fireEvent.click(await screen.findByText('sub'))
+
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.getByText('sub', { selector: 'p' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'forward'
+    )
     await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/proj/sub'))
+  })
+
+  it('resets to the project root when the drawer is reopened', async () => {
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [])
+
+    const { rerender } = render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    fireEvent.click(await screen.findByText('sub'))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+
+    rerender(<MobileFileExplorer open={false} onOpenChange={vi.fn()} />)
+    rerender(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('returns to the parent folder and slides back without going above root', async () => {
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [
+      entry('inside.txt', 'file', '/proj/sub/inside.txt')
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByText('sub'))
+    expect(await screen.findByText('inside.txt')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('preserves a Windows drive-root path when navigating back', async () => {
+    mockExplorerState.rootPath = 'C:/'
+    mockExplorerState.directoryContents = new Map([
+      ['C:/', [entry('child', 'directory', 'C:/child')]],
+      ['C:/child', [entry('inside.txt', 'file', 'C:/child/inside.txt')]]
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByText('child'))
+    expect(await screen.findByText('inside.txt')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+
+    expect(await screen.findByText('child')).toBeInTheDocument()
+    expect(mockToggleDirectory).not.toHaveBeenCalledWith('C:')
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('sorts visible entries exactly like desktop: directories, ignored state, then A-Z', async () => {
+    setRoot([
+      entry('z-file.txt', 'file'),
+      entry('beta', 'directory', undefined, true),
+      entry('Alpha.txt', 'file'),
+      entry('Zoo', 'directory'),
+      entry('alpha', 'directory'),
+      entry('aardvark.txt', 'file', undefined, true)
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    const list = await screen.findByRole('list', { name: 'Files in proj' })
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual(['alpha', 'Zoo', 'beta', 'Alpha.txt', 'z-file.txt', 'aardvark.txt'])
+  })
+
+  it('disables slide movement when reduced motion is preferred', async () => {
+    mockReducedMotion = true
+    setRoot([entry('sub', 'directory')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    fireEvent.click(await screen.findByText('sub'))
+
+    expect(await screen.findByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-reduced-motion',
+      'true'
+    )
   })
 
   it('tapping a file opens it in the editor and closes the drawer', async () => {
@@ -164,18 +285,52 @@ describe('MobileFileExplorer', () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
   })
 
-  it('creates a new file via the facade then refreshes the root', async () => {
-    setRoot([])
+  it('creates and refreshes inside the currently viewed directory', async () => {
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [])
 
     render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
 
-    fireEvent.click(await screen.findByLabelText('New file'))
+    fireEvent.click(await screen.findByText('sub'))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('New file'))
     const input = await screen.findByPlaceholderText('new-file.txt')
     fireEvent.change(input, { target: { value: 'made.txt' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/proj/made.txt'))
-    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/proj/sub/made.txt'))
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj/sub'))
+
+    mockRefreshDirectory.mockClear()
+    fireEvent.click(screen.getByLabelText('Refresh current folder'))
+    expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj/sub')
+  })
+
+  it('prevents navigation and a second create form while a create request is pending', async () => {
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [])
+    let resolveCreate: ((result: { success: true; data: undefined }) => void) | undefined
+    mockCreateFile.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = resolve
+      })
+    )
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByText('sub'))
+    fireEvent.click(screen.getByLabelText('New file'))
+    const input = await screen.findByPlaceholderText('new-file.txt')
+    fireEvent.change(input, { target: { value: 'made.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/proj/sub/made.txt'))
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    expect(screen.getByLabelText('New file')).toBeDisabled()
+    expect(input).toBeDisabled()
+
+    resolveCreate?.({ success: true, data: undefined })
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj/sub'))
   })
 
   it('surfaces a server error code as a toast when create fails', async () => {
@@ -253,6 +408,34 @@ describe('MobileFileExplorer', () => {
     await waitFor(() => expect(mockCloseFile).toHaveBeenCalledWith('/proj/old.txt'))
     await waitFor(() => expect(mockRemoveTab).toHaveBeenCalledWith('edit-/proj/old.txt'))
     await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+  })
+
+  it('renames a child directory and refreshes the current parent folder', async () => {
+    const sub = entry('sub', 'directory')
+    setRoot([sub])
+    mockExplorerState.directoryContents.set('/proj/sub', [
+      entry('child', 'directory', '/proj/sub/child')
+    ])
+    mockExplorerState.directoryContents.set('/proj/sub/child', [])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    fireEvent.click(await screen.findByText('sub'))
+    fireEvent.click(await screen.findByText('child'))
+    expect(await screen.findByRole('heading', { name: 'child' })).toBeInTheDocument()
+
+    // Navigate back to the parent listing and rename its child directory.
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    fireEvent.click(await screen.findByLabelText('Actions for child'))
+    fireEvent.click(await screen.findByText('Rename'))
+    const input = await screen.findByLabelText('Rename child')
+    fireEvent.change(input, { target: { value: 'renamed' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(mockRenameFile).toHaveBeenCalledWith('/proj/sub/child', '/proj/sub/renamed')
+    )
+    expect(screen.getByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj/sub'))
   })
 
   it('renames a file via blur using the parentOf-derived target path', async () => {

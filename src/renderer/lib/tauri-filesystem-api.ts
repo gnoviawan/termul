@@ -23,6 +23,7 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { sortDirectoryEntries } from './filesystem-sort'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { webServerFilesystem } from './web-server-api'
 
@@ -97,26 +98,6 @@ const globalCallbacks = new Set<FileChangeCallback>()
 
 function shouldIgnore(name: string): boolean {
   return ALWAYS_IGNORE.includes(name)
-}
-
-/**
- * Sort directory entries: directories first (A-Z), then files (A-Z)
- */
-function sortDirectoryEntries(entries: DirectoryEntry[]): DirectoryEntry[] {
-  return [...entries].sort((a, b) => {
-    // Directories come before files
-    if (a.type === 'directory' && b.type === 'file') return -1
-    if (a.type === 'file' && b.type === 'directory') return 1
-
-    // Within same type, non-ignored entries come before ignored ones
-    if (!a.ignored && b.ignored) return -1
-    if (a.ignored && !b.ignored) return 1
-
-    // Within same type/ignored group, sort alphabetically by name (case-insensitive)
-    const nameA = a.name.toLowerCase()
-    const nameB = b.name.toLowerCase()
-    return nameA.localeCompare(nameB)
-  })
 }
 
 function isBinaryFile(content: string): boolean {
