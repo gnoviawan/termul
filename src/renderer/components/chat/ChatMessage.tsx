@@ -249,7 +249,10 @@ function AgentProse({
         return (
           <button
             type="button"
-            className={cn(props.className, 'cursor-pointer')}
+            className={cn(
+              props.className,
+              'cursor-pointer appearance-none text-left font-medium text-primary underline'
+            )}
             title="Ctrl/Cmd-click to open in editor"
             onClick={(event) => {
               if (!event.ctrlKey && !event.metaKey) return
