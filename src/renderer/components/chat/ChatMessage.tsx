@@ -164,9 +164,13 @@ function InlineAudio({ block }: { block: ContentBlock }): React.JSX.Element | nu
 export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element | null {
   const media = mediaBlocks(blocks)
   if (media.length === 0) return null
-  const attachments = media.filter((block) => block.type !== 'audio' || !inlineAudioUrl(block))
-  const audio = media.filter((block) => block.type === 'audio')
   const resources = media.filter((block) => block.type === 'resource')
+  const attachments = media.filter(
+    (block) =>
+      (block.type !== 'audio' || !inlineAudioUrl(block)) &&
+      !(block.type === 'resource' && typeof blockResource(block)?.text === 'string')
+  )
+  const audio = media.filter((block) => block.type === 'audio')
   return (
     <>
       {attachments.length > 0 && (
