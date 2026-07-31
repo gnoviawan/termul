@@ -484,6 +484,36 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
   })
 
+  it('stages the optimistic user message with a turn:<id> and dedups a same-turnId echo even when blocks differ', async () => {
+    // Regression for the duplicate-bubble bug: the optimistic message and the
+    // server `user_prompt` echo must share the same `turn:<turnId>` id so
+    // `_onUserPrompt` dedups by id (not a fragile block-exact compare) — a
+    // differing echo is collapsed into the optimistic message, not appended.
+    seedSession('s1', 'agent-1', false)
+    // never resolve, so the turn stays active for the assertion
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPrompt('s1', 'hi there')
+    await Promise.resolve()
+    const msgs = useAcpStore.getState().messages['s1']
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('user')
+    expect(msgs[0].id.startsWith('turn:')).toBe(true)
+    const turnId = msgs[0].id.slice('turn:'.length)
+    expect(turnId.length).toBeGreaterThan(0)
+    // Server echoes the SAME turn id but with DIFFERENT block content — must
+    // collapse into the optimistic message (dedup by id), not append a copy.
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId,
+      content: [{ type: 'text', text: 'echoed-different-blocks' }]
+    })
+    const after = useAcpStore.getState().messages['s1']
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(`turn:${turnId}`)
+    expect(after[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
+  })
+
   it('sendPrompt updates the persisted history title from the first user message', async () => {
     seedSession('s1', 'agent-09d39730', false)
     useAcpStore.setState({

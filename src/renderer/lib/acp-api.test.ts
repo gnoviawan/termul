@@ -159,7 +159,7 @@ describe('acp-api web path (injected WS transport)', () => {
 
     const reason = await acpSendPrompt('a1', 's1', 'hi')
     expect(reason).toBe('end_turn')
-    expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi')
+    expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi', undefined)
     expect(invoke).not.toHaveBeenCalled()
     _resetAcpTransportForTests(null)
   })

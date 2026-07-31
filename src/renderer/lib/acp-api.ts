@@ -485,17 +485,19 @@ export async function acpListSessions(
 export async function acpSendPrompt(
   agentId: AgentId,
   sessionId: SessionId,
-  text: string
+  text: string,
+  turnId?: string
 ): Promise<StopReason> {
-  return getAcpTransport().sendPrompt(agentId, sessionId, text)
+  return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId)
 }
 
 export async function acpSendPromptBlocks(
   agentId: AgentId,
   sessionId: SessionId,
-  content: ContentBlock[]
+  content: ContentBlock[],
+  turnId?: string
 ): Promise<StopReason> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
