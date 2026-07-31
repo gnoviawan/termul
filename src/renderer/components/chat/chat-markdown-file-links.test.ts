@@ -13,6 +13,7 @@ describe('chat markdown file links', () => {
     expect(findFilePathMatches('See src/App.tsx:42,')).toEqual([
       { text: 'src/App.tsx:42', start: 4 }
     ])
+    expect(findFilePathMatches('(see src/App.tsx)')).toEqual([{ text: 'src/App.tsx', start: 5 }])
   })
 
   it('encodes and decodes path markers', () => {

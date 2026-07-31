@@ -64,7 +64,15 @@ function looksLikeFilePath(text: string): boolean {
 }
 
 function trimTrailingPathPunctuation(value: string): string {
-  return value.replace(/[.,;!?]+$/, '')
+  let result = value.replace(/[.,;!?]+$/, '')
+
+  for (const [opening, closing] of WRAPPER_PAIRS) {
+    while (result.endsWith(closing) && !result.includes(opening)) {
+      result = result.slice(0, -1)
+    }
+  }
+
+  return result
 }
 
 function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
