@@ -292,6 +292,18 @@ export function AgentChatPanel({
     session?.lastError
   ])
 
+  const filePathContext = useMemo(
+    () =>
+      isTauriContext()
+        ? {
+            cwd: session?.cwd,
+            projectRoot: session
+              ? getDefaultCwdForProject(session.projectId) || session.cwd
+              : undefined
+          }
+        : undefined,
+    [session]
+  )
   const timeline = useMemo(
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
     [messages, toolCalls]
@@ -439,14 +451,7 @@ export function AgentChatPanel({
         sessionId={session.id}
         agentId={session.agentId}
         showRunningIndicator={showRunningIndicator}
-        filePathContext={
-          isTauriContext()
-            ? {
-                cwd: session.cwd,
-                projectRoot: getDefaultCwdForProject(session.projectId) || session.cwd
-              }
-            : undefined
-        }
+        filePathContext={filePathContext}
         onEditMessage={seedComposer}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />
