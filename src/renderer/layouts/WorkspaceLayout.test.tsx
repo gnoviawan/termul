@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
+import { useThemePickerStore } from '@/stores/theme-picker-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
@@ -374,6 +375,7 @@ beforeEach(() => {
   mockWaitForPendingAppSettingsPersistence.mockReset()
   useFileExplorerStore.setState({ isVisible: true })
   useSidebarStore.setState({ isVisible: true })
+  useThemePickerStore.getState().close()
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
@@ -838,19 +840,17 @@ describe('WorkspaceLayout - Empty States', () => {
     })
 
     it('opens the color theme picker from backend shortcut callbacks', async () => {
+      let backendShortcut: ((shortcut: string) => void) | undefined
       mockApi.keyboard.onShortcut.mockImplementationOnce((callback: (shortcut: string) => void) => {
-        callback('colorThemePicker')
+        backendShortcut = callback
         return vi.fn()
       })
 
       renderWithRouter()
 
-      await waitFor(
-        () => {
-          expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
-        },
-        { timeout: 5000 }
-      )
+      expect(backendShortcut).toBeDefined()
+      act(() => backendShortcut?.('colorThemePicker'))
+      expect(await screen.findByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
     })
   })
 

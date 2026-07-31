@@ -200,7 +200,7 @@ async function readClipboardImageAttachment(): Promise<Extract<
  * `items` (screenshots often surface only as an image item, not in `files`),
  * de-duplicating the overlap.
  */
-function dataTransferFiles(data: DataTransfer): File[] {
+export function dataTransferFiles(data: DataTransfer): File[] {
   const fromItems = Array.from(data.items)
     .filter((it) => it.kind === 'file')
     .map((it) => it.getAsFile())

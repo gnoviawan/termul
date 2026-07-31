@@ -14,7 +14,12 @@
  * `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the renderer never
  * sees a thrown exception from the network layer.
  */
-import type { DetectedShells, DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
+import type {
+  DetectedShells,
+  DirectoryEntry,
+  FileContent,
+  IpcResult
+} from '@shared/types/ipc.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
 import { isTauriContext } from './tauri-runtime'
 
@@ -96,6 +101,26 @@ export const webServerFilesystem = {
   async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
     const encoded = encodeURIComponent(dirPath)
     return getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`)
+  },
+
+  async readFile(filePath: string): Promise<IpcResult<FileContent>> {
+    const encoded = encodeURIComponent(filePath)
+    return getJson<FileContent>(`/fs/read?path=${encoded}`)
+  },
+
+  async deletePath(path: string, options?: { recursive?: boolean }): Promise<IpcResult<void>> {
+    return postJson<void>('/fs/delete', {
+      path,
+      ...(options?.recursive ? { recursive: options.recursive } : {})
+    })
+  },
+
+  async renameFile(oldPath: string, newPath: string): Promise<IpcResult<void>> {
+    return postJson<void>('/fs/rename', { from: oldPath, to: newPath })
+  },
+
+  async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+    return postJson<void>('/fs/copy', { from: srcPath, to: destPath })
   }
 }
 

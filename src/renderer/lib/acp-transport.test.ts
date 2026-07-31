@@ -71,6 +71,12 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    if (req.type === 'ping') {
+      // Heartbeat handler: round-trip an ok reply so the client's request
+      // promise resolves (a healthy ping resets the failure counter).
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'subscribe') {
       const payload = req.payload as { sessionId: string; lastSeq?: number }
       if (payload.lastSeq === 99) {
@@ -409,6 +415,47 @@ describe('WsAcpTransport', () => {
     const after = sock.sent.filter((s) => JSON.parse(s).type === 'subscribe').length
     expect(after).toBe(before)
     transport.dispose()
+  })
+
+  it('forwards a caller-supplied turnId on send_prompt (no fresh mint)', async () => {
+    // The store mints the turn-id and passes it through so the optimistic
+    // user message can share the same `turn:<turnId>` id as the server echo.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    await transport.sendPrompt('a1', 's1', 'hello', 'my-turn-id')
+    const sendPromptFrame = sock.sent
+      .map((s) => JSON.parse(s) as { type: string; payload?: { turnId?: string } })
+      .find((f) => f.type === 'send_prompt')
+    expect(sendPromptFrame?.payload?.turnId).toBe('my-turn-id')
+    transport.dispose()
+  })
+
+  it('sends a ping heartbeat on the interval to refresh the server watchdog', async () => {
+    // Proxies that strip WS-level Ping/Pong (Cloudflare tunnels) let the
+    // server's ~75s watchdog false-positive drop a focused tab; a periodic
+    // `ping` text request refreshes `last_activity` through any proxy.
+    vi.useFakeTimers()
+    try {
+      const transport = new WsAcpTransport({
+        url: 'ws://test/ws',
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+      })
+      await transport.connect()
+      const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+      const pingsBefore = sock.sent.filter((s) => JSON.parse(s).type === 'ping').length
+      // HEARTBEAT_INTERVAL_MS = 30s; advance past one tick.
+      await vi.advanceTimersByTimeAsync(31_000)
+      const pingsAfter = sock.sent.filter((s) => JSON.parse(s).type === 'ping').length
+      expect(pingsAfter).toBeGreaterThan(pingsBefore)
+      expect(pingsAfter).toBeGreaterThanOrEqual(1)
+      transport.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('delivers reliable events on arrival across a seq gap (no reorder-recovery)', async () => {

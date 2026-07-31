@@ -11,14 +11,17 @@ function clickMenuOption(name: string | RegExp): void {
   fireEvent.pointerDown(within(dialog).getByText(name))
 }
 
-const { mockSetConfig, mockSetMode, mockSetModel, mockMcpCount } = vi.hoisted(() => ({
+const { mockSetConfig, mockSetMode, mockSetModel, mockMcpCount, mockReadDir } = vi.hoisted(() => ({
   mockSetConfig: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
   // Story 1.8 review (verification-gap #8): override-able MCP server count for
   // the read-only badge. 0 by default (badge hidden); tests set it to render.
-  mockMcpCount: { current: 0 }
+  mockMcpCount: { current: 0 },
+  mockReadDir: vi.fn()
 }))
+
+vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
 
 vi.mock('@/hooks/use-agent-skills', () => ({
   useAgentSkills: () => ({ skills: [] }),
@@ -267,6 +270,45 @@ function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}
   )
 }
 
+describe('ChatInputBar file mentions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockReadDir.mockImplementation(async (path: string) => {
+      if (path === '/work') return [{ name: 'src', isDirectory: true }]
+      if (path === '/work/src') return [{ name: 'auth.ts', isDirectory: false }]
+      return []
+    })
+  })
+
+  it('stages a selected @ file and sends it as a resource link block', async () => {
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'fix @auth' } })
+
+    const option = await screen.findByRole('option', { name: /auth\.ts/ })
+    fireEvent.mouseDown(option)
+
+    expect(textarea).toHaveValue('fix ')
+    expect(screen.getByText('auth.ts')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSendBlocks).toHaveBeenCalledWith([
+        { type: 'text', text: 'fix' },
+        {
+          type: 'resource_link',
+          uri: 'file:///work/src/auth.ts',
+          name: 'auth.ts',
+          mimeType: 'text/typescript'
+        }
+      ])
+    })
+  })
+})
+
 describe('ChatInputBar morph button', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -288,6 +330,21 @@ describe('ChatInputBar morph button', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Queue message' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Cancel turn' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('accepts a drop whose file is exposed only through dataTransfer.items', async () => {
+    renderInputBar({ imageCapable: true })
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    const dataTransfer = {
+      files: [] as unknown as FileList,
+      items: [{ kind: 'file', getAsFile: () => file }]
+    } as unknown as DataTransfer
+
+    fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
     })
   })
 })

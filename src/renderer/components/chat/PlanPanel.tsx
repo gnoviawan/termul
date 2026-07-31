@@ -2,6 +2,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { CheckCircle2, Circle, ListChecks, Loader2 } from 'lucide-react'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
+import { ScrollArea } from '../ui/scroll-area'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
@@ -13,6 +15,23 @@ const PRIORITY_DOT: Record<string, string> = {
   high: 'bg-red-400',
   medium: 'bg-amber-400',
   low: 'bg-muted-foreground/50'
+}
+
+function getPlanDetail(entry: PlanEntry): string | undefined {
+  const directDetail = entry.detail
+  if (typeof directDetail === 'string' && directDetail.trim()) {
+    return directDetail
+  }
+
+  const metadata = entry._meta
+  if (metadata && typeof metadata === 'object' && 'detail' in metadata) {
+    const metadataDetail = metadata.detail
+    if (typeof metadataDetail === 'string' && metadataDetail.trim()) {
+      return metadataDetail
+    }
+  }
+
+  return undefined
 }
 
 function StatusIcon({ status }: { status?: string }): React.JSX.Element {
@@ -38,6 +57,34 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
     >
       {icon}
     </motion.span>
+  )
+}
+
+function getPlanEntryIdentity(entry: PlanEntry): string {
+  const id = entry.id
+  return typeof id === 'string' && id.trim() ? id : entry.content
+}
+
+function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
+  return (
+    <>
+      <StatusIcon status={entry.status} />
+      <span
+        className={cn(
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          PRIORITY_DOT[entry.priority ?? 'low'] ?? 'bg-muted-foreground/50'
+        )}
+        title={`priority: ${entry.priority ?? 'low'}`}
+      />
+      <span
+        className={cn(
+          'min-w-0 flex-1 text-pretty break-words',
+          entry.status === 'completed' ? 'text-muted-foreground line-through' : 'text-foreground'
+        )}
+      >
+        {entry.content}
+      </span>
+    </>
   )
 }
 
@@ -68,39 +115,49 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                   {entries.length}
                 </span>
               </div>
-              <ul className="flex flex-col gap-0.5 border-t border-border/40 px-2.5 pb-2.5 pt-1.5">
-                {entries.map((entry, i) => (
-                  <motion.li
-                    key={`${entry.content}-${i}`}
-                    className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
-                    initial={reduced ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' }}
-                    animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-                    transition={{
-                      ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
-                      delay: reduced ? 0 : Math.min(i, 8) * 0.08
-                    }}
-                  >
-                    <StatusIcon status={entry.status} />
-                    <span
-                      className={cn(
-                        'h-1.5 w-1.5 shrink-0 rounded-full',
-                        PRIORITY_DOT[entry.priority ?? 'low'] ?? 'bg-muted-foreground/50'
-                      )}
-                      title={`priority: ${entry.priority ?? 'low'}`}
-                    />
-                    <span
-                      className={cn(
-                        'min-w-0 flex-1 text-pretty break-words',
-                        entry.status === 'completed'
-                          ? 'text-muted-foreground line-through'
-                          : 'text-foreground'
-                      )}
-                    >
-                      {entry.content}
-                    </span>
-                  </motion.li>
-                ))}
-              </ul>
+              <ScrollArea className="max-h-60 border-t border-border/40">
+                <Accordion
+                  type="single"
+                  collapsible
+                  className="flex flex-col gap-0.5 px-2.5 pb-2.5 pt-1.5"
+                >
+                  {entries.map((entry, i) => {
+                    const detail = getPlanDetail(entry)
+                    const entryValue = `entry-${getPlanEntryIdentity(entry)}`
+                    const motionProps = {
+                      initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' },
+                      animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' },
+                      transition: {
+                        ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
+                        delay: reduced ? 0 : Math.min(i, 8) * 0.08
+                      }
+                    }
+
+                    return detail ? (
+                      <motion.div key={entryValue} {...motionProps}>
+                        <AccordionItem value={entryValue} className="border-0">
+                          <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
+                            <span className="flex min-w-0 flex-1 items-center gap-2">
+                              <EntryLabel entry={entry} />
+                            </span>
+                          </AccordionTrigger>
+                          <AccordionContent className="pl-8 pr-2 text-xs text-muted-foreground">
+                            {detail}
+                          </AccordionContent>
+                        </AccordionItem>
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key={entryValue}
+                        {...motionProps}
+                        className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
+                      >
+                        <EntryLabel entry={entry} />
+                      </motion.div>
+                    )
+                  })}
+                </Accordion>
+              </ScrollArea>
             </div>
           </div>
         </motion.div>

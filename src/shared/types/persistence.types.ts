@@ -66,7 +66,10 @@ export const PersistenceKeys = {
   // Last-selected agent in the launcher (persisted across sessions).
   // GH-289: value shape is `LastSelectedAgent` ({ agentId, mode }); legacy
   // records carrying only `{ agentId }` are read as `mode: 'cli'`.
-  lastSelectedAgent: 'agents/last-selected'
+  lastSelectedAgent: 'agents/last-selected',
+  // Mobile file explorer: last folder the user navigated into, per project.
+  // Restored on drawer reopen across close/reopen and page reloads (web only).
+  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`
 } as const
 
 // GH-289: persisted launcher selection — the chosen agent plus its call mode.
