@@ -58,7 +58,12 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | **Command Palette**    | Global command launcher (`Ctrl+K` / `Ctrl+Shift+P`) for project switching, workspace actions, and more |
 | **Command History**    | Per-project and aggregate command history viewer with search                                           |
 | **Keyboard Shortcuts** | Fully customizable shortcut bindings for every action                                                  |
-| **Git Integration**    | Status bar shows current branch, working directory, git status, and exit code                          |
+| **Git Integration**    | Stage changes, create commits, push updates, browse branches and history, review status and diffs, and manage Git-backed project workspaces |
+| **Worktrees**          | Create, switch, remove, archive, and restore Git worktrees with merge previews and conflict resolution |
+| **SSH & SFTP**         | Connect to remote hosts with saved SSH profiles, port forwarding, interactive terminals, and SFTP browsing/editing |
+| **Agent Chat**         | Launch built-in or custom CLI agents per pane and work with ACP-backed agents in persistent, project-aware chat sessions |
+| **Remote Server**      | Provide browser terminal access to published projects through the built-in server and optional Cloudflare quick tunnel |
+| **Ripgrep Search**     | Search project files with ripgrep-powered results from the file explorer                              |
 | **Custom Title Bar**   | Desktop-native title bar with window controls, sidebar toggles, and settings navigation                |
 
 ### 🔧 System & Reliability
@@ -81,6 +86,12 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | **Editor**        | `EditorPanel`, `CodeEditor`, `MarkdownEditor`, `EditorToolbar`, `MermaidBlock`     | `editor-store`                                     |
 | **Browser**       | `BrowserPanel`, `BrowserControls`, `AnnotationPanel`, `AnnotationExportModal`      | `browser-session-store`, `annotation-store`        |
 | **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu`                              | —                                                  |
+| **Git**           | `GitPanel`, `GitHistoryPanel`, `GitBranchPicker`                                   | —                                                  |
+| **Worktrees**     | `NewWorktreeModal`, `RemoveWorktreeDialog`, `MergePreviewDialog`, `ConflictResolutionPanel` | `project-store`                                    |
+| **SSH & SFTP**    | `SSHPanel`, `SSHWorkspace`, `SSHFileExplorer`, `SSHFileEditor`, `PortForwardPanel` | `ssh-store`                                        |
+| **Agent Chat**    | `AgentLauncher`, `CustomAgentDialog`, `AgentChatPanel`, ACP chat components      | `acp-store`                                        |
+| **Remote Server** | `RemoteAccessPopover`                                                              | `remote-status-store`                             |
+| **Search**        | Ripgrep-powered file and content search                                            | `file-explorer-store`                             |
 | **Snapshots**     | `CreateSnapshotModal`, `RestoreSnapshotModal`, `DeleteSnapshotModal`               | `snapshot-store`                                   |
 | **Projects**      | `ProjectSidebar`, `NewProjectModal`                                                | `project-store`                                    |
 | **Settings**      | `ShortcutRecorder`, `ColorPickerPopover`, `ContextBarSettingsPopover`              | `app-settings-store`, `context-bar-settings-store` |

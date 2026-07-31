@@ -629,11 +629,11 @@
   {
     "id": "nova",
     "name": "Nova",
-    "version": "1.1.29",
+    "version": "1.1.30",
     "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
     "distribution": {
       "npx": {
-        "package": "@compass-ai/nova@1.1.29",
+        "package": "@compass-ai/nova@1.1.30",
         "args": ["acp"]
       }
     }
@@ -744,11 +744,11 @@
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.1",
+    "version": "0.21.2",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.1",
+        "package": "@qwen-code/qwen-code@0.21.2",
         "args": ["--acp", "--experimental-skills"]
       }
     }
