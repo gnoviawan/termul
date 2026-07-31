@@ -174,7 +174,23 @@ export function createTauriFilesystemApi(): FilesystemApi {
       // Web/remote mode: route through the same-origin server (Story: Web/
       // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
       if (!isTauriContext()) {
-        return webServerFilesystem.readDirectory(dirPath)
+        // The web server (fs_api.rs `ls`) returns OS-native entry paths — on
+        // Windows that is backslash separators. The file-explorer store keys
+        // `expandedDirs`/`directoryContents` by normalizePath (`\`→`/`) but
+        // FileTreeNode reads them by raw `entry.path`, so backslash paths
+        // break subdir expansion at level 2+. Normalize to forward slashes to
+        // match the Tauri branch below.
+        const result = await webServerFilesystem.readDirectory(dirPath)
+        if (result.success) {
+          return {
+            success: true,
+            data: result.data.map((entry) => ({
+              ...entry,
+              path: entry.path.replace(/\\/g, '/')
+            }))
+          }
+        }
+        return result
       }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')

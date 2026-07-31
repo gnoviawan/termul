@@ -109,6 +109,44 @@ describe('tauriFilesystemApi (web branch)', () => {
     )
   })
 
+  it('readDirectory normalizes Windows backslash entry paths to forward slashes (web)', async () => {
+    // fs_api.rs `ls` joins paths with PathBuf and returns to_string_lossy() —
+    // backslash separators on a Windows server. The file-explorer store keys
+    // expandedDirs/directoryContents by normalizePath (`\`→`/`) but
+    // FileTreeNode reads by raw entry.path; without this normalization the
+    // desktop tree can't expand subdirs at level 2+ on web.
+    const entries = [
+      {
+        name: 'src',
+        path: 'C:\\web\\src',
+        type: 'directory',
+        extension: null,
+        size: 0,
+        modifiedAt: 1
+      },
+      {
+        name: 'a.txt',
+        path: 'C:\\web\\a.txt',
+        type: 'file',
+        extension: 'txt',
+        size: 4,
+        modifiedAt: 2
+      }
+    ]
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: entries }))
+
+    const result = await tauriFilesystemApi.readDirectory('C:\\web')
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.map((e) => e.path)).toEqual(['C:/web/src', 'C:/web/a.txt'])
+    }
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/fs/ls?path=${encodeURIComponent('C:\\web')}`,
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
   it('propagates a server-side failure body (e.g. MKDIR_ERROR) from the web client', async () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ success: false, error: 'permission denied', code: 'MKDIR_ERROR' })

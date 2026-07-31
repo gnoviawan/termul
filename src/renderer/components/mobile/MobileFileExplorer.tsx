@@ -1,4 +1,5 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   ChevronLeft,
@@ -11,7 +12,7 @@ import {
   RefreshCw,
   Trash2
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import {
@@ -33,10 +34,11 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
-import { filesystemApi } from '@/lib/api'
+import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
+import { useActiveProjectId } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
 interface MobileFileExplorerProps {
@@ -71,6 +73,16 @@ function joinPath(parent: string, name: string): string {
   return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
 }
 
+function isWithinRoot(path: string, root: string): boolean {
+  const p = pathIdentity(path)
+  const r = pathIdentity(root)
+  if (p === r) return true
+  // Drive roots (`C:/`) and posix `/` prefix any child without a trailing
+  // separator, so check `startsWith(r)` directly for those.
+  if (r === '/' || /^[A-Za-z]:\/$/.test(r)) return p.startsWith(r)
+  return p.startsWith(`${r}/`)
+}
+
 /** Lean touch-first file explorer drawer for the web/mobile view. Directory
  * rows drill into a single folder at a time, while files reuse the desktop
  * open-file wiring. Native desktop keeps its existing tree explorer. */
@@ -81,25 +93,56 @@ export function MobileFileExplorer({
   const { rootPath, directoryContents, loadingDirs, rootLoadError } = useFileExplorer()
   const { toggleDirectory, refreshDirectory, selectPath } = useFileExplorerActions()
   const reducedMotion = useReducedMotion() ?? false
+  const projectId = useActiveProjectId()
 
-  const [currentPath, setCurrentPath] = useState<string | null>(rootPath)
+  const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [navigationDirection, setNavigationDirection] = useState<NavigationDirection>(0)
   const [actionEntry, setActionEntry] = useState<DirectoryEntry | null>(null)
   const [renaming, setRenaming] = useState<RenameState | null>(null)
   const [creating, setCreating] = useState<CreateState | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<DirectoryEntry | null>(null)
+  // Tracks the project root we've already restored the persisted folder for.
+  // Prevents re-reading persistence (and clobbering the in-session folder) on
+  // every drawer reopen — the component stays mounted across close, so
+  // currentPath already holds the user's last folder.
+  const restoredForRootRef = useRef<string | null>(null)
 
-  // Every project/drawer opening starts at the project root, avoiding a stale
-  // subfolder when the active project changes while the drawer is closed.
+  function persistFolder(path: string): void {
+    if (!projectId) return
+    void persistenceApi.write(PersistenceKeys.mobileFileExplorerFolder(projectId), path)
+  }
+
+  // Restore the last folder the user navigated into (persisted per project)
+  // when opening for a new/different project root — first open, reload, or
+  // project switch. Within-session reopens keep the current folder: the
+  // component stays mounted across drawer close, so currentPath survives.
   useEffect(() => {
     if (!open) return
-    setCurrentPath(rootPath)
     setNavigationDirection(0)
     setActionEntry(null)
     setRenaming(null)
     setCreating(null)
-  }, [open, rootPath])
+    if (!rootPath) {
+      setCurrentPath(null)
+      return
+    }
+    if (restoredForRootRef.current === rootPath) return
+    restoredForRootRef.current = rootPath
+    if (!projectId) {
+      setCurrentPath(rootPath)
+      return
+    }
+    // Clear a stale folder from a different project while reading the
+    // persisted one, so the drawer shows loading instead of old contents.
+    setCurrentPath(null)
+    void persistenceApi
+      .read<string>(PersistenceKeys.mobileFileExplorerFolder(projectId))
+      .then((res) => {
+        const persisted = res.success ? res.data : null
+        setCurrentPath(persisted && isWithinRoot(persisted, rootPath) ? persisted : rootPath)
+      })
+  }, [open, rootPath, projectId])
 
   // Web has no directory watcher, so load whichever folder is currently shown.
   useEffect(() => {
@@ -152,7 +195,9 @@ export function MobileFileExplorer({
     setCreating(null)
     setRenaming(null)
     setNavigationDirection(1)
-    setCurrentPath(normalizePath(path))
+    const next = normalizePath(path)
+    setCurrentPath(next)
+    persistFolder(next)
   }
 
   function navigateBack(): void {
@@ -160,7 +205,9 @@ export function MobileFileExplorer({
     setCreating(null)
     setRenaming(null)
     setNavigationDirection(-1)
-    setCurrentPath(parentOf(currentPath))
+    const next = parentOf(currentPath)
+    setCurrentPath(next)
+    persistFolder(next)
   }
 
   function handleRowTap(entry: DirectoryEntry): void {
@@ -214,6 +261,7 @@ export function MobileFileExplorer({
     if (currentPath && normalizePath(currentPath).startsWith(`${normalizePath(entry.path)}/`)) {
       setCurrentPath(parent)
       setNavigationDirection(-1)
+      persistFolder(parent)
     }
     await refreshDirectory(parent)
   }
@@ -235,6 +283,7 @@ export function MobileFileExplorer({
     ) {
       setCurrentPath(parent)
       setNavigationDirection(-1)
+      persistFolder(parent)
     }
     await refreshDirectory(parent)
   }
@@ -417,9 +466,13 @@ export function MobileFileExplorer({
               )}
             </div>
           ) : !currentPath ? (
-            <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              No active project
-            </div>
+            rootPath ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</div>
+            ) : (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                No active project
+              </div>
+            )
           ) : (
             <AnimatePresence initial={false} mode="wait" custom={navigationDirection}>
               <motion.div

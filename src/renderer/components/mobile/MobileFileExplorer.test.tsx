@@ -46,6 +46,9 @@ const mockDeletePath = vi.fn()
 const mockRenameFile = vi.fn()
 const mockCopyFile = vi.fn()
 const mockToastError = vi.fn()
+const mockPersistenceRead = vi.fn()
+const mockPersistenceWrite = vi.fn()
+let mockProjectId: string | undefined
 
 // Mutable explorer state so individual tests can seed the tree (loaded root,
 // empty root, load error, no project) without re-declaring the module mock.
@@ -83,6 +86,10 @@ vi.mock('@/stores/workspace-store', () => ({
   editorTabId: (path: string) => `edit-${path}`
 }))
 
+vi.mock('@/stores/project-store', () => ({
+  useActiveProjectId: () => mockProjectId
+}))
+
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
     createFile: (...args: unknown[]) => mockCreateFile(...args),
@@ -90,6 +97,10 @@ vi.mock('@/lib/api', () => ({
     deletePath: (...args: unknown[]) => mockDeletePath(...args),
     renameFile: (...args: unknown[]) => mockRenameFile(...args),
     copyFile: (...args: unknown[]) => mockCopyFile(...args)
+  },
+  persistenceApi: {
+    read: (...args: unknown[]) => mockPersistenceRead(...args),
+    write: (...args: unknown[]) => mockPersistenceWrite(...args)
   }
 }))
 
@@ -131,6 +142,9 @@ function setRoot(entries: DirectoryEntry[]): void {
 describe('MobileFileExplorer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockProjectId = undefined
+    mockPersistenceRead.mockReset()
+    mockPersistenceWrite.mockReset()
     mockReducedMotion = false
     mockExplorerState.rootPath = '/proj'
     mockExplorerState.directoryContents = new Map()
@@ -185,19 +199,85 @@ describe('MobileFileExplorer', () => {
     await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/proj/sub'))
   })
 
-  it('resets to the project root when the drawer is reopened', async () => {
+  it('restores the persisted folder on open and keeps it on reopen', async () => {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/sub' })
     setRoot([entry('sub', 'directory')])
     mockExplorerState.directoryContents.set('/proj/sub', [])
 
     const { rerender } = render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
-    fireEvent.click(await screen.findByText('sub'))
-    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
 
+    // First open restores the persisted subfolder, not the project root.
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-1')
+
+    // Reopening keeps the user's folder — no reset to root, no re-read.
+    mockPersistenceRead.mockClear()
     rerender(<MobileFileExplorer open={false} onOpenChange={vi.fn()} />)
     rerender(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    expect(mockPersistenceRead).not.toHaveBeenCalled()
+  })
+
+  it('persists the folder on navigation and restores it on a fresh mount', async () => {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj' })
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [])
+
+    const { unmount } = render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+
+    // Navigating into a subfolder writes the new folder to persistence.
+    fireEvent.click(await screen.findByText('sub'))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(mockPersistenceWrite).toHaveBeenCalledWith('mobile-file-explorer/proj-1', '/proj/sub')
+
+    // A fresh mount (page reload) restores the persisted folder.
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/sub' })
+    unmount()
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+  })
+
+  it('falls back to the project root when the persisted folder is outside the root', async () => {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/other-project/sub' })
+    setRoot([entry('a.txt', 'file')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
 
     expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
     expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-1')
+  })
+
+  it('restores the new project folder after a project switch', async () => {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/sub' })
+    setRoot([entry('sub', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/sub', [])
+
+    const { rerender } = render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+
+    // Switch the active project: the drawer should restore that project's own
+    // persisted folder, not keep the previous project's.
+    mockExplorerState.rootPath = '/proj2'
+    mockExplorerState.directoryContents = new Map([
+      ['/proj2', [entry('deep', 'directory', '/proj2/deep')]],
+      ['/proj2/deep', []]
+    ])
+    mockProjectId = 'proj-2'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj2/deep' })
+
+    rerender(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'deep' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-2')
   })
 
   it('returns to the parent folder and slides back without going above root', async () => {
