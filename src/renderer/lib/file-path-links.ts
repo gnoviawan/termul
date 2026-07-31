@@ -87,10 +87,24 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
   }
 
   const matches: FilePathMatch[] = []
+  const wrapperEnd: Record<string, string> = {
+    '(': ')',
+    '[': ']',
+    '{': '}',
+    '`': '`',
+    '"': '"',
+    "'": "'"
+  }
 
   for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
-    const text = match[0]
-    const start = match.index ?? -1
+    let text = match[0]
+    let start = match.index ?? -1
+    const closing = wrapperEnd[text[0] ?? '']
+    if (closing && line[start + text.length] === closing) {
+      text = text.slice(1)
+      start += 1
+    }
+
     if (
       !text ||
       !looksLikeFilePath(text) ||
