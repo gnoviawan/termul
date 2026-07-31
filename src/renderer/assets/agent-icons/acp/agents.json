@@ -81,11 +81,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.47",
+    "version": "3.0.48",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.47",
+        "package": "cline@3.0.48",
         "args": ["--acp"]
       }
     }
@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.184.0",
+    "version": "0.185.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.184.0",
+        "package": "droid@0.185.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -372,11 +372,11 @@
   {
     "id": "github-copilot-cli",
     "name": "GitHub Copilot",
-    "version": "1.0.76",
+    "version": "1.0.77",
     "description": "GitHub's AI pair programmer",
     "distribution": {
       "npx": {
-        "package": "@github/copilot@1.0.76",
+        "package": "@github/copilot@1.0.77",
         "args": ["--acp"]
       }
     }
