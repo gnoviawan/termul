@@ -19,7 +19,7 @@ describe('AgentCapabilitiesBadge', () => {
     )
 
     const trigger = screen.getByLabelText(
-      'Agent capabilities: Image prompts, Audio prompts (attachment unavailable), Embedded files, HTTP MCP, SSE MCP'
+      'Agent capabilities: Image prompts, Audio prompts (attachment unavailable), Embedded files, HTTP MCP accepted, SSE MCP accepted'
     )
     expect(trigger).toHaveTextContent('5')
     fireEvent.pointerEnter(trigger)
@@ -27,8 +27,8 @@ describe('AgentCapabilitiesBadge', () => {
       expect(screen.getByText('Agent capabilities')).toBeInTheDocument()
       expect(screen.getByText('Image prompts')).toBeInTheDocument()
       expect(screen.getByText('Embedded files')).toBeInTheDocument()
-      expect(screen.getByText('HTTP MCP')).toBeInTheDocument()
-      expect(screen.getByText('SSE MCP')).toBeInTheDocument()
+      expect(screen.getByText('HTTP MCP accepted')).toBeInTheDocument()
+      expect(screen.getByText('SSE MCP accepted')).toBeInTheDocument()
       expect(screen.getByText('Audio prompts (attachment unavailable)')).toBeInTheDocument()
     })
   })

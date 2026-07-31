@@ -42,8 +42,9 @@ export function AgentCapabilitiesBadge({
   if (embeddedContext) {
     items.push({ key: 'embedded-context', label: 'Embedded files', icon: FileText })
   }
-  if (mcpCapabilities?.http) items.push({ key: 'mcp-http', label: 'HTTP MCP', icon: Radio })
-  if (mcpCapabilities?.sse) items.push({ key: 'mcp-sse', label: 'SSE MCP', icon: Plug })
+  if (mcpCapabilities?.http)
+    items.push({ key: 'mcp-http', label: 'HTTP MCP accepted', icon: Radio })
+  if (mcpCapabilities?.sse) items.push({ key: 'mcp-sse', label: 'SSE MCP accepted', icon: Plug })
 
   if (items.length === 0) return null
 

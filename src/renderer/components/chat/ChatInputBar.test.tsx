@@ -251,7 +251,7 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
 
     expect(
       screen.getByRole('button', {
-        name: 'Agent capabilities: Image prompts, Audio prompts (attachment unavailable), Embedded files, HTTP MCP, SSE MCP'
+        name: 'Agent capabilities: Image prompts, Audio prompts (attachment unavailable), Embedded files, HTTP MCP accepted, SSE MCP accepted'
       })
     ).toBeInTheDocument()
   })
