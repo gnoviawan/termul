@@ -89,6 +89,25 @@ export function MobileFileExplorer({
     return idx <= 0 ? (rootPath ?? normalized) : normalized.slice(0, idx)
   }
 
+  /** Close every open editor tab pointing at `target` — the exact path for a
+   * file, or the path plus any descendant for a directory (a recursive
+   * delete or a directory rename moves/removes them all). Keeps the mobile
+   * pane tree free of stale/orphan tabs, mirroring desktop FileExplorer's
+   * reconciliation but covering the recursive directory case the exact-match
+   * check missed. */
+  function closeAffectedTabs(target: DirectoryEntry): void {
+    const editor = useEditorStore.getState()
+    const targetNorm = target.path.replace(/\\/g, '/')
+    const prefix = `${targetNorm}/`
+    for (const openPath of Array.from(editor.openFiles.keys())) {
+      const openNorm = openPath.replace(/\\/g, '/')
+      if (openNorm === targetNorm || (target.type === 'directory' && openNorm.startsWith(prefix))) {
+        editor.closeFile(openPath)
+        useWorkspaceStore.getState().removeTab(editorTabId(openPath))
+      }
+    }
+  }
+
   async function handleOpenFile(entry: DirectoryEntry): Promise<void> {
     selectPath(entry.path)
     try {
@@ -140,20 +159,22 @@ export function MobileFileExplorer({
       setRenaming(null)
       return
     }
+    // Clear the rename state BEFORE the async request so an Enter→blur
+    // sequence can't fire `handleRename` twice — the second call would hit a
+    // missing source (already renamed) and surface a spurious "Failed to
+    // rename" toast after a successful rename. With state cleared up front,
+    // a late blur re-enters `handleRename`, sees `renaming === null`, and
+    // returns early via the guard above.
+    setRenaming(null)
     const result = await filesystemApi.renameFile(entry.path, newPath)
     if (!result.success) {
       toast.error('Failed to rename', { description: result.error })
-      setRenaming(null)
       return
     }
-    // Reconcile open editor tabs: close the old tab so the mobile pane tree
-    // never shows a stale/orphan path (mirrors desktop FileExplorer).
-    const editor = useEditorStore.getState()
-    if (editor.openFiles.has(entry.path)) {
-      editor.closeFile(entry.path)
-      useWorkspaceStore.getState().removeTab(editorTabId(entry.path))
-    }
-    setRenaming(null)
+    // Reconcile open editor tabs: close tabs pointing at the old path (and,
+    // for a renamed directory, its descendants) so the mobile pane tree never
+    // shows a stale/orphan path.
+    closeAffectedTabs(entry)
     await refreshDirectory(parent)
   }
 
@@ -165,11 +186,9 @@ export function MobileFileExplorer({
       toast.error('Failed to delete', { description: result.error })
       return
     }
-    const editor = useEditorStore.getState()
-    if (editor.openFiles.has(entry.path)) {
-      editor.closeFile(entry.path)
-      useWorkspaceStore.getState().removeTab(editorTabId(entry.path))
-    }
+    // Close tabs pointing at the deleted path — the exact path for a file,
+    // or the path plus any descendant for a recursive directory delete.
+    closeAffectedTabs(entry)
     await refreshDirectory(parentOf(entry.path))
   }
 

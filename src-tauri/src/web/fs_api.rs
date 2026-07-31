@@ -571,7 +571,13 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
                 "BINARY_FILE",
             ));
         }
-        let content = String::from_utf8_lossy(&bytes).into_owned();
+        // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
+        // would replace invalid bytes with U+FFFD and let the editor save the
+        // corrupted content back over the original file. Desktop's
+        // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
+        // contract so the web path never silently corrupts a file.
+        let content = String::from_utf8(bytes)
+            .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
         Ok(FileContentDto {
             content,
             encoding: "utf-8".to_string(),
@@ -1558,6 +1564,25 @@ mod tests {
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "binary file must be refused");
         assert_eq!(body.code.as_deref(), Some("BINARY_FILE"));
+    }
+
+    /// `/fs/read` refuses a non-UTF-8 text file with `READ_ERROR` instead of
+    /// lossy-decoding it (matches desktop `readTextFile`, which fails on
+    /// invalid UTF-8). Prevents the editor from saving U+FFFD replacement
+    /// characters back over the original bytes.
+    #[tokio::test]
+    async fn read_rejects_non_utf8_text_file() {
+        let root = TempDir::new("read-latin1-root");
+        let file = root.path().join("latin1.txt");
+        // 0xE9 (Latin-1 `é`) is > 0x08 so it clears the binary sample scan,
+        // but it is not valid UTF-8 (0xE9 is a 3-byte lead expecting two
+        // continuation bytes). Previously this was lossy-decoded to U+FFFD.
+        fs::write(&file, [0xE9u8]).expect("write latin-1");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-UTF-8 text must be refused, not lossy-decoded");
+        assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
     }
 
     /// `/fs/delete` removes a file inside the project root.
