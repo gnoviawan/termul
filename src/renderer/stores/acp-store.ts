@@ -1545,6 +1545,12 @@ function waitForSpawnDetails(get: () => AcpState, agentId: AgentId): Promise<voi
     const agent = get().agents[agentId]
     // Unknown agent: nothing will arrive for it here — don't block.
     if (!agent) return true
+    // `capabilities` and `authMethods` are set atomically by `_onAgentSpawned`
+    // in a single `set()`, so `capabilities !== null` ⟺ the spawn event has
+    // been observed ⟺ `authMethods` is the final advertised value (possibly
+    // `[]` for a genuine no-auth agent, which correctly skips authenticate).
+    // The `|| authMethods.length > 0` term is a defensive fallback for a
+    // record that somehow gained methods first.
     return agent.capabilities !== null || (agent.authMethods?.length ?? 0) > 0
   }
   if (hasDetails()) return Promise.resolve()
