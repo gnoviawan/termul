@@ -2249,14 +2249,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // 'local' — which is why reopened chats could not be continued.
         const existing = s.agents[agentId]
         return {
-          // authMethods seeded empty; populated by `acp:agent_spawned`. See
-          // `authenticateBeforeSession` for why the event is awaited.
+          // Preserve any authMethods already recorded for this agent (a
+          // re-spawn after the spawn event landed keeps them available to
+          // `authenticateBeforeSession`); seed [] only when none exist yet.
+          // The `acp:agent_spawned` event (re)populates them asynchronously.
           agents: {
             ...s.agents,
             [agentId]: {
               id: agentId,
               capabilities: existing?.capabilities ?? null,
-              authMethods: []
+              authMethods: existing?.authMethods ?? []
             }
           },
           agentStatus
@@ -2306,9 +2308,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   authenticateAgent: async (agentId, methodId) => {
-    await acpApi.authenticate(agentId, methodId)
-    // Remember success so the next `createSession` skips its own authenticate.
-    authenticatedAgents.add(agentId)
+    // Share a single in-flight authenticate with `authenticateBeforeSession`
+    // (P2): a launcher Sign-in click concurrent with a background
+    // `prepareChat` must issue one round-trip, not two. Keyed by agent —
+    // auto-auth only fires for the single unambiguous method, the same one
+    // Sign-in uses, so concurrent callers share the same request.
+    const existing = inFlightAuth.get(agentId)
+    if (existing) return existing
+    const promise = (async () => {
+      await acpApi.authenticate(agentId, methodId)
+      // Remember success so the next `createSession` skips its own authenticate.
+      authenticatedAgents.add(agentId)
+    })().finally(() => inFlightAuth.delete(agentId))
+    inFlightAuth.set(agentId, promise)
+    return promise
   },
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {

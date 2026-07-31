@@ -1,6 +1,11 @@
 import type { AgentConfig, AuthMethod } from '@/lib/acp-api'
 
-const ENOENT_PATTERN = /enoent|not found|cannot find|no such file|program not found|spawn.*fail/i
+// Match only explicit process-spawn / executable-launch failures. Generic
+// "not found" / "cannot find" are intentionally excluded so messages about a
+// missing API key, credential, or session are not misclassified as a spawn
+// error (and rewritten by `formatAcpSpawnError` into spawn guidance).
+const ENOENT_PATTERN =
+  /enoent|no such file|program not found|command not found|spawn.*fail|failed to spawn/i
 
 /**
  * Turn a raw spawn/setup error into a user-facing message. Only ENOENT-style
