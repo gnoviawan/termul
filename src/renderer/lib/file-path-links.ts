@@ -91,22 +91,16 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
   }
 
   const matches: FilePathMatch[] = []
-  const wrapperEnd: Record<string, string> = {
-    '(': ')',
-    '[': ']',
-    '{': '}',
-    '`': '`',
-    '"': '"',
-    "'": "'"
-  }
 
   for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
     let text = trimTrailingPathPunctuation(match[0])
     let start = match.index ?? -1
-    const closing = wrapperEnd[text[0] ?? '']
-    if (closing && line[start + text.length] === closing) {
-      text = text.slice(1)
-      start += 1
+    const wrapper = WRAPPER_PAIRS.find(
+      ([opening, closing]) => text.startsWith(opening) && line[start + text.length] === closing
+    )
+    if (wrapper) {
+      text = text.slice(wrapper[0].length)
+      start += wrapper[0].length
     }
 
     if (
