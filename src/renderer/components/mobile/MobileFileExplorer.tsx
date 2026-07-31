@@ -127,21 +127,34 @@ export function MobileFileExplorer({
       setCurrentPath(null)
       return
     }
-    if (restoredForRootRef.current === rootPath) return
-    restoredForRootRef.current = rootPath
+    const restoreKey = `${projectId ?? ''}:${rootPath}`
+    if (restoredForRootRef.current === restoreKey) return
+    restoredForRootRef.current = restoreKey
+    const normalizedRoot = normalizePath(rootPath)
     if (!projectId) {
-      setCurrentPath(rootPath)
+      setCurrentPath(normalizedRoot)
       return
     }
     // Clear a stale folder from a different project while reading the
     // persisted one, so the drawer shows loading instead of old contents.
     setCurrentPath(null)
+    // Cancel the pending read if rootPath/projectId change mid-flight, so a
+    // late resolution can't apply the previous project's folder; fall back to
+    // root on rejection (persistenceApi.read shouldn't reject, but defend it).
+    let cancelled = false
     void persistenceApi
       .read<string>(PersistenceKeys.mobileFileExplorerFolder(projectId))
       .then((res) => {
+        if (cancelled) return
         const persisted = res.success ? res.data : null
-        setCurrentPath(persisted && isWithinRoot(persisted, rootPath) ? persisted : rootPath)
+        setCurrentPath(persisted && isWithinRoot(persisted, rootPath) ? persisted : normalizedRoot)
       })
+      .catch(() => {
+        if (!cancelled) setCurrentPath(normalizedRoot)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [open, rootPath, projectId])
 
   // Web has no directory watcher, so load whichever folder is currently shown.
@@ -154,7 +167,7 @@ export function MobileFileExplorer({
 
   function parentOf(path: string): string {
     const normalized = normalizePath(path)
-    const canonicalRoot = rootPath ?? normalized
+    const canonicalRoot = rootPath ? normalizePath(rootPath) : normalized
     const rootIdentity = pathIdentity(canonicalRoot)
     const currentIdentity = pathIdentity(normalized)
     const rootPrefix = rootIdentity === '/' ? '/' : `${rootIdentity}/`
@@ -366,6 +379,15 @@ export function MobileFileExplorer({
 
   const normalizedRoot = rootPath ? normalizePath(rootPath) : null
   const normalizedCurrent = currentPath ? normalizePath(currentPath) : null
+  // Roots ending in a separator (`/`, `C:/`) already include it, so the
+  // relative-path label slices from the root length itself; otherwise skip the
+  // separator after the root (the old `+ 1` dropped the first child char for
+  // `C:/`/`/`).
+  const rootPrefixLength = normalizedRoot
+    ? normalizedRoot.endsWith('/')
+      ? normalizedRoot.length
+      : normalizedRoot.length + 1
+    : 0
   const isAtRoot =
     !normalizedRoot || pathIdentity(normalizedCurrent ?? '/') === pathIdentity(normalizedRoot)
   const currentName =
@@ -405,9 +427,7 @@ export function MobileFileExplorer({
                 className="truncate text-xs text-muted-foreground"
                 title={normalizedCurrent ?? undefined}
               >
-                {isAtRoot
-                  ? 'Project files'
-                  : normalizedCurrent?.slice((normalizedRoot?.length ?? 0) + 1)}
+                {isAtRoot ? 'Project files' : normalizedCurrent?.slice(rootPrefixLength)}
               </p>
             </div>
           </div>

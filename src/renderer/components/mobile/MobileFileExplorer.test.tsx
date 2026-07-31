@@ -311,6 +311,8 @@ describe('MobileFileExplorer', () => {
 
     fireEvent.click(await screen.findByText('child'))
     expect(await screen.findByText('inside.txt')).toBeInTheDocument()
+    // Drive-root (`C:/`) subtitle must show the full child name, not drop a char.
+    expect(screen.getByText('child', { selector: 'p' })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Back to parent folder'))
 
     expect(await screen.findByText('child')).toBeInTheDocument()
