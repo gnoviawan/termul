@@ -197,54 +197,95 @@ Renderer browser adapters subscribe to:
 ### Updater/Menu Event Flow
 The app also emits menu/updater-related events such as the updater check trigger from the native menu.
 
-### ACP Agent Setup & Authentication Flow
+## ACP / AI Agent Chat Contract
 
-ACP provider setup follows the stable ACP handshake ordering. The renderer facade
-(`src/renderer/lib/acp-api.ts`) → Tauri command → ACP manager
-(`src-tauri/src/acp/manager.rs`) boundary is preserved end to end.
+ACP is an internal Agent Client Protocol integration, not a public HTTP API.
+The native command inventory below is copied from `src-tauri/src/acp/commands.rs`;
+the event inventory is copied from `src-tauri/src/acp/events.rs`. The renderer
+mirror is `src/renderer/lib/acp-api.ts`, and `acp-transport.ts` selects Tauri
+IPC on desktop or the WebSocket relay for web/remote.
 
-**1. Initialize → auth-method propagation.** When an agent completes `initialize`,
-the manager forwards **every** advertised authentication method to the renderer on
-the `acp:agent_spawned` event as an opaque descriptor:
+### Native ACP command inventory
 
-- `authMethods: { id: string; name: string; description?: string }[]`
+All commands return a Tauri `Result`; renderer facade methods reject on an ACP
+error. `AgentId` and `SessionId` are string newtypes on the wire.
 
-Methods are propagated verbatim — there is no agent-type filtering. An agent that
-advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
-types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
-the stable `id`/`name`/optional `description` surface is carried.
+| Command | Inputs | Result |
+| --- | --- | --- |
+| `acp_spawn_agent` | `config: AgentConfig` | `AgentId` |
+| `acp_kill_agent` | `agentId` | `()`; idempotent kill |
+| `acp_list_agents` | none | `AgentId[]` |
+| `acp_new_session` | `agentId`, `cwd`, optional `mcpServers` | `NewSessionOutcome` |
+| `acp_load_session` | `agentId`, `sessionId`, `cwd` | `SessionReopenOutcome` |
+| `acp_resume_session` | `agentId`, `sessionId`, `cwd` | `SessionReopenOutcome` |
+| `acp_close_session` | `agentId`, `sessionId` | `()` |
+| `acp_list_sessions` | `agentId`, optional `cwd`, optional `cursor` | `ListSessionsResponse` |
+| `acp_send_prompt` | `agentId`, `sessionId`, optional `content` or `text` | ACP `StopReason` |
+| `acp_cancel_prompt` | `agentId`, `sessionId` | `()` |
+| `acp_set_config_option` | `agentId`, `sessionId`, `configId`, `valueId` | updated `SessionConfigOption[]` |
+| `acp_set_mode` | `agentId`, `sessionId`, `modeId` | `()` |
+| `acp_set_model` | `agentId`, `sessionId`, `modelId` | `()` |
+| `acp_authenticate` | `agentId`, `methodId` | `()` |
+| `acp_respond_permission` | `agentId`, `requestId`, optional `optionId` | `()`; an already-resolved request is treated as success |
+| `acp_probe_runtime` | none | `AcpRuntimeProbe` |
 
-**2. Authenticate before `session/new`.** The store retains the advertised methods
-and, before creating a session (`acp_new_session`), runs `acp_authenticate`
-(`authenticate(methodId)`) when the agent advertises auth:
+`acp_send_prompt` requires non-empty structured content or a text fallback. A
+second in-flight turn returns the stable `ACP_TURN_IN_PROGRESS` diagnostic used
+by the renderer queue. Permission resolution is first-response-wins across the
+desktop command and the web/remote response path.
 
-- exactly one method → authenticate that method, then create the session;
-- more than one method → **do not choose one**; surface an actionable
-  "multiple sign-in methods" failure that lists the method names (there is no
-  automatic "unambiguous default" pick);
-- no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
+The facade also exposes `acpInstallRegistryBinary`, `acpProbeRuntime`, and
+`acpFetchRegistrySnapshot`. `acpProbeRuntime` maps to the native command above;
+the registry install/snapshot helpers are renderer transport/catalog operations,
+not additional commands declared in `src-tauri/src/acp/commands.rs`.
 
-For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect and never
-stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+### ACP event inventory
 
-**3. Recoverable setup failures.** Setup failures are classified deterministically
-(`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with
-distinct, actionable launcher labels — order: `multi-auth` → `spawn` → `transport`
-→ `auth` → `timeout` → `unknown`:
+All native event payload structs use camelCase field names. Nested content,
+tool, plan, model, mode, permission, and config objects retain ACP schema
+serialization.
 
-- `transport` (destroyed stream / refused / reset connection, incl. "connection
-  timed out"): the live process is **killed and evicted** from reuse before a
-  retry, so exactly one fresh spawn follows;
-- `auth`: the launcher shows "Authentication required" plus the diagnostic and a
-  Sign-in action (only when exactly one method is advertised); a failed
-  session/new that is auth-classified clears the authenticated flag so a manual
-  Sign-in + retry can re-authenticate;
-- `timeout`: "Session setup timed out" (the alive-but-slow agent is not killed);
-- `spawn`: a missing/unresolvable binary (ENOENT), rewritten into actionable
-  guidance;
-- only a genuine empty-model state uses the neutral model pill / "Model
-  unavailable" text — a setup failure never masquerades as a model-list problem.
+| Event | Payload (key fields) | Meaning |
+| --- | --- | --- |
+| `acp:agent_spawned` | `agentId`, `capabilities`, `authMethods` | `initialize` completed; advertised auth methods are forwarded opaquely |
+| `acp:session_created` | `agentId`, `sessionId`, optional `modes`, `models`, `configOptions` | A new session is ready |
+| `acp:message_chunk` | `agentId`, `sessionId`, `role`, `content` | Streamed user, agent, or thought content |
+| `acp:tool_call` | `agentId`, `sessionId`, `toolCall` | New tool call |
+| `acp:tool_call_update` | `agentId`, `sessionId`, `update` | Tool call progress/content update |
+| `acp:plan_update` | `agentId`, `sessionId`, `plan` | Full replacement of the session plan |
+| `acp:commands_update` | `agentId`, `sessionId`, `availableCommands` | Available slash commands changed |
+| `acp:mode_update` | `agentId`, `sessionId`, `currentModeId`, optional `availableModes` | Active mode changed |
+| `acp:config_options_update` | `agentId`, `sessionId`, `configOptions` | Session configuration options changed |
+| `acp:permission_request` | `agentId`, `sessionId`, `requestId`, `toolCall`, `options` | Agent requests a user decision |
+| `acp:prompt_complete` | `agentId`, `sessionId`, `stopReason`, optional `turnId` | Prompt turn ended |
+| `acp:agent_error` | `agentId`, optional `sessionId`, `message` | Non-fatal agent error |
+| `acp:agent_crashed` | `agentId`, optional `sessionId`, `message` | Agent subprocess crash; emitted before disconnect |
+| `acp:session_closed` | `agentId`, `sessionId` | Session closed explicitly or after agent loss |
+| `acp:agent_disconnected` | `agentId` | Agent process disconnected/exited |
+| `acp:session_info_update` | `agentId`, `sessionId`, nullable `title` | Agent session metadata changed |
+| `acp:usage_update` | `agentId`, `sessionId`, `used`, `size`, optional `cost` | Reported context-window utilization and cost |
+
+The renderer facade additionally declares `ACP_EVENTS.userPrompt` (`acp:user_prompt`)
+and `UserPromptEvent` for its transport-facing contract. There is no matching
+`EVENT_USER_PROMPT` declaration in `src-tauri/src/acp/events.rs`; it is therefore
+not counted as a native desktop event here and must not be documented as one
+without a corresponding backend source change.
+
+### ACP setup and state semantics
+
+- Agent setup retains every `authMethods` descriptor advertised by
+  `initialize`. Zero methods preserves the normal flow; exactly one method is
+authenticated before `session/new`; multiple methods require an explicit choice.
+- The store is global and multi-session. Persisted history is scoped by
+  `(projectId, cwd)` and loaded lazily; `activeSessionId` is only an in-process UI
+  convenience.
+- `ContentBlock` supports text and ACP media/resource forms. A known filesystem
+  path is sent as `resource_link`; drag/drop or paste without a path uses inline
+  image data or an embedded resource only when the agent advertises
+  `embeddedContext`.
+- Plan, tool, permission, config, mode, model, and usage updates are capability-
+driven. Usage updates with invalid/non-positive values are ignored by the store;
+valid updates replace the session snapshot, with positive finite costs retained.
 
 ## Shared TypeScript Contracts
 
@@ -273,71 +314,6 @@ Representative error codes include:
 - `SESSION_INVALID`
 - `MIGRATION_*`
 - `ROLLBACK_FAILED`
-
-## ACP Agent Chat Events
-
-ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/acp/events.rs` and `src/renderer/lib/acp-api.ts`).
-
-### `acp:plan_update`
-
-**Purpose:** Agent execution plan changed ([Agent Plan spec](https://agentclientprotocol.com/protocol/v1/agent-plan)).
-
-**Payload:**
-
-```ts
-{
-  agentId: string
-  sessionId: string
-  plan: {
-    entries: Array<{
-      content: string
-      priority?: 'high' | 'medium' | 'low'
-      status?: 'pending' | 'in_progress' | 'completed'
-    }>
-  }
-}
-```
-
-**Semantics:**
-
-- Emitted when the agent sends `session/update` with `sessionUpdate: "plan"`.
-- Each event replaces the session plan entirely (full list).
-- Empty `entries` clears the plan in the renderer (`PlanPanel` hidden).
-
-See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
-
-### `acp:usage_update`
-
-**Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).
-
-**Payload:**
-
-```ts
-{
-  agentId: string
-  sessionId: string
-  used: number
-  size: number
-  cost?: {
-    amount: number
-    currency: string
-  }
-}
-```
-
-**Semantics:**
-
-- Emitted when the agent pushes a usage update; Rust forwards `used`/`size`/`cost` without additional gating (`UsageUpdateEvent` in `src-tauri/src/acp/events.rs`).
-- Each event **replaces** the renderer’s current usage state for that session (`used`/`size`; optional `cost` when accepted).
-- Renderer validation (`_onUsageUpdate` in `acp-store.ts`):
-  - Drops the update when `used` or `size` is non-finite, or when `used <= 0` or `size <= 0`.
-  - Ignores updates for unknown sessions.
-  - Keeps optional `cost` only when `amount` is finite and `> 0` and `currency` is non-empty; otherwise omits cost (zero/placeholder costs are not stored).
-- TypeScript mirror: `UsageUpdateEvent` / `ACP_EVENTS.usageUpdate` in `src/renderer/lib/acp-api.ts`. Keep Rust and TypeScript field names (`agentId`, `sessionId`, `used`, `size`, `cost`) aligned.
-
-### `acp_send_prompt` errors
-
-When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
 
 ## Notes
 
