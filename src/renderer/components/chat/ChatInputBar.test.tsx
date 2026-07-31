@@ -245,6 +245,19 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.queryByText('5')).not.toBeInTheDocument()
   })
+
+  it('shows the negotiated capability summary without enabling unsupported audio', () => {
+    renderInputBar({
+      promptCapabilities: { image: true, audio: true, embeddedContext: true },
+      mcpCapabilities: { http: true, sse: true }
+    })
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Agent capabilities: Image prompts, Audio prompts (attachment unavailable), Embedded files, HTTP MCP accepted, SSE MCP accepted'
+      })
+    ).toBeInTheDocument()
+  })
 })
 
 function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}) {

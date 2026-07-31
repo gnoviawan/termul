@@ -9,6 +9,7 @@ import {
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
+import { AgentCapabilitiesBadge } from '@/components/chat/AgentCapabilitiesBadge'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
@@ -162,11 +163,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     activeConfigId ? (s.agentOptionsCache[activeConfigId] ?? null) : null
   )
   const draftSession = useAcpSession(preparedSessionId)
-  const promptCaps = useAcpStore((s) =>
-    draftSession?.agentId
-      ? s.agents?.[draftSession.agentId]?.capabilities?.promptCapabilities
-      : undefined
+  const negotiatedCapabilities = useAcpStore((s) =>
+    draftSession?.agentId ? s.agents?.[draftSession.agentId]?.capabilities : null
   )
+  const promptCaps = negotiatedCapabilities?.promptCapabilities
   const imageCapable = Boolean(promptCaps?.image)
   const embedCapable = Boolean(promptCaps?.embeddedContext)
   const composerDisabled =
@@ -971,6 +971,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     label="Agent"
                   />
                 )}
+                <AgentCapabilitiesBadge
+                  image={promptCaps?.image}
+                  audio={promptCaps?.audio}
+                  embeddedContext={promptCaps?.embeddedContext}
+                  mcpCapabilities={negotiatedCapabilities?.mcpCapabilities}
+                />
                 <button
                   type="button"
                   onClick={() => launch()}
