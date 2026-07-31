@@ -63,6 +63,10 @@ function looksLikeFilePath(text: string): boolean {
   return text.includes('/') || text.includes('\\') || /^[A-Za-z]:/.test(text)
 }
 
+function trimTrailingPathPunctuation(value: string): string {
+  return value.replace(/[.,;!?]+$/, '')
+}
+
 function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
   const tokenStart = line.slice(0, start).search(/\S+$/)
   if (tokenStart < 0) {
@@ -97,7 +101,7 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
   }
 
   for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
-    let text = match[0]
+    let text = trimTrailingPathPunctuation(match[0])
     let start = match.index ?? -1
     const closing = wrapperEnd[text[0] ?? '']
     if (closing && line[start + text.length] === closing) {
