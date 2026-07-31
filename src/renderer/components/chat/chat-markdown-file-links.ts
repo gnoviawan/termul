@@ -44,7 +44,7 @@ function splitTextNode(node: MarkdownNode): MarkdownNode[] {
 
 function transformNode(node: MarkdownNode): MarkdownNode[] {
   if (node.type === 'text') return splitTextNode(node)
-  if (node.type === 'code' || node.type === 'link' || !node.children) return [node]
+  if (node.type === 'code' || node.type === 'link') return [node]
 
   if (node.type === 'inlineCode') {
     const value = node.value ?? ''
@@ -55,6 +55,7 @@ function transformNode(node: MarkdownNode): MarkdownNode[] {
     return [node]
   }
 
+  if (!node.children) return [node]
   node.children = node.children.flatMap(transformNode)
   return [node]
 }
