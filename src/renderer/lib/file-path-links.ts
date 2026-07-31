@@ -39,7 +39,7 @@ export interface TerminalPathLink {
 }
 
 const FILE_PATH_LINK_REGEX =
-  /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])*[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
+  /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])+[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
 
 const URI_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 
@@ -64,16 +64,14 @@ function looksLikeFilePath(text: string): boolean {
 }
 
 function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
-  if (!text.startsWith('/')) {
-    return false
-  }
-
   const tokenStart = line.slice(0, start).search(/\S+$/)
   if (tokenStart < 0) {
     return false
   }
 
-  const tokenPrefix = line.slice(tokenStart, start + 1).replace(/^[`"'([{]+/, '')
+  const tokenPrefix = line
+    .slice(tokenStart, start + (text.startsWith('/') ? 1 : 0))
+    .replace(/^[`"'([{]+/, '')
   return URI_SCHEME_REGEX.test(tokenPrefix)
 }
 

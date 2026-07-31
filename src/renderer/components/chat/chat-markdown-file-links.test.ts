@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import { findFilePathMatches } from '@/lib/file-path-links'
 import { filePathFromHref, filePathHref, remarkFilePathLinks } from './chat-markdown-file-links'
 
 describe('chat markdown file links', () => {
+  it('only linkifies path-shaped tokens', () => {
+    expect(findFilePathMatches('See src/App.tsx:42 and ./main.ts')).toEqual([
+      { text: 'src/App.tsx:42', start: 4 },
+      { text: './main.ts', start: 23 }
+    ])
+    expect(findFilePathMatches('https://example.com/src/App.tsx')).toEqual([])
+  })
+
   it('encodes and decodes path markers', () => {
     const href = filePathHref('src/renderer/App.tsx:42')
     expect(filePathFromHref(href)).toBe('src/renderer/App.tsx:42')

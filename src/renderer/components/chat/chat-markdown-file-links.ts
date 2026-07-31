@@ -46,15 +46,6 @@ function transformNode(node: MarkdownNode): MarkdownNode[] {
   if (node.type === 'text') return splitTextNode(node)
   if (node.type === 'code' || node.type === 'link') return [node]
 
-  if (node.type === 'inlineCode') {
-    const value = node.value ?? ''
-    const matches = findFilePathMatches(value)
-    if (matches.length === 1 && matches[0]?.start === 0 && matches[0].text === value) {
-      return [{ type: 'link', title: null, url: filePathHref(value), children: [node] }]
-    }
-    return [node]
-  }
-
   if (!node.children) return [node]
   node.children = node.children.flatMap(transformNode)
   return [node]
