@@ -1585,6 +1585,23 @@ mod tests {
         assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
     }
 
+    /// `/fs/read` refuses a file larger than `MAX_FILE_SIZE` (1 MiB) with
+    /// `FILE_TOO_LARGE` BEFORE reading any bytes (matches the desktop
+    /// facade's size guard).
+    #[tokio::test]
+    async fn read_rejects_file_too_large() {
+        let root = TempDir::new("read-large-root");
+        let file = root.path().join("huge.txt");
+        // One byte over the 1 MiB cap; refused before the read.
+        let bytes = vec![b'x'; (MAX_FILE_SIZE + 1) as usize];
+        fs::write(&file, &bytes).expect("write large file");
+        let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "oversized file must be refused before reading");
+        assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
+    }
+
     /// `/fs/delete` removes a file inside the project root.
     #[tokio::test]
     async fn delete_removes_file() {
@@ -1665,6 +1682,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
     }
 
+    /// `/fs/rename` is loopback-guarded: a non-loopback peer is refused with
+    /// `FORBIDDEN` (same guard as `delete`/`mkdir`/`write`). The source is
+    /// not moved.
+    #[tokio::test]
+    async fn rename_rejects_non_loopback_peer() {
+        let root = TempDir::new("rename-peer-root");
+        let from = root.path().join("a.txt");
+        let to = root.path().join("b.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json_from(
+            test_state_with_root(root.path()),
+            "/fs/rename",
+            &req_body,
+            SocketAddr::from(([192, 168, 1, 10], 54321)),
+        )
+        .await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback rename must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(from.exists(), "refused rename must not move the source");
+        assert!(!to.exists(), "refused rename must not create the destination");
+    }
+
     /// `/fs/rename` allows a destination outside the project root (the jail
     /// was removed; matches `mkdir`/`write`). The source is actually moved.
     #[tokio::test]
@@ -1697,6 +1738,29 @@ mod tests {
         assert!(from.exists(), "source must remain after copy");
         assert!(to.exists(), "destination must exist after copy");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    /// `/fs/copy` is loopback-guarded: a non-loopback peer is refused with
+    /// `FORBIDDEN` (same guard as `delete`/`rename`). No copy is written.
+    #[tokio::test]
+    async fn copy_rejects_non_loopback_peer() {
+        let root = TempDir::new("copy-peer-root");
+        let from = root.path().join("orig.txt");
+        let to = root.path().join("dup.txt");
+        fs::write(&from, "payload").expect("write from");
+        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let resp = post_json_from(
+            test_state_with_root(root.path()),
+            "/fs/copy",
+            &req_body,
+            SocketAddr::from(([192, 168, 1, 10], 54321)),
+        )
+        .await;
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback copy must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        assert!(from.exists(), "refused copy must not remove the source");
+        assert!(!to.exists(), "refused copy must not create the destination");
     }
 
     /// `/fs/copy` allows a destination outside the project root (the jail was

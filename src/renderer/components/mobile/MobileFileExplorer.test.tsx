@@ -213,7 +213,6 @@ describe('MobileFileExplorer', () => {
     fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
     fireEvent.click(await screen.findByText('Delete'))
 
-    // ConfirmDialog confirm button is labelled "Delete" (confirmLabel="Delete").
     // The delete confirm is a Radix AlertDialog (stacks above the Sheet so it
     // stays accessible — a plain overlay inside #root would be aria-hidden by
     // the Sheet's inert). Scope the confirm button within the alertdialog to
@@ -229,6 +228,63 @@ describe('MobileFileExplorer', () => {
     )
     await waitFor(() => expect(mockCloseFile).toHaveBeenCalledWith('/proj/doomed.txt'))
     await waitFor(() => expect(mockRemoveTab).toHaveBeenCalledWith('edit-/proj/doomed.txt'))
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+  })
+
+  it('renames a file via Enter using the parentOf-derived target and reconciles the open tab', async () => {
+    const file = entry('old.txt', 'file')
+    setRoot([file])
+    mockEditorStore.openFiles.set('/proj/old.txt', { isDirty: false })
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByLabelText('Actions for old.txt'))
+    fireEvent.click(await screen.findByText('Rename'))
+    const input = await screen.findByLabelText('Rename old.txt')
+    fireEvent.change(input, { target: { value: 'new.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // parentOf('/proj/old.txt') = '/proj' → '/proj/new.txt'.
+    await waitFor(() =>
+      expect(mockRenameFile).toHaveBeenCalledWith('/proj/old.txt', '/proj/new.txt')
+    )
+    // Clearing rename state before the await prevents a double submit.
+    expect(mockRenameFile).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(mockCloseFile).toHaveBeenCalledWith('/proj/old.txt'))
+    await waitFor(() => expect(mockRemoveTab).toHaveBeenCalledWith('edit-/proj/old.txt'))
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+  })
+
+  it('renames a file via blur using the parentOf-derived target path', async () => {
+    const file = entry('old.txt', 'file')
+    setRoot([file])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByLabelText('Actions for old.txt'))
+    fireEvent.click(await screen.findByText('Rename'))
+    const input = await screen.findByLabelText('Rename old.txt')
+    fireEvent.change(input, { target: { value: 'new.txt' } })
+    fireEvent.blur(input)
+
+    await waitFor(() =>
+      expect(mockRenameFile).toHaveBeenCalledWith('/proj/old.txt', '/proj/new.txt')
+    )
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+  })
+
+  it('duplicates a file into "<stem> copy<ext>" at the parentOf-derived path', async () => {
+    const file = entry('note.txt', 'file')
+    setRoot([file])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    fireEvent.click(await screen.findByLabelText('Actions for note.txt'))
+    fireEvent.click(await screen.findByText('Duplicate'))
+
+    await waitFor(() =>
+      expect(mockCopyFile).toHaveBeenCalledWith('/proj/note.txt', '/proj/note copy.txt')
+    )
     await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
   })
 

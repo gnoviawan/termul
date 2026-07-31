@@ -279,9 +279,14 @@ export function MobileFileExplorer({
             </Button>
           </div>
         )}
-        {entry.type === 'directory' && isExpanded && renderEntries(entry.path, depth + 1)}
-        {entry.type === 'directory' && isLoading && !directoryContents.has(entry.path) && (
-          <div className="px-4 py-2 text-xs text-muted-foreground">Loading…</div>
+        {entry.type === 'directory' && isExpanded && (
+          // biome-ignore lint/a11y/useSemanticElements: ARIA tree pattern groups a treeitem's expanded children under role="group"; <fieldset> is a form-grouping element, not appropriate for tree structure
+          <div role="group">
+            {renderEntries(entry.path, depth + 1)}
+            {isLoading && !directoryContents.has(entry.path) && (
+              <div className="px-4 py-2 text-xs text-muted-foreground">Loading…</div>
+            )}
+          </div>
         )}
       </div>
     )

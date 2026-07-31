@@ -106,6 +106,7 @@ export function MobileChatShell({
             size="icon"
             className="size-10 shrink-0"
             aria-label="Browse files"
+            aria-expanded={filesOpen}
             onClick={() => setFilesOpen(true)}
           >
             <FolderTree size={20} />
