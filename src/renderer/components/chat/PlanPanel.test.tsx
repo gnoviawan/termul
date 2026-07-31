@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 import { PlanPanel } from './PlanPanel'
 
@@ -49,5 +50,31 @@ describe('PlanPanel', () => {
 
     rerender(<PlanPanel entries={[{ content: 'Task 0', status: 'completed' }]} />)
     expect(screen.getByText('Task 0')).toHaveClass('line-through')
+  })
+
+  it('keeps detail and status paired when entries reorder', () => {
+    function ReorderablePlan(): React.JSX.Element {
+      const [entries, setEntries] = useState([
+        { content: 'First task', detail: 'First detail', status: 'pending' },
+        { content: 'Second task', detail: 'Second detail', status: 'completed' }
+      ])
+
+      return (
+        <>
+          <button type="button" onClick={() => setEntries([...entries].reverse())}>
+            Reorder
+          </button>
+          <PlanPanel entries={entries} />
+        </>
+      )
+    }
+
+    render(<ReorderablePlan />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reorder' }))
+    fireEvent.click(screen.getByRole('button', { name: /First task/ }))
+
+    expect(screen.getByText('First detail')).toBeVisible()
+    expect(screen.getByText('First task').parentElement).not.toHaveClass('line-through')
+    expect(screen.getByText('Second task')).toHaveClass('line-through')
   })
 })

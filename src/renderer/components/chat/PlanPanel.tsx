@@ -60,6 +60,11 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
   )
 }
 
+function getPlanEntryIdentity(entry: PlanEntry): string {
+  const id = entry.id
+  return typeof id === 'string' && id.trim() ? id : entry.content
+}
+
 function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
   return (
     <>
@@ -118,10 +123,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 >
                   {entries.map((entry, i) => {
                     const detail = getPlanDetail(entry)
-                    const hasStableId = typeof entry.id === 'string' && entry.id.length > 0
-                    const entryId = hasStableId ? entry.id : `${entry.content}-${i}`
-                    const entryValue = `entry-${entryId}`
-                    const key = entryValue
+                    const entryValue = `entry-${getPlanEntryIdentity(entry)}`
                     const motionProps = {
                       initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' },
                       animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' },
@@ -132,7 +134,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                     }
 
                     return detail ? (
-                      <motion.div key={key} {...motionProps}>
+                      <motion.div key={entryValue} {...motionProps}>
                         <AccordionItem value={entryValue} className="border-0">
                           <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
                             <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -146,7 +148,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                       </motion.div>
                     ) : (
                       <motion.div
-                        key={key}
+                        key={entryValue}
                         {...motionProps}
                         className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
                       >
