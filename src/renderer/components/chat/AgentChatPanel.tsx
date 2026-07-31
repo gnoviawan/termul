@@ -6,7 +6,14 @@ import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
-import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import type {
+  AgentCapabilities,
+  AvailableCommand,
+  ContentBlock,
+  PlanEntry,
+  SessionId,
+  ToolCall
+} from '@/lib/acp-api'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
@@ -72,14 +79,11 @@ export function AgentChatPanel({
 }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
-  const imageCapable = useAcpStore((s) =>
-    session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
+  const negotiatedCapabilities = useAcpStore((s): AgentCapabilities | null =>
+    session ? (s.agents[session.agentId]?.capabilities ?? null) : null
   )
-  const embedCapable = useAcpStore((s) =>
-    session
-      ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.embeddedContext)
-      : false
-  )
+  const imageCapable = Boolean(negotiatedCapabilities?.promptCapabilities?.image)
+  const embedCapable = Boolean(negotiatedCapabilities?.promptCapabilities?.embeddedContext)
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
@@ -446,6 +450,8 @@ export function AgentChatPanel({
         disabled={isClosed}
         imageCapable={imageCapable}
         embedCapable={embedCapable}
+        promptCapabilities={negotiatedCapabilities?.promptCapabilities}
+        mcpCapabilities={negotiatedCapabilities?.mcpCapabilities}
         onSend={handleSend}
         onSendBlocks={handleSendBlocks}
         onCancel={handleCancel}

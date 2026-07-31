@@ -29,6 +29,7 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store'
+import { AgentCapabilitiesBadge } from './AgentCapabilitiesBadge'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -78,6 +79,10 @@ interface ChatInputBarProps {
   imageCapable?: boolean
   /** Whether the agent accepts embedded `resource` blocks (drag/paste text files). */
   embedCapable?: boolean
+  /** Negotiated prompt capabilities shown in the read-only capability summary. */
+  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
+  /** Negotiated MCP transport capabilities shown in the read-only capability summary. */
+  mcpCapabilities?: { http?: boolean; sse?: boolean } | null
   onSend: (text: string) => void
   /** Send a prompt carrying structured content blocks (text + attachments). */
   onSendBlocks: (blocks: ContentBlock[]) => void
@@ -109,6 +114,8 @@ export function ChatInputBar({
   disabled,
   imageCapable = false,
   embedCapable = false,
+  promptCapabilities,
+  mcpCapabilities,
   onSend,
   onSendBlocks,
   onCancel,
@@ -440,7 +447,22 @@ export function ChatInputBar({
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
   )
 
+  const capabilitiesBadge = (
+    <AgentCapabilitiesBadge
+      image={promptCapabilities?.image}
+      audio={promptCapabilities?.audio}
+      embeddedContext={promptCapabilities?.embeddedContext}
+      mcpCapabilities={mcpCapabilities}
+    />
+  )
   const mcpBadge = <McpBadge count={mcpCount} />
+  const hasCapabilities = Boolean(
+    promptCapabilities?.image ||
+      promptCapabilities?.audio ||
+      promptCapabilities?.embeddedContext ||
+      mcpCapabilities?.http ||
+      mcpCapabilities?.sse
+  )
 
   return (
     <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-3.5 pt-3')}>
@@ -551,7 +573,7 @@ export function ChatInputBar({
                   const agentModesAvailable =
                     session.modes != null && session.modes.availableModes.length > 0
                   const hasRow1 = agentModesAvailable || Boolean(modelChip)
-                  const hasRow2 = hasConfigOptions || mcpCount > 0
+                  const hasRow2 = hasConfigOptions || mcpCount > 0 || hasCapabilities
                   if (!hasRow1 && !hasRow2) return null
                   return (
                     <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -572,6 +594,7 @@ export function ChatInputBar({
                           {thoughtChip}
                           {genericChips}
                           {mcpBadge}
+                          {capabilitiesBadge}
                         </div>
                       )}
                     </div>
@@ -587,6 +610,7 @@ export function ChatInputBar({
                   {genericChips}
                   {agentModeChip}
                   {mcpBadge}
+                  {capabilitiesBadge}
                 </div>
               )}
               <div
