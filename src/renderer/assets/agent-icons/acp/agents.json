@@ -81,11 +81,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.47",
+    "version": "3.0.48",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.47",
+        "package": "cline@3.0.48",
         "args": ["--acp"]
       }
     }
@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.184.0",
+    "version": "0.186.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.184.0",
+        "package": "droid@0.186.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -348,11 +348,11 @@
   {
     "id": "fast-agent",
     "name": "fast-agent",
-    "version": "0.9.28",
+    "version": "0.9.29",
     "description": "Code and build agents with comprehensive multi-provider support",
     "distribution": {
       "uvx": {
-        "package": "fast-agent-acp==0.9.28",
+        "package": "fast-agent-acp==0.9.29",
         "args": ["-x"]
       }
     }
@@ -360,11 +360,11 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.53.0",
+    "version": "0.53.1",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.53.0",
+        "package": "@google/gemini-cli@0.53.1",
         "args": ["--acp"]
       }
     }
@@ -372,11 +372,11 @@
   {
     "id": "github-copilot-cli",
     "name": "GitHub Copilot",
-    "version": "1.0.76",
+    "version": "1.0.77",
     "description": "GitHub's AI pair programmer",
     "distribution": {
       "npx": {
-        "package": "@github/copilot@1.0.76",
+        "package": "@github/copilot@1.0.77",
         "args": ["--acp"]
       }
     }
@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "0.2.117",
+    "version": "0.2.118",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@0.2.117",
+        "package": "@xai-official/grok@0.2.118",
         "args": ["agent", "stdio"]
       }
     }
@@ -438,33 +438,33 @@
   {
     "id": "harn",
     "name": "Harn",
-    "version": "0.10.45",
+    "version": "0.10.47",
     "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-aarch64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-aarch64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "darwin-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-aarch64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "windows-x86_64": {
           "cmd": "harn.exe",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.45/harn-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.47/harn-x86_64-pc-windows-msvc.zip",
           "args": ["serve", "acp"]
         }
       }
@@ -629,11 +629,11 @@
   {
     "id": "nova",
     "name": "Nova",
-    "version": "1.1.29",
+    "version": "1.1.30",
     "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
     "distribution": {
       "npx": {
-        "package": "@compass-ai/nova@1.1.29",
+        "package": "@compass-ai/nova@1.1.30",
         "args": ["acp"]
       }
     }
@@ -692,38 +692,38 @@
   {
     "id": "poolside",
     "name": "Poolside",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "description": "Poolside's coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./pool-darwin-arm64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-darwin-arm64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-darwin-arm64.tar.gz",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./pool-darwin-amd64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-darwin-amd64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-darwin-amd64.tar.gz",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./pool-linux-arm64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-linux-arm64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./pool-linux-amd64",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-linux-amd64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-linux-amd64.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./pool-windows-arm64.exe",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-windows-arm64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-windows-arm64.tar.gz",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./pool-windows-amd64.exe",
-          "archive": "https://downloads.poolside.ai/pool/v1.0.13/pool-windows-amd64.tar.gz",
+          "archive": "https://downloads.poolside.ai/pool/v1.0.14/pool-windows-amd64.tar.gz",
           "args": ["acp"]
         }
       }
@@ -744,11 +744,11 @@
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.1",
+    "version": "0.21.2",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.1",
+        "package": "@qwen-code/qwen-code@0.21.2",
         "args": ["--acp", "--experimental-skills"]
       }
     }
