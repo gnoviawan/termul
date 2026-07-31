@@ -16,6 +16,9 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: vi.fn(() => true),
   cleanupTauriListener: vi.fn()
 }))
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
 vi.mock('@/lib/acp-agents-persistence', async (orig) => {
   const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
   return {
@@ -78,6 +81,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { logFrontendError } from '@/lib/log-api'
 import {
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
@@ -4356,6 +4360,20 @@ describe('ACP agent plan store', () => {
     vi.mocked(invoke).mockResolvedValue(undefined)
     await useAcpStore.getState().closeSession('sess-1')
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+
+  it('logs close failures while still closing the session locally', async () => {
+    seedSession('sess-close-failure', 'agent-1', false)
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('agent rejected session/close'))
+
+    await useAcpStore.getState().closeSession('sess-close-failure')
+
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'acp.closeSession',
+      message: 'Failed to close session sess-close-failure: Error: agent rejected session/close'
+    })
+    expect(useAcpStore.getState().sessions['sess-close-failure']?.status).toBe('closed')
   })
 
   it('_onSessionClosed clears cached plan for the session', () => {

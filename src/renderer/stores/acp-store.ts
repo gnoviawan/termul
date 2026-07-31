@@ -108,6 +108,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { syncChatHistory } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { logFrontendError } from '@/lib/log-api'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
@@ -2490,8 +2491,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (session && session.status !== 'closed') {
       try {
         await acpApi.closeSession(session.agentId, sessionId)
-      } catch {
-        // close may fail if the agent lacks the capability; mark closed locally regardless
+      } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.closeSession',
+          message: `Failed to close session ${sessionId}: ${String(error)}`
+        })
       }
     }
     // Reclaim app-owned temp files (pasted screenshots) staged for this session
