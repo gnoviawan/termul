@@ -61,13 +61,19 @@ impl TerminalBuffer {
     }
 
     fn snapshot(&self) -> (String, bool) {
-        (String::from_utf8_lossy(&self.bytes).into_owned(), self.truncated)
+        (
+            String::from_utf8_lossy(&self.bytes).into_owned(),
+            self.truncated,
+        )
     }
 }
 
 /// A live (or completed) terminal: its child process handle, shared output
 /// buffer, and a cached exit status (set once the process is observed exited).
 struct AcpTerminal {
+    /// Session that created this terminal. Terminal ids are only unique within
+    /// an agent, so every follow-up request must also match this owner.
+    session_id: String,
     /// `None` while a `wait_exit` is in flight (the child is being awaited
     /// outside the registry lock) or after the process has been reaped.
     child: Option<tokio::process::Child>,
@@ -92,6 +98,7 @@ impl TerminalRegistry {
     /// Spawn a command and begin capturing its combined stdout+stderr.
     pub fn create(
         &mut self,
+        session_id: &str,
         command: &str,
         args: &[String],
         env: &[(String, String)],
@@ -168,6 +175,7 @@ impl TerminalRegistry {
         self.terminals.insert(
             id,
             AcpTerminal {
+                session_id: session_id.to_string(),
                 child: Some(child),
                 buffer,
                 exit: None,
@@ -180,12 +188,16 @@ impl TerminalRegistry {
     /// Non-blocking: uses `try_wait` to observe (and cache) exit without blocking.
     pub fn output(
         &mut self,
+        session_id: &str,
         id: &TerminalId,
     ) -> Result<(String, bool, Option<TerminalExitStatus>), String> {
         let term = self
             .terminals
             .get_mut(id.0.as_ref())
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
         if term.exit.is_none() {
             if let Some(child) = term.child.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -204,12 +216,16 @@ impl TerminalRegistry {
     /// - `Err` if the terminal id is unknown.
     pub fn take_child_for_wait(
         &mut self,
+        session_id: &str,
         id: &TerminalId,
     ) -> Result<Option<tokio::process::Child>, String> {
         let term = self
             .terminals
             .get_mut(id.0.as_ref())
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
         if term.exit.is_some() {
             return Ok(None);
         }
@@ -218,25 +234,50 @@ impl TerminalRegistry {
 
     /// The cached exit status for a terminal, if known.
     #[must_use]
-    pub fn cached_exit(&self, id: &TerminalId) -> Option<TerminalExitStatus> {
-        self.terminals.get(id.0.as_ref()).and_then(|t| t.exit.clone())
+    pub fn cached_exit(
+        &self,
+        session_id: &str,
+        id: &TerminalId,
+    ) -> Result<Option<TerminalExitStatus>, String> {
+        let term = self
+            .terminals
+            .get(id.0.as_ref())
+            .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
+        Ok(term.exit.clone())
     }
 
     /// Record a terminal's observed exit status (and that it is reaped). Called
     /// after awaiting the child taken via [`take_child_for_wait`].
-    pub fn record_exit(&mut self, id: &TerminalId, status: TerminalExitStatus) {
-        if let Some(term) = self.terminals.get_mut(id.0.as_ref()) {
-            term.exit = Some(status);
-            term.child = None;
-        }
-    }
-
-    /// Kill the process but keep its buffer + exit status queryable.
-    pub fn kill(&mut self, id: &TerminalId) -> Result<(), String> {
+    pub fn record_exit(
+        &mut self,
+        session_id: &str,
+        id: &TerminalId,
+        status: TerminalExitStatus,
+    ) -> Result<(), String> {
         let term = self
             .terminals
             .get_mut(id.0.as_ref())
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
+        term.exit = Some(status);
+        term.child = None;
+        Ok(())
+    }
+
+    /// Kill the process but keep its buffer + exit status queryable.
+    pub fn kill(&mut self, session_id: &str, id: &TerminalId) -> Result<(), String> {
+        let term = self
+            .terminals
+            .get_mut(id.0.as_ref())
+            .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
         if let Some(child) = term.child.as_mut() {
             let _ = child.start_kill();
             // Reap if it has already exited so we don't leave a zombie; the
@@ -251,11 +292,18 @@ impl TerminalRegistry {
     }
 
     /// Release a terminal: kill if still running and drop all its resources.
-    pub fn release(&mut self, id: &TerminalId) -> Result<(), String> {
+    pub fn release(&mut self, session_id: &str, id: &TerminalId) -> Result<(), String> {
+        let term = self
+            .terminals
+            .get(id.0.as_ref())
+            .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        if term.session_id != session_id {
+            return Err(format!("terminal does not belong to session: {}", id.0));
+        }
         let mut term = self
             .terminals
             .remove(id.0.as_ref())
-            .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+            .expect("terminal was checked above");
         if let Some(child) = term.child.take() {
             reap(child);
         }
@@ -335,6 +383,26 @@ mod tests {
         let decoded = String::from_utf8(out).expect("valid utf-8 after truncation");
         assert!(decoded.len() <= 5);
         assert!(decoded.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn registry_rejects_wrong_session_for_terminal_operations() {
+        let mut registry = TerminalRegistry::new();
+        let id = TerminalId::new("term-test");
+        registry.terminals.insert(
+            id.0.to_string(),
+            AcpTerminal {
+                session_id: "session-a".to_string(),
+                child: None,
+                buffer: Arc::new(Mutex::new(TerminalBuffer::default())),
+                exit: None,
+            },
+        );
+        assert!(registry.output("session-b", &id).is_err());
+        assert!(registry.take_child_for_wait("session-b", &id).is_err());
+        assert!(registry.kill("session-b", &id).is_err());
+        assert!(registry.release("session-b", &id).is_err());
+        registry.release("session-a", &id).unwrap();
     }
 
     #[test]

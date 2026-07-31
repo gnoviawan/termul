@@ -69,8 +69,8 @@ import {
   type SessionModeState,
   type SessionReopenOutcome,
   type SessionUsage,
-  type TerminalOutputEvent,
   type StopReason,
+  type TerminalOutputEvent,
   type ToolCall,
   type ToolCallEvent,
   type ToolCallUpdateEvent,
@@ -290,6 +290,8 @@ interface AcpState {
   // Per-session conversation state
   messages: Record<SessionId, ChatMessage[]>
   toolCalls: Record<SessionId, ToolCall[]>
+  /** Terminal snapshots that arrived before their tool-call notification. */
+  terminalOutputs: Record<SessionId, Record<string, TerminalOutputEvent>>
   /** ACP agent-plan entries per session (`session/update` plan, full replace). */
   plans: Record<SessionId, PlanEntry[]>
   commands: Record<SessionId, AvailableCommand[]>
@@ -819,9 +821,15 @@ function mergeTranscriptMessages(cached: ChatMessage[], live: ChatMessage[]): Ch
  * Call only after any needed `persistSession` so the last mirror is flushed.
  */
 function dropSessionTranscriptState(
-  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
+  state: Pick<
+    AcpState,
+    'messages' | 'toolCalls' | 'terminalOutputs' | 'commands' | 'sessionUsage' | 'plans'
+  >,
   sessionId: SessionId
-): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
+): Pick<
+  AcpState,
+  'messages' | 'toolCalls' | 'terminalOutputs' | 'commands' | 'sessionUsage' | 'plans'
+> {
   // Drop per-session module-level bookkeeping too so a closed/deleted session
   // never leaks a backfill allowance or an in-flight load guard.
   backfillCounts.delete(sessionId)
@@ -829,6 +837,7 @@ function dropSessionTranscriptState(
   return {
     messages: dropRecordKey(state.messages, sessionId),
     toolCalls: dropRecordKey(state.toolCalls, sessionId),
+    terminalOutputs: dropRecordKey(state.terminalOutputs, sessionId),
     commands: dropRecordKey(state.commands, sessionId),
     sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
     plans: dropRecordKey(state.plans, sessionId)
@@ -2228,6 +2237,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   sessionUsage: {},
   messages: {},
   toolCalls: {},
+  terminalOutputs: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
@@ -3935,9 +3945,32 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // pattern in `_onToolCallUpdate` below.
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.toolCall.toolCallId)
+      const terminalId = stamped.content?.find(
+        (item): item is { type: 'terminal'; terminalId?: string } =>
+          item.type === 'terminal' && typeof item.terminalId === 'string'
+      )?.terminalId
+      const pendingOutput = terminalId ? s.terminalOutputs[e.sessionId]?.[terminalId] : undefined
+      const stampedWithOutput = pendingOutput
+        ? {
+            ...stamped,
+            terminalOutput: pendingOutput.output,
+            terminalTruncated: pendingOutput.truncated,
+            terminalExitStatus: pendingOutput.exitStatus ?? null
+          }
+        : stamped
+      const clearPendingOutput = (): Partial<AcpState> => {
+        if (!pendingOutput || !terminalId) return {}
+        const sessionOutputs = { ...(s.terminalOutputs[e.sessionId] ?? {}) }
+        delete sessionOutputs[terminalId]
+        const terminalOutputs = { ...s.terminalOutputs }
+        if (Object.keys(sessionOutputs).length > 0) terminalOutputs[e.sessionId] = sessionOutputs
+        else delete terminalOutputs[e.sessionId]
+        return { terminalOutputs }
+      }
       if (idx === -1) {
         return {
-          toolCalls: { ...s.toolCalls, [e.sessionId]: [...list, stamped] }
+          toolCalls: { ...s.toolCalls, [e.sessionId]: [...list, stampedWithOutput] },
+          ...clearPendingOutput()
         }
       }
       // Preserve the original timeline placement: a replay (reconnect overlap)
@@ -3945,14 +3978,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // (title/status/content/...) win; the arrival-stamped seq + timestamp stay.
       const merged: ToolCall = {
         ...list[idx],
-        ...stamped,
+        ...stampedWithOutput,
         timestamp: list[idx].timestamp,
         seq: list[idx].seq
       }
       const next = [...list]
       next[idx] = merged
       return {
-        toolCalls: { ...s.toolCalls, [e.sessionId]: next }
+        toolCalls: { ...s.toolCalls, [e.sessionId]: next },
+        ...clearPendingOutput()
       }
     }
     if (useCoalesce) {
@@ -3971,9 +4005,33 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
       const merged = { ...list[idx], ...e.update }
+      const terminalId = merged.content?.find(
+        (item): item is { type: 'terminal'; terminalId?: string } =>
+          item.type === 'terminal' && typeof item.terminalId === 'string'
+      )?.terminalId
+      const pendingOutput = terminalId ? s.terminalOutputs[e.sessionId]?.[terminalId] : undefined
+      const nextTool = pendingOutput
+        ? {
+            ...merged,
+            terminalOutput: pendingOutput.output,
+            terminalTruncated: pendingOutput.truncated,
+            terminalExitStatus: pendingOutput.exitStatus ?? null
+          }
+        : merged
       const next = [...list]
-      next[idx] = merged
-      return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
+      next[idx] = nextTool
+      if (!pendingOutput || !terminalId) {
+        return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
+      }
+      const sessionOutputs = { ...(s.terminalOutputs[e.sessionId] ?? {}) }
+      delete sessionOutputs[terminalId]
+      const terminalOutputs = { ...s.terminalOutputs }
+      if (Object.keys(sessionOutputs).length > 0) terminalOutputs[e.sessionId] = sessionOutputs
+      else delete terminalOutputs[e.sessionId]
+      return {
+        toolCalls: { ...s.toolCalls, [e.sessionId]: next },
+        terminalOutputs
+      }
     }
     if (useCoalesce) {
       coalesceSet(e.sessionId, apply)
@@ -4056,25 +4114,40 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   _onTerminalOutput: (e) => {
-    const session = get().sessions[e.sessionId]
-    if (!session || session.agentId !== e.agentId) return
-    const list = get().toolCalls[e.sessionId] ?? []
-    const next = list.map((tool) => {
-      if (
-        !tool.content?.some((item) => item.type === 'terminal' && item.terminalId === e.terminalId)
-      ) {
-        return tool
-      }
+    set((s) => {
+      const session = s.sessions[e.sessionId]
+      if (session?.agentId !== e.agentId || !acceptsSessionTranscriptEvents(session)) return {}
+      const list = s.toolCalls[e.sessionId] ?? []
+      let matched = false
+      const next = list.map((tool) => {
+        if (
+          !tool.content?.some(
+            (item) => item.type === 'terminal' && item.terminalId === e.terminalId
+          )
+        ) {
+          return tool
+        }
+        matched = true
+        return {
+          ...tool,
+          terminalOutput: e.output,
+          terminalTruncated: e.truncated,
+          terminalExitStatus: e.exitStatus ?? null
+        }
+      })
+      if (matched) return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
+      // ACP may deliver terminal/output before the session/update tool call.
+      // Keep the bounded snapshot until that tool call lands, then attach it.
       return {
-        ...tool,
-        terminalOutput: e.output,
-        terminalTruncated: e.truncated,
-        terminalExitStatus: e.exitStatus ?? null
+        terminalOutputs: {
+          ...s.terminalOutputs,
+          [e.sessionId]: {
+            ...(s.terminalOutputs[e.sessionId] ?? {}),
+            [e.terminalId]: e
+          }
+        }
       }
     })
-    if (next.some((tool, i) => tool !== list[i])) {
-      set({ toolCalls: { ...get().toolCalls, [e.sessionId]: next } })
-    }
   },
 
   _onUsageUpdate: (e) => {
@@ -4342,8 +4415,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     if (dropTranscriptIds.length > 0) {
       set((s) => {
-        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> =
-          s
+        let next: Pick<
+          AcpState,
+          'messages' | 'toolCalls' | 'terminalOutputs' | 'commands' | 'sessionUsage' | 'plans'
+        > = s
         for (const id of dropTranscriptIds) {
           next = dropSessionTranscriptState(next, id)
         }

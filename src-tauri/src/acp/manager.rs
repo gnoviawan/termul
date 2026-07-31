@@ -35,9 +35,8 @@ use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
     McpServer, ModelId, NewSessionRequest, PromptRequest, ProtocolVersion,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome,
-    SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    SetSessionModelRequest, StopReason,
+    ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionModelState,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
@@ -515,10 +514,7 @@ impl AcpManager {
     /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
     /// unknown. Used by the switch-back reopen filter so only sessions owned
     /// by the same agent namespace are candidates (patch #4).
-    pub fn stable_agent_namespace(
-        &self,
-        agent_id: &AgentId,
-    ) -> Result<Option<String>, String> {
+    pub fn stable_agent_namespace(&self, agent_id: &AgentId) -> Result<Option<String>, String> {
         self.agents
             .lock()
             .get(agent_id)
@@ -1397,6 +1393,7 @@ async fn drive_connection(
                 let result = term_create
                     .lock()
                     .create(
+                        request.session_id.0.as_ref(),
                         &request.command,
                         &request.args,
                         &env,
@@ -1422,7 +1419,7 @@ async fn drive_connection(
                     return Ok(());
                 }
                 let session_id = request.session_id.0.to_string();
-                let snapshot = term_output.lock().output(&request.terminal_id);
+                let snapshot = term_output.lock().output(&session_id, &request.terminal_id);
                 if let Ok((output, truncated, exit_status)) = &snapshot {
                     let event = TerminalOutputEvent {
                         agent_id: term_output_agent_id.clone(),
@@ -1459,23 +1456,38 @@ async fn drive_connection(
                 // responsive. The child handle is taken out from under the lock
                 // first, so the registry mutex is NOT held across the await.
                 cx.spawn(async move {
-                    let taken = registry.lock().take_child_for_wait(&request.terminal_id);
+                    let session_id = request.session_id.0.to_string();
+                    let taken = registry
+                        .lock()
+                        .take_child_for_wait(&session_id, &request.terminal_id);
                     let result = match taken {
                         Err(e) => Err(agent_client_protocol::Error::internal_error().data(e)),
                         Ok(None) => {
                             // Already exited: return the cached status.
-                            match registry.lock().cached_exit(&request.terminal_id) {
-                                Some(status) => Ok(WaitForTerminalExitResponse::new(status)),
-                                None => Err(agent_client_protocol::Error::internal_error()
+                            match registry
+                                .lock()
+                                .cached_exit(&session_id, &request.terminal_id)
+                            {
+                                Ok(Some(status)) => Ok(WaitForTerminalExitResponse::new(status)),
+                                Ok(None) => Err(agent_client_protocol::Error::internal_error()
                                     .data("terminal has no exit status")),
+                                Err(e) => {
+                                    Err(agent_client_protocol::Error::internal_error().data(e))
+                                }
                             }
                         }
                         Ok(Some(mut child)) => match child.wait().await {
                             Ok(status) => {
                                 let exit = crate::acp::terminal::to_exit_status(status);
-                                registry
-                                    .lock()
-                                    .record_exit(&request.terminal_id, exit.clone());
+                                // `release` may remove the entry while this wait is
+                                // awaiting the child. The process result is still valid
+                                // for the caller, so do not turn that cleanup race into
+                                // a failed ACP wait response.
+                                let _ = registry.lock().record_exit(
+                                    &session_id,
+                                    &request.terminal_id,
+                                    exit.clone(),
+                                );
                                 Ok(WaitForTerminalExitResponse::new(exit))
                             }
                             Err(e) => Err(agent_client_protocol::Error::internal_error()
@@ -1495,7 +1507,7 @@ async fn drive_connection(
                 use agent_client_protocol::schema::KillTerminalResponse;
                 let result = term_kill
                     .lock()
-                    .kill(&request.terminal_id)
+                    .kill(request.session_id.0.as_ref(), &request.terminal_id)
                     .map(|()| KillTerminalResponse::new())
                     .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
                 let _ = responder.respond_with_result(result);
@@ -1510,7 +1522,7 @@ async fn drive_connection(
                 use agent_client_protocol::schema::ReleaseTerminalResponse;
                 let result = term_release
                     .lock()
-                    .release(&request.terminal_id)
+                    .release(request.session_id.0.as_ref(), &request.terminal_id)
                     .map(|()| ReleaseTerminalResponse::new())
                     .map_err(|e| agent_client_protocol::Error::internal_error().data(e));
                 let _ = responder.respond_with_result(result);
@@ -1570,8 +1582,7 @@ async fn run_command_loop(
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
             let auth_methods = to_auth_method_infos(&response.auth_methods);
-            let auth_method_ids: Vec<&str> =
-                auth_methods.iter().map(|m| m.id.as_str()).collect();
+            let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
@@ -1975,7 +1986,10 @@ async fn run_command_loop(
             }
 
             AcpCommand::OwnsSession { session_id, reply } => {
-                let _ = reply.send(Ok(driver_state.lock().session_root(&session_id.0).is_some()));
+                let _ = reply.send(Ok(driver_state
+                    .lock()
+                    .session_root(&session_id.0)
+                    .is_some()));
             }
 
             AcpCommand::IsTurnActive { session_id, reply } => {
@@ -2392,32 +2406,28 @@ mod tests {
         let response = LoadSessionResponse::new()
             .modes(modes.clone())
             .config_options(Vec::<SessionConfigOption>::new());
-        let outcome = run_session_reopen(
-            "session/load",
-            "sess-load",
-            "/work",
-            &state,
-            async move { Ok::<_, String>(response) },
-        )
-        .await
-        .unwrap();
+        let outcome =
+            run_session_reopen("session/load", "sess-load", "/work", &state, async move {
+                Ok::<_, String>(response)
+            })
+            .await
+            .unwrap();
 
         assert_eq!(outcome.modes, Some(modes));
         assert_eq!(outcome.models, None);
         assert_eq!(outcome.config_options, Some(vec![]));
-        assert_eq!(state.lock().session_root("sess-load"), Some(PathBuf::from("/work")));
+        assert_eq!(
+            state.lock().session_root("sess-load"),
+            Some(PathBuf::from("/work"))
+        );
     }
 
     #[tokio::test]
     async fn session_resume_reopen_preserves_omitted_fields() {
         let state = Mutex::new(DriverState::new());
-        let outcome = run_session_reopen(
-            "session/resume",
-            "sess-resume",
-            "/work",
-            &state,
-            async { Ok::<_, String>(ResumeSessionResponse::new()) },
-        )
+        let outcome = run_session_reopen("session/resume", "sess-resume", "/work", &state, async {
+            Ok::<_, String>(ResumeSessionResponse::new())
+        })
         .await
         .unwrap();
 
@@ -2429,7 +2439,10 @@ mod tests {
                 config_options: None,
             }
         );
-        assert_eq!(serde_json::to_value(&outcome).unwrap(), serde_json::json!({}));
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).

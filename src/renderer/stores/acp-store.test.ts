@@ -123,6 +123,7 @@ const FRESH = {
   sessionUsage: {},
   messages: {},
   toolCalls: {},
+  terminalOutputs: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
@@ -1074,6 +1075,64 @@ describe('acp-store', () => {
     // not the replay's fresh stamps — the card must not jump to a later position.
     expect(list[0].seq).toBe(originalSeq)
     expect(list[0].timestamp).toBe(originalTimestamp)
+  })
+
+  it('_onTerminalOutput attaches immediately and buffers before its tool call', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    const event = {
+      agentId: 'agent-1',
+      sessionId: 's1',
+      terminalId: 'term-1',
+      output: 'ready',
+      truncated: false,
+      exitStatus: { exitCode: 0 }
+    }
+
+    store._onTerminalOutput(event)
+    expect(useAcpStore.getState().terminalOutputs.s1?.['term-1']).toEqual(event)
+
+    store._onToolCall({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      toolCall: {
+        toolCallId: 'tc-terminal',
+        title: 'run',
+        status: 'completed',
+        content: [{ type: 'terminal', terminalId: 'term-1' }]
+      }
+    })
+    _flushCoalescedForTesting()
+
+    expect(useAcpStore.getState().toolCalls.s1?.[0]).toMatchObject({
+      terminalOutput: 'ready',
+      terminalTruncated: false,
+      terminalExitStatus: { exitCode: 0 }
+    })
+    expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
+  })
+
+  it('_onTerminalOutput ignores the wrong agent and closed session', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    const event = {
+      agentId: 'agent-2',
+      sessionId: 's1',
+      terminalId: 'term-1',
+      output: 'secret',
+      truncated: false
+    }
+    store._onTerminalOutput(event)
+    expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
+
+    useAcpStore.setState({
+      sessions: {
+        ...useAcpStore.getState().sessions,
+        s1: { ...useAcpStore.getState().sessions.s1, status: 'closed' }
+      }
+    })
+    store._onTerminalOutput({ ...event, agentId: 'agent-1' })
+    expect(useAcpStore.getState().terminalOutputs.s1).toBeUndefined()
   })
 
   it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
