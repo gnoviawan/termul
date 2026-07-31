@@ -9,6 +9,7 @@ describe('chat markdown file links', () => {
       { text: './main.ts', start: 23 }
     ])
     expect(findFilePathMatches('https://example.com/src/App.tsx')).toEqual([])
+    expect(findFilePathMatches('(src/App.tsx:42)')).toEqual([{ text: 'src/App.tsx:42', start: 1 }])
   })
 
   it('encodes and decodes path markers', () => {
