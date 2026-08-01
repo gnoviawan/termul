@@ -121,7 +121,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
-pub use acp::{AcpManager, FileProjectRegistry, SessionPersistence};
+pub use acp::{AcpManager, ChatHistoryStore, FileProjectRegistry, SessionPersistence};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -129,10 +129,7 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
-use web::{
-    ChatHistoryCache, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, TauriEventSink,
-    WsRelaySink,
-};
+use web::{PermissionRendezvous, ProjectRegistry, QuestionRendezvous, TauriEventSink, WsRelaySink};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1033,6 +1030,22 @@ pub fn run() {
                 Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager);
 
+            // Desktop renderer chat history lives outside tauri-plugin-store so
+            // loading unrelated preferences never materializes full transcripts
+            // in the WebView. The app-data path is mandatory for safe startup.
+            let chat_history_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("acp-chat-history");
+            let chat_history_store = ChatHistoryStore::open(chat_history_root)
+                .map_err(|error| format!("failed to open ACP chat history store: {error}"))?;
+            log::info!(
+                "[acp-history] store ready path={}",
+                chat_history_store.root().display()
+            );
+            app.manage(chat_history_store);
+
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
             // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
@@ -1087,14 +1100,6 @@ pub fn run() {
             // Lives only while the server runs; cleared on `remote_server_stop`.
             let project_registry = Arc::new(ProjectRegistry::new());
             app.manage(project_registry);
-
-            // In-memory chat-history cache (Epic-4 bridge) — renderer-fed via
-            // `remote_sync_chat_history`; the source for `list_persisted_sessions`
-            // + `get_session_payload` + switch-back reopen on the shared-live
-            // web server. Lives only while the server runs; cleared on
-            // `remote_server_stop`.
-            let chat_history_cache = Arc::new(ChatHistoryCache::new());
-            app.manage(chat_history_cache);
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -1370,6 +1375,7 @@ pub fn run() {
             acp::commands::acp_load_session,
             acp::commands::acp_resume_session,
             acp::commands::acp_close_session,
+            acp::commands::acp_dispose_ephemeral_session,
             acp::commands::acp_list_sessions,
             acp::commands::acp_send_prompt,
             acp::commands::acp_cancel_prompt,
@@ -1388,6 +1394,13 @@ pub fn run() {
             commands::remote_server_status,
             commands::remote_sync_projects,
             commands::remote_sync_chat_history,
+            // Desktop ACP renderer-history storage
+            commands::acp_history_list,
+            commands::acp_history_get,
+            commands::acp_history_save,
+            commands::acp_history_delete,
+            commands::acp_history_flush,
+            commands::acp_history_mark_legacy_import_complete,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])

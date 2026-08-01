@@ -134,6 +134,10 @@ class FakeWebSocket {
       void payload
       return
     }
+    if (req.type === 'dispose_ephemeral_session') {
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'load_session' || req.type === 'resume_session') {
       this.emitReply({ id: req.id, ok: true, payload: this.reopenOutcome })
       return
@@ -753,6 +757,33 @@ describe('WsAcpTransport', () => {
     }
     expect(frame.type).toBe('send_prompt')
     expect(frame.payload.turnId).toEqual(expect.any(String))
+    transport.dispose()
+  })
+
+  it('forwards ephemeral creation and disposal over WS', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.newSession('a1', '/work', undefined, { ephemeral: true })
+    await transport.disposeEphemeralSession('a1', 'sess-chatflow')
+
+    const frames = sock.sent.map((raw) => JSON.parse(raw) as { type: string; payload: unknown })
+    expect(frames).toContainEqual({
+      id: expect.any(String),
+      type: 'create_session',
+      payload: { agentId: 'a1', cwd: '/work', ephemeral: true }
+    })
+    expect(frames).toContainEqual({
+      id: expect.any(String),
+      type: 'dispose_ephemeral_session',
+      payload: { agentId: 'a1', sessionId: 'sess-chatflow' }
+    })
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false)
+    expect(transport.getSessionCursor('sess-chatflow')).toBeNull()
     transport.dispose()
   })
 

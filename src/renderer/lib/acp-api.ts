@@ -492,9 +492,10 @@ export async function acpListAgents(): Promise<AgentId[]> {
 export async function acpNewSession(
   agentId: AgentId,
   cwd: string,
-  mcpServers?: McpServer[]
+  mcpServers?: McpServer[],
+  options?: { ephemeral?: boolean }
 ): Promise<NewSessionOutcome> {
-  return getAcpTransport().newSession(agentId, cwd, mcpServers)
+  return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
 }
 
 export async function acpLoadSession(
@@ -515,6 +516,13 @@ export async function acpResumeSession(
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
   await getAcpTransport().closeSession(agentId, sessionId)
+}
+
+export async function acpDisposeEphemeralSession(
+  agentId: AgentId,
+  sessionId: SessionId
+): Promise<void> {
+  await getAcpTransport().disposeEphemeralSession(agentId, sessionId)
 }
 
 export async function acpListSessions(
@@ -614,6 +622,7 @@ export const acpApi = {
   loadSession: acpLoadSession,
   resumeSession: acpResumeSession,
   closeSession: acpCloseSession,
+  disposeEphemeralSession: acpDisposeEphemeralSession,
   listSessions: acpListSessions,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,

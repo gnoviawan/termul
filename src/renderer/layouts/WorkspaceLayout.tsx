@@ -46,7 +46,7 @@ import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
-import { waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
+import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -594,12 +594,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const closeAppWithPersistenceFlush = useCallback(async () => {
     try {
-      const [pendingAppSettingsResult, pendingPersistenceResult, pendingSessionIndexResult] =
-        await Promise.allSettled([
-          waitForPendingAppSettingsPersistence(),
-          persistenceApi.flushPendingWrites(),
-          waitForPendingSessionIndexWrite()
-        ])
+      const [
+        pendingAppSettingsResult,
+        pendingPersistenceResult,
+        pendingSessionIndexResult,
+        historyFlushResult
+      ] = await Promise.allSettled([
+        waitForPendingAppSettingsPersistence(),
+        persistenceApi.flushPendingWrites(),
+        waitForPendingSessionIndexWrite(),
+        flushSessionHistory()
+      ])
 
       if (pendingAppSettingsResult.status === 'rejected') {
         console.error(
@@ -617,6 +622,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
           'Failed to wait for session index persistence before close:',
           pendingSessionIndexResult.reason
         )
+      }
+
+      if (historyFlushResult.status === 'rejected') {
+        console.error('Failed to flush ACP history before close:', historyFlushResult.reason)
       }
 
       if (pendingPersistenceResult.status === 'fulfilled') {

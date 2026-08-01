@@ -170,6 +170,25 @@ Returns registered migrations.
 ### `data_migration_rollback`
 Runs rollback logic for a migration.
 
+## Desktop ACP Chat History Commands
+
+Desktop renderer chat history is stored under the Tauri app-data directory by a
+Rust-owned, versioned file store. The commands preserve the existing renderer
+`SessionIndexEntry` / `SessionPayload` JSON shape:
+
+- `acp_history_list` returns `{ sessions, legacyImportComplete }`.
+- `acp_history_get` returns one full payload or `null` when absent.
+- `acp_history_save` atomically replaces one payload and its lightweight index entry.
+- `acp_history_delete` removes the payload and index entry with serialized ordering.
+- `acp_history_flush` is the close-path durability barrier.
+- `acp_history_mark_legacy_import_complete` records verified legacy import completion.
+
+The legacy Tauri Store is read only by the one-shot renderer migration. ACP keys
+are deleted only after Rust list/get verification; unrelated preferences remain.
+Desktop-hosted browser `list_persisted_sessions` and `get_session_payload` read
+this durable provider directly, while the standalone server keeps its existing
+persistence path and wire format.
+
 ## Web Terminal WebSocket
 
 `GET /terminal/ws` upgrades to the browser terminal transport and is isolated from ACP `/ws`.

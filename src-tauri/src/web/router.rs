@@ -16,10 +16,9 @@ use axum::{
     Router,
 };
 
-use crate::acp::{AcpManager, FileProjectRegistry};
+use crate::acp::{AcpManager, ChatHistoryStore, FileProjectRegistry};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
-use crate::web::chat_history_cache::ChatHistoryCache;
 use crate::web::fs_api;
 use crate::web::mcp_servers_api;
 use crate::web::project_registry::ProjectRegistry;
@@ -53,7 +52,7 @@ pub fn router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
-    chat_history_cache: Option<Arc<ChatHistoryCache>>,
+    chat_history_store: Option<Arc<ChatHistoryStore>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     project_root: PathBuf,
@@ -101,7 +100,7 @@ pub fn router(
         exit_code_tracker,
         relay: ws_relay,
         registry,
-        chat_history_cache,
+        chat_history_store,
         registry_persistence,
         projects_file: projects_file.map(Arc::new),
         history_mode,
@@ -147,7 +146,7 @@ pub fn router_with_static(
             pty,
             relay: ws_relay,
             registry,
-            chat_history_cache: None,
+            chat_history_store: None,
             registry_persistence: None,
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,

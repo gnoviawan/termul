@@ -5,15 +5,17 @@ use crate::migrations::{
 use crate::path_validation;
 use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
 use crate::remote;
+use crate::trackers::{
+    CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitStatusDetail, GitTracker,
+};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
@@ -44,11 +46,7 @@ fn validate_project_path(path: &str) -> Result<PathBuf, String> {
 
     // Canonicalize to resolve symlinks and relative paths
     let canonical = path_buf.canonicalize().map_err(|e| {
-        log::warn!(
-            "[Security] Path validation failed for '{}': {}",
-            path,
-            e
-        );
+        log::warn!("[Security] Path validation failed for '{}': {}", path, e);
         format!("Invalid or inaccessible path: {}", e)
     })?;
 
@@ -69,7 +67,12 @@ macro_rules! validate_and_stringify {
         match validate_project_path($path) {
             Ok(validated) => match validated.to_str() {
                 Some(s) => s.to_string(),
-                None => return Ok(IpcResult::error("Path contains invalid UTF-8", "INVALID_PATH_ENCODING")),
+                None => {
+                    return Ok(IpcResult::error(
+                        "Path contains invalid UTF-8",
+                        "INVALID_PATH_ENCODING",
+                    ))
+                }
             },
             Err(e) => return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED")),
         }
@@ -192,8 +195,8 @@ pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
         return Err("Attachment path is not an image".to_string());
     }
 
-    let mut file = std::fs::File::open(&canonical)
-        .map_err(|e| format!("Failed to open attachment: {}", e))?;
+    let mut file =
+        std::fs::File::open(&canonical).map_err(|e| format!("Failed to open attachment: {}", e))?;
     let metadata = file
         .metadata()
         .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
@@ -402,9 +405,7 @@ pub async fn agent_registry_fetch(
 /// List all worktrees for a git repo at the given path.
 /// Filters out bare worktrees and detached-HEAD worktrees.
 #[tauri::command]
-pub async fn worktree_list(
-    project_path: String,
-) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
+pub async fn worktree_list(project_path: String) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::list(&validated_path) {
         Ok(entries) => {
@@ -461,11 +462,7 @@ pub async fn worktree_remove(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::remove(
-        &validated_project,
-        &validated_worktree,
-        force,
-    ) {
+    match WorktreeManager::remove(&validated_project, &validated_worktree, force) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -473,9 +470,7 @@ pub async fn worktree_remove(
 
 /// List local and remote branches for a git repo.
 #[tauri::command]
-pub async fn worktree_branches(
-    project_path: String,
-) -> Result<IpcResult<Vec<BranchInfo>>, String> {
+pub async fn worktree_branches(project_path: String) -> Result<IpcResult<Vec<BranchInfo>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::branches(&validated_path) {
         Ok(entries) => {
@@ -497,9 +492,7 @@ pub async fn worktree_branches(
 
 /// Check dirty status for a worktree checkout.
 #[tauri::command]
-pub async fn worktree_check_dirty(
-    worktree_path: String,
-) -> Result<IpcResult<DirtyStatus>, String> {
+pub async fn worktree_check_dirty(worktree_path: String) -> Result<IpcResult<DirtyStatus>, String> {
     let validated_path = validate_and_stringify!(&worktree_path);
     match WorktreeManager::check_dirty(&validated_path) {
         Ok(status) => Ok(IpcResult::success(status)),
@@ -562,11 +555,7 @@ pub async fn worktree_create_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::create_symlinks(
-        &validated_project,
-        &validated_worktree,
-        &dirs,
-    );
+    let results = WorktreeManager::create_symlinks(&validated_project, &validated_worktree, &dirs);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -598,11 +587,7 @@ pub async fn worktree_ensure_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::ensure_symlinks(
-        &validated_project,
-        &validated_worktree,
-        &dirs2,
-    );
+    let results = WorktreeManager::ensure_symlinks(&validated_project, &validated_worktree, &dirs2);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -623,10 +608,7 @@ pub async fn worktree_archive(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::archive(
-        &validated_project,
-        &validated_worktree,
-    ) {
+    match WorktreeManager::archive(&validated_project, &validated_worktree) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -640,10 +622,7 @@ pub async fn worktree_restore(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_archive = validate_and_stringify!(&archive_path);
-    match WorktreeManager::restore(
-        &validated_project,
-        &validated_archive,
-    ) {
+    match WorktreeManager::restore(&validated_project, &validated_archive) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -662,12 +641,16 @@ pub async fn worktree_merge_preview(
                 direction: preview.direction,
                 source_branch: preview.source_branch,
                 target_branch: preview.target_branch,
-                conflict_files: preview.conflict_files.into_iter().map(|f| ConflictFileInfo {
-                    path: f.path,
-                    severity: f.severity,
-                    conflict_count: f.conflict_count,
-                    is_lock_file: f.is_lock_file,
-                }).collect(),
+                conflict_files: preview
+                    .conflict_files
+                    .into_iter()
+                    .map(|f| ConflictFileInfo {
+                        path: f.path,
+                        severity: f.severity,
+                        conflict_count: f.conflict_count,
+                        is_lock_file: f.is_lock_file,
+                    })
+                    .collect(),
                 changed_files: preview.changed_files,
                 total_changes: preview.total_changes,
                 detection_mode: preview.detection_mode,
@@ -903,7 +886,6 @@ pub async fn browser_tab_open_devtools(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
     }
 }
-
 
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
@@ -1528,7 +1510,10 @@ fn path_is_ignored(rel_path: &str) -> bool {
 /// Reap an rg child after stdout reading stops. When the reader breaks early
 /// (cap hit) stdout is no longer drained; kill first so rg cannot block on a
 /// full pipe before `wait()` returns.
-fn reap_rg_child_after_stdout(child: &mut Child, stdout_stopped_early: bool) -> Option<std::process::ExitStatus> {
+fn reap_rg_child_after_stdout(
+    child: &mut Child,
+    stdout_stopped_early: bool,
+) -> Option<std::process::ExitStatus> {
     if stdout_stopped_early {
         let _ = child.kill();
     }
@@ -1668,8 +1653,7 @@ pub async fn search_content_stream(
                 code: Some("QUERY_TOO_LONG".to_string()),
                 error: Some(format!(
                     "Search query too long: {} characters (max {})",
-                    query_char_count,
-                    MAX_SEARCH_QUERY_LEN
+                    query_char_count, MAX_SEARCH_QUERY_LEN
                 )),
             },
         );
@@ -1706,7 +1690,10 @@ pub async fn search_content_stream(
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
-    rg_command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    rg_command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     configure_background_command(&mut rg_command);
     let mut child = match rg_command.spawn() {
         Ok(c) => c,
@@ -1988,8 +1975,7 @@ pub async fn search_file_names_stream(
         return Ok(IpcResult::error(
             format!(
                 "Search query too long: {} characters (max {})",
-                query_char_count,
-                MAX_SEARCH_QUERY_LEN
+                query_char_count, MAX_SEARCH_QUERY_LEN
             ),
             "QUERY_TOO_LONG",
         ));
@@ -2018,7 +2004,8 @@ pub async fn search_file_names_stream(
         }
     };
 
-    let args = build_file_name_search_args(&trimmed_query, &validated_root, request.include_ignored);
+    let args =
+        build_file_name_search_args(&trimmed_query, &validated_root, request.include_ignored);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -2728,7 +2715,10 @@ pub async fn sftp_download(
     {
         Ok(Ok(())) => Ok(IpcResult::success(())),
         Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
-        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_DOWNLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(
+            format!("Task failed: {}", e),
+            "SFTP_DOWNLOAD_ERROR",
+        )),
     }
 }
 
@@ -2761,7 +2751,10 @@ pub async fn sftp_upload(
     {
         Ok(Ok(())) => Ok(IpcResult::success(())),
         Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
-        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_UPLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(
+            format!("Task failed: {}", e),
+            "SFTP_UPLOAD_ERROR",
+        )),
     }
 }
 
@@ -3002,7 +2995,7 @@ pub async fn remote_server_start(
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
+    chat_history_store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     // Default to localhost only when the caller omits the bind mode; an
@@ -3011,11 +3004,8 @@ pub async fn remote_server_start(
     // connect).
     let bind_mode = match bind_mode.as_deref() {
         None => remote::RemoteBindMode::Localhost,
-        Some(s) => remote::RemoteBindMode::parse(s).ok_or_else(|| {
-            format!(
-                "invalid bind mode '{s}': use 'localhost' or 'all'",
-            )
-        })?,
+        Some(s) => remote::RemoteBindMode::parse(s)
+            .ok_or_else(|| format!("invalid bind mode '{s}': use 'localhost' or 'all'",))?,
     };
     let started = remote_state
         .start(
@@ -3023,7 +3013,7 @@ pub async fn remote_server_start(
             pty_manager.inner().clone(),
             ws_relay.inner().clone(),
             project_registry.inner().clone(),
-            chat_history_cache.inner().clone(),
+            chat_history_store.inner().clone(),
             bind_mode,
         )
         .await;
@@ -3079,16 +3069,12 @@ pub async fn remote_server_start(
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     let result = remote_state.stop().await;
     // Clear the in-memory project mirror so a stale list does not linger after
     // the server is off (the registry is renderer-fed; it is repopulated on the
     // next server start via `remote_sync_projects`).
     project_registry.clear();
-    // Clear the chat-history cache too (mirrors the registry — it lives only
-    // while the server runs and is re-fed on the next start).
-    chat_history_cache.clear();
     match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
@@ -3127,15 +3113,13 @@ pub async fn remote_sync_projects(
     Ok(IpcResult::success(()))
 }
 
-/// Push the desktop renderer's chat-history index + payloads into the
-/// in-memory `ChatHistoryCache` (Epic-4 bridge) and broadcast a
-/// `chat_history_changed` WS event so connected web clients refetch the
-/// session index. Called by the renderer on server-start success + on every
-/// session-index/payload mutation while the server runs. No secrets,
-/// permission tickets, or auth data cross the wire (redact-by-omission — the
-/// cache holds only transcript metadata + messages).
+/// Compatibility refresh command for older renderer callers.
+///
+/// Durable desktop history is owned by `acp_history_*`; this command retains
+/// the old invoke shape but only broadcasts `chat_history_changed`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct SyncChatHistoryPayload {
     /// The full session index (wire `PersistedSessionSummary[]` shape).
     /// `None` on a payload-only sync (the `useAcpHistorySync` hook owns the
@@ -3159,7 +3143,6 @@ pub struct SyncChatHistoryPayload {
 #[tauri::command]
 pub async fn remote_sync_chat_history(
     payload: SyncChatHistoryPayload,
-    chat_history_cache: State<'_, Arc<crate::web::ChatHistoryCache>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<()>, String> {
@@ -3170,27 +3153,192 @@ pub async fn remote_sync_chat_history(
     if !remote_state.status().running {
         return Ok(IpcResult::success(()));
     }
-    if let Some(index) = payload.index {
-        chat_history_cache.set_index(payload.revision.unwrap_or(0), index);
-    }
-    if let Some(payloads) = payload.payloads {
-        for (id, p) in payloads {
-            chat_history_cache.set_payload(&id, p);
-        }
-    }
+    // Compatibility bridge only: durable desktop history is now written by
+    // the dedicated `acp_history_*` commands. Existing callers may still use
+    // this command to request a browser index refresh, but payload/index values
+    // are deliberately not retained or cloned in Rust memory.
+    let _ = payload;
     crate::web::broadcast_chat_history_changed(ws_relay.inner());
     Ok(IpcResult::success(()))
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopChatHistoryList {
+    pub sessions: Vec<crate::acp::ChatHistoryIndexEntry>,
+    pub legacy_import_complete: bool,
+}
+
+#[tauri::command]
+pub async fn acp_history_list(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<DesktopChatHistoryList>, String> {
+    log::info!("[acp-history] list start");
+    let (sessions, legacy_import_complete) = store.list();
+    log::info!("[acp-history] list success sessions={}", sessions.len());
+    Ok(IpcResult::success(DesktopChatHistoryList {
+        sessions,
+        legacy_import_complete,
+    }))
+}
+
+#[tauri::command]
+pub async fn acp_history_get(
+    session_id: String,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<Option<serde_json::Value>>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] get start session_id={}", log_session_id);
+    let task_store = store.inner().clone();
+    let task_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.get(&task_id))
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(payload) => {
+            log::info!("[acp-history] get success session_id={}", log_session_id);
+            Ok(IpcResult::success(Some(payload)))
+        }
+        Err(crate::acp::ChatHistoryStoreError::SessionNotFound) => {
+            log::info!("[acp-history] get not_found session_id={}", log_session_id);
+            Ok(IpcResult::success(None))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] get failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_GET_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_save(
+    session_id: String,
+    payload: serde_json::Value,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] save start session_id={}", log_session_id);
+    let task_store = store.inner().clone();
+    let task_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.save(&task_id, payload))
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            crate::web::broadcast_chat_history_changed(ws_relay.inner());
+            log::info!("[acp-history] save success session_id={}", log_session_id);
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] save failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_SAVE_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_delete(
+    session_id: String,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] delete start session_id={}", log_session_id);
+    let task_store = store.inner().clone();
+    let task_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.delete(&task_id))
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            crate::web::broadcast_chat_history_changed(ws_relay.inner());
+            log::info!("[acp-history] delete success session_id={}", log_session_id);
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] delete failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_DELETE_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_flush(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<()>, String> {
+    log::info!("[acp-history] flush start");
+    let task_store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.flush())
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            log::info!("[acp-history] flush success");
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!("[acp-history] flush failure error={}", error);
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_FLUSH_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_mark_legacy_import_complete(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<()>, String> {
+    log::info!("[acp-history] legacy marker start");
+    let task_store = store.inner().clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || task_store.mark_legacy_import_complete())
+            .await
+            .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            log::info!("[acp-history] legacy marker success");
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!("[acp-history] legacy marker failure error={}", error);
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_MIGRATION_FAILED",
+            ))
+        }
+    }
 }
 
 // ==================== Git Commands ====================
 
 /// Get git status for a repository
 #[tauri::command]
-pub async fn git_get_status(
-    cwd: String,
-) -> Result<Vec<GitStatusDetail>, String> {
-    crate::trackers::git_tracker::git_get_status_detail(&cwd)
-        .map_err(|e: String| e)
+pub async fn git_get_status(cwd: String) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd).map_err(|e: String| e)
 }
 
 /// Get git diff for a file. `staged` selects the index-vs-HEAD diff
@@ -3312,11 +3460,7 @@ pub async fn git_create_branch(
     start_ref: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::trackers::git_tracker::git_create_branch(
-            &cwd,
-            &branch,
-            start_ref.as_deref(),
-        )
+        crate::trackers::git_tracker::git_create_branch(&cwd, &branch, start_ref.as_deref())
     })
     .await
     .map_err(|e| format!("git create branch task failed: {e}"))?
@@ -3353,8 +3497,9 @@ pub async fn git_stash_save(
             msg = m.clone();
             args.push(&msg);
         }
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
-            .ok_or_else(|| "Failed to run git stash push".to_string())?;
+        let output =
+            crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
+                .ok_or_else(|| "Failed to run git stash push".to_string())?;
         if output.status.success() {
             Ok(())
         } else {
@@ -3374,8 +3519,11 @@ pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
         .to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["stash", "list"])
-            .ok_or_else(|| "Failed to run git stash list".to_string())?;
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "list"],
+        )
+        .ok_or_else(|| "Failed to run git stash list".to_string())?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
@@ -3388,7 +3536,11 @@ pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
                     if let Some(end) = name.find('}') {
                         if let Ok(index) = name[start + 1..end].parse::<usize>() {
                             let message = rest.trim().to_string();
-                            stashes.push(GitStashInfo { index, name, message });
+                            stashes.push(GitStashInfo {
+                                index,
+                                name,
+                                message,
+                            });
                         }
                     }
                 }
@@ -3515,8 +3667,11 @@ pub async fn git_branch_switch(cwd: String, name: String) -> Result<(), String> 
         .to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["checkout", &name])
-            .ok_or_else(|| "Failed to run git checkout".to_string())?;
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["checkout", &name],
+        )
+        .ok_or_else(|| "Failed to run git checkout".to_string())?;
         if output.status.success() {
             Ok(())
         } else {
@@ -3807,13 +3962,28 @@ mod tests {
     #[test]
     fn rank_search_hits_puts_non_ignored_first_and_caps_total() {
         let non_ignored = vec![
-            SearchFileHit { path: "a".to_string(), ignored: false },
-            SearchFileHit { path: "b".to_string(), ignored: false },
+            SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            },
+            SearchFileHit {
+                path: "b".to_string(),
+                ignored: false,
+            },
         ];
         let ignored = vec![
-            SearchFileHit { path: "c".to_string(), ignored: true },
-            SearchFileHit { path: "d".to_string(), ignored: true },
-            SearchFileHit { path: "e".to_string(), ignored: true },
+            SearchFileHit {
+                path: "c".to_string(),
+                ignored: true,
+            },
+            SearchFileHit {
+                path: "d".to_string(),
+                ignored: true,
+            },
+            SearchFileHit {
+                path: "e".to_string(),
+                ignored: true,
+            },
         ];
         // cap=3 → all non-ignored (2) + one ignored.
         let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 3);
@@ -3836,8 +4006,14 @@ mod tests {
         // No ignored → non-ignored only, untruncated when under cap.
         let ranked = rank_search_hits(
             vec![
-                SearchFileHit { path: "a".to_string(), ignored: false },
-                SearchFileHit { path: "b".to_string(), ignored: false },
+                SearchFileHit {
+                    path: "a".to_string(),
+                    ignored: false,
+                },
+                SearchFileHit {
+                    path: "b".to_string(),
+                    ignored: false,
+                },
             ],
             vec![],
             100,

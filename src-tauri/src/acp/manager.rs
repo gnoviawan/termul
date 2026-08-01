@@ -35,9 +35,8 @@ use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
     McpServer, ModelId, NewSessionRequest, PromptRequest, ProtocolVersion,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome,
-    SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    SetSessionModelRequest, StopReason,
+    ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionModelState,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
@@ -251,6 +250,7 @@ pub struct NewSessionOutcome {
 #[derive(Debug, Clone, Default)]
 pub struct SessionCreationContext {
     pub project_id: Option<String>,
+    pub ephemeral: bool,
 }
 
 /// The `_session/question` ACP extension request (issue #411).
@@ -299,7 +299,9 @@ impl agent_client_protocol::JsonRpcMessage for AskUserQuestionRequest {
         "_session/question"
     }
 
-    fn to_untyped_message(&self) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
+    fn to_untyped_message(
+        &self,
+    ) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
         agent_client_protocol::UntypedMessage::new("_session/question", self)
     }
 
@@ -330,6 +332,7 @@ enum AcpCommand {
         stable_agent_namespace: Option<String>,
         runtime_agent_id: String,
         project_id: Option<String>,
+        ephemeral: bool,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
@@ -343,6 +346,10 @@ enum AcpCommand {
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     CloseSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    DisposeEphemeralSession {
         session_id: SessionId,
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -365,6 +372,10 @@ enum AcpCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
     OwnsSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<bool, String>>,
+    },
+    IsEphemeralSession {
         session_id: SessionId,
         reply: oneshot::Sender<Result<bool, String>>,
     },
@@ -619,10 +630,7 @@ impl AcpManager {
     /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
     /// unknown. Used by the switch-back reopen filter so only sessions owned
     /// by the same agent namespace are candidates (patch #4).
-    pub fn stable_agent_namespace(
-        &self,
-        agent_id: &AgentId,
-    ) -> Result<Option<String>, String> {
+    pub fn stable_agent_namespace(&self, agent_id: &AgentId) -> Result<Option<String>, String> {
         self.agents
             .lock()
             .get(agent_id)
@@ -667,6 +675,7 @@ impl AcpManager {
             stable_agent_namespace,
             runtime_agent_id: agent_id.0.clone(),
             project_id: context.project_id,
+            ephemeral: context.ephemeral,
             reply,
         })
         .await
@@ -718,6 +727,32 @@ impl AcpManager {
         gate_close_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await
+    }
+
+    pub async fn dispose_ephemeral_session(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::DisposeEphemeralSession {
+            session_id,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn is_ephemeral_session(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+    ) -> Result<bool, String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::IsEphemeralSession {
+            session_id,
+            reply,
+        })
+        .await
     }
 
     /// List sessions on the given agent. Gated on the agent's
@@ -1406,9 +1441,13 @@ async fn drive_connection(
     let term_create = terminals.clone();
     let term_create_state = driver_state.clone();
     let term_output = terminals.clone();
+    let term_output_state = driver_state.clone();
     let term_wait = terminals.clone();
+    let term_wait_state = driver_state.clone();
     let term_kill = terminals.clone();
+    let term_kill_state = driver_state.clone();
     let term_release = terminals.clone();
+    let term_release_state = driver_state.clone();
     let loop_terminals = terminals.clone();
 
     // Clones moved into the command loop (`main_fn`).
@@ -1451,6 +1490,12 @@ async fn drive_connection(
                     ..
                 } = request;
                 let session_string = session_id.0.to_string();
+                if perm_state.lock().is_ephemeral(&session_string) {
+                    let _ = responder.respond(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Cancelled,
+                    ));
+                    return Ok(());
+                }
                 let request_id = {
                     let mut state = perm_state.lock();
                     state.bind_tool_call(
@@ -1483,6 +1528,12 @@ async fn drive_connection(
                 // fan out `acp:question_request`, and resolve the responder when
                 // the user answers via `acp_answer_question` / `answer_question`.
                 let session_string = request.session_id.clone();
+                if question_state.lock().is_ephemeral(&session_string) {
+                    let _ = responder.respond(serde_json::json!({
+                        "cancelled": true,
+                    }));
+                    return Ok(());
+                }
                 let question_id = {
                     let mut state = question_state.lock();
                     state.register_question(session_string.clone(), responder)
@@ -1520,9 +1571,15 @@ async fn drive_connection(
                 // Resolve the session's workspace root (the sandbox boundary)
                 // and perform the (blocking) read off the dispatch loop so a
                 // large file can't stall connection I/O (M1).
-                let root = read_state
-                    .lock()
-                    .session_root(request.session_id.0.as_ref());
+                let root = {
+                    let state = read_state.lock();
+                    if state.is_ephemeral(request.session_id.0.as_ref()) {
+                        let denied = Err(agent_client_protocol::Error::method_not_found());
+                        let _ = responder.respond_with_result(denied);
+                        return Ok(());
+                    }
+                    state.session_root(request.session_id.0.as_ref())
+                };
                 cx.spawn(async move {
                     let result = client::handle_read_text_file(&request, root.as_deref()).await;
                     let _ = responder.respond_with_result(result);
@@ -1535,9 +1592,15 @@ async fn drive_connection(
             async move |request: agent_client_protocol::schema::WriteTextFileRequest,
                         responder,
                         cx| {
-                let root = write_state
-                    .lock()
-                    .session_root(request.session_id.0.as_ref());
+                let root = {
+                    let state = write_state.lock();
+                    if state.is_ephemeral(request.session_id.0.as_ref()) {
+                        let denied = Err(agent_client_protocol::Error::method_not_found());
+                        let _ = responder.respond_with_result(denied);
+                        return Ok(());
+                    }
+                    state.session_root(request.session_id.0.as_ref())
+                };
                 cx.spawn(async move {
                     let result = client::handle_write_text_file(&request, root.as_deref()).await;
                     let _ = responder.respond_with_result(result);
@@ -1551,7 +1614,11 @@ async fn drive_connection(
                         responder,
                         _cx| {
                 use agent_client_protocol::schema::CreateTerminalResponse;
-                if !allow_terminal {
+                if !allow_terminal
+                    || term_create_state
+                        .lock()
+                        .is_ephemeral(request.session_id.0.as_ref())
+                {
                     let denied: Result<CreateTerminalResponse, agent_client_protocol::Error> =
                         Err(agent_client_protocol::Error::method_not_found());
                     let _ = responder.respond_with_result(denied);
@@ -1589,6 +1656,15 @@ async fn drive_connection(
                         responder,
                         _cx| {
                 use agent_client_protocol::schema::TerminalOutputResponse;
+                if term_output_state
+                    .lock()
+                    .is_ephemeral(request.session_id.0.as_ref())
+                {
+                    let denied: Result<TerminalOutputResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
                 let result = term_output
                     .lock()
                     .output(&request.terminal_id)
@@ -1606,6 +1682,15 @@ async fn drive_connection(
                         responder,
                         cx| {
                 use agent_client_protocol::schema::WaitForTerminalExitResponse;
+                if term_wait_state
+                    .lock()
+                    .is_ephemeral(request.session_id.0.as_ref())
+                {
+                    let denied: Result<WaitForTerminalExitResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
                 let registry = term_wait.clone();
                 // Await off the dispatch path so other terminal ops stay
                 // responsive. The child handle is taken out from under the lock
@@ -1645,6 +1730,15 @@ async fn drive_connection(
                         responder,
                         _cx| {
                 use agent_client_protocol::schema::KillTerminalResponse;
+                if term_kill_state
+                    .lock()
+                    .is_ephemeral(request.session_id.0.as_ref())
+                {
+                    let denied: Result<KillTerminalResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
                 let result = term_kill
                     .lock()
                     .kill(&request.terminal_id)
@@ -1660,6 +1754,15 @@ async fn drive_connection(
                         responder,
                         _cx| {
                 use agent_client_protocol::schema::ReleaseTerminalResponse;
+                if term_release_state
+                    .lock()
+                    .is_ephemeral(request.session_id.0.as_ref())
+                {
+                    let denied: Result<ReleaseTerminalResponse, agent_client_protocol::Error> =
+                        Err(agent_client_protocol::Error::method_not_found());
+                    let _ = responder.respond_with_result(denied);
+                    return Ok(());
+                }
                 let result = term_release
                     .lock()
                     .release(&request.terminal_id)
@@ -1715,16 +1818,16 @@ async fn run_command_loop(
         .client_capabilities(client::client_capabilities(allow_terminal));
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
-    match init_outcome {
+    let supports_session_close = match init_outcome {
         Ok(Ok(response)) => {
             // Propagate the FULL advertised auth methods (opaque
             // id/name/optional description) so the renderer can offer a Sign-in
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
             let auth_methods = to_auth_method_infos(&response.auth_methods);
-            let auth_method_ids: Vec<&str> =
-                auth_methods.iter().map(|m| m.id.as_str()).collect();
+            let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
+            let supports_session_close = session_caps.close.is_some();
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
                  loadSession={} sessionCapabilities.list={} resume={} close={}",
@@ -1733,7 +1836,7 @@ async fn run_command_loop(
                 response.agent_capabilities.load_session,
                 session_caps.list.is_some(),
                 session_caps.resume.is_some(),
-                session_caps.close.is_some(),
+                supports_session_close,
             );
 
             spawned.store(true, Ordering::Release);
@@ -1741,6 +1844,7 @@ async fn run_command_loop(
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
+            supports_session_close
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -1751,7 +1855,7 @@ async fn run_command_loop(
             let _ = init_tx.send(Err(message.clone()));
             return Err(agent_client_protocol::Error::internal_error().data(message));
         }
-    }
+    };
 
     // Step 2: command loop.
     //
@@ -1774,6 +1878,7 @@ async fn run_command_loop(
                 stable_agent_namespace,
                 runtime_agent_id,
                 project_id,
+                ephemeral,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -1795,32 +1900,39 @@ async fn run_command_loop(
                     {
                         Ok(Ok(response)) => {
                             let session_id = SessionId::from(response.session_id);
-                            if let Some(persistence) = req_persistence {
-                                let registration = SessionRegistration {
-                                    session_id: session_id.0.clone(),
-                                    stable_agent_namespace,
-                                    runtime_agent_id: Some(runtime_agent_id),
-                                    project_id,
-                                    cwd: PathBuf::from(&cwd),
-                                };
-                                if let Err(error) = persistence.register_session(registration).await
-                                {
-                                    let _ = close_cx
-                                        .send_request(CloseSessionRequest::new(&session_id))
-                                        .block_task()
-                                        .await;
-                                    send_reply(
-                                        &task_slot,
-                                        Err(format!("failed to persist new session: {error}")),
-                                    );
-                                    return;
+                            if !ephemeral {
+                                if let Some(persistence) = req_persistence {
+                                    let registration = SessionRegistration {
+                                        session_id: session_id.0.clone(),
+                                        stable_agent_namespace,
+                                        runtime_agent_id: Some(runtime_agent_id),
+                                        project_id,
+                                        cwd: PathBuf::from(&cwd),
+                                    };
+                                    if let Err(error) =
+                                        persistence.register_session(registration).await
+                                    {
+                                        let _ = close_cx
+                                            .send_request(CloseSessionRequest::new(&session_id))
+                                            .block_task()
+                                            .await;
+                                        send_reply(
+                                            &task_slot,
+                                            Err(format!("failed to persist new session: {error}")),
+                                        );
+                                        return;
+                                    }
                                 }
                             }
                             // Record the session's workspace root so agent fs
                             // requests for this session can be sandboxed (H2).
-                            req_state
-                                .lock()
-                                .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                            {
+                                let mut state = req_state.lock();
+                                state.set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+                                if ephemeral {
+                                    state.mark_ephemeral(session_id.0.clone());
+                                }
+                            }
 
                             // ---- First-prompt warmup (upstream bug workaround) ----
                             //
@@ -1837,27 +1949,21 @@ async fn run_command_loop(
                             // See: https://github.com/svkozak/pi-acp/issues/94
                             let warmup_timeout = first_prompt_warmup_timeout();
                             if warmup_timeout.as_secs() > 0 {
-                                let warmup_content = vec![
-                                    agent_client_protocol::schema::ContentBlock::Text(
+                                let warmup_content =
+                                    vec![agent_client_protocol::schema::ContentBlock::Text(
                                         agent_client_protocol::schema::TextContent::new(
                                             " ".to_string(),
                                         ),
-                                    ),
-                                ];
-                                let warmup_request = PromptRequest::new(
-                                    &session_id,
-                                    warmup_content,
-                                );
+                                    )];
+                                let warmup_request =
+                                    PromptRequest::new(&session_id, warmup_content);
                                 log::info!(
                                     "[acp] {req_agent_id} first-prompt warmup started \
                                      (timeout {warmup_timeout:?})"
                                 );
-                                let warmup =
-                                    req_cx.send_request(warmup_request).block_task();
+                                let warmup = req_cx.send_request(warmup_request).block_task();
                                 tokio::pin!(warmup);
-                                match tokio::time::timeout(warmup_timeout, &mut warmup)
-                                    .await
-                                {
+                                match tokio::time::timeout(warmup_timeout, &mut warmup).await {
                                     Ok(Ok(_response)) => {
                                         log::info!(
                                             "[acp] {req_agent_id} first-prompt warmup \
@@ -1879,9 +1985,7 @@ async fn run_command_loop(
                                         // Signal cancel so pi-acp's in-flight
                                         // warmup turn can settle.
                                         let _ = req_cx
-                                            .send_notification(
-                                                CancelNotification::new(&session_id),
-                                            )
+                                            .send_notification(CancelNotification::new(&session_id))
                                             .map_err(|e| {
                                                 log::debug!(
                                                     "[acp] warmup cancel notification \
@@ -1895,11 +1999,7 @@ async fn run_command_loop(
                                         // pending turn in pi-acp when the user
                                         // sends their first prompt. Mirrors the
                                         // SendPrompt handler's cancel-grace race.
-                                        match tokio::time::timeout(
-                                            CANCEL_GRACE,
-                                            &mut warmup,
-                                        )
-                                        .await
+                                        match tokio::time::timeout(CANCEL_GRACE, &mut warmup).await
                                         {
                                             Ok(Ok(_)) => {
                                                 log::info!(
@@ -2066,7 +2166,8 @@ async fn run_command_loop(
                         }
                         // Issue #411: resolve outstanding questions for the
                         // closed session as cancelled too.
-                        let pending_questions = req_state.lock().finish_turn_questions(&session_id.0);
+                        let pending_questions =
+                            req_state.lock().finish_turn_questions(&session_id.0);
                         for question in pending_questions {
                             let _ = question.responder.respond(serde_json::json!({
                                 "questionId": question.question_id,
@@ -2211,6 +2312,7 @@ async fn run_command_loop(
                         }));
                     }
 
+                    let is_ephemeral = turn_state.lock().is_ephemeral(&session_id.0);
                     match outcome {
                         Ok(stop_reason) => {
                             let event = PromptCompleteEvent {
@@ -2225,15 +2327,19 @@ async fn run_command_loop(
                                 events::EVENT_PROMPT_COMPLETE,
                                 &event,
                             );
-                            if let Some(persistence) = &turn_persistence {
-                                if let Err(error) =
-                                    persistence.flush_session(&event.session_id.0).await
-                                {
-                                    send_reply(
-                                        &task_slot,
-                                        Err(format!("failed to flush session history: {error}")),
-                                    );
-                                    return Ok(());
+                            if !is_ephemeral {
+                                if let Some(persistence) = &turn_persistence {
+                                    if let Err(error) =
+                                        persistence.flush_session(&event.session_id.0).await
+                                    {
+                                        send_reply(
+                                            &task_slot,
+                                            Err(format!(
+                                                "failed to flush session history: {error}"
+                                            )),
+                                        );
+                                        return Ok(());
+                                    }
                                 }
                             }
                             send_reply(&task_slot, Ok(stop_reason));
@@ -2251,18 +2357,20 @@ async fn run_command_loop(
                                 events::EVENT_AGENT_ERROR,
                                 &event,
                             );
-                            if let Some(persistence) = &turn_persistence {
-                                if let Some(session_id) = event.session_id.as_ref() {
-                                    if let Err(error) =
-                                        persistence.flush_session(&session_id.0).await
-                                    {
-                                        send_reply(
-                                            &task_slot,
-                                            Err(format!(
-                                                "{message}; history flush failed: {error}"
-                                            )),
-                                        );
-                                        return Ok(());
+                            if !is_ephemeral {
+                                if let Some(persistence) = &turn_persistence {
+                                    if let Some(session_id) = event.session_id.as_ref() {
+                                        if let Err(error) =
+                                            persistence.flush_session(&session_id.0).await
+                                        {
+                                            send_reply(
+                                                &task_slot,
+                                                Err(format!(
+                                                    "{message}; history flush failed: {error}"
+                                                )),
+                                            );
+                                            return Ok(());
+                                        }
                                     }
                                 }
                             }
@@ -2280,7 +2388,14 @@ async fn run_command_loop(
             }
 
             AcpCommand::OwnsSession { session_id, reply } => {
-                let _ = reply.send(Ok(driver_state.lock().session_root(&session_id.0).is_some()));
+                let _ = reply.send(Ok(driver_state
+                    .lock()
+                    .session_root(&session_id.0)
+                    .is_some()));
+            }
+
+            AcpCommand::IsEphemeralSession { session_id, reply } => {
+                let _ = reply.send(Ok(driver_state.lock().is_ephemeral(&session_id.0)));
             }
 
             AcpCommand::IsTurnActive { session_id, reply } => {
@@ -2304,6 +2419,116 @@ async fn run_command_loop(
                         });
                     }
                 }
+            }
+
+            AcpCommand::DisposeEphemeralSession { session_id, reply } => {
+                let waiter = {
+                    let mut state = driver_state.lock();
+                    if !state.is_ephemeral(&session_id.0) {
+                        let _ = reply.send(Err("session is not ephemeral".to_string()));
+                        continue;
+                    }
+                    state.signal_cancel(&session_id.0);
+                    state.wait_turn_idle(&session_id.0)
+                };
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let dispose_state = driver_state.clone();
+                let close_cx = cx.clone();
+                spawn_request(&cx, slot, async move {
+                    if let Some(waiter) = waiter {
+                        let timeout = CANCEL_GRACE + Duration::from_millis(250);
+                        match tokio::time::timeout(timeout, waiter).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => {
+                                send_reply(
+                                    &task_slot,
+                                    Err("turn idle waiter was dropped".to_string()),
+                                );
+                                return;
+                            }
+                            Err(_) => {
+                                send_reply(
+                                    &task_slot,
+                                    Err(format!(
+                                        "ephemeral session disposal timed out after {timeout:?}"
+                                    )),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    {
+                        let state = dispose_state.lock();
+                        if state.is_turn_active(&session_id.0) {
+                            send_reply(
+                                &task_slot,
+                                Err("ephemeral session turn is still active".to_string()),
+                            );
+                            return;
+                        }
+                        if !state.is_ephemeral(&session_id.0) {
+                            send_reply(&task_slot, Err("session is not ephemeral".to_string()));
+                            return;
+                        }
+                    }
+
+                    // The temporary session is now idle and still protected by
+                    // the authoritative ephemeral marker. Ask capable agents to
+                    // release their session-side resources, but never let a
+                    // stale or wedged `session/close` prevent local cleanup. The
+                    // short bound keeps disposal responsive.
+                    if supports_session_close {
+                        let close_timeout = CANCEL_GRACE;
+                        match tokio::time::timeout(
+                            close_timeout,
+                            close_cx
+                                .send_request(CloseSessionRequest::new(&session_id))
+                                .block_task(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => log::debug!(
+                                "[acp] ephemeral session {} close failed: {error}",
+                                session_id.0
+                            ),
+                            Err(_) => log::warn!(
+                                "[acp] ephemeral session {} close timed out after {close_timeout:?}",
+                                session_id.0
+                            ),
+                        }
+                    }
+
+                    let (permissions, questions) = {
+                        let mut state = dispose_state.lock();
+                        if state.is_turn_active(&session_id.0) {
+                            send_reply(
+                                &task_slot,
+                                Err("ephemeral session turn became active during disposal"
+                                    .to_string()),
+                            );
+                            return;
+                        }
+                        if !state.is_ephemeral(&session_id.0) {
+                            send_reply(&task_slot, Err("session is not ephemeral".to_string()));
+                            return;
+                        }
+                        state.dispose_session(&session_id.0)
+                    };
+                    for permission in permissions {
+                        let _ = permission.responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Cancelled,
+                        ));
+                    }
+                    for question in questions {
+                        let _ = question.responder.respond(serde_json::json!({
+                            "questionId": question.question_id,
+                            "cancelled": true,
+                        }));
+                    }
+                    send_reply(&task_slot, Ok(()));
+                });
             }
 
             AcpCommand::CancelPrompt { session_id, reply } => {
@@ -2442,8 +2667,7 @@ async fn run_command_loop(
                         let _ = reply.send(result.map_err(|e| e.to_string()));
                     }
                     None => {
-                        let _ =
-                            reply.send(Err(format!("unknown question request: {question_id}")));
+                        let _ = reply.send(Err(format!("unknown question request: {question_id}")));
                     }
                 }
             }
@@ -2738,32 +2962,28 @@ mod tests {
         let response = LoadSessionResponse::new()
             .modes(modes.clone())
             .config_options(Vec::<SessionConfigOption>::new());
-        let outcome = run_session_reopen(
-            "session/load",
-            "sess-load",
-            "/work",
-            &state,
-            async move { Ok::<_, String>(response) },
-        )
-        .await
-        .unwrap();
+        let outcome =
+            run_session_reopen("session/load", "sess-load", "/work", &state, async move {
+                Ok::<_, String>(response)
+            })
+            .await
+            .unwrap();
 
         assert_eq!(outcome.modes, Some(modes));
         assert_eq!(outcome.models, None);
         assert_eq!(outcome.config_options, Some(vec![]));
-        assert_eq!(state.lock().session_root("sess-load"), Some(PathBuf::from("/work")));
+        assert_eq!(
+            state.lock().session_root("sess-load"),
+            Some(PathBuf::from("/work"))
+        );
     }
 
     #[tokio::test]
     async fn session_resume_reopen_preserves_omitted_fields() {
         let state = Mutex::new(DriverState::new());
-        let outcome = run_session_reopen(
-            "session/resume",
-            "sess-resume",
-            "/work",
-            &state,
-            async { Ok::<_, String>(ResumeSessionResponse::new()) },
-        )
+        let outcome = run_session_reopen("session/resume", "sess-resume", "/work", &state, async {
+            Ok::<_, String>(ResumeSessionResponse::new())
+        })
         .await
         .unwrap();
 
@@ -2775,7 +2995,10 @@ mod tests {
                 config_options: None,
             }
         );
-        assert_eq!(serde_json::to_value(&outcome).unwrap(), serde_json::json!({}));
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).

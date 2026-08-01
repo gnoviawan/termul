@@ -53,6 +53,8 @@ pub(crate) struct DriverState {
     /// Canonicalized workspace root per active session, used to sandbox `fs`
     /// reads/writes to the session's `cwd`.
     session_roots: HashMap<String, PathBuf>,
+    /// Authoritative set of non-durable sessions created by the manager.
+    ephemeral_sessions: HashSet<String>,
     /// Sessions with an in-flight prompt turn. The value holds the cancel
     /// signal sender; it is taken (set to `None`) once a cancel has been
     /// signalled, but the key remains until the turn task finishes so a
@@ -144,10 +146,7 @@ impl DriverState {
 
     /// Remove and return every pending question, regardless of session.
     pub(crate) fn drain_all_questions(&mut self) -> Vec<PendingQuestion> {
-        self.pending_questions
-            .drain()
-            .map(|(_, q)| q)
-            .collect()
+        self.pending_questions.drain().map(|(_, q)| q).collect()
     }
 
     /// Remove and return all pending permissions belonging to a session.
@@ -180,6 +179,15 @@ impl DriverState {
         self.session_roots.insert(session_id, root);
     }
 
+    pub(crate) fn mark_ephemeral(&mut self, session_id: String) {
+        self.ephemeral_sessions.insert(session_id);
+    }
+
+    #[must_use]
+    pub(crate) fn is_ephemeral(&self, session_id: &str) -> bool {
+        self.ephemeral_sessions.contains(session_id)
+    }
+
     /// Look up the canonicalized workspace root for a session, if known.
     pub(crate) fn session_root(&self, session_id: &str) -> Option<PathBuf> {
         self.session_roots.get(session_id).cloned()
@@ -188,6 +196,7 @@ impl DriverState {
     /// Forget a session's workspace root (on explicit close).
     pub(crate) fn remove_session_root(&mut self, session_id: &str) {
         self.session_roots.remove(session_id);
+        self.ephemeral_sessions.remove(session_id);
     }
 
     /// Return all sessions that still have a registered workspace root. Used on
@@ -264,6 +273,16 @@ impl DriverState {
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn_questions(&mut self, session_id: &str) -> Vec<PendingQuestion> {
         self.drain_session_questions(session_id)
+    }
+
+    pub(crate) fn dispose_session(
+        &mut self,
+        session_id: &str,
+    ) -> (Vec<PendingPermission>, Vec<PendingQuestion>) {
+        self.remove_session_root(session_id);
+        let permissions = self.finish_turn(session_id);
+        let questions = self.finish_turn_questions(session_id);
+        (permissions, questions)
     }
 }
 
@@ -349,6 +368,25 @@ mod tests {
         // Only finishing the turn frees the slot.
         let _ = state.finish_turn("sess-1");
         assert!(state.try_begin_turn("sess-1").is_some());
+    }
+
+    #[test]
+    fn ephemeral_sessions_are_authoritative_and_disposed_with_roots() {
+        let mut state = DriverState::new();
+        state.set_session_root("temp".to_string(), PathBuf::from("/tmp/ws"));
+        state.mark_ephemeral("temp".to_string());
+        assert!(state.is_ephemeral("temp"));
+        assert!(state.try_begin_turn("temp").is_some());
+        state.signal_cancel("temp");
+        assert!(state.is_ephemeral("temp"));
+        assert!(state.session_root("temp").is_some());
+        assert!(state.is_turn_active("temp"));
+        state.finish_turn("temp");
+        let (permissions, questions) = state.dispose_session("temp");
+        assert!(permissions.is_empty());
+        assert!(questions.is_empty());
+        assert!(!state.is_ephemeral("temp"));
+        assert!(state.session_root("temp").is_none());
     }
 
     #[test]

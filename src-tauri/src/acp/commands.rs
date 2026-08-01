@@ -13,7 +13,9 @@ use agent_client_protocol::schema::{
 use tauri::State;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
-use crate::acp::manager::{AcpManager, NewSessionOutcome, SessionReopenOutcome};
+use crate::acp::manager::{
+    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
+};
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 #[tauri::command]
@@ -46,9 +48,18 @@ pub async fn acp_new_session(
     agent_id: AgentId,
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
+    ephemeral: Option<bool>,
 ) -> Result<NewSessionOutcome, String> {
     manager
-        .new_session(&agent_id, cwd, mcp_servers.unwrap_or_default())
+        .new_session_with_context(
+            &agent_id,
+            cwd,
+            mcp_servers.unwrap_or_default(),
+            SessionCreationContext {
+                project_id: None,
+                ephemeral: ephemeral.unwrap_or(false),
+            },
+        )
         .await
 }
 
@@ -84,6 +95,17 @@ pub async fn acp_close_session(
     manager.close_session(&agent_id, session_id).await
 }
 
+#[tauri::command]
+pub async fn acp_dispose_ephemeral_session(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+) -> Result<(), String> {
+    manager
+        .dispose_ephemeral_session(&agent_id, session_id)
+        .await
+}
+
 /// List sessions on an agent (requires `sessionCapabilities.list`).
 /// Pass `cwd` to filter by working directory; `cursor` for pagination.
 #[tauri::command]
@@ -115,7 +137,9 @@ pub async fn acp_send_prompt(
     };
     // Desktop path: no client turn-id (the renderer's dedup is Tauri-event-
     // based; the WS `turnId` field is Story 1.8's web concern). Pass `None`.
-    manager.send_prompt(&agent_id, session_id, blocks, None).await
+    manager
+        .send_prompt(&agent_id, session_id, blocks, None)
+        .await
 }
 
 /// Cancel the active turn for a session.

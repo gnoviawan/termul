@@ -226,7 +226,10 @@ This is one of the most custom parts of the app architecture.
 
 ### Renderer-Side Persistence
 
-The renderer uses Tauri plugin-store adapters through versioned persistence APIs.
+The renderer uses Tauri plugin-store adapters through versioned persistence APIs
+for settings and lightweight application data. Desktop ACP chat transcripts are
+an exception: they are owned by a Rust file store under Tauri app data, with a
+lightweight index and one atomic JSON payload per session.
 
 Primary persisted domains include:
 
@@ -236,7 +239,8 @@ Primary persisted domains include:
 - command history
 - window state
 - app settings
-- session persistence
+- Rust-backed desktop ACP chat history
+- standalone ACP event-log session persistence
 
 ### Shared Persistence Contracts
 
@@ -251,8 +255,12 @@ Primary persisted domains include:
 
 - debounced writes with flush-on-close behavior
 - version-wrapped persisted records
+- atomic Rust replacement for desktop ACP payload/index files
+- bounded renderer LRU for inactive full chat payloads; trimmed live sessions stay pinned
+- verified, fail-closed legacy ACP import from `termul-data.json`
+- desktop shared-live browser history reads durable files on demand instead of renderer clones
 - transcript/scrollback persistence for restore scenarios
-- session store separated from general app data store
+- session stores separated from general app data store
 
 ## State Management Patterns
 

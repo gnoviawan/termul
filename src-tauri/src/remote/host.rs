@@ -34,10 +34,10 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::acp::AcpManager;
+use crate::acp::{AcpManager, ChatHistoryStore};
 use crate::pty::PtyManager;
 use crate::web::sink::WsRelaySink;
-use crate::web::{serve_router, ChatHistoryCache, ProjectRegistry, ServerConfig};
+use crate::web::{serve_router, ProjectRegistry, ServerConfig};
 
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,7 +228,7 @@ impl RemoteServerState {
         pty: Arc<PtyManager>,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
-        chat_history_cache: Arc<ChatHistoryCache>,
+        chat_history_store: Arc<ChatHistoryStore>,
         _bind_mode: RemoteBindMode,
     ) -> Result<RemoteStatus, String> {
         // The built-in cloudflared quick-tunnel forwards to localhost, so the
@@ -307,7 +307,7 @@ impl RemoteServerState {
             pty.exit_code_tracker(),
             ws_relay,
             registry,
-            Some(chat_history_cache),
+            Some(chat_history_store),
             None,
             None,
             cfg,
@@ -441,8 +441,7 @@ impl RemoteServerState {
         match slot.as_mut() {
             Some(server) if !server.task_finished() => {
                 let child = child.take().expect("child present after take");
-                let dead_flag =
-                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let dead_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let flag = dead_flag.clone();
                 // The watchdog owns the child: `wait()` for natural exit, then
                 // flag death so the next `status()` poll clears the stale URL.
@@ -577,20 +576,35 @@ mod tests {
     /// shared-live host lifecycle tests. The serve task binds a real OS-assigned
     /// localhost socket — safe in tests.
     #[allow(clippy::type_complexity)]
-    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<PtyManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>, Arc<ChatHistoryCache>) {
+    fn lifecycle_fixtures() -> (
+        Arc<AcpManager>,
+        Arc<PtyManager>,
+        Arc<WsRelaySink>,
+        Arc<ProjectRegistry>,
+        Arc<ChatHistoryStore>,
+        std::path::PathBuf,
+    ) {
         let acp = Arc::new(AcpManager::new(vec![]));
         let pty = crate::web::test_pty_manager();
         let relay = Arc::new(WsRelaySink::new());
         let registry = Arc::new(ProjectRegistry::new());
-        let chat_history_cache = Arc::new(ChatHistoryCache::new());
-        (acp, pty, relay, registry, chat_history_cache)
+        let root = std::env::temp_dir().join(format!(
+            "termul-remote-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let chat_history_store = ChatHistoryStore::open(root.clone()).unwrap();
+        (acp, pty, relay, registry, chat_history_store, root)
     }
 
     #[tokio::test]
     async fn remote_server_state_start_then_stop_lifecycle() {
         // The full start→status(running)→stop→status(stopped)→restart cycle
         // that T8.1 asked for and the old misnamed test never exercised.
-        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_store, history_root) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         assert!(!state.status().running);
 
@@ -600,7 +614,7 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -631,13 +645,15 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
             .expect("restart after stop succeeds");
         assert!(again.running);
         let _ = state.stop().await;
+        drop(chat_history_store);
+        let _ = std::fs::remove_dir_all(history_root);
     }
 
     #[tokio::test]
@@ -645,7 +661,7 @@ mod tests {
         // The lose-race guard: a second start while the first is running returns
         // Err — and (per R1) does NOT orphan a second server (its shutdown_tx is
         // signaled before returning). The first server keeps running.
-        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_store, history_root) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _first = state
             .start(
@@ -653,7 +669,7 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -665,7 +681,7 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await;
@@ -676,6 +692,8 @@ mod tests {
         assert!(state.status().running, "the first server is still running");
 
         let _ = state.stop().await;
+        drop(chat_history_store);
+        let _ = std::fs::remove_dir_all(history_root);
     }
 
     #[tokio::test]
@@ -687,7 +705,7 @@ mod tests {
         // disturbed. (AcpManager::new(vec![]) owns no agents, so there is
         // nothing to kill — this guards the path: start/stop complete without
         // touching kill_all, i.e. no panic, no error, clean drain.)
-        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_store, history_root) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
             .start(
@@ -695,7 +713,7 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -708,6 +726,8 @@ mod tests {
         // direct kill_all assertion possible without a spy; the invariant is
         // structural: serve_router does not call kill_all, host::stop does not
         // call kill_all. This test guards the path end-to-end.)
+        drop(chat_history_store);
+        let _ = std::fs::remove_dir_all(history_root);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -716,7 +736,7 @@ mod tests {
         // then clears `tunnel_url` so the renderer poller drops the stale QR
         // (it would otherwise offer a link that yields "This site can't be
         // reached").
-        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_store, history_root) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
             .start(
@@ -724,7 +744,7 @@ mod tests {
                 pty.clone(),
                 relay.clone(),
                 registry.clone(),
-                chat_history_cache.clone(),
+                chat_history_store.clone(),
                 RemoteBindMode::Localhost,
             )
             .await
@@ -756,6 +776,8 @@ mod tests {
         );
 
         let _ = state.stop().await;
+        drop(chat_history_store);
+        let _ = std::fs::remove_dir_all(history_root);
     }
 
     /// A cross-platform command that exits 0 almost immediately, for the

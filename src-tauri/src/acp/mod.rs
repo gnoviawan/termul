@@ -9,6 +9,7 @@
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
 pub mod atomic_file;
+pub mod chat_history_store;
 pub mod client;
 pub mod commands;
 pub mod config;
@@ -23,6 +24,10 @@ pub mod terminal;
 // is used now (managed in `lib.rs`); the config/id types are part of the public
 // surface the chat UI will consume, so they are intentionally re-exported even
 // though nothing inside the crate references them through this path yet.
+#[allow(unused_imports)]
+pub use chat_history_store::{
+    ChatHistoryIndexEntry, ChatHistoryStatus, ChatHistoryStore, ChatHistoryStoreError,
+};
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 pub use manager::{AcpManager, SessionCreationContext};
