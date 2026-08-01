@@ -124,11 +124,7 @@ function lcsTable(a: string[], b: string[]): number[][] {
  *
  * @param contextLines - Number of unchanged context lines to show around each change (default 3).
  */
-function computeDiffLines(
-  oldLines: string[],
-  newLines: string[],
-  contextLines = 3
-): DiffLine[] {
+function computeDiffLines(oldLines: string[], newLines: string[], contextLines = 3): DiffLine[] {
   const table = lcsTable(oldLines, newLines)
 
   // Walk back through the table to produce the raw edit script
