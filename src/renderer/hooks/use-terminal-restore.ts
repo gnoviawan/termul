@@ -899,11 +899,13 @@ async function restoreFromLayout(
             const result = await terminalApi.spawn(
               agentSpawnOptions
                 ? {
+                    projectId,
                     cwd: persistedTerminal.cwd,
                     ...agentSpawnOptions,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
+                    projectId,
                     shell: normalizedShell,
                     cwd: persistedTerminal.cwd,
                     ...(spawnEnv ? { env: spawnEnv } : {})
@@ -1165,6 +1167,7 @@ async function createDefaultTerminal(
         const result = await terminalApi.spawn({
           shell,
           cwd,
+          projectId,
           ...(hasProjectEnv ? { env } : {})
         })
         if (spawnTimeout) {

@@ -91,7 +91,7 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
         <kbd className="rounded border border-border bg-muted/60 px-1 py-0.5 font-mono text-3xs">
           /
         </kbd>{' '}
-        for commands & skills
+        for commands
       </p>
     </div>
   )

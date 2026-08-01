@@ -10,7 +10,6 @@ import type {
   SessionMode,
   SessionModeState
 } from '@/lib/acp-api'
-import type { AgentSkillSummary } from '@/lib/skills-api'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -35,14 +34,7 @@ export interface SlashModeItem {
   selected: boolean
 }
 
-export interface SlashSkillItem {
-  kind: 'skill'
-  name: string
-  description: string | null
-  scope: string
-}
-
-export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem | SlashSkillItem
+export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem
 
 export interface SlashSection {
   /** Stable key for the section. */
@@ -56,7 +48,6 @@ export interface SlashMenuInput {
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
-  skills?: AgentSkillSummary[]
   /** The text after the leading `/`, used to filter. */
   filter: string
 }
@@ -88,20 +79,8 @@ function headingForCategory(category: string | null | undefined, fallbackName: s
  * legacy Modes section is emitted if modes exist.
  */
 export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
-  const { commands, configOptions, modes, skills = [], filter } = input
+  const { commands, configOptions, modes, filter } = input
   const sections: SlashSection[] = []
-
-  const skillItems: SlashItem[] = skills
-    .filter((s) => matches(filter, s.name, s.description))
-    .map((s) => ({
-      kind: 'skill',
-      name: s.name,
-      description: s.description || null,
-      scope: s.scope
-    }))
-  if (skillItems.length > 0) {
-    sections.push({ id: 'skills', heading: 'Skills', items: skillItems })
-  }
 
   const commandItems: SlashItem[] = commands
     .filter((c) => matches(filter, c.name, c.description))

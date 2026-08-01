@@ -37,12 +37,19 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
             key={i}
             className={cn(
               'whitespace-pre-wrap',
-              line.type === 'added'
-                ? 'bg-green-500/10 text-green-800 dark:bg-green-400/10 dark:text-green-300'
-                : 'bg-red-500/10 text-red-800 dark:bg-red-400/10 dark:text-red-300'
+              line.type === 'added' &&
+                'bg-green-500/10 text-green-800 dark:bg-green-400/10 dark:text-green-300',
+              line.type === 'removed' &&
+                'bg-red-500/10 text-red-800 dark:bg-red-400/10 dark:text-red-300',
+              line.type === 'context' &&
+                (line.text === '···'
+                  ? 'select-none text-muted-foreground/50'
+                  : 'text-muted-foreground')
             )}
           >
-            <span className="select-none opacity-60">{line.type === 'added' ? '+' : '−'} </span>
+            <span className="select-none opacity-60">
+              {line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}
+            </span>
             {line.text}
           </div>
         ))}

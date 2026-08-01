@@ -20,7 +20,6 @@ import {
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
-import { LoadedSkillChip } from '@/components/chat/LoadedSkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
 import {
@@ -39,11 +38,6 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
-import {
-  buildPromptWithLoadedSkill,
-  type LoadedAgentSkill,
-  useAgentSkills
-} from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
@@ -94,7 +88,6 @@ export function __resetLauncherSelectionCache(): void {
 
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
-  const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
   const [manualPath, setManualPath] = useState('')
@@ -199,9 +192,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const commands = useAcpStore((s) =>
     preparedSessionId ? (s.commands[preparedSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
   )
-  const { skills } = useAgentSkills(
-    supportedAgents.some((entry) => entry.status === 'ready') ? projectRoot : undefined
-  )
 
   // Live session wins; otherwise paint last-known options (stale-while-revalidate),
   // then overlay any launcher selections made before the session is live.
@@ -296,11 +286,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             // Cached or live options — pending handlers queue until session is ready.
             configOptions: optionsInteractive ? effectiveConfigOptions : [],
             modes: optionsInteractive ? effectiveModes : null,
-            skills,
             filter: slashFilter(prompt)
           })
         : [],
-    [menuOpen, commands, optionsInteractive, effectiveConfigOptions, effectiveModes, skills, prompt]
+    [menuOpen, commands, optionsInteractive, effectiveConfigOptions, effectiveModes, prompt]
   )
 
   const persistSelection = useCallback((configId: string) => {
@@ -587,14 +576,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSlashSelect = useCallback(
     (item: SlashItem) => {
-      if (item.kind === 'skill') {
-        setLoadedSkill({ name: item.name, description: item.description ?? '' })
-        setPrompt('')
-        updateMentions('', 0)
-        resetHeight()
-        textareaRef.current?.focus()
-        return
-      }
       if (item.kind === 'config') {
         void handleSetConfig(item.configId, item.valueId)
       } else if (item.kind === 'mode') {
@@ -624,7 +605,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const pendingSnapshot = pendingOptions
     const promptSnapshot = prompt
     const attachmentsSnapshot = [...attachments]
-    const loadedSkillSnapshot = loadedSkill
     const appOwnedPaths = appOwnedTempPaths()
     const modelsSnapshot = effectiveModels
     const modesSnapshot = effectiveModes
@@ -646,8 +626,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let seededOptimistic = false
 
     // Prefer sync first-turn content so the chat can paint like a normal send.
-    // Skills may need async load — those seed after open via finalize.
-    const syncText = loadedSkillSnapshot ? '' : promptSnapshot
+    // Sync first-turn content so the chat can paint like a normal send.
+    const syncText = promptSnapshot
     const syncTrimmed = syncText.trim()
     const syncBlocks: ContentBlock[] = []
     if (attachmentsSnapshot.length > 0) {
@@ -675,7 +655,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     useWorkspaceStore.getState().addAgentChatTab(sessionId, paneSnapshot)
     useWorkspaceStore.getState().hideAgentLauncher()
     setPendingOptions(emptyPendingLauncherOptions())
-    setLoadedSkill(null)
     clearAttachments()
     resetMentions()
     resetHeight()
@@ -688,11 +667,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         persistSelection(configSnapshot.id)
 
-        const text = await buildPromptWithLoadedSkill(
-          loadedSkillSnapshot,
-          promptSnapshot,
-          projectRootSnapshot
-        )
+        const text = promptSnapshot
         const trimmed = text.trim()
         const blocks: ContentBlock[] = []
         if (attachmentsSnapshot.length > 0) {
@@ -746,7 +721,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     saveAgentConfig,
     persistSelection,
     paneId,
-    loadedSkill,
     prompt,
     attachments,
     clearAttachments,
@@ -797,7 +771,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
+    (prompt.trim().length > 0 || attachments.length > 0)
 
   return (
     <div
@@ -891,9 +865,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onRetry={handleRetryPrepare}
                 />
               )}
-            {loadedSkill && (
-              <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
-            )}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -908,11 +879,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 onKeyUp={onKeyUp}
                 onSelect={onSelect}
                 onPaste={handlePaste}
-                placeholder={
-                  loadedSkill
-                    ? 'Add a message (optional)…'
-                    : 'Ask for follow-up changes or attach files (@ for files, / for commands)'
-                }
+                placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
                 rows={2}
                 aria-label="Agent prompt"
                 autoFocus

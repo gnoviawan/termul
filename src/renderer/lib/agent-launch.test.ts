@@ -98,6 +98,7 @@ describe('launchAgentInPane', () => {
     expect(result.success).toBe(true)
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
       expect.objectContaining({
+        projectId: 'proj-1',
         cwd: '/test',
         program: 'claude',
         args: ['explain this'],
@@ -109,7 +110,12 @@ describe('launchAgentInPane', () => {
   it('uses the flag form for gemini', async () => {
     await launchAgentInPane('pane-1', 'proj-1', '/test', gemini, 'query')
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
-      expect.objectContaining({ program: 'gemini', args: ['-i', 'query'], kind: 'agent' })
+      expect.objectContaining({
+        projectId: 'proj-1',
+        program: 'gemini',
+        args: ['-i', 'query'],
+        kind: 'agent'
+      })
     )
   })
 
@@ -154,7 +160,12 @@ describe('launchAgentInPane', () => {
     const pi = getBuiltInAgent('pi')!
     await launchAgentInPane('pane-1', 'proj-1', '/test', pi, 'ignored prompt')
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
-      expect.objectContaining({ program: 'pi', args: ['ignored prompt'], kind: 'agent' })
+      expect.objectContaining({
+        projectId: 'proj-1',
+        program: 'pi',
+        args: ['ignored prompt'],
+        kind: 'agent'
+      })
     )
   })
 

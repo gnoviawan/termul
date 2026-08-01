@@ -163,6 +163,14 @@ describe('spawnTerminalInPane', () => {
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(expect.objectContaining({ shell: 'zsh' }))
   })
 
+  it('passes projectId into the spawn payload (web server requires non-empty projectId)', async () => {
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
+
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'proj-1' })
+    )
+  })
+
   it('resolves shell from project default when no explicit shell', async () => {
     await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
 

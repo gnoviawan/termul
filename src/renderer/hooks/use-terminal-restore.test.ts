@@ -551,7 +551,9 @@ describe('useTerminalRestore', () => {
     )
 
     await vi.runOnlyPendingTimersAsync()
-    expect(mockTerminalSpawn).toHaveBeenCalled()
+    expect(mockTerminalSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'project-a' })
+    )
 
     rerender({ projectId: 'project-b' })
     await vi.runOnlyPendingTimersAsync()
@@ -666,5 +668,60 @@ describe('useTerminalRestore', () => {
     // The key assertion: terminalApi.kill should NOT be called during project switch
     // (the old implementation would have called kill for project-a's terminals)
     expect(mockTerminalKill).not.toHaveBeenCalled()
+  })
+
+  it('passes projectId when restoring an agent terminal (agent branch)', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-agent',
+      terminals: [
+        {
+          id: 'persisted-agent',
+          name: 'Agent',
+          kind: 'agent',
+          agentId: 'claude-code',
+          agentProgram: 'claude',
+          agentArgs: [],
+          shell: 'claude',
+          cwd: '/projects/a',
+          scrollback: []
+        }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-a',
+          program: 'claude',
+          kind: 'agent'
+        })
+      )
+    })
+  })
+
+  it('passes projectId when spawning the default terminal on restore error fallback', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockTerminalStoreState.terminals = []
+    // Force the restore try-block to throw (not cancelled) -> createDefaultTerminal
+    mockLoadPersistedTerminals.mockRejectedValueOnce(new Error('disk read failed'))
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: 'project-a' })
+      )
+    })
+    consoleErrorSpy.mockRestore()
   })
 })
