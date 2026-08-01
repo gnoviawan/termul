@@ -110,6 +110,7 @@ export const WS_REQUEST_TYPES = [
   'set_mode',
   'set_model',
   'respond_permission',
+  'answer_question',
   'create_session',
   'load_session',
   'resume_session',
