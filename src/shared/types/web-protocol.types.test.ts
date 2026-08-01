@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 21 request types including the ping heartbeat', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(21)
+  it('exports exactly 22 request types including the ping heartbeat', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(22)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -67,6 +67,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'set_mode',
       'set_model',
       'respond_permission',
+      'answer_question',
       'create_session',
       'load_session',
       'resume_session',
