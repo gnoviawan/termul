@@ -1,9 +1,10 @@
 /**
  * ACP (Agent Client Protocol) renderer facade.
  *
- * This is the ONLY module in the renderer that talks to the ACP backend
- * (Tauri commands `acp_*` / events `acp:*`, or the web WS relay). Components
- * and the acp-store go through here.
+ * This module defines the renderer-facing ACP API types and wrappers over the
+ * ACP backend (Tauri commands `acp_*` / events `acp:*`, or the web WS relay).
+ * Components and the acp-store go through here; `acp-transport.ts` owns the
+ * underlying request/connection path.
  *
  * Transport selection (Story 1.6): `getAcpTransport()` picks Tauri IPC when
  * `isTauriContext()` is true, otherwise the multiplexed WS client. Public
