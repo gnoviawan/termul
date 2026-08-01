@@ -587,8 +587,10 @@ async fn run_relay(socket: WebSocket, state: AppState) {
         }
         // Cleanup subscriptions for this connection. Retain the affected
         // session ids so last-subscriber permission grace can be scheduled.
-        let disconnected_sessions: std::collections::HashSet<String> =
-            subscribed_clients.iter().map(|(sid, _)| sid.clone()).collect();
+        let disconnected_sessions: std::collections::HashSet<String> = subscribed_clients
+            .iter()
+            .map(|(sid, _)| sid.clone())
+            .collect();
         for (sid, cid) in subscribed_clients.drain(..) {
             relay.unsubscribe(&sid, cid);
         }
@@ -809,6 +811,18 @@ async fn handle_request(
         "close_session" => {
             handle_close_session(id, &req.payload, acp, current_session, current_project).await
         }
+        "dispose_ephemeral_session" => {
+            handle_dispose_ephemeral_session(
+                id,
+                &req.payload,
+                acp,
+                relay,
+                subscribed_clients,
+                current_session,
+                current_project,
+            )
+            .await
+        }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
         "switch_project" => {
             handle_switch_project(
@@ -987,11 +1001,7 @@ async fn handle_recover_session_snapshot(
         match relay.subscribe_snapshot(&parsed.session_id).await {
             Ok(result) => result,
             Err(_) => {
-                return WsReply::err(
-                    id,
-                    WsErrorCode::NotFound,
-                    "session snapshot not found",
-                );
+                return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
             }
         };
     subscribed_clients.retain(|(sid, client_id)| {
@@ -1196,6 +1206,8 @@ struct CreateSessionPayload {
     cwd: String,
     #[serde(default)]
     mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
+    #[serde(default)]
+    ephemeral: bool,
 }
 
 async fn handle_create_session(
@@ -1227,16 +1239,26 @@ async fn handle_create_session(
         );
     }
     match acp
-        .new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers)
+        .new_session_with_context(
+            &parsed.agent_id,
+            parsed.cwd,
+            parsed.mcp_servers,
+            SessionCreationContext {
+                project_id: None,
+                ephemeral: parsed.ephemeral,
+            },
+        )
         .await
     {
         Ok(outcome) => {
-            // Track the agent + new session for `switch_project` cwd switching.
-            *current_agent = Some(parsed.agent_id.clone());
-            *current_session.lock() = Some(outcome.session_id.clone());
-            // Generic session creation carries a cwd, not a registry-owned
-            // project id. Leave it unknown so the next switch is always real.
-            *current_project.lock() = None;
+            if !parsed.ephemeral {
+                // Track the agent + new session for `switch_project` cwd switching.
+                *current_agent = Some(parsed.agent_id.clone());
+                *current_session.lock() = Some(outcome.session_id.clone());
+                // Generic session creation carries a cwd, not a registry-owned
+                // project id. Leave it unknown so the next switch is always real.
+                *current_project.lock() = None;
+            }
             ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
@@ -1270,10 +1292,7 @@ enum SwitchProjectOutcome {
     /// changed but no session was created. The web client spawns the agent
     /// lazily when a chat starts (Ask-First resolution stands). `cwd` lets the
     /// client resolve the project root without a second registry round-trip.
-    Selected {
-        project_id: String,
-        cwd: String,
-    },
+    Selected { project_id: String, cwd: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1455,6 +1474,7 @@ async fn execute_project_switch(
                     target.mcp_servers,
                     SessionCreationContext {
                         project_id: Some(target.project_id.clone()),
+                        ephemeral: false,
                     },
                 )
                 .await?;
@@ -1552,9 +1572,11 @@ fn execute_cold_tab_select(
         }
     }
     if !registry.set_active_project(&target.project_id) {
-        if let (Some(file_registry), Some(path), Some(old_active)) =
-            (registry_persistence, projects_file, persisted_previous_active)
-        {
+        if let (Some(file_registry), Some(path), Some(old_active)) = (
+            registry_persistence,
+            projects_file,
+            persisted_previous_active,
+        ) {
             let mut file_registry = file_registry.lock();
             file_registry.restore_active_project(old_active);
             if let Err(error) = file_registry.save_atomic(path) {
@@ -1851,7 +1873,10 @@ async fn handle_load_session(
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp.load_session(&agent_id, parsed.session_id, parsed.cwd).await {
+    match acp
+        .load_session(&agent_id, parsed.session_id, parsed.cwd)
+        .await
+    {
         Ok(outcome) => {
             *current_agent = Some(agent_id);
             *current_session.lock() = Some(session_id);
@@ -1886,7 +1911,10 @@ async fn handle_resume_session(
     // we still need the session id to track it for `switch_project`.
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
-    match acp.resume_session(&agent_id, parsed.session_id, parsed.cwd).await {
+    match acp
+        .resume_session(&agent_id, parsed.session_id, parsed.cwd)
+        .await
+    {
         Ok(outcome) => {
             *current_agent = Some(agent_id);
             *current_session.lock() = Some(session_id);
@@ -1903,6 +1931,52 @@ async fn handle_resume_session(
 struct CloseSessionPayload {
     agent_id: crate::acp::AgentId,
     session_id: crate::acp::SessionId,
+}
+
+async fn handle_dispose_ephemeral_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+) -> WsReply {
+    let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!(
+                    "malformed dispose_ephemeral_session payload (want agentId, sessionId): {e}"
+                ),
+            )
+        }
+    };
+    let disposed_session_id = parsed.session_id.clone();
+    match acp
+        .dispose_ephemeral_session(&parsed.agent_id, parsed.session_id)
+        .await
+    {
+        Ok(()) => {
+            subscribed_clients.retain(|(session_id, client_id)| {
+                if session_id == &disposed_session_id.0 {
+                    relay.unsubscribe(session_id, *client_id);
+                    false
+                } else {
+                    true
+                }
+            });
+            if current_session.lock().as_ref() == Some(&disposed_session_id) {
+                *current_session.lock() = None;
+                *current_project.lock() = None;
+            }
+            relay.forget_session(&disposed_session_id.0).await;
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(e) => acp_err_to_reply(id, e),
+    }
 }
 
 async fn handle_close_session(
@@ -2063,24 +2137,34 @@ async fn handle_send_prompt(
         }
     }
 
+    let ephemeral = match acp
+        .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => return acp_err_to_reply(id, error),
+    };
+
     let prompt_payload = json!({
         "agentId": parsed.agent_id.clone(),
         "sessionId": parsed.session_id.clone(),
         "turnId": parsed.turn_id.clone(),
         "content": content.clone(),
     });
-    if let Err(error) = relay
-        .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
-        .await
-    {
-        relay
-            .turn_watermark()
-            .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
-        return WsReply::err(
-            id,
-            WsErrorCode::NotImplemented,
-            format!("failed to persist accepted prompt: {error}"),
-        );
+    if !ephemeral {
+        if let Err(error) = relay
+            .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
+            .await
+        {
+            relay
+                .turn_watermark()
+                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+            return WsReply::err(
+                id,
+                WsErrorCode::NotImplemented,
+                format!("failed to persist accepted prompt: {error}"),
+            );
+        }
     }
 
     match acp
@@ -2478,7 +2562,9 @@ async fn handle_answer_question(
             return WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
-                format!("malformed answer_question payload (want agentId, questionId, values?): {e}"),
+                format!(
+                    "malformed answer_question payload (want agentId, questionId, values?): {e}"
+                ),
             );
         }
     };
@@ -2524,7 +2610,10 @@ async fn handle_answer_question(
     let client_id = *client_id;
 
     let values = parsed.values.as_deref();
-    match rdz.try_respond(client_id, &parsed.question_id, values).await {
+    match rdz
+        .try_respond(client_id, &parsed.question_id, values)
+        .await
+    {
         Ok(crate::web::permissions::QuestionRespondOutcome::Resolved) => {
             WsReply::ok(id, Some(json!({})))
         }
@@ -2560,7 +2649,8 @@ mod tests {
 
     #[tokio::test]
     async fn cross_agent_prompt_is_rejected_before_claim_or_persistence() {
-        let root = std::env::temp_dir().join(format!("termul-ws-ownership-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-ownership-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -2918,10 +3008,22 @@ mod tests {
         // `ping` text frame refreshes this and stays open).
         let base = 1_000_000_u64;
         let timeout = PONG_TIMEOUT.as_millis() as u64;
-        assert!(!watchdog_is_stale(base, base), "fresh connection is not stale");
-        assert!(!watchdog_is_stale(base, base + timeout), "exactly at timeout is not stale (strict >)");
-        assert!(!watchdog_is_stale(base, base + timeout - 1), "just under timeout is not stale");
-        assert!(watchdog_is_stale(base, base + timeout + 1), "just past timeout is stale");
+        assert!(
+            !watchdog_is_stale(base, base),
+            "fresh connection is not stale"
+        );
+        assert!(
+            !watchdog_is_stale(base, base + timeout),
+            "exactly at timeout is not stale (strict >)"
+        );
+        assert!(
+            !watchdog_is_stale(base, base + timeout - 1),
+            "just under timeout is not stale"
+        );
+        assert!(
+            watchdog_is_stale(base, base + timeout + 1),
+            "just past timeout is stale"
+        );
         // Clock-skew safe: a future `last_activity` saturates to 0 (not stale).
         assert!(!watchdog_is_stale(base + 10_000, base));
     }
@@ -3986,22 +4088,25 @@ mod tests {
         use crate::web::chat_history_cache::ChatHistoryCache;
 
         let cache = Arc::new(ChatHistoryCache::new());
-        cache.set_index(0, vec![SessionIndexEntry {
-            storage_key: "sk-1".to_string(),
-            session_id: "s-1".to_string(),
-            stable_agent_namespace: Some("config:claude".to_string()),
-            runtime_agent_id: None,
-            project_id: Some("p-1".to_string()),
-            cwd: "/a".to_string(),
-            title: Some("Chat".to_string()),
-            created_at: 1,
-            last_activity_at: 2,
-            status: PersistedSessionStatus::Closed,
-            message_count: 3,
-            tool_count: 0,
-            last_seq: 3,
-            resume_eligible: true,
-        }]);
+        cache.set_index(
+            0,
+            vec![SessionIndexEntry {
+                storage_key: "sk-1".to_string(),
+                session_id: "s-1".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: None,
+                project_id: Some("p-1".to_string()),
+                cwd: "/a".to_string(),
+                title: Some("Chat".to_string()),
+                created_at: 1,
+                last_activity_at: 2,
+                status: PersistedSessionStatus::Closed,
+                message_count: 3,
+                tool_count: 0,
+                last_seq: 3,
+                resume_eligible: true,
+            }],
+        );
         let relay = Arc::new(WsRelaySink::new());
         let reply = handle_list_persisted_sessions(
             "r1".to_string(),
@@ -4023,22 +4128,25 @@ mod tests {
 
         let cache = Arc::new(ChatHistoryCache::new());
         // Seed the index so the index-guard accepts s-9's payload.
-        cache.set_index(0, vec![SessionIndexEntry {
-            storage_key: "sk-9".to_string(),
-            session_id: "s-9".to_string(),
-            stable_agent_namespace: Some("config:claude".to_string()),
-            runtime_agent_id: None,
-            project_id: Some("p-1".to_string()),
-            cwd: "/a".to_string(),
-            title: Some("Chat".to_string()),
-            created_at: 1,
-            last_activity_at: 2,
-            status: PersistedSessionStatus::Closed,
-            message_count: 3,
-            tool_count: 0,
-            last_seq: 3,
-            resume_eligible: true,
-        }]);
+        cache.set_index(
+            0,
+            vec![SessionIndexEntry {
+                storage_key: "sk-9".to_string(),
+                session_id: "s-9".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: None,
+                project_id: Some("p-1".to_string()),
+                cwd: "/a".to_string(),
+                title: Some("Chat".to_string()),
+                created_at: 1,
+                last_activity_at: 2,
+                status: PersistedSessionStatus::Closed,
+                message_count: 3,
+                tool_count: 0,
+                last_seq: 3,
+                resume_eligible: true,
+            }],
+        );
         let payload = json!({ "metadata": { "id": "s-9" }, "messages": [{ "seq": 1 }] });
         cache.set_payload("s-9", payload.clone());
         let relay = Arc::new(WsRelaySink::new());
@@ -4109,9 +4217,13 @@ mod tests {
             mcp_servers: vec![],
             is_active: false,
         };
-        let result = try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &cache, &target).await;
+        let result =
+            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &cache, &target).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().is_none(), "no cached session → Ok(None) → new session");
+        assert!(
+            result.unwrap().is_none(),
+            "no cached session → Ok(None) → new session"
+        );
     }
 
     /// Switch-back reopen returns `Err` (fallback) when a session IS cached but
@@ -4123,22 +4235,25 @@ mod tests {
         use crate::web::chat_history_cache::ChatHistoryCache;
 
         let cache = Arc::new(ChatHistoryCache::new());
-        cache.set_index(0, vec![SessionIndexEntry {
-            storage_key: "sk-1".to_string(),
-            session_id: "s-1".to_string(),
-            stable_agent_namespace: Some("config:claude".to_string()),
-            runtime_agent_id: None,
-            project_id: Some("p-1".to_string()),
-            cwd: "/a".to_string(),
-            title: Some("Chat".to_string()),
-            created_at: 1,
-            last_activity_at: 2,
-            status: PersistedSessionStatus::Closed,
-            message_count: 3,
-            tool_count: 0,
-            last_seq: 3,
-            resume_eligible: true,
-        }]);
+        cache.set_index(
+            0,
+            vec![SessionIndexEntry {
+                storage_key: "sk-1".to_string(),
+                session_id: "s-1".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: None,
+                project_id: Some("p-1".to_string()),
+                cwd: "/a".to_string(),
+                title: Some("Chat".to_string()),
+                created_at: 1,
+                last_activity_at: 2,
+                status: PersistedSessionStatus::Closed,
+                message_count: 3,
+                tool_count: 0,
+                last_seq: 3,
+                resume_eligible: true,
+            }],
+        );
         let acp = Arc::new(AcpManager::new(vec![]));
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
@@ -4146,7 +4261,11 @@ mod tests {
             mcp_servers: vec![],
             is_active: false,
         };
-        let result = try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &cache, &target).await;
-        assert!(result.is_err(), "no registered agent → reopen fails → Err → new session");
+        let result =
+            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &cache, &target).await;
+        assert!(
+            result.is_err(),
+            "no registered agent → reopen fails → Err → new session"
+        );
     }
 }

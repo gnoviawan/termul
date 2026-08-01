@@ -1370,6 +1370,7 @@ pub fn run() {
             acp::commands::acp_load_session,
             acp::commands::acp_resume_session,
             acp::commands::acp_close_session,
+            acp::commands::acp_dispose_ephemeral_session,
             acp::commands::acp_list_sessions,
             acp::commands::acp_send_prompt,
             acp::commands::acp_cancel_prompt,

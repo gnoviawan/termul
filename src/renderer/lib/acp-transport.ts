@@ -70,10 +70,16 @@ export interface AcpTransport {
   spawnAgent(config: AgentConfig): Promise<AgentId>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
-  newSession(agentId: AgentId, cwd: string, mcpServers?: McpServer[]): Promise<NewSessionOutcome>
+  newSession(
+    agentId: AgentId,
+    cwd: string,
+    mcpServers?: McpServer[],
+    options?: { ephemeral?: boolean }
+  ): Promise<NewSessionOutcome>
   loadSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
+  disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
   sendPrompt(
     agentId: AgentId,
@@ -158,14 +164,22 @@ function createTauriAcpTransport(): AcpTransport {
       await invoke('acp_kill_agent', { agentId })
     },
     listAgents: () => invoke<AgentId[]>('acp_list_agents'),
-    newSession: (agentId, cwd, mcpServers) =>
-      invoke<NewSessionOutcome>('acp_new_session', { agentId, cwd, mcpServers }),
+    newSession: (agentId, cwd, mcpServers, options) =>
+      invoke<NewSessionOutcome>('acp_new_session', {
+        agentId,
+        cwd,
+        mcpServers,
+        ...(options?.ephemeral ? { ephemeral: true } : {})
+      }),
     loadSession: (agentId, sessionId, cwd) =>
       invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd }),
     resumeSession: (agentId, sessionId, cwd) =>
       invoke<SessionReopenOutcome>('acp_resume_session', { agentId, sessionId, cwd }),
     closeSession: async (agentId, sessionId) => {
       await invoke('acp_close_session', { agentId, sessionId })
+    },
+    disposeEphemeralSession: async (agentId, sessionId) => {
+      await invoke('acp_dispose_ephemeral_session', { agentId, sessionId })
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
@@ -552,20 +566,29 @@ export class WsAcpTransport implements AcpTransport {
   async newSession(
     agentId: AgentId,
     cwd: string,
-    mcpServers?: McpServer[]
+    mcpServers?: McpServer[],
+    options?: { ephemeral?: boolean }
   ): Promise<NewSessionOutcome> {
     const outcome = await this.request<NewSessionOutcome>('create_session', {
       agentId,
       cwd,
-      mcpServers
+      mcpServers,
+      ephemeral: options?.ephemeral ?? false
     })
-    if (outcome?.sessionId) {
+    if (outcome?.sessionId && !options?.ephemeral) {
       await this.subscribeSession(outcome.sessionId, null)
     }
     return outcome
   }
 
   /** Web/remote: subscribe immediately only when the server completed the switch. */
+  async disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+    await this.request('dispose_ephemeral_session', { agentId, sessionId })
+    this.subscribed.delete(sessionId)
+    this.lastSeq.delete(sessionId)
+    this.seenTurnIds.delete(sessionId)
+  }
+
   async switchProject(projectId: string): Promise<SwitchProjectReply> {
     const outcome = await this.request<SwitchProjectReply>('switch_project', { projectId })
     if (outcome.status === 'completed') {
