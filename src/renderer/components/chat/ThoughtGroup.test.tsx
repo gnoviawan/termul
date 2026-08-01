@@ -77,7 +77,9 @@ describe('ThoughtGroup', () => {
       expect(screen.getByText('Some thinking text')).toBeInTheDocument()
     })
     // The content container should have max-h class
-    const contentDiv = screen.getByText('Some thinking text').closest('div[class*="overflow-y-auto"]')
+    const contentDiv = screen
+      .getByText('Some thinking text')
+      .closest('div[class*="overflow-y-auto"]')
     expect(contentDiv).toBeInTheDocument()
     expect(contentDiv?.className).toContain('max-h-[200px]')
     expect(contentDiv?.className).toContain('overflow-y-auto')
@@ -110,12 +112,16 @@ describe('ThoughtGroup', () => {
     fireEvent.click(moreButton)
     expect(screen.getByText('Less')).toBeInTheDocument()
     // The content container should no longer have max-h
-    const contentDiv = screen.getByText('Some thinking text').closest('div[class*="overflow-y-auto"]')
+    const contentDiv = screen
+      .getByText('Some thinking text')
+      .closest('div[class*="overflow-y-auto"]')
     expect(contentDiv?.className).not.toContain('max-h-[200px]')
     // Click "Less" to collapse
     fireEvent.click(screen.getByText('Less'))
     expect(screen.getByText('More')).toBeInTheDocument()
-    const contentDivAgain = screen.getByText('Some thinking text').closest('div[class*="overflow-y-auto"]')
+    const contentDivAgain = screen
+      .getByText('Some thinking text')
+      .closest('div[class*="overflow-y-auto"]')
     expect(contentDivAgain?.className).toContain('max-h-[200px]')
   })
 
