@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 22 event types including durable user prompts', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(22)
+  it('exports exactly 23 event types including terminal output and durable user prompts', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(23)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',

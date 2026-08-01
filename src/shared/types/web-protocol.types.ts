@@ -57,6 +57,7 @@ export const WS_EVENT_TYPES = [
   'config_options_update',
   'session_info_update',
   'usage_update',
+  'terminal_output',
   // Permission (reliable)
   'permission_request',
   // Prompt turn lifecycle (idempotent)
@@ -203,6 +204,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   config_options_update: WS_RELAY_TIERS.RELIABLE,
   session_info_update: WS_RELAY_TIERS.RELIABLE,
   usage_update: WS_RELAY_TIERS.RELIABLE,
+  terminal_output: WS_RELAY_TIERS.RELIABLE,
   permission_request: WS_RELAY_TIERS.RELIABLE,
   auth_required: WS_RELAY_TIERS.RELIABLE,
   projects_changed: WS_RELAY_TIERS.RELIABLE,

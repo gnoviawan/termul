@@ -119,6 +119,11 @@ export interface DiffContent {
   newText: string
 }
 
+export interface TerminalExitStatus {
+  exitCode?: number | null
+  signal?: string | null
+}
+
 /** Tagged tool-call content item. */
 export type ToolCallContent =
   | { type: 'content'; content: ContentBlock }
@@ -128,6 +133,10 @@ export type ToolCallContent =
 
 export interface ToolCall {
   toolCallId: string
+  /** Renderer-only terminal snapshot delivered by acp:terminal_output. */
+  terminalOutput?: string
+  terminalTruncated?: boolean
+  terminalExitStatus?: TerminalExitStatus | null
   title?: string
   kind?: ToolKind
   status?: ToolCallStatus
@@ -377,6 +386,15 @@ export interface UsageCost {
   currency: string
 }
 
+export interface TerminalOutputEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  terminalId: string
+  output: string
+  truncated: boolean
+  exitStatus?: TerminalExitStatus | null
+}
+
 export interface UsageUpdateEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -414,7 +432,8 @@ export const ACP_EVENTS = {
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
   sessionInfoUpdate: 'acp:session_info_update',
-  usageUpdate: 'acp:usage_update'
+  usageUpdate: 'acp:usage_update',
+  terminalOutput: 'acp:terminal_output'
 } as const
 
 // --- Command wrappers ------------------------------------------------------
