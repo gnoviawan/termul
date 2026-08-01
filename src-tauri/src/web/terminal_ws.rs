@@ -167,11 +167,15 @@ async fn handle(
 ) -> Result<Value, (&'static str, String)> {
     match request.type_.as_str() {
         "spawn" => {
-            let mut options: SpawnOptions = serde_json::from_value(request.payload)
+            let options: SpawnOptions = serde_json::from_value(request.payload)
                 .map_err(|e| ("VALIDATION_ERROR", e.to_string()))?;
-            // Ensure project_id is set so the terminal is scoped.
-            if options.project_id.is_none() {
-                options.project_id = Some("default".to_string());
+            // Require project_id so the terminal is scoped — do not default
+            // to a literal that any client can target.
+            if options.project_id.as_deref().filter(|s| !s.is_empty()).is_none() {
+                return Err((
+                    "VALIDATION_ERROR",
+                    "spawn requires a non-empty projectId".to_string(),
+                ));
             }
             info!(
                 "[terminal-ws] spawn requested project_id={}",
@@ -241,7 +245,15 @@ async fn handle(
             let instance = state.pty.get(&terminal_id).ok_or_else(|| {
                 ("TERMINAL_NOT_FOUND", format!("Terminal not found: {terminal_id}"))
             })?;
-            ctx.authorize(&terminal_id);
+            // attach does NOT authorize — only spawn does. This prevents a
+            // client from self-authorizing for any terminal ID it discovers.
+            // If the connection is not already authorized, reject.
+            if !ctx.is_authorized(&terminal_id) {
+                return Err((
+                    "UNAUTHORIZED",
+                    format!("Not authorized for terminal {terminal_id}"),
+                ));
+            }
 
             // Sequenced replay: only unseen chunks, with gap detection.
             let replay = instance.subscribe_from(last_seq);
@@ -328,18 +340,34 @@ async fn handle(
             ctx.detach(terminal_id);
             Ok(Value::Null)
         }
-        "get_cwd" => Ok(json!(state
-            .cwd_tracker
-            .get_cwd(string_field(&request.payload, "terminalId")?))),
-        "get_git_branch" => Ok(json!(state
-            .git_tracker
-            .get_branch(string_field(&request.payload, "terminalId")?))),
-        "get_git_status" => Ok(json!(state
-            .git_tracker
-            .get_status(string_field(&request.payload, "terminalId")?))),
-        "get_exit_code" => Ok(json!(state
-            .exit_code_tracker
-            .get_exit_code(string_field(&request.payload, "terminalId")?))),
+        "get_cwd" => {
+            let terminal_id = string_field(&request.payload, "terminalId")?;
+            if !ctx.is_authorized(terminal_id) {
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+            }
+            Ok(json!(state.cwd_tracker.get_cwd(terminal_id)))
+        }
+        "get_git_branch" => {
+            let terminal_id = string_field(&request.payload, "terminalId")?;
+            if !ctx.is_authorized(terminal_id) {
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+            }
+            Ok(json!(state.git_tracker.get_branch(terminal_id)))
+        }
+        "get_git_status" => {
+            let terminal_id = string_field(&request.payload, "terminalId")?;
+            if !ctx.is_authorized(terminal_id) {
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+            }
+            Ok(json!(state.git_tracker.get_status(terminal_id)))
+        }
+        "get_exit_code" => {
+            let terminal_id = string_field(&request.payload, "terminalId")?;
+            if !ctx.is_authorized(terminal_id) {
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+            }
+            Ok(json!(state.exit_code_tracker.get_exit_code(terminal_id)))
+        }
         "add_renderer_ref" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
@@ -353,6 +381,9 @@ async fn handle(
         }
         "remove_renderer_ref" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
+            if !ctx.is_authorized(terminal_id) {
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+            }
             state
                 .pty
                 .remove_renderer_ref(terminal_id, string_field(&request.payload, "rendererId")?)
@@ -369,10 +400,16 @@ async fn handle(
             Ok(Value::Null)
         }
         "update_orphan_detection" => {
+            // Global setting — require at least one authorized terminal to
+            // prevent arbitrary clients from changing lifecycle policy.
+            if ctx.authorized.read().is_empty() {
+                return Err(("UNAUTHORIZED", "Not authorized to update orphan detection".to_string()));
+            }
             let enabled = request.payload["enabled"].as_bool().unwrap_or(true);
             let timeout = request.payload["timeout"]
                 .as_u64()
-                .map(|t| t * 60 * 1000); // minutes → milliseconds (desktop parity)
+                .and_then(|t| t.checked_mul(60 * 1000)) // minutes → ms (checked to prevent overflow)
+                .filter(|t| *t > 0 && *t <= 3_600_000); // cap at 1 hour
             state
                 .pty
                 .update_orphan_detection_settings(enabled, timeout)

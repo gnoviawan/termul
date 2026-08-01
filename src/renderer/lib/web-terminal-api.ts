@@ -119,7 +119,10 @@ export class WebTerminalClient {
         resolve()
       }
       socket.onmessage = (event) => this.handleFrame(String(event.data))
-      socket.onerror = () => reject(new Error('Terminal websocket connection failed'))
+      socket.onerror = () => {
+        this.connecting = null
+        reject(new Error('Terminal websocket connection failed'))
+      }
       socket.onclose = () => {
         this.connecting = null
         this.socket = null

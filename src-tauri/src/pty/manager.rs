@@ -658,7 +658,11 @@ impl TerminalInstance {
         let receiver = self.broadcast_tx.subscribe();
         let earliest = guard.front().map(|chunk| chunk.seq);
         let latest_seq = guard.back().map(|chunk| chunk.seq).unwrap_or(last_seq);
-        let gap = earliest.is_some_and(|first| last_seq.saturating_add(1) < first);
+        // Gap if the client's cursor is behind the earliest retained chunk,
+        // OR if the log is empty but the client expected prior output.
+        let gap = earliest
+            .map(|first| last_seq.saturating_add(1) < first)
+            .unwrap_or(last_seq > 0);
         let chunks = guard
             .iter()
             .filter(|chunk| chunk.seq > last_seq)
@@ -1739,6 +1743,7 @@ impl PtyManager {
             cwd_tracker.stop_tracking(&id);
             git_tracker.remove_terminal(&id);
             exit_code_tracker.remove_terminal(&id);
+            self.terminal_events.remove(&id);
         }
     }
 

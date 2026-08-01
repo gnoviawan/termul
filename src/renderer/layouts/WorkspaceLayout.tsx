@@ -1739,12 +1739,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
           onCloseTerminal={handleCloseTerminal}
           onRenameTerminal={renameTerminal}
           onRestartTerminal={(terminalId) => {
-            // Restart: kill the PTY then re-spawn in the same tab.
+            // Restart: kill the PTY, close the old tab, then re-spawn.
             const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId)
             if (!terminal?.ptyId) return
+            const root = useWorkspaceStore.getState().root
+            const pane = findPaneContainingTab(root, `term-${terminalId}`)
             void terminalApi.kill(terminal.ptyId).then(() => {
+              closeTerminal(terminalId, activeProjectId)
+              if (pane) {
+                useWorkspaceStore.getState().closeTab(pane.id, `term-${terminalId}`)
+              }
               handleCreateTerminalInPane(
-                useWorkspaceStore.getState().activePaneId ?? '',
+                pane?.id ?? useWorkspaceStore.getState().activePaneId ?? '',
                 terminal.shell ?? undefined
               )
             })
