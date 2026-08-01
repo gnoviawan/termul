@@ -10,7 +10,6 @@ import {
   useRef,
   useState
 } from 'react'
-import { toast } from 'sonner'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
