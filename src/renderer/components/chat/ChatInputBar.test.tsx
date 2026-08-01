@@ -524,4 +524,62 @@ describe('ChatInputBar command chip', () => {
       expect(onSend).toHaveBeenCalledWith('/compact')
     })
   })
+
+  it('clears active command when externally seeded text is applied', async () => {
+    const onSend = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    const { rerender } = renderInputBar({ commands, onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Externally seed text (e.g. editing a message)
+    rerender(
+      <TooltipProvider>
+        <ChatInputBar
+          session={session()}
+          busy={false}
+          disabled={false}
+          onSend={onSend}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={commands}
+          configOptions={[]}
+          modes={session().modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          seedText="edited message"
+          seedNonce={1}
+        />
+      </TooltipProvider>
+    )
+
+    // Command chip should be gone after seeding
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Remove /compact command' })
+      ).not.toBeInTheDocument()
+    })
+
+    // Textarea should have the seeded text
+    expect(screen.getByRole('textbox')).toHaveValue('edited message')
+
+    // Send should use only the seeded text (no command prefix)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith('edited message')
+    })
+  })
 })

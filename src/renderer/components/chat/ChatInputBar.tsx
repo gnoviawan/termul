@@ -368,6 +368,7 @@ export function ChatInputBar({
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
+    setActiveCommand(null)
     updateMentions(next, next.length)
     const el = textareaRef.current
     if (!el) return
