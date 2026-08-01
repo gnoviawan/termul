@@ -1842,13 +1842,11 @@ async fn run_command_loop(
                                     "[acp] {req_agent_id} first-prompt warmup started \
                                      (timeout {warmup_timeout:?})"
                                 );
-                                match tokio::time::timeout(
-                                    warmup_timeout,
-                                    req_cx
-                                        .send_request(warmup_request)
-                                        .block_task(),
-                                )
-                                .await
+                                let warmup =
+                                    req_cx.send_request(warmup_request).block_task();
+                                tokio::pin!(warmup);
+                                match tokio::time::timeout(warmup_timeout, &mut warmup)
+                                    .await
                                 {
                                     Ok(Ok(_response)) => {
                                         log::info!(
@@ -1866,10 +1864,10 @@ async fn run_command_loop(
                                         log::warn!(
                                             "[acp] {req_agent_id} first-prompt warmup \
                                              timed out after {warmup_timeout:?} \
-                                             (continuing without warmup)"
+                                             (cancelling)"
                                         );
-                                        // Best-effort cancel so the pi-acp session
-                                        // doesn't stay wedged.
+                                        // Signal cancel so pi-acp's in-flight
+                                        // warmup turn can settle.
                                         let _ = req_cx
                                             .send_notification(
                                                 CancelNotification::new(&session_id),
@@ -1881,6 +1879,38 @@ async fn run_command_loop(
                                                 );
                                                 e
                                             });
+                                        // Await the warmup's cancellation
+                                        // settlement (bounded by CANCEL_GRACE)
+                                        // so the session is not left with a
+                                        // pending turn in pi-acp when the user
+                                        // sends their first prompt. Mirrors the
+                                        // SendPrompt handler's cancel-grace race.
+                                        match tokio::time::timeout(
+                                            CANCEL_GRACE,
+                                            &mut warmup,
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(_)) => {
+                                                log::info!(
+                                                    "[acp] {req_agent_id} warmup \
+                                                     cancelled and settled"
+                                                );
+                                            }
+                                            Ok(Err(e)) => {
+                                                log::warn!(
+                                                    "[acp] {req_agent_id} warmup \
+                                                     cancel settled with error: {e}"
+                                                );
+                                            }
+                                            Err(_) => {
+                                                log::warn!(
+                                                    "[acp] {req_agent_id} warmup \
+                                                     cancel did not settle within \
+                                                     {CANCEL_GRACE:?}; continuing"
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
