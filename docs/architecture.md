@@ -68,6 +68,71 @@ This preserves a browser/dev/test path while keeping the Tauri-specific app as t
 - `src-tauri/src/main.rs` initializes logging and delegates to `termul_manager_lib::run()`
 - `src-tauri/src/lib.rs` builds the Tauri app, plugins, menu, managed state, migrations, and invoke handlers
 
+## ACP / AI Agent Chat Architecture
+
+Agent Chat is an ACP-backed workspace surface. It is separate from the
+terminal-native CLI-agent path. The renderer is responsible for initiating and
+tracking the UI session, transcript, and active tab; `AcpManager` and the Rust
+ACP runtime own the agent subprocess, backend session lifecycle, and protocol
+state.
+
+```text
+Agent Chat components
+  ├─ use-acp-listeners + acp-store (Zustand session/event state)
+  ├─ acp-history / agent / MCP persistence adapters
+  └─ acp-api → acp-transport
+       ├─ Tauri invoke/listen (desktop)
+       └─ ACP WebSocket transport (web/remote)
+              ↓
+        src-tauri/src/acp
+          ├─ commands.rs (Tauri command wrappers)
+          ├─ manager.rs (agent/session lifecycle and driver routing)
+          ├─ client.rs / session.rs (ACP protocol work)
+          └─ events.rs → EventSink fan-out
+```
+
+### Renderer topology
+
+- `components/chat/AgentChatPanel.tsx` composes the header, timeline, plan,
+  permission, and composer surfaces. `ChatInputBar.tsx` and
+  `use-composer-attachments.ts` build structured prompt content; `ChatMessage.tsx`,
+  `ToolCallCard.tsx`, and `PlanPanel.tsx` render streamed ACP state.
+- `stores/acp-store.ts` is the global multi-session Zustand store. It tracks
+  configured/live agents, sessions, messages, tool calls, plans, available
+  commands, pending permissions, prompt queues, and reported usage. The
+  `activeSessionId` field is a UI convenience, not a cross-tab isolation
+  boundary.
+- `hooks/use-acp-listeners.ts` installs the event reducers once at app mount.
+  The ACP history, agent, MCP, registry-catalog, and runtime-probe hooks
+  coordinate persistence and setup around the store.
+- `lib/acp-api.ts` is the renderer facade. `lib/acp-transport.ts` selects Tauri
+  IPC on desktop and the WebSocket relay on web/remote; components and stores do
+  not call Tauri APIs directly.
+
+### Runtime and lifecycle
+
+`commands.rs` is a thin command boundary over `AcpManager`. The manager starts
+an agent subprocess, completes `initialize`, routes session and prompt work to
+the agent driver, and forwards protocol notifications as typed `acp:*` events.
+`events.rs` defines the event names and serializable camelCase payloads. Event
+emission is transport-neutral fan-out; the desktop sink bridges to Tauri while
+the web path receives the same event contract through the ACP transport.
+
+A normal chat flow is: spawn or reuse an agent → initialize and retain
+capabilities/auth methods → authenticate when the advertised methods require it
+→ create/load/resume a session → send structured prompt blocks → receive message,
+tool, plan, permission, config, and usage updates → complete or cancel the turn.
+Session history is persisted lazily and scoped by `(projectId, cwd)`; the live
+store remains multi-session so switching chat tabs does not require reshaping
+the backend protocol.
+
+ACP setup must preserve protocol capabilities rather than assuming a provider:
+agent-advertised authentication methods are opaque, exactly one method is
+selected automatically before `session/new`, and multiple methods require an
+explicit user choice. Model, mode, config-option, prompt-content, permission,
+and optional usage/cost fields remain capability-driven and are surfaced only
+when supplied by the ACP agent.
+
 ## Renderer Architecture
 
 ### 1. App Shell Layer

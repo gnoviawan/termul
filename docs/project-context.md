@@ -105,6 +105,17 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
 - Don't assume native chrome, drag-drop, or global hotkeys exist on the web/mobile surface — provide keyboard + touch equivalents.
 - When designing a feature, ask: "Does this work on a phone browser served by termul-server?" If not, gate it desktop-only with an explicit `isTauriContext()` branch and document why.
 
+### ACP / Agent Chat Rules
+
+- Route all renderer ACP calls and subscriptions through `src/renderer/lib/acp-api.ts`; keep transport selection in `acp-transport.ts` and do not import Tauri APIs from chat components, hooks, or stores.
+- Treat `src-tauri/src/acp/commands.rs`, `events.rs`, and the renderer facade as one contract: preserve command names, `acp:*` event names, camelCase payload fields, and nested ACP schema values together.
+- Preserve desktop↔web parity for ACP commands and events. A new desktop command or event needs the equivalent web/remote transport path, or an explicit desktop-only boundary.
+- Keep ACP state in `acp-store.ts`; use its selectors and existing persistence adapters rather than introducing a second session store. History identity is `(projectId, cwd)`.
+- Preserve ACP capability and authentication ordering: when `authMethods` is
+  empty, do not authenticate; when exactly one method is advertised, authenticate
+  it automatically before `session/new`; when multiple methods are advertised,
+  require an explicit user choice.
+
 ### Testing Rules
 
 - Colocate tests with code: `*.test.ts` / `*.test.tsx` next to the file (excluded from `tsconfig.web.json`). Vitest globs `src/**/*.test.{ts,tsx}` + `scripts/**/*.test.ts`.

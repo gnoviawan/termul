@@ -339,6 +339,59 @@ See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent 
 
 When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
 
+## ACP / AI Agent Chat Contract
+
+ACP is an internal Agent Client Protocol integration, not a public HTTP API. The
+renderer facade (`src/renderer/lib/acp-api.ts`) selects Tauri IPC or the
+WebSocket relay through `src/renderer/lib/acp-transport.ts`; the Rust command
+and event definitions remain the contract source of truth.
+
+### Native commands
+
+| Command | Inputs | Result |
+| --- | --- | --- |
+| `acp_spawn_agent` | `config` | `AgentId` |
+| `acp_kill_agent` / `acp_list_agents` | `agentId` / none | `()` / `AgentId[]` |
+| `acp_new_session` | `agentId`, `cwd`, optional `mcpServers` | `NewSessionOutcome` |
+| `acp_load_session` / `acp_resume_session` | `agentId`, `sessionId`, `cwd` | `SessionReopenOutcome` |
+| `acp_close_session` / `acp_cancel_prompt` | `agentId`, `sessionId` | `()` |
+| `acp_list_sessions` | `agentId`, optional `cwd`/`cursor` | `ListSessionsResponse` |
+| `acp_send_prompt` | `agentId`, `sessionId`, `content` or `text` | `StopReason` |
+| `acp_set_config_option` | `agentId`, `sessionId`, `configId`, `valueId` | updated options |
+| `acp_set_mode` / `acp_set_model` | `agentId`, `sessionId`, `modeId` / `modelId` | `()` |
+| `acp_authenticate` | `agentId`, `methodId` | `()` |
+| `acp_respond_permission` | `agentId`, `requestId`, optional `optionId` | `()` |
+| `acp_probe_runtime` | none | `AcpRuntimeProbe` |
+
+`acp_send_prompt` uses structured `content` when it is non-empty and falls back
+to the `text` field when structured content is empty. It rejects the prompt only
+when both are absent. A second in-flight turn returns the stable
+`ACP_TURN_IN_PROGRESS` diagnostic used by the renderer queue. Permission
+resolution is first-response-wins across desktop and web/remote paths.
+
+### Native events
+
+Native event payloads use camelCase fields and preserve nested ACP schema values.
+The main event families are `agent_spawned`, `session_created`, streamed
+`message_chunk`, `tool_call`/`tool_call_update`, `plan_update`,
+`commands_update`, `mode_update`, `config_options_update`,
+`permission_request`, `prompt_complete`, `agent_error`/`agent_crashed`,
+`session_closed`, `agent_disconnected`, `session_info_update`, and
+`usage_update`. The renderer additionally consumes transport-facing `user_prompt`
+events; that event is not declared as a native Rust event.
+
+### State and media semantics
+
+- Auth methods advertised during `initialize` are retained; one unambiguous
+  method is authenticated before `session/new`, while multiple methods require
+  explicit user choice.
+- `acp-store.ts` is global multi-session state. Persisted history is scoped by
+  `(projectId, cwd)` and loaded lazily; `activeSessionId` is a UI convenience.
+- ACP plans replace the session plan, with empty entries clearing it. Usage
+  values must be finite and positive; valid updates replace the session snapshot.
+- Path-backed attachments use `resource_link`; pasted/dropped bytes use image or
+  embedded-resource blocks only when the agent advertises `embeddedContext`.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.

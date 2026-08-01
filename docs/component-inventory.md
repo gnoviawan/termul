@@ -51,12 +51,29 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 ### Agent Chat (ACP) Components
 
 - `chat/AgentChatPanel.tsx` — top-level agent-chat pane body coordinating header, message thread, plan panel, permission dialog, and composer for a single ACP session
-- `chat/ChatMessage.tsx` — user/agent message row; renders sanitized markdown prose plus media blocks as AI Elements `Attachments` grid thumbnails (lightbox for inline images, click-to-open for `file://`-backed blocks)
-- `chat/ChatInputBar.tsx` — composer with slash commands, `@`-file mentions, config/mode chips, and staged-attachment badges
-- `chat/AttachmentPreviewGroup.tsx` — staged-attachment badges above the composer using AI Elements `Attachments` inline variant with hover-card image previews and click-to-open for path-backed refs
-- `chat/use-composer-attachments.ts` — hybrid transport hook (OS picker → `resource_link`, drag/paste → inline image or embedded text) shared by the chat input and the new-thread launcher
-- `chat/chat-attachments.ts` — attachment helpers: MIME guessing, name humanization, ACP block mapping, and `pendingToAttachmentData`/`blockToAttachmentData` adapters into AI Elements `AttachmentData`
-- `ai-elements/attachments.tsx` — vendored [AI SDK Elements Attachments](https://elements.ai-sdk.dev/components/attachments) component (grid/inline/list variants) adapted to the repo's shadcn primitives and `ai` package types
+- `chat/AgentHeader.tsx` / `chat/AgentBadge.tsx` / `chat/AgentConnectionLamp.tsx` — agent identity, setup state, and transport/session connectivity indicators
+- `chat/ChatMessage.tsx` / `chat/ChatMessageList.tsx` — user/agent message rows and timeline rendering, including sanitized Markdown, streamed text, ACP media blocks, inline-image lightbox behavior, and safe opening of path-backed resources
+- `chat/ChatInputBar.tsx` — composer with slash commands, `@`-file mentions, config/mode chips, prompt queue controls, and staged-attachment badges
+- `chat/AttachmentPreviewGroup.tsx` / `chat/AttachFilesButton.tsx` — staged attachment presentation and file/image selection, including hover previews and path-backed opening
+- `chat/use-composer-attachments.ts` / `chat/chat-attachments.ts` — map OS-picked paths to `resource_link` blocks and drag/paste bytes to image or embedded-resource blocks; `pendingToAttachmentData` and `blockToAttachmentData` adapt ACP blocks to attachment UI data
+- `chat/FileMentionMenu.tsx` / `chat/use-composer-mentions.ts` — codebase filename discovery that stages a `file-ref` attachment
+- `chat/ToolCallCard.tsx` / `chat/ThoughtGroup.tsx` / `chat/TurnActivity.tsx` — streamed tool, reasoning, and turn-state views
+- `chat/PlanPanel.tsx` / `chat/ContextUsageIndicator.tsx` — agent plan and reported context-window usage surfaces
+- `chat/PermissionDialog.tsx` / `chat/PromptQueuePanel.tsx` — pending permission decisions and queued prompts
+- `src/renderer/components/ai-elements/attachments.tsx` — vendored AI SDK Elements attachment primitives adapted to the repository's shadcn primitives, with grid/inline/list variants
+
+#### ACP state, hooks, and transport topology
+
+- `stores/acp-store.ts` — global multi-session Zustand state: configured/live agents, sessions, messages, tool calls, plans, available commands, permissions, prompt queues, and usage
+- `hooks/use-acp-listeners.ts` — installs the store's ACP event subscriptions once; `use-acp-agents.ts`, `use-acp-history.ts`, `use-acp-history-sync.ts`, `use-acp-mcp.ts`, `use-acp-registry-catalog.ts`, and `use-acp-runtime-probe.ts` coordinate setup, persistence, discovery, and transport recovery
+- `lib/acp-api.ts` — typed renderer facade for ACP commands and events
+- `lib/acp-transport.ts` — desktop Tauri IPC versus web/remote WebSocket transport selection
+- `lib/acp-agents-persistence.ts`, `lib/acp-history-persistence.ts`, and `lib/acp-mcp-persistence.ts` — persisted agent configuration, chat history, and MCP registry adapters
+- `lib/agents/acp-registry.ts`, `acp-registry-catalog.ts`, and `supported-acp-agents.ts` — supported/provider registry and catalog helpers
+- `src-tauri/src/acp/commands.rs` — thin command wrappers over `AcpManager`
+- `src-tauri/src/acp/events.rs` — event constants and typed camelCase payloads
+- `src-tauri/src/acp/manager.rs` — agent/session lifecycle, driver routing, and event fan-out
+- `src-tauri/src/acp/client.rs`, `session.rs`, `terminal.rs`, `config.rs`, `session_persistence.rs`, and `project_registry.rs` — protocol client, session operations, optional terminal capability, configuration, and persistence/registry support
 
 ### Browser / Annotation Components
 
