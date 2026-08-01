@@ -37,6 +37,8 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `terminal/TauriTerminal.tsx` — alternate direct Tauri PTY terminal implementation
 - `terminal/TerminalSearchBar.tsx` — terminal text search UI
 - `terminal/ActivityIndicator.tsx` — recent terminal activity indicator
+- `mobile/MobileChatShell.tsx` — narrow web shell with terminal creation, selection, and close navigation alongside chat history
+- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
 - `TerminalTabBar.tsx` / `TerminalView.tsx` — legacy or transitional terminal view helpers retained in repository
 
 ### Editor Components
@@ -115,6 +117,8 @@ These components are coordinated by dedicated Zustand stores:
 The app shell (`WorkspaceLayout`) owns cross-cutting concerns, while feature surfaces (`ConnectedTerminal`, `EditorPanel`, `BrowserPanel`) encapsulate mode-specific behavior.
 
 ### 2. Adapter Isolation Pattern
+
+`terminal-api.ts` selects `tauri-terminal-api.ts` or `web-terminal-api.ts` at runtime. Renderer components, including `ConnectedTerminal` and mobile controls, never import Tauri APIs directly. The browser adapter owns `/terminal/ws` request correlation, listener fan-out, reconnect, and reattach behavior.
 UI components prefer `@/lib/api` adapters rather than direct Tauri APIs, keeping runtime coupling isolated in a service layer.
 
 ### 3. Store-Driven Rendering

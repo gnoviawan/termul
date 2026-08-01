@@ -11,6 +11,7 @@
 
 import type { ClipboardApi } from '@shared/types/ipc.types'
 import { tauriClipboardApi } from './tauri-clipboard-api'
+import { isTauriContext } from './tauri-runtime'
 
 /**
  * Singleton ClipboardApi instance
@@ -19,4 +20,25 @@ import { tauriClipboardApi } from './tauri-clipboard-api'
  * In the future, this could conditionally export an Electron implementation
  * based on build environment.
  */
-export const clipboardApi: ClipboardApi = tauriClipboardApi
+const browserClipboardApi: ClipboardApi = {
+  async readText() {
+    try {
+      return { success: true, data: await navigator.clipboard.readText() }
+    } catch (error) {
+      return { success: false, error: String(error), code: 'READ_ERROR' }
+    }
+  },
+  async writeText(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return { success: true, data: undefined }
+    } catch (error) {
+      return { success: false, error: String(error), code: 'WRITE_ERROR' }
+    }
+  },
+  async hasImage() {
+    return { success: true, data: false }
+  }
+}
+
+export const clipboardApi: ClipboardApi = isTauriContext() ? tauriClipboardApi : browserClipboardApi

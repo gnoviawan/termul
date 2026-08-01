@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use super::cwd_tracker::CwdTracker;
+use super::{TerminalEvent, TerminalEventHub};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -326,22 +327,6 @@ impl GitState {
     }
 }
 
-/// Event emitted when git branch changes
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitBranchChangedEvent {
-    terminal_id: String,
-    branch: Option<String>,
-}
-
-/// Event emitted when git status changes
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitStatusChangedEvent {
-    terminal_id: String,
-    status: Option<GitStatus>,
-}
-
 /// Tracks git repository status for terminals
 ///
 /// Polls git status periodically and emits events when branch or status changes.
@@ -349,7 +334,9 @@ struct GitStatusChangedEvent {
 /// On Windows, uses CWD deduplication and throttling to reduce git.exe spawns.
 pub struct GitTracker {
     terminal_states: Arc<RwLock<HashMap<String, GitState>>>,
-    app_handle: AppHandle,
+    app_handle: Option<AppHandle>,
+    cwd_tracker: Option<Arc<CwdTracker>>,
+    events: TerminalEventHub,
     poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     is_polling_started: Arc<AtomicBool>,
     is_visible: Arc<AtomicBool>,
@@ -359,16 +346,26 @@ pub struct GitTracker {
 
 impl GitTracker {
     /// Create a new GitTracker with the given app handle
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(app_handle: Option<AppHandle>, events: TerminalEventHub) -> Self {
         Self {
             terminal_states: Arc::new(RwLock::new(HashMap::new())),
             app_handle,
+            cwd_tracker: None,
+            events,
             poll_handle: Arc::new(RwLock::new(None)),
             is_polling_started: Arc::new(AtomicBool::new(false)),
             is_visible: Arc::new(AtomicBool::new(true)),
             #[cfg(target_os = "windows")]
             cwd_poll_states: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Create a GitTracker with a direct CwdTracker reference (standalone mode).
+    /// This avoids the Tauri AppHandle dependency for CWD synchronization.
+    pub fn with_cwd_tracker(cwd_tracker: Arc<CwdTracker>, events: TerminalEventHub) -> Self {
+        let mut tracker = Self::new(None, events);
+        tracker.cwd_tracker = Some(cwd_tracker);
+        tracker
     }
 
     /// Initialize tracking for a terminal with the given working directory
@@ -384,7 +381,7 @@ impl GitTracker {
             .write()
             .insert(terminal_id.to_string(), state);
 
-        let app_handle = self.app_handle.clone();
+        let events = self.events.clone();
         let states = self.terminal_states.clone();
         let terminal_id_owned = terminal_id.to_string();
         let cwd_owned = cwd.to_string();
@@ -396,11 +393,11 @@ impl GitTracker {
                 Self::apply_git_results(&states, &terminal_ids, branch, status);
 
             for (_, branch) in branch_emits {
-                Self::emit_branch_changed_static(&app_handle, &terminal_id_owned, &branch);
+                Self::emit_branch_changed_static(&events, &terminal_id_owned, &branch);
             }
 
             for (_, status) in status_emits {
-                Self::emit_status_changed_static(&app_handle, &terminal_id_owned, &status);
+                Self::emit_status_changed_static(&events, &terminal_id_owned, &status);
             }
         });
 
@@ -452,6 +449,13 @@ impl GitTracker {
         // for simplicity - it will just skip when empty
     }
 
+    /// Update a terminal's tracked CWD from the transport-neutral CWD tracker.
+    pub fn update_terminal_cwd(&self, terminal_id: &str, cwd: String) {
+        if let Some(state) = self.terminal_states.write().get_mut(terminal_id) {
+            state.update_terminal_cwd(cwd);
+        }
+    }
+
     /// Get the current branch for a terminal
     pub fn get_branch(&self, terminal_id: &str) -> Option<String> {
         self.terminal_states
@@ -479,7 +483,13 @@ impl GitTracker {
     }
 
     fn refresh_tracked_terminals(&self) {
-        Self::sync_terminal_cwds_from_tracker(&self.app_handle, &self.terminal_states);
+        // Transport-neutral: use the direct CwdTracker reference if available,
+        // otherwise fall back to the Tauri AppHandle state lookup.
+        if let Some(cwd_tracker) = &self.cwd_tracker {
+            Self::sync_terminal_cwds_from_tracker_direct(cwd_tracker, &self.terminal_states);
+        } else if let Some(app_handle) = &self.app_handle {
+            Self::sync_terminal_cwds_from_tracker(app_handle, &self.terminal_states);
+        }
 
         #[cfg(target_os = "windows")]
         Self::prune_unused_cwd_poll_states(&self.terminal_states, &self.cwd_poll_states);
@@ -519,11 +529,11 @@ impl GitTracker {
                 );
 
                 for (terminal_id, branch) in branch_emits {
-                    Self::emit_branch_changed_static(&self.app_handle, &terminal_id, &branch);
+                    Self::emit_branch_changed_static(&self.events, &terminal_id, &branch);
                 }
 
                 for (terminal_id, status) in status_emits {
-                    Self::emit_status_changed_static(&self.app_handle, &terminal_id, &status);
+                    Self::emit_status_changed_static(&self.events, &terminal_id, &status);
                 }
             }
         }
@@ -549,11 +559,11 @@ impl GitTracker {
                 );
 
                 for (_, branch) in branch_emits {
-                    Self::emit_branch_changed_static(&self.app_handle, &terminal_id, &branch);
+                    Self::emit_branch_changed_static(&self.events, &terminal_id, &branch);
                 }
 
                 for (_, status) in status_emits {
-                    Self::emit_status_changed_static(&self.app_handle, &terminal_id, &status);
+                    Self::emit_status_changed_static(&self.events, &terminal_id, &status);
                 }
             }
         }
@@ -567,6 +577,34 @@ impl GitTracker {
             return;
         };
 
+        let terminal_ids: Vec<String> = states.read().keys().cloned().collect();
+        let updates: Vec<(String, String)> = terminal_ids
+            .into_iter()
+            .filter_map(|terminal_id| {
+                cwd_tracker
+                    .get_cwd(&terminal_id)
+                    .map(|cwd| (terminal_id, cwd))
+            })
+            .collect();
+
+        if updates.is_empty() {
+            return;
+        }
+
+        let mut states_guard = states.write();
+        for (terminal_id, new_cwd) in updates {
+            if let Some(state) = states_guard.get_mut(&terminal_id) {
+                state.update_terminal_cwd(new_cwd);
+            }
+        }
+    }
+
+    /// Transport-neutral CWD sync: uses a direct Arc<CwdTracker> reference
+    /// instead of the Tauri AppHandle state lookup. Used in standalone mode.
+    fn sync_terminal_cwds_from_tracker_direct(
+        cwd_tracker: &Arc<CwdTracker>,
+        states: &Arc<RwLock<HashMap<String, GitState>>>,
+    ) {
         let terminal_ids: Vec<String> = states.read().keys().cloned().collect();
         let updates: Vec<(String, String)> = terminal_ids
             .into_iter()
@@ -1389,6 +1427,7 @@ impl GitTracker {
         #[cfg(target_os = "windows")]
         let cwd_poll_states = self.cwd_poll_states.clone();
         let app_handle = self.app_handle.clone();
+        let events = self.events.clone();
         let poll_handle = self.poll_handle.clone();
 
         let handle = tokio::spawn(async move {
@@ -1439,7 +1478,9 @@ impl GitTracker {
                     None => continue, // Already polling
                 };
 
-                Self::sync_terminal_cwds_from_tracker(&app_handle, &states);
+                if let Some(app_handle) = &app_handle {
+                    Self::sync_terminal_cwds_from_tracker(app_handle, &states);
+                }
                 #[cfg(target_os = "windows")]
                 Self::prune_unused_cwd_poll_states(&states, &cwd_poll_states);
 
@@ -1517,11 +1558,11 @@ impl GitTracker {
                         );
 
                         for (terminal_id, branch) in branch_emits {
-                            Self::emit_branch_changed_static(&app_handle, &terminal_id, &branch);
+                            Self::emit_branch_changed_static(&events, &terminal_id, &branch);
                         }
 
                         for (terminal_id, status) in status_emits {
-                            Self::emit_status_changed_static(&app_handle, &terminal_id, &status);
+                            Self::emit_status_changed_static(&events, &terminal_id, &status);
                         }
                     }
                 }
@@ -1541,11 +1582,11 @@ impl GitTracker {
                             Self::apply_git_results(&states, &terminal_ids, new_branch, new_status);
 
                         for (_, branch) in branch_emits {
-                            Self::emit_branch_changed_static(&app_handle, &terminal_id, &branch);
+                            Self::emit_branch_changed_static(&events, &terminal_id, &branch);
                         }
 
                         for (_, status) in status_emits {
-                            Self::emit_status_changed_static(&app_handle, &terminal_id, &status);
+                            Self::emit_status_changed_static(&events, &terminal_id, &status);
                         }
                     }
                 }
@@ -1666,28 +1707,26 @@ impl GitTracker {
 
     /// Static version of emit_branch_changed for use in async context
     fn emit_branch_changed_static(
-        app_handle: &AppHandle,
+        events: &TerminalEventHub,
         terminal_id: &str,
         branch: &Option<String>,
     ) {
-        let event = GitBranchChangedEvent {
+        events.emit(TerminalEvent::GitBranchChanged {
             terminal_id: terminal_id.to_string(),
             branch: branch.clone(),
-        };
-        let _ = app_handle.emit("terminal-git-branch-changed", event);
+        });
     }
 
     /// Static version of emit_status_changed for use in async context
     fn emit_status_changed_static(
-        app_handle: &AppHandle,
+        events: &TerminalEventHub,
         terminal_id: &str,
         status: &Option<GitStatus>,
     ) {
-        let event = GitStatusChangedEvent {
+        events.emit(TerminalEvent::GitStatusChanged {
             terminal_id: terminal_id.to_string(),
             status: status.clone(),
-        };
-        let _ = app_handle.emit("terminal-git-status-changed", event);
+        });
     }
 }
 

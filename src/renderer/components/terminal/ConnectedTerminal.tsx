@@ -24,7 +24,7 @@ import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { isMac, isPlatformModifier } from '@/lib/platform'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
+import { addRendererRef, removeRendererRef } from '@/lib/terminal-api'
 import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent

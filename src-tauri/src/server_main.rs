@@ -19,7 +19,10 @@ use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, ServerConfig, WsRelaySink,
 };
-use termul_manager_lib::{AcpManager, FileProjectRegistry, SessionPersistence};
+use termul_manager_lib::{
+    AcpManager, CwdTracker, ExitCodeTracker, FileProjectRegistry, GitTracker, PtyManager,
+    SessionPersistence, TerminalEventHub,
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -122,10 +125,31 @@ fn main() -> ExitCode {
                 }
             }
         }
-        // `serve` always kill_all()s after Axum returns (ok or err).
+        // The standalone binary owns its interactive PTYs and kills them only
+        // after Axum drains. Desktop shared-live passes its existing manager and
+        // never reaches that cleanup path.
+        let terminal_events = TerminalEventHub::standalone();
+        let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
+        let git_tracker = Arc::new(GitTracker::with_cwd_tracker(
+            cwd_tracker.clone(),
+            terminal_events.clone(),
+        ));
+        let exit_code_tracker = Arc::new(ExitCodeTracker::new(terminal_events.clone()));
+        let pty = Arc::new(PtyManager::new(
+            terminal_events.clone(),
+            Arc::clone(&cwd_tracker),
+            Arc::clone(&git_tracker),
+            Arc::clone(&exit_code_tracker),
+        ));
+
         let projects_file = cfg.projects_file.clone();
         match serve(
             acp,
+            pty,
+            terminal_events,
+            cwd_tracker,
+            git_tracker,
+            exit_code_tracker,
             ws_relay,
             registry,
             registry_persistence,

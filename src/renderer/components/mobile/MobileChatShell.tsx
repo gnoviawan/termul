@@ -1,4 +1,15 @@
-import { FolderGit2, FolderTree, Menu, MessageSquarePlus, Settings } from 'lucide-react'
+import {
+  FolderGit2,
+  FolderTree,
+  Menu,
+  MessageSquarePlus,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Settings,
+  TerminalSquare,
+  X
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
@@ -15,8 +26,10 @@ import {
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { MobileFileExplorer } from './MobileFileExplorer'
+import { MobileTerminalControls } from './MobileTerminalControls'
 
 interface MobileChatShellProps {
   children: React.ReactNode
@@ -24,6 +37,10 @@ interface MobileChatShellProps {
   onNewChat: () => void
   /** Whether a new chat can be started (active project has a path). */
   canNewChat?: boolean
+  onNewTerminal?: () => void
+  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  onRenameTerminal?: (terminalId: string, name: string) => void
+  onRestartTerminal?: (terminalId: string) => void
 }
 
 /**
@@ -34,22 +51,41 @@ interface MobileChatShellProps {
 export function MobileChatShell({
   children,
   onNewChat,
-  canNewChat = false
+  canNewChat = false,
+  onNewTerminal,
+  onCloseTerminal,
+  onRenameTerminal,
+  onRestartTerminal
 }: MobileChatShellProps): React.JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const navigate = useNavigate()
   const activeProject = useActiveProject()
 
-  const activeSessionId = useWorkspaceStore((s) => {
-    // Walk the pane tree once (not twice) and return a primitive sessionId —
-    // no `useShallow` needed for a primitive selector.
+  const { activeTab, activeTerminal, terminalTabs } = useWorkspaceStore((s) => {
     const leaves = getAllLeafPanes(s.root)
     const pane = leaves.find((p) => p.id === s.activePaneId) ?? leaves[0]
-    const tab = pane?.tabs.find((t) => t.id === pane.activeTabId)
-    return tab?.type === 'agent-chat' ? tab.sessionId : null
+    const tab = pane?.tabs.find((t) => t.id === pane.activeTabId) ?? null
+    // Flatten terminal tabs from ALL leaf panes, not just the active one.
+    const allTerminalTabs = leaves.flatMap((leaf) =>
+      (leaf.tabs ?? [])
+        .filter((t) => t.type === 'terminal')
+        .map((t) => ({ tab: t, paneId: leaf.id }))
+    )
+    return {
+      activeTab: tab,
+      activeTerminal:
+        tab?.type === 'terminal'
+          ? useTerminalStore.getState().terminals.find((terminal) => terminal.id === tab.terminalId)
+          : undefined,
+      terminalTabs: allTerminalTabs
+    }
   })
+
+  const activeSessionId = activeTab?.type === 'agent-chat' ? activeTab.sessionId : null
 
   const sessionTitle = useAcpStore((s) => {
     if (!activeSessionId) return null
@@ -59,12 +95,39 @@ export function MobileChatShell({
   })
 
   const headerTitle = useMemo(() => {
+    if (activeTerminal?.name) return activeTerminal.name
     if (sessionTitle) return sessionTitle
     if (activeProject?.name) return activeProject.name
     return 'Termul'
-  }, [sessionTitle, activeProject?.name])
+  }, [activeTerminal?.name, sessionTitle, activeProject?.name])
 
   const closeDrawer = (): void => setDrawerOpen(false)
+
+  const selectTerminal = (paneId: string, tabId: string): void => {
+    const workspace = useWorkspaceStore.getState()
+    if (workspace.activePaneId !== paneId) {
+      // Defer tab activation until pane is active.
+      requestAnimationFrame(() => {
+        useWorkspaceStore.getState().setActiveTab(paneId, tabId)
+      })
+    } else {
+      workspace.setActiveTab(paneId, tabId)
+    }
+    closeDrawer()
+  }
+
+  const startRename = (terminalId: string, currentName: string): void => {
+    setRenamingId(terminalId)
+    setRenameValue(currentName)
+  }
+
+  const confirmRename = (): void => {
+    if (renamingId && renameValue.trim() && onRenameTerminal) {
+      onRenameTerminal(renamingId, renameValue.trim())
+    }
+    setRenamingId(null)
+    setRenameValue('')
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-mobile-chat-shell="">
@@ -113,20 +176,50 @@ export function MobileChatShell({
           </Button>
         )}
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-10 shrink-0"
-          aria-label="New chat"
-          disabled={!canNewChat}
-          onClick={onNewChat}
-        >
-          <MessageSquarePlus size={20} />
-        </Button>
+        {activeTab?.type === 'terminal' ? (
+          <>
+            {onRestartTerminal && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0"
+                aria-label="Restart terminal"
+                onClick={() => onRestartTerminal(activeTab.terminalId)}
+              >
+                <RotateCcw size={18} />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="Close terminal"
+              onClick={() => onCloseTerminal?.(activeTab.terminalId, activeTab.id)}
+            >
+              <X size={20} />
+            </Button>
+          </>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 shrink-0"
+            aria-label="New chat"
+            disabled={!canNewChat}
+            onClick={onNewChat}
+          >
+            <MessageSquarePlus size={20} />
+          </Button>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      {activeTab?.type === 'terminal' && activeTerminal?.ptyId ? (
+        <MobileTerminalControls terminalId={activeTerminal.ptyId} />
+      ) : null}
 
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent
@@ -171,6 +264,90 @@ export function MobileChatShell({
             >
               <Settings size={16} />
             </Button>
+          </div>
+
+          <div className="border-b border-border/60 p-2">
+            <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
+              <span>Terminals</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="New terminal"
+                onClick={() => {
+                  closeDrawer()
+                  onNewTerminal?.()
+                }}
+              >
+                <Plus size={16} />
+              </Button>
+            </div>
+            {terminalTabs.length === 0 ? (
+              <p className="px-2 py-2 text-xs text-muted-foreground">No open terminals</p>
+            ) : (
+              terminalTabs.map(({ tab, paneId }) => {
+                const terminal = useTerminalStore
+                  .getState()
+                  .terminals.find((item) => item.id === tab.terminalId)
+                const isActive = tab.id === activeTab?.id
+                const isRenaming = renamingId === tab.terminalId
+                return (
+                  <div key={tab.id} className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant={isActive ? 'secondary' : 'ghost'}
+                      className="h-10 flex-1 justify-start gap-2"
+                      onClick={() => selectTerminal(paneId, tab.id)}
+                    >
+                      <TerminalSquare size={16} />
+                      <span className="truncate">{terminal?.name ?? 'Terminal'}</span>
+                    </Button>
+                    {isRenaming ? (
+                      <input
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={confirmRename}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') confirmRename()
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                        className="h-8 w-24 rounded border border-border bg-background px-2 text-xs"
+                        autoFocus
+                      />
+                    ) : (
+                      onRenameTerminal && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 shrink-0"
+                          aria-label="Rename terminal"
+                          onClick={() => startRename(tab.terminalId, terminal?.name ?? 'Terminal')}
+                        >
+                          <Pencil size={14} />
+                        </Button>
+                      )
+                    )}
+                    {onCloseTerminal && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 shrink-0"
+                        aria-label="Close terminal"
+                        onClick={() => {
+                          onCloseTerminal(tab.terminalId, tab.id)
+                        }}
+                      >
+                        <X size={14} />
+                      </Button>
+                    )}
+                  </div>
+                )
+              })
+            )}
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden">

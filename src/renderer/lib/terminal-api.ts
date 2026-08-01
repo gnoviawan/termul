@@ -9,8 +9,10 @@
  *   await terminalApi.spawn({ cwd: '/path' })
  */
 
-import type { TerminalApi } from '@shared/types/ipc.types'
+import type { IpcResult, TerminalApi } from '@shared/types/ipc.types'
+import { isTauriContext } from './tauri-runtime'
 import { createTauriTerminalApi } from './tauri-terminal-api'
+import { createWebTerminalApi, webTerminalInternals } from './web-terminal-api'
 
 /**
  * Singleton TerminalApi instance
@@ -19,7 +21,36 @@ import { createTauriTerminalApi } from './tauri-terminal-api'
  * In the future, this could conditionally export an Electron implementation
  * based on build environment.
  */
-export const terminalApi: TerminalApi = createTauriTerminalApi()
+export const terminalApi: TerminalApi = isTauriContext()
+  ? createTauriTerminalApi()
+  : createWebTerminalApi()
 
-// Re-export internal renderer ref methods for ConnectedTerminal component
-export { addRendererRef, removeRendererRef, setTerminalProtected } from './tauri-terminal-api'
+export async function addRendererRef(ptyId: string, rendererId: string): Promise<IpcResult<void>> {
+  if (isTauriContext()) {
+    const { addRendererRef: addTauriRendererRef } = await import('./tauri-terminal-api')
+    return addTauriRendererRef(ptyId, rendererId)
+  }
+  return webTerminalInternals.addRendererRef(ptyId, rendererId)
+}
+
+export async function removeRendererRef(
+  ptyId: string,
+  rendererId: string
+): Promise<IpcResult<void>> {
+  if (isTauriContext()) {
+    const { removeRendererRef: removeTauriRendererRef } = await import('./tauri-terminal-api')
+    return removeTauriRendererRef(ptyId, rendererId)
+  }
+  return webTerminalInternals.removeRendererRef(ptyId, rendererId)
+}
+
+export async function setTerminalProtected(
+  ptyId: string,
+  protectedState: boolean
+): Promise<IpcResult<void>> {
+  if (isTauriContext()) {
+    const { setTerminalProtected: setTauriTerminalProtected } = await import('./tauri-terminal-api')
+    return setTauriTerminalProtected(ptyId, protectedState)
+  }
+  return webTerminalInternals.setProtected(ptyId, protectedState)
+}

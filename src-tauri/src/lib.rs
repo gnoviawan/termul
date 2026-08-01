@@ -124,7 +124,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 // Re-exports for commands
 pub use acp::{AcpManager, FileProjectRegistry, SessionPersistence};
 pub use pty::PtyManager;
-pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
 // `Vec<Arc<dyn EventSink>>` fan-out reaches the renderer as `acp:*` events
 // (byte-for-byte unchanged from before Story 1.1). The headless `termul-server`
@@ -1003,21 +1003,25 @@ pub fn run() {
 
             app.manage(ViewMenuState::default());
 
-            // Create CWD Tracker (takes app_handle directly)
-            let cwd_tracker = Arc::new(CwdTracker::new(handle.clone()));
+            // Transport-neutral terminal event fan-out: desktop events remain
+            // byte-compatible while the web terminal socket subscribes to the
+            // same lifecycle/metadata stream.
+            let terminal_events = TerminalEventHub::tauri(handle.clone());
+
+            let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
             app.manage(cwd_tracker.clone());
 
-            // Create Git Tracker (takes app_handle directly)
-            let git_tracker = Arc::new(GitTracker::new(handle.clone()));
+            let git_tracker = Arc::new(GitTracker::new(
+                Some(handle.clone()),
+                terminal_events.clone(),
+            ));
             app.manage(git_tracker.clone());
 
-            // Create Exit Code Tracker (takes app_handle directly)
-            let exit_code_tracker = Arc::new(ExitCodeTracker::new(handle.clone()));
+            let exit_code_tracker = Arc::new(ExitCodeTracker::new(terminal_events.clone()));
             app.manage(exit_code_tracker.clone());
 
-            // Create PTY Manager (depends on trackers)
             let pty_manager = Arc::new(PtyManager::new(
-                handle.clone(),
+                terminal_events,
                 cwd_tracker,
                 git_tracker,
                 exit_code_tracker,

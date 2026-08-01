@@ -17,11 +17,14 @@ use axum::{
 };
 
 use crate::acp::{AcpManager, FileProjectRegistry};
+use crate::pty::PtyManager;
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::chat_history_cache::ChatHistoryCache;
 use crate::web::fs_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
+use crate::web::terminal_ws::terminal_ws_upgrade;
 use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
@@ -42,6 +45,11 @@ use super::assets;
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
+    pty: Arc<PtyManager>,
+    terminal_events: TerminalEventHub,
+    cwd_tracker: Arc<CwdTracker>,
+    git_tracker: Arc<GitTracker>,
+    exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
     chat_history_cache: Option<Arc<ChatHistoryCache>>,
@@ -53,6 +61,7 @@ pub fn router(
     let mut r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
+        .route("/terminal/ws", get(terminal_ws_upgrade))
         // Project list mirror (Epic-4 bridge): the web client reads the
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
@@ -80,6 +89,11 @@ pub fn router(
     }
     r.with_state(AppState {
         acp,
+        pty,
+        terminal_events,
+        cwd_tracker,
+        git_tracker,
+        exit_code_tracker,
         relay: ws_relay,
         registry,
         chat_history_cache,
@@ -93,6 +107,7 @@ pub fn router(
 /// Same as [`router`], but with an injectable static-root for unit tests.
 pub fn router_with_static(
     acp: Arc<AcpManager>,
+    pty: Arc<PtyManager>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
     static_dir: &Path,
@@ -101,6 +116,7 @@ pub fn router_with_static(
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
+        .route("/terminal/ws", get(terminal_ws_upgrade))
         .route("/projects", get(projects_api::list))
         .route("/fs/mkdir", post(fs_api::mkdir))
         .route("/fs/write", post(fs_api::write))
@@ -115,6 +131,11 @@ pub fn router_with_static(
         .fallback_service(assets::static_service_from(static_dir))
         .with_state(AppState {
             acp,
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
             relay: ws_relay,
             registry,
             chat_history_cache: None,
@@ -174,6 +195,7 @@ mod tests {
         // we pass the OS temp dir for symmetry with the legacy default.
         router_with_static(
             Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
             Arc::new(WsRelaySink::new()),
             Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             dir,

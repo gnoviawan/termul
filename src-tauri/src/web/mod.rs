@@ -23,6 +23,7 @@ pub mod project_registry;
 pub mod projects_api;
 pub mod router;
 pub mod sink;
+pub mod terminal_ws;
 pub mod ws;
 
 pub use chat_history_cache::ChatHistoryCache;
@@ -47,6 +48,17 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::acp::AcpManager;
+use crate::pty::PtyManager;
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+
+#[cfg(test)]
+pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
+    let events = TerminalEventHub::standalone();
+    let cwd = Arc::new(CwdTracker::new(events.clone()));
+    let git = Arc::new(GitTracker::new(None, events.clone()));
+    let exit = Arc::new(ExitCodeTracker::new(events.clone()));
+    Arc::new(PtyManager::new(events, cwd, git, exit))
+}
 
 /// Bind and serve the standalone ACP HTTP server until SIGINT/SIGTERM.
 ///
@@ -66,8 +78,14 @@ use crate::acp::AcpManager;
 /// The standalone binary owns its agent lifetime end-to-end, so it kills agents
 /// on exit. The desktop-hosted shared-live path calls [`serve_router`] directly
 /// and must NOT kill the desktop's live agents — see [`serve_router`].
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     acp: Arc<AcpManager>,
+    pty: Arc<PtyManager>,
+    terminal_events: TerminalEventHub,
+    cwd_tracker: Arc<CwdTracker>,
+    git_tracker: Arc<GitTracker>,
+    exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
     registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
@@ -76,6 +94,11 @@ pub async fn serve(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
+        pty.clone(),
+        terminal_events,
+        cwd_tracker,
+        git_tracker,
+        exit_code_tracker,
         ws_relay,
         registry,
         // The standalone VPS binary has no renderer-fed cache; it relies on
@@ -91,14 +114,26 @@ pub async fn serve(
 
     let serve_result = handle.await;
 
-    // Kill agents after Axum has drained (or failed) — the standalone binary
-    // owns its agents' lifecycle. The desktop-hosted path never reaches here.
-    acp.kill_all_checked()
-        .await
-        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
-    acp.shutdown_persistence()
-        .await
-        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+    // Cleanup: always attempt ALL resource cleanup even if one step fails.
+    // PTY cleanup must not be skipped because ACP persistence errored.
+    let mut cleanup_errors: Vec<Box<dyn std::error::Error + Send + Sync>> = Vec::new();
+
+    if let Err(e) = acp.kill_all_checked().await {
+        let e: Box<dyn std::error::Error + Send + Sync> = e.into();
+        log::error!("[termul-server] ACP kill_all failed during shutdown: {e}");
+        cleanup_errors.push(e);
+    }
+    if let Err(e) = acp.shutdown_persistence().await {
+        let e: Box<dyn std::error::Error + Send + Sync> = e.into();
+        log::error!("[termul-server] ACP persistence shutdown failed: {e}");
+        cleanup_errors.push(e);
+    }
+    // PTY cleanup always runs — never skip terminal process-tree kill.
+    pty.kill_all().await;
+
+    if let Some(first) = cleanup_errors.into_iter().next() {
+        return Err(first);
+    }
 
     match serve_result {
         Ok(()) => {
@@ -129,6 +164,11 @@ pub async fn serve(
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
+    pty: Arc<PtyManager>,
+    terminal_events: TerminalEventHub,
+    cwd_tracker: Arc<CwdTracker>,
+    git_tracker: Arc<GitTracker>,
+    exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
     chat_history_cache: Option<Arc<ChatHistoryCache>>,
@@ -167,6 +207,11 @@ pub async fn serve_router(
     };
     let app = router::router(
         Arc::clone(&acp),
+        pty,
+        terminal_events,
+        cwd_tracker,
+        git_tracker,
+        exit_code_tracker,
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
         chat_history_cache,

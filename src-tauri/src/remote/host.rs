@@ -35,6 +35,7 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::acp::AcpManager;
+use crate::pty::PtyManager;
 use crate::web::sink::WsRelaySink;
 use crate::web::{serve_router, ChatHistoryCache, ProjectRegistry, ServerConfig};
 
@@ -224,6 +225,7 @@ impl RemoteServerState {
     pub async fn start(
         &self,
         acp: Arc<AcpManager>,
+        pty: Arc<PtyManager>,
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
         chat_history_cache: Arc<ChatHistoryCache>,
@@ -294,6 +296,11 @@ impl RemoteServerState {
 
         let (addr, serve_handle) = serve_router(
             acp,
+            Arc::clone(&pty),
+            pty.terminal_events(),
+            pty.cwd_tracker(),
+            pty.git_tracker(),
+            pty.exit_code_tracker(),
             ws_relay,
             registry,
             Some(chat_history_cache),
@@ -565,25 +572,28 @@ mod tests {
     /// A real `AcpManager` (zero sinks is legal) + a `WsRelaySink` for the
     /// shared-live host lifecycle tests. The serve task binds a real OS-assigned
     /// localhost socket — safe in tests.
-    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>, Arc<ChatHistoryCache>) {
+    #[allow(clippy::type_complexity)]
+    fn lifecycle_fixtures() -> (Arc<AcpManager>, Arc<PtyManager>, Arc<WsRelaySink>, Arc<ProjectRegistry>, Arc<ChatHistoryCache>) {
         let acp = Arc::new(AcpManager::new(vec![]));
+        let pty = crate::web::test_pty_manager();
         let relay = Arc::new(WsRelaySink::new());
         let registry = Arc::new(ProjectRegistry::new());
         let chat_history_cache = Arc::new(ChatHistoryCache::new());
-        (acp, relay, registry, chat_history_cache)
+        (acp, pty, relay, registry, chat_history_cache)
     }
 
     #[tokio::test]
     async fn remote_server_state_start_then_stop_lifecycle() {
         // The full start→status(running)→stop→status(stopped)→restart cycle
         // that T8.1 asked for and the old misnamed test never exercised.
-        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         assert!(!state.status().running);
 
         let status = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),
@@ -614,6 +624,7 @@ mod tests {
         let again = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),
@@ -630,11 +641,12 @@ mod tests {
         // The lose-race guard: a second start while the first is running returns
         // Err — and (per R1) does NOT orphan a second server (its shutdown_tx is
         // signaled before returning). The first server keeps running.
-        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _first = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),
@@ -646,6 +658,7 @@ mod tests {
         let second = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),
@@ -670,11 +683,12 @@ mod tests {
         // disturbed. (AcpManager::new(vec![]) owns no agents, so there is
         // nothing to kill — this guards the path: start/stop complete without
         // touching kill_all, i.e. no panic, no error, clean drain.)
-        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),
@@ -698,11 +712,12 @@ mod tests {
         // then clears `tunnel_url` so the renderer poller drops the stale QR
         // (it would otherwise offer a link that yields "This site can't be
         // reached").
-        let (acp, relay, registry, chat_history_cache) = lifecycle_fixtures();
+        let (acp, pty, relay, registry, chat_history_cache) = lifecycle_fixtures();
         let state = RemoteServerState::new();
         let _ = state
             .start(
                 acp.clone(),
+                pty.clone(),
                 relay.clone(),
                 registry.clone(),
                 chat_history_cache.clone(),

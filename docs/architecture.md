@@ -332,6 +332,14 @@ CI runs:
 - good CI discipline across JS and Rust stacks
 - significant test surface in renderer code
 
+## Web Terminal Transport
+
+The renderer terminal seam is `terminal-api.ts`: Tauri uses typed commands and browser builds use a dedicated `/terminal/ws` socket. The terminal socket is intentionally separate from ACP `/ws`; it carries PTY requests, bounded scrollback replay/live output, and transport-neutral lifecycle/cwd/git/exit events. `ConnectedTerminal` remains the single xterm surface in both runtimes.
+
+Standalone `termul-server` owns its `PtyManager` and terminates those PTYs after graceful shutdown. Desktop shared-live mode passes the already-managed desktop `Arc<PtyManager>` into Axum, so stopping sharing detaches browser clients without killing desktop terminals. Output broadcast queues and replay scrollback remain bounded.
+
+**Security boundary:** terminal authentication, authorization, TLS, and sandbox hardening are deferred. `/terminal/ws` must not be exposed to public or untrusted networks; existing server exposure controls are the only boundary in this version. Logs record lifecycle/request outcomes only and must never record terminal input, output, environment values, or secrets.
+
 ## Architectural Risks / Constraints
 
 - terminal and pane rendering paths are performance-sensitive and complex

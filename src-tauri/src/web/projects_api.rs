@@ -61,14 +61,21 @@ mod tests {
     use crate::acp::{AcpManager, FileProjectRegistry};
     use crate::web::project_registry::{seed_from_file, ProjectRegistry, ProjectSummary};
     use crate::web::sink::WsRelaySink;
+    use crate::web::test_pty_manager;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::sync::Arc;
     use tower::ServiceExt;
 
     fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
+        let pty = test_pty_manager();
         AppState {
             acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
             relay: Arc::new(WsRelaySink::new()),
             registry,
             chat_history_cache: None,

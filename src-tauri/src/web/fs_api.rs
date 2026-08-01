@@ -817,6 +817,7 @@ mod tests {
     use crate::acp::AcpManager;
     use crate::web::project_registry::ProjectRegistry;
     use crate::web::sink::WsRelaySink;
+    use crate::web::test_pty_manager;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::path::PathBuf;
@@ -865,8 +866,14 @@ mod tests {
     /// `test_state()` keep working because the default root is the OS temp
     /// dir (and the existing tests only touch temp dirs).
     fn test_state_with_root(root: &Path) -> AppState {
+        let pty = test_pty_manager();
         AppState {
             acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
             relay: Arc::new(WsRelaySink::new()),
             registry: Arc::new(ProjectRegistry::new()),
             chat_history_cache: None,

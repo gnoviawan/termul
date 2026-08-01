@@ -2998,6 +2998,7 @@ pub async fn sftp_create_file(
 #[tauri::command]
 pub async fn remote_server_start(
     acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
+    pty_manager: State<'_, Arc<PtyManager>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
@@ -3019,6 +3020,7 @@ pub async fn remote_server_start(
     let started = remote_state
         .start(
             acp_manager.inner().clone(),
+            pty_manager.inner().clone(),
             ws_relay.inner().clone(),
             project_registry.inner().clone(),
             chat_history_cache.inner().clone(),

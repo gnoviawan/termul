@@ -170,6 +170,20 @@ Returns registered migrations.
 ### `data_migration_rollback`
 Runs rollback logic for a migration.
 
+## Web Terminal WebSocket
+
+`GET /terminal/ws` upgrades to the browser terminal transport and is isolated from ACP `/ws`.
+
+Client request envelope:
+
+```json
+{ "id": "terminal-1", "type": "resize", "payload": { "terminalId": "...", "cols": 100, "rows": 30 } }
+```
+
+Supported request types are `spawn`, `write`, `resize`, `kill`, `attach`, `get_cwd`, `get_git_branch`, `get_git_status`, `get_exit_code`, `add_renderer_ref`, `remove_renderer_ref`, `set_protected`, and `update_orphan_detection`. Replies use the existing `IpcResult` shape with the request `id`. Output frames are `{ "type": "data", "terminalId": "...", "data": [byte...] }`; event frames contain the transport-neutral exit/cwd/git/exit-code payload. `attach` sends bounded retained scrollback before subscribed live output.
+
+The service deliberately does not log request data, terminal bytes, environment values, or secrets. Authentication, authorization, TLS, and sandboxing are not provided; this endpoint is unsafe for public or untrusted network exposure.
+
 ## Event Contracts
 
 ### Terminal Event Flow

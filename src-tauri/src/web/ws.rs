@@ -41,6 +41,8 @@ use tracing::warn;
 
 use crate::acp::config::AgentConfig;
 use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
+use crate::pty::PtyManager;
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::permissions::TurnClaim;
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
 use crate::web::sink::{broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink};
@@ -275,6 +277,12 @@ pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
 pub struct AppState {
     /// The ACP manager (server is the ACP client-of-record).
     pub acp: Arc<AcpManager>,
+    /// Interactive PTYs exposed on the separate `/terminal/ws` endpoint.
+    pub pty: Arc<PtyManager>,
+    pub terminal_events: TerminalEventHub,
+    pub cwd_tracker: Arc<CwdTracker>,
+    pub git_tracker: Arc<GitTracker>,
+    pub exit_code_tracker: Arc<ExitCodeTracker>,
     /// The live WS relay sink (owns per-session logs + seq counters + subs).
     pub relay: Arc<WsRelaySink>,
     /// In-memory, renderer-fed project registry — source for `GET /projects`
