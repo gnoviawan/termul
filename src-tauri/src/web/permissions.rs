@@ -163,8 +163,9 @@ pub struct PermissionRendezvous {
     timeout: Duration,
     /// Grace before disconnect orphaning resolves a session's pending tickets.
     disconnect_grace: Duration,
-    /// Per-session cancellation for an armed disconnect grace.
-    disconnect_graces: Mutex<HashMap<String, oneshot::Sender<()>>>,
+    /// Per-session cancellation for an armed disconnect grace, keyed by a
+    /// generation token so an expired older task cannot evict a newer one.
+    disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
     /// A handle to the server's tokio runtime. Captured at construction so the
     /// per-ticket timeout can be armed from ANY thread (the relay's `emit` runs
     /// on the per-agent driver thread — a plain `std::thread`, NOT a tokio
@@ -265,7 +266,7 @@ impl PermissionRendezvous {
 
     /// Cancel an orphan grace only after a replacement subscription is live.
     pub fn cancel_disconnect_grace(&self, session_id: &str) {
-        if let Some(cancel) = self.disconnect_graces.lock().remove(session_id) {
+        if let Some((_, cancel)) = self.disconnect_graces.lock().remove(session_id) {
             let _ = cancel.send(());
             tracing::info!(session_id, "permission disconnect grace cancelled after resubscribe");
         }
@@ -280,11 +281,13 @@ impl PermissionRendezvous {
     ) where
         F: Fn(&str) -> usize + Send + Sync + 'static,
     {
+        static GRACE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let generation = GRACE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (cancel_tx, cancel_rx) = oneshot::channel();
-        if let Some(previous) = self
+        if let Some((_, previous)) = self
             .disconnect_graces
             .lock()
-            .insert(session_id.clone(), cancel_tx)
+            .insert(session_id.clone(), (generation, cancel_tx))
         {
             let _ = previous.send(());
         }
@@ -293,6 +296,16 @@ impl PermissionRendezvous {
         let session_id_for_warn = session_id.clone();
         let future = async move {
             if tokio::time::timeout(grace, cancel_rx).await.is_ok() {
+                return;
+            }
+            // Only deny if this is still the latest grace task — a newer
+            // schedule may have replaced us while the timeout was expiring.
+            let is_latest = {
+                let graces = this.disconnect_graces.lock();
+                graces.get(&session_id).is_some_and(|(gen, _)| *gen == generation)
+            };
+            if !is_latest {
+                tracing::info!(session_id, "permission disconnect grace superseded; skipping deny");
                 return;
             }
             this.disconnect_graces.lock().remove(&session_id);
