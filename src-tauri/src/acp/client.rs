@@ -1,6 +1,6 @@
 //! ACP `Client`-role behavior: capability advertisement, inbound request
 //! handling (permission, filesystem), session-update fan-out, and terminal
-//! stubs.
+//! capability advertisement (handlers wired in `manager.rs`, backed by `terminal.rs`).
 //!
 //! In `agent-client-protocol` 0.12 there is no `Client` *trait* to implement;
 //! instead the client role is expressed by registering handler closures on a
