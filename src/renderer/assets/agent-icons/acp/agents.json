@@ -105,11 +105,11 @@
   {
     "id": "codex-acp",
     "name": "Codex",
-    "version": "1.1.7",
+    "version": "1.1.8",
     "description": "ACP adapter for OpenAI's coding assistant",
     "distribution": {
       "npx": {
-        "package": "@agentclientprotocol/codex-acp@1.1.7"
+        "package": "@agentclientprotocol/codex-acp@1.1.8"
       }
     }
   },
@@ -438,33 +438,33 @@
   {
     "id": "harn",
     "name": "Harn",
-    "version": "0.10.49",
+    "version": "0.10.50",
     "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.49/harn-aarch64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.50/harn-aarch64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "darwin-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.49/harn-x86_64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.50/harn-x86_64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.49/harn-aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.50/harn-aarch64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.49/harn-x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.50/harn-x86_64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "windows-x86_64": {
           "cmd": "harn.exe",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.49/harn-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.50/harn-x86_64-pc-windows-msvc.zip",
           "args": ["serve", "acp"]
         }
       }
