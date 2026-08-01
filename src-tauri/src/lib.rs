@@ -12,7 +12,6 @@ mod pty;
 mod remote;
 mod secure_storage;
 mod shell_paths;
-mod skills;
 mod ssh;
 mod trackers;
 pub mod web;
@@ -1383,9 +1382,6 @@ pub fn run() {
             acp::commands::acp_probe_runtime,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
-            // Agent Skills (Zed-compatible SKILL.md packages)
-            skills::commands::list_agent_skills_cmd,
-            skills::commands::read_agent_skill_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

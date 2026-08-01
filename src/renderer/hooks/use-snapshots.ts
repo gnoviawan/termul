@@ -137,6 +137,7 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
 
   for (const persistedTerminal of snapshot.terminals) {
     const spawnResult = await terminalApi.spawn({
+      projectId,
       shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
       cwd: persistedTerminal.cwd,
       ...(hasProjectEnv ? { env } : {})

@@ -24,11 +24,6 @@ const { mockMcpCount } = vi.hoisted(() => ({
   mockMcpCount: { current: 2 }
 }))
 
-vi.mock('@/hooks/use-agent-skills', () => ({
-  useAgentSkills: () => ({ skills: [] }),
-  buildPromptWithLoadedSkill: vi.fn(async (_skill, text: string) => text)
-}))
-
 vi.mock('@/stores/acp-store', () => ({
   useAcpStore: (selector: (s: { mcpServers: unknown[] }) => unknown) =>
     selector({ mcpServers: Array.from({ length: mockMcpCount.current }) }),

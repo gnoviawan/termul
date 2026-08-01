@@ -36,38 +36,82 @@ describe('statusStyle', () => {
 })
 
 describe('diffLines / diffLineCounts', () => {
-  it('emits removed lines then added lines', () => {
+  it('computes actual changed lines between old and new file contents', () => {
+    // oldText: a, b  →  newText: a, c
+    // LCS: [a] → removed: [b], added: [c]
     const lines = diffLines({ oldText: 'a\nb', newText: 'a\nc' })
-    expect(lines).toEqual([
-      { type: 'removed', text: 'a' },
-      { type: 'removed', text: 'b' },
-      { type: 'added', text: 'a' },
-      { type: 'added', text: 'c' }
-    ])
+    const types = lines.map((l) => l.type)
+    const texts = lines.map((l) => l.text)
+    expect(types).toContain('removed')
+    expect(types).toContain('added')
+    expect(types).toContain('context')
+    expect(texts).toContain('b')
+    expect(texts).toContain('c')
+    expect(diffLineCounts({ oldText: 'a\nb', newText: 'a\nc' })).toEqual({ added: 1, removed: 1 })
   })
-  it('treats absent oldText as a new file', () => {
+  it('treats absent oldText as a new file (all lines added)', () => {
     const lines = diffLines({ oldText: null, newText: 'x\ny' })
     expect(lines.every((l) => l.type === 'added')).toBe(true)
     expect(diffLineCounts({ oldText: null, newText: 'x\ny' })).toEqual({ added: 2, removed: 0 })
   })
-  it('skips an empty side entirely', () => {
-    expect(diffLines({ oldText: 'a', newText: '' })).toEqual([{ type: 'removed', text: 'a' }])
+  it('treats empty newText as a full deletion', () => {
+    const lines = diffLines({ oldText: 'a', newText: '' })
+    expect(lines).toEqual([{ type: 'removed', text: 'a', oldLine: 1 }])
+    expect(diffLineCounts({ oldText: 'a', newText: '' })).toEqual({ added: 0, removed: 1 })
   })
   it('strips trailing CR from CRLF lines', () => {
     expect(diffLines({ oldText: null, newText: 'a\r\nb' })).toEqual([
-      { type: 'added', text: 'a' },
-      { type: 'added', text: 'b' }
+      { type: 'added', text: 'a', newLine: 1 },
+      { type: 'added', text: 'b', newLine: 2 }
     ])
   })
-  it('counts both sides', () => {
-    expect(diffLineCounts({ oldText: 'a\nb\nc', newText: 'a' })).toEqual({ added: 1, removed: 3 })
+  it('counts actual changed lines, not total lines', () => {
+    // 150-line file where only 3 lines changed → should show +3 −3, not +150 −150
+    const oldLines = Array.from({ length: 150 }, (_, i) => `line ${i + 1}`)
+    const newLines = [...oldLines]
+    newLines[49] = 'changed line 50' // line 50 modified
+    newLines[99] = 'changed line 100' // line 100 modified
+    newLines[149] = 'changed line 150' // line 150 modified
+    const oldText = oldLines.join('\n')
+    const newText = newLines.join('\n')
+    const counts = diffLineCounts({ oldText, newText })
+    expect(counts).toEqual({ added: 3, removed: 3 })
+  })
+  it('reports identical files as zero changes', () => {
+    expect(diffLineCounts({ oldText: 'a\nb\nc', newText: 'a\nb\nc' })).toEqual({
+      added: 0,
+      removed: 0
+    })
   })
   it('ignores the trailing empty segment for newline-terminated text', () => {
-    expect(diffLines({ oldText: 'a\n', newText: 'b\n' })).toEqual([
-      { type: 'removed', text: 'a' },
-      { type: 'added', text: 'b' }
-    ])
     expect(diffLineCounts({ oldText: 'a\n', newText: 'b\n' })).toEqual({ added: 1, removed: 1 })
+  })
+  it('includes context lines around changes', () => {
+    const lines = diffLines({ oldText: 'a\nb\nc\nd\ne', newText: 'a\nb\nX\nd\ne' })
+    // Line 3 changed (c → X), so context lines 1,2,4,5 should appear
+    const types = lines.map((l) => l.type)
+    const texts = lines.map((l) => l.text)
+    expect(types).toContain('context')
+    expect(types).toContain('removed')
+    expect(types).toContain('added')
+    expect(texts).toContain('c')
+    expect(texts).toContain('X')
+  })
+  it('shows ellipsis marker between non-adjacent change regions', () => {
+    const oldLines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`)
+    const newLines = [...oldLines]
+    newLines[0] = 'changed 1' // line 1
+    newLines[19] = 'changed 20' // line 20
+    const lines = diffLines({ oldText: oldLines.join('\n'), newText: newLines.join('\n') })
+    const ellipsis = lines.find((l) => l.type === 'context' && l.text === '···')
+    expect(ellipsis).toBeDefined()
+  })
+  it('includes line numbers on diff lines', () => {
+    const lines = diffLines({ oldText: 'a\nb\nc', newText: 'a\nB\nc\nd' })
+    const removed = lines.find((l) => l.type === 'removed')
+    const added = lines.find((l) => l.type === 'added')
+    expect(typeof removed?.oldLine).toBe('number')
+    expect(typeof added?.newLine).toBe('number')
   })
 })
 
