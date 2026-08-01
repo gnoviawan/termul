@@ -341,18 +341,15 @@ impl WsRelaySink {
     /// Current session sequence frontier. Used as the snapshot watermark.
     #[must_use]
     pub fn session_watermark(&self, session_id: &str) -> u64 {
-        self.sessions
-            .lock()
-            .get(session_id)
-            .map_or_else(
-                || {
-                    self.persistence
-                        .as_ref()
-                        .and_then(|persistence| persistence.last_seq(session_id).ok())
-                        .unwrap_or(0)
-                },
-                |state| state.last_seq,
-            )
+        self.sessions.lock().get(session_id).map_or_else(
+            || {
+                self.persistence
+                    .as_ref()
+                    .and_then(|persistence| persistence.last_seq(session_id).ok())
+                    .unwrap_or(0)
+            },
+            |state| state.last_seq,
+        )
     }
 
     /// Assign seq + append under the sessions lock (atomic w.r.t. concurrent emits).
@@ -566,9 +563,9 @@ impl WsRelaySink {
             // was evicted while disk replay was in flight, drop the state lock,
             // flush/re-read durable history, and retry before registering.
             let frontier = last_seq;
-            let first_missing = cursor.checked_add(1).and_then(|start| {
-                (start..=frontier).find(|seq| !by_seq.contains_key(seq))
-            });
+            let first_missing = cursor
+                .checked_add(1)
+                .and_then(|start| (start..=frontier).find(|seq| !by_seq.contains_key(seq)));
             if first_missing.is_some() {
                 if self.persistence.is_none() || base_seq <= cursor.saturating_add(1) {
                     return (client_id, rx, ReplayResult::Stale);
@@ -726,6 +723,25 @@ impl WsRelaySink {
                 session_subs.remove(sid);
             }
         }
+    }
+
+    /// Forget all in-memory relay state for a successfully disposed ephemeral session.
+    pub async fn forget_session(&self, sid: &str) {
+        self.sessions.lock().remove(sid);
+        let affected_clients = self.session_subs.lock().remove(sid).unwrap_or_default();
+        if !affected_clients.is_empty() {
+            let mut clients = self.clients.lock();
+            for client_id in affected_clients {
+                if let Some(client) = clients.get_mut(&client_id) {
+                    client.sessions.remove(sid);
+                    if client.sessions.is_empty() {
+                        clients.remove(&client_id);
+                    }
+                }
+            }
+        }
+        self.turn_watermark.forget_session(sid);
+        self.replay_gates.lock().await.remove(sid);
     }
 
     /// Remove a client entirely (e.g. on WS close).
@@ -1044,6 +1060,32 @@ mod tests {
                 message: msg.to_string(),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn forget_session_removes_relay_subscription_and_replay_state() {
+        let ws = Arc::new(WsRelaySink::new());
+        let (client, _rx, _) = ws.subscribe("temp", Some(0)).await;
+        let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+        fan_out(
+            &sinks,
+            Some("temp"),
+            "acp:message_chunk",
+            &TestPayload::new("a1", "temp", "secret"),
+        );
+        ws.turn_watermark().mark_seen("temp", "turn-1");
+        assert_eq!(ws.session_watermark("temp"), 1);
+        assert_eq!(ws.session_subscriber_count("temp"), 1);
+        assert!(ws.turn_watermark().is_seen("temp", "turn-1"));
+        assert!(ws.replay_gates.lock().await.contains_key("temp"));
+
+        ws.forget_session("temp").await;
+
+        assert_eq!(ws.session_watermark("temp"), 0);
+        assert_eq!(ws.session_subscriber_count("temp"), 0);
+        assert!(!ws.clients.lock().contains_key(&client));
+        assert!(!ws.turn_watermark().is_seen("temp", "turn-1"));
+        assert!(!ws.replay_gates.lock().await.contains_key("temp"));
     }
 
     /// AC: `WsRelaySink` delivers session + agent-level events in emission
@@ -1372,9 +1414,8 @@ mod tests {
         let hook = crate::acp::session_persistence::ReplayTestHook::new(entered_tx);
         persistence.set_replay_test_hook(hook.clone());
         let subscribe_relay = relay.clone();
-        let subscribe = tokio::spawn(async move {
-            subscribe_relay.subscribe("sess-durable", Some(0)).await
-        });
+        let subscribe =
+            tokio::spawn(async move { subscribe_relay.subscribe("sess-durable", Some(0)).await });
         tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
             .await
             .unwrap();

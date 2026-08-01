@@ -812,6 +812,18 @@ async fn handle_request(
         "close_session" => {
             handle_close_session(id, &req.payload, acp, current_session, current_project).await
         }
+        "dispose_ephemeral_session" => {
+            handle_dispose_ephemeral_session(
+                id,
+                &req.payload,
+                acp,
+                relay,
+                subscribed_clients,
+                current_session,
+                current_project,
+            )
+            .await
+        }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
         "switch_project" => {
             handle_switch_project(
@@ -1261,6 +1273,8 @@ struct CreateSessionPayload {
     cwd: String,
     #[serde(default)]
     mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
+    #[serde(default)]
+    ephemeral: bool,
 }
 
 async fn handle_create_session(
@@ -1292,16 +1306,26 @@ async fn handle_create_session(
         );
     }
     match acp
-        .new_session(&parsed.agent_id, parsed.cwd, parsed.mcp_servers)
+        .new_session_with_context(
+            &parsed.agent_id,
+            parsed.cwd,
+            parsed.mcp_servers,
+            SessionCreationContext {
+                project_id: None,
+                ephemeral: parsed.ephemeral,
+            },
+        )
         .await
     {
         Ok(outcome) => {
-            // Track the agent + new session for `switch_project` cwd switching.
-            *current_agent = Some(parsed.agent_id.clone());
-            *current_session.lock() = Some(outcome.session_id.clone());
-            // Generic session creation carries a cwd, not a registry-owned
-            // project id. Leave it unknown so the next switch is always real.
-            *current_project.lock() = None;
+            if !parsed.ephemeral {
+                // Track the agent + new session for `switch_project` cwd switching.
+                *current_agent = Some(parsed.agent_id.clone());
+                *current_session.lock() = Some(outcome.session_id.clone());
+                // Generic session creation carries a cwd, not a registry-owned
+                // project id. Leave it unknown so the next switch is always real.
+                *current_project.lock() = None;
+            }
             ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
@@ -1517,6 +1541,7 @@ async fn execute_project_switch(
                     target.mcp_servers,
                     SessionCreationContext {
                         project_id: Some(target.project_id.clone()),
+                        ephemeral: false,
                     },
                 )
                 .await?;
@@ -1975,6 +2000,52 @@ struct CloseSessionPayload {
     session_id: crate::acp::SessionId,
 }
 
+async fn handle_dispose_ephemeral_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+) -> WsReply {
+    let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!(
+                    "malformed dispose_ephemeral_session payload (want agentId, sessionId): {e}"
+                ),
+            )
+        }
+    };
+    let disposed_session_id = parsed.session_id.clone();
+    match acp
+        .dispose_ephemeral_session(&parsed.agent_id, parsed.session_id)
+        .await
+    {
+        Ok(()) => {
+            subscribed_clients.retain(|(session_id, client_id)| {
+                if session_id == &disposed_session_id.0 {
+                    relay.unsubscribe(session_id, *client_id);
+                    false
+                } else {
+                    true
+                }
+            });
+            if current_session.lock().as_ref() == Some(&disposed_session_id) {
+                *current_session.lock() = None;
+                *current_project.lock() = None;
+            }
+            relay.forget_session(&disposed_session_id.0).await;
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(e) => acp_err_to_reply(id, e),
+    }
+}
+
 async fn handle_close_session(
     id: String,
     payload: &Value,
@@ -2133,24 +2204,39 @@ async fn handle_send_prompt(
         }
     }
 
+    let ephemeral = match acp
+        .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            relay
+                .turn_watermark()
+                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+            return acp_err_to_reply(id, error);
+        }
+    };
+
     let prompt_payload = json!({
         "agentId": parsed.agent_id.clone(),
         "sessionId": parsed.session_id.clone(),
         "turnId": parsed.turn_id.clone(),
         "content": content.clone(),
     });
-    if let Err(error) = relay
-        .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
-        .await
-    {
-        relay
-            .turn_watermark()
-            .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
-        return WsReply::err(
-            id,
-            WsErrorCode::NotImplemented,
-            format!("failed to persist accepted prompt: {error}"),
-        );
+    if !ephemeral {
+        if let Err(error) = relay
+            .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
+            .await
+        {
+            relay
+                .turn_watermark()
+                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+            return WsReply::err(
+                id,
+                WsErrorCode::NotImplemented,
+                format!("failed to persist accepted prompt: {error}"),
+            );
+        }
     }
 
     match acp
@@ -4166,5 +4252,27 @@ mod tests {
                 .await
                 .unwrap();
         assert!(result.is_none());
+    }
+
+    /// Switch-back reopen returns `Err` (fallback) when a durable session exists
+    /// but the agent cannot load or resume it. `execute_project_switch` catches
+    /// this and falls back to a new session.
+    #[tokio::test]
+    async fn try_reopen_falls_back_when_agent_cannot_load() {
+        let store = crate::acp::ChatHistoryStore::new();
+        store.save("s-1", desktop_history_payload("s-1")).unwrap();
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let target = ProjectSwitchContext {
+            project_id: "p-1".to_string(),
+            cwd: "/a".to_string(),
+            mcp_servers: vec![],
+            is_active: false,
+        };
+        let result =
+            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &store, &target).await;
+        assert!(
+            result.is_err(),
+            "no registered agent → reopen fails → Err → new session"
+        );
     }
 }

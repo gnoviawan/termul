@@ -259,7 +259,273 @@ describe('acp-store', () => {
     _resetAcpAuthForTesting()
     _resetInFlightPreparedForTesting()
     _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
     useAcpStore.setState(FRESH)
+  })
+
+  it('generates a commit message from correlated chunks and removes temporary state', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') return 'agent-1'
+      if (command === 'acp_new_session') return { sessionId: 'commit-session' }
+      if (command === 'acp_send_prompt') {
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'commit-session',
+          role: 'agent',
+          content: { type: 'text', text: '```json\n{"summary":"Add generator",' }
+        })
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'commit-session',
+          role: 'agent',
+          content: { type: 'text', text: '"description":"Use staged diffs"}\n```' }
+        })
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 'commit-session',
+          stopReason: 'end_turn'
+        })
+        return 'end_turn'
+      }
+      if (command === 'acp_dispose_ephemeral_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await expect(
+      useAcpStore.getState().generateCommitMessage('/work', 'diff --git a/file b/file')
+    ).resolves.toEqual({ summary: 'Add generator', description: 'Use staged diffs' })
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-1',
+      cwd: '/work',
+      mcpServers: undefined,
+      ephemeral: true
+    })
+    expect(useAcpStore.getState().sessions['commit-session']).toBeUndefined()
+    expect(useAcpStore.getState().messages['commit-session']).toBeUndefined()
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_dispose_ephemeral_session')
+    ).toBe(true)
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_close_session')).toBe(
+      false
+    )
+  })
+
+  it('rejects interactive commit generation without leaving temporary state', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') return 'agent-1'
+      if (command === 'acp_new_session') return { sessionId: 'commit-session' }
+      if (command === 'acp_send_prompt') {
+        useAcpStore.getState()._onPermissionRequest({
+          agentId: 'agent-1',
+          sessionId: 'commit-session',
+          requestId: 'permission-1',
+          options: [],
+          toolCall: {}
+        })
+        return new Promise<string>(() => {})
+      }
+      if (command === 'acp_dispose_ephemeral_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await expect(
+      useAcpStore.getState().generateCommitMessage('/work', 'diff --git a/file b/file')
+    ).rejects.toThrow('requested permission')
+    expect(useAcpStore.getState().sessions['commit-session']).toBeUndefined()
+    expect(useAcpStore.getState().pendingPermissions).toEqual({})
+  })
+
+  it('reaps a session that resolves after the overall generation timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const lateSession = deferred<{ sessionId: string }>()
+      useAcpStore.setState({
+        selectedAgentConfigId: 'cfg-1',
+        agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }],
+        agents: {
+          'agent-1': { id: 'agent-1', capabilities: {}, authMethods: [] }
+        },
+        agentStatus: { 'agent-1': 'connected' },
+        configToLiveAgent: { [agentReuseKey('cfg-1', '/work')]: 'agent-1' }
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_new_session') return lateSession.promise
+        if (command === 'acp_close_session' || command === 'acp_dispose_ephemeral_session') {
+          return undefined
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      const generation = useAcpStore
+        .getState()
+        .generateCommitMessage('/work', 'diff --git a/file b/file')
+      const generationResult = generation.catch((error: unknown) => error)
+      await vi.advanceTimersByTimeAsync(60_000)
+      await expect(generationResult).resolves.toMatchObject({
+        message: expect.stringContaining('timed out')
+      })
+
+      lateSession.resolve({ sessionId: 'late-commit-session' })
+      await vi.advanceTimersByTimeAsync(0)
+      await Promise.resolve()
+
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command, args]) =>
+              command === 'acp_dispose_ephemeral_session' &&
+              (args as { sessionId?: string })?.sessionId === 'late-commit-session'
+          )
+      ).toBe(true)
+      expect(useAcpStore.getState().sessions['late-commit-session']).toBeUndefined()
+      expect(useAcpStore.getState().messages['late-commit-session']).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects commit generation when no selected configured agent exists', async () => {
+    await expect(
+      useAcpStore.getState().generateCommitMessage('/work', 'diff --git a/file b/file')
+    ).rejects.toThrow('Configure and select an ACP agent')
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+  })
+
+  it('validates commit diff bounds before spawning an agent', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    await expect(useAcpStore.getState().generateCommitMessage('/work', '   ')).rejects.toThrow(
+      'staged diff is empty'
+    )
+    await expect(
+      useAcpStore.getState().generateCommitMessage('/work', 'x'.repeat(120_001))
+    ).rejects.toThrow('too large')
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed, abnormal, tool, question, crash, and disconnect responses', async () => {
+    const scenarios = [
+      { kind: 'malformed', error: 'invalid commit message' },
+      { kind: 'abnormal', error: 'did not complete normally' },
+      { kind: 'tool', error: 'attempted to use a tool' },
+      { kind: 'question', error: 'interactive question' },
+      { kind: 'crash', error: 'crashed' },
+      { kind: 'disconnect', error: 'disconnected' }
+    ]
+    for (const scenario of scenarios) {
+      _resetEphemeralSessionIdsForTesting()
+      useAcpStore.setState({
+        ...FRESH,
+        selectedAgentConfigId: 'cfg-1',
+        agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+      })
+      vi.mocked(invoke).mockReset()
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_spawn_agent') return 'agent-1'
+        if (command === 'acp_new_session') return { sessionId: 'commit-session' }
+        if (command === 'acp_dispose_ephemeral_session') return undefined
+        if (command === 'acp_send_prompt') {
+          const store = useAcpStore.getState()
+          if (scenario.kind === 'malformed') {
+            store._onMessageChunk({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              role: 'agent',
+              content: { type: 'text', text: 'not json' }
+            })
+            store._onPromptComplete({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              stopReason: 'end_turn'
+            })
+            return 'end_turn'
+          }
+          if (scenario.kind === 'abnormal') {
+            store._onPromptComplete({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              stopReason: 'refusal'
+            })
+            return 'refusal'
+          }
+          if (scenario.kind === 'tool') {
+            store._onToolCall({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              toolCall: { toolCallId: 't1', title: 'tool', status: 'pending' }
+            })
+          } else if (scenario.kind === 'question') {
+            store._onQuestionRequest({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              questionId: 'q1',
+              question: 'Continue?',
+              options: []
+            })
+          } else if (scenario.kind === 'crash') {
+            store._onAgentCrashed({
+              agentId: 'agent-1',
+              sessionId: 'commit-session',
+              message: 'agent crashed'
+            })
+          } else {
+            store._onAgentDisconnected({ agentId: 'agent-1' })
+          }
+          return new Promise<string>(() => {})
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await expect(
+        useAcpStore.getState().generateCommitMessage('/work', 'diff --git a/file b/file')
+      ).rejects.toThrow(scenario.error)
+      expect(useAcpStore.getState().sessions['commit-session']).toBeUndefined()
+    }
+  })
+
+  it('rejects invalid commit summaries', async () => {
+    for (const summary of ['line one\nline two', 'x'.repeat(73)]) {
+      _resetEphemeralSessionIdsForTesting()
+      useAcpStore.setState({
+        ...FRESH,
+        selectedAgentConfigId: 'cfg-1',
+        agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+      })
+      vi.mocked(invoke).mockReset()
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_spawn_agent') return 'agent-1'
+        if (command === 'acp_new_session') return { sessionId: 'commit-session' }
+        if (command === 'acp_dispose_ephemeral_session') return undefined
+        if (command === 'acp_send_prompt') {
+          useAcpStore.getState()._onMessageChunk({
+            agentId: 'agent-1',
+            sessionId: 'commit-session',
+            role: 'agent',
+            content: { type: 'text', text: JSON.stringify({ summary, description: '' }) }
+          })
+          useAcpStore.getState()._onPromptComplete({
+            agentId: 'agent-1',
+            sessionId: 'commit-session',
+            stopReason: 'end_turn'
+          })
+          return 'end_turn'
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await expect(
+        useAcpStore.getState().generateCommitMessage('/work', 'diff --git a/file b/file')
+      ).rejects.toThrow('72 characters or contains a newline')
+    }
   })
 
   it('createSession records sessionId -> agentId and activates it', async () => {
