@@ -77,6 +77,17 @@ const SESSION_REOPEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// How long to wait for the first-prompt warmup after `session/new`.
+///
+/// pi-acp's `PiRpcProcess.request()` has no timeout, and pi's `session.prompt()`
+/// may stall before calling `preflightResult` on a cold start. The warmup sends
+/// a lightweight `session/prompt` through the full pi-acp pipeline before the
+/// `acp:session_created` event is emitted, so the renderer's event handlers
+/// silently drop warmup events (the session doesn't exist in the store yet).
+/// If the warmup times out, we cancel and continue — session creation still
+/// succeeds, but the user's first manual prompt may still experience the
+/// cold-start hang. Overridable via `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS`.
+const FIRST_PROMPT_WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -102,6 +113,17 @@ fn session_new_timeout() -> Duration {
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or(SESSION_NEW_TIMEOUT)
+}
+
+/// First-prompt warmup timeout, overridable via
+/// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (seconds, must be > 0). Set to 0 to
+/// disable the warmup entirely. Defaults to [`FIRST_PROMPT_WARMUP_TIMEOUT`].
+fn first_prompt_warmup_timeout() -> Duration {
+    let secs: u64 = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT.as_secs());
+    Duration::from_secs(secs)
 }
 
 /// `session/load` / `session/resume` timeout, overridable via
@@ -1789,6 +1811,80 @@ async fn run_command_loop(
                             req_state
                                 .lock()
                                 .set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
+
+                            // ---- First-prompt warmup (upstream bug workaround) ----
+                            //
+                            // pi-acp's `PiRpcProcess.request()` has no timeout, and pi's
+                            // `session.prompt()` may stall before calling `preflightResult`
+                            // on a cold start. The warmup sends a lightweight
+                            // `session/prompt` through the full pi-acp pipeline BEFORE
+                            // the `acp:session_created` event is emitted, so the
+                            // renderer's event handlers silently drop warmup events
+                            // (the session doesn't exist in the store yet). If the
+                            // warmup times out, we cancel and continue — session
+                            // creation still succeeds, but the user's first manual
+                            // prompt may still experience the cold-start hang.
+                            // See: https://github.com/svkozak/pi-acp/issues/94
+                            let warmup_timeout = first_prompt_warmup_timeout();
+                            if warmup_timeout.as_secs() > 0 {
+                                let warmup_content = vec![
+                                    agent_client_protocol::schema::ContentBlock::Text(
+                                        agent_client_protocol::schema::TextContent::new(
+                                            " ".to_string(),
+                                        ),
+                                    ),
+                                ];
+                                let warmup_request = PromptRequest::new(
+                                    &session_id,
+                                    warmup_content,
+                                );
+                                log::info!(
+                                    "[acp] {req_agent_id} first-prompt warmup started \
+                                     (timeout {warmup_timeout:?})"
+                                );
+                                match tokio::time::timeout(
+                                    warmup_timeout,
+                                    req_cx
+                                        .send_request(warmup_request)
+                                        .block_task(),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(_response)) => {
+                                        log::info!(
+                                            "[acp] {req_agent_id} first-prompt warmup \
+                                             completed — agent is ready"
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        log::warn!(
+                                            "[acp] {req_agent_id} first-prompt warmup \
+                                             failed: {e} (continuing without warmup)"
+                                        );
+                                    }
+                                    Err(_) => {
+                                        log::warn!(
+                                            "[acp] {req_agent_id} first-prompt warmup \
+                                             timed out after {warmup_timeout:?} \
+                                             (continuing without warmup)"
+                                        );
+                                        // Best-effort cancel so the pi-acp session
+                                        // doesn't stay wedged.
+                                        let _ = req_cx
+                                            .send_notification(
+                                                CancelNotification::new(&session_id),
+                                            )
+                                            .map_err(|e| {
+                                                log::debug!(
+                                                    "[acp] warmup cancel notification \
+                                                     failed: {e}"
+                                                );
+                                                e
+                                            });
+                                    }
+                                }
+                            }
+
                             let event = SessionCreatedEvent {
                                 agent_id: req_agent_id,
                                 session_id: session_id.clone(),
