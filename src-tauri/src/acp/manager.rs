@@ -41,6 +41,8 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::acp::client;
@@ -219,6 +221,71 @@ pub struct SessionCreationContext {
     pub project_id: Option<String>,
 }
 
+/// The `_session/question` ACP extension request (issue #411).
+///
+/// Agents send a structured question over the protocol's extension surface
+/// (the vendored protocol routes `_`-prefixed methods to
+/// [`ExtMethodRequest`](agent_client_protocol::schema::ExtRequest)); the
+/// response is an untyped JSON value. This type implements the protocol's
+/// `JsonRpcMessage`/`JsonRpcRequest` traits directly for the single method, so
+/// the driver handler chain matches ONLY `_session/question` — unlike
+/// registering on the whole `AgentRequest` enum, which would also claim
+/// client→agent responses and break response routing.
+///
+/// Wire params (camelCase): `{ sessionId, questionId?, question, options }`
+/// where `options` is `[{ value, label, description?, cardinality? }]` and
+/// `cardinality` is `single` (default) or `multi`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AskUserQuestionRequest {
+    session_id: String,
+    question: String,
+    #[serde(default)]
+    options: Vec<AskQuestionOption>,
+    #[serde(default)]
+    question_id: Option<String>,
+}
+
+/// One option of an [`AskUserQuestionRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AskQuestionOption {
+    value: String,
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    cardinality: Option<String>,
+}
+
+impl agent_client_protocol::JsonRpcMessage for AskUserQuestionRequest {
+    fn matches_method(method: &str) -> bool {
+        method == "_session/question"
+    }
+
+    fn method(&self) -> &str {
+        "_session/question"
+    }
+
+    fn to_untyped_message(&self) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
+        agent_client_protocol::UntypedMessage::new("_session/question", self)
+    }
+
+    fn parse_message(
+        method: &str,
+        params: &impl serde::Serialize,
+    ) -> Result<Self, agent_client_protocol::Error> {
+        if method != "_session/question" {
+            return Err(agent_client_protocol::Error::method_not_found());
+        }
+        agent_client_protocol::util::json_cast_params(params)
+    }
+}
+
+impl agent_client_protocol::JsonRpcRequest for AskUserQuestionRequest {
+    type Response = Value;
+}
+
 /// Commands sent from Tauri command handlers to an agent's driver thread.
 ///
 /// Every variant that expects a result carries a `oneshot::Sender`; the driver
@@ -296,6 +363,11 @@ enum AcpCommand {
     RespondPermission {
         request_id: String,
         outcome: RequestPermissionOutcome,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    AnswerQuestion {
+        question_id: String,
+        values: Option<Vec<String>>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Run the ACP `authenticate` method with the given method id.
@@ -773,6 +845,29 @@ impl AcpManager {
         .await
     }
 
+    /// Route a structured-question answer (issue #411) back to a waiting agent
+    /// request.
+    ///
+    /// `values == None` resolves the question as cancelled; `Some(values)`
+    /// resolves it with the selected option values (exactly-once: the first
+    /// answer wins; a later `answer_question` for the same id gets
+    /// `"unknown question request"`, surfaced as `Ok(())` by the command
+    /// wrapper).
+    pub async fn answer_question(
+        &self,
+        agent_id: &AgentId,
+        question_id: String,
+        values: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::AnswerQuestion {
+            question_id,
+            values,
+            reply,
+        })
+        .await
+    }
+
     /// Run the ACP `authenticate` method for an agent with the given method id
     /// (one of the ids advertised in the `initialize` response).
     pub async fn authenticate(&self, agent_id: &AgentId, method_id: String) -> Result<(), String> {
@@ -1103,6 +1198,16 @@ fn run_agent(
             RequestPermissionOutcome::Cancelled,
         ));
     }
+    // Issue #411: resolve leaked questions as cancelled too (the connection is
+    // gone, so responding may fail silently — the point is to not hold the
+    // responders forever).
+    let leaked_questions = driver_state.lock().drain_all_questions();
+    for question in leaked_questions {
+        let _ = question.responder.respond(serde_json::json!({
+            "questionId": question.question_id,
+            "cancelled": true,
+        }));
+    }
 
     // Self-reap: remove our own registry entry so a crashed/EOFed agent does
     // not linger in `list_agents` with a dead command channel. We do NOT join
@@ -1253,6 +1358,9 @@ async fn drive_connection(
     let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
+    let question_sinks = sinks.clone();
+    let question_agent_id = agent_id.clone();
+    let question_state = driver_state.clone();
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
@@ -1330,6 +1438,43 @@ async fn drive_connection(
                     &perm_sinks,
                     Some(event.session_id.0.as_str()),
                     events::EVENT_PERMISSION_REQUEST,
+                    &event,
+                );
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: AskUserQuestionRequest, responder, _cx| {
+                // Issue #411: a structured question from the agent. Register the
+                // parked `Responder<serde_json::Value>` (mirroring permissions),
+                // fan out `acp:question_request`, and resolve the responder when
+                // the user answers via `acp_answer_question` / `answer_question`.
+                let session_string = request.session_id.clone();
+                let question_id = {
+                    let mut state = question_state.lock();
+                    state.register_question(session_string.clone(), responder)
+                };
+                let event = events::AskUserQuestionEvent {
+                    agent_id: question_agent_id.clone(),
+                    session_id: SessionId::new(session_string),
+                    question_id,
+                    question: request.question,
+                    options: request
+                        .options
+                        .into_iter()
+                        .map(|o| events::QuestionOption {
+                            value: o.value,
+                            label: o.label,
+                            description: o.description,
+                            cardinality: o.cardinality,
+                        })
+                        .collect(),
+                };
+                events::fan_out(
+                    &question_sinks,
+                    Some(event.session_id.0.as_str()),
+                    events::EVENT_QUESTION_REQUEST,
                     &event,
                 );
                 Ok(())
@@ -1753,6 +1898,15 @@ async fn run_command_loop(
                                 RequestPermissionOutcome::Cancelled,
                             ));
                         }
+                        // Issue #411: resolve outstanding questions for the
+                        // closed session as cancelled too.
+                        let pending_questions = req_state.lock().finish_turn_questions(&session_id.0);
+                        for question in pending_questions {
+                            let _ = question.responder.respond(serde_json::json!({
+                                "questionId": question.question_id,
+                                "cancelled": true,
+                            }));
+                        }
                     }
                     let mut result = result.map(|_| ()).map_err(|e| e.to_string());
                     if result.is_ok() {
@@ -1880,6 +2034,16 @@ async fn run_command_loop(
                             RequestPermissionOutcome::Cancelled,
                         ));
                     }
+                    // Issue #411: model-abandoned questions are first-class
+                    // outcomes — a turn that ends without the user answering
+                    // resolves the parked question responders as cancelled.
+                    let pending_questions = turn_state.lock().finish_turn_questions(&session_id.0);
+                    for question in pending_questions {
+                        let _ = question.responder.respond(serde_json::json!({
+                            "questionId": question.question_id,
+                            "cancelled": true,
+                        }));
+                    }
 
                     match outcome {
                         Ok(stop_reason) => {
@@ -1989,6 +2153,15 @@ async fn run_command_loop(
                         RequestPermissionOutcome::Cancelled,
                     ));
                 }
+                // Issue #411: cancel also resolves any outstanding questions for
+                // the session (the agent abandons them; first-class outcome).
+                let pending_questions = driver_state.lock().drain_session_questions(&session_id.0);
+                for question in pending_questions {
+                    let _ = question.responder.respond(serde_json::json!({
+                        "questionId": question.question_id,
+                        "cancelled": true,
+                    }));
+                }
                 let result = cx.send_notification(CancelNotification::new(&session_id));
                 let _ = reply.send(result.map_err(|e| e.to_string()));
             }
@@ -2073,6 +2246,38 @@ async fn run_command_loop(
                     None => {
                         let _ =
                             reply.send(Err(format!("unknown permission request: {request_id}")));
+                    }
+                }
+            }
+
+            AcpCommand::AnswerQuestion {
+                question_id,
+                values,
+                reply,
+            } => {
+                // Issue #411: resolve the parked `_session/question` responder
+                // exactly once. `Some(values)` → the selected option values;
+                // `None` → cancelled. Unknown id (already resolved / drained)
+                // mirrors the permission race-loser path.
+                let pending = driver_state.lock().take_question(&question_id);
+                match pending {
+                    Some(question) => {
+                        let payload = match &values {
+                            Some(values) => serde_json::json!({
+                                "questionId": question_id,
+                                "values": values,
+                            }),
+                            None => serde_json::json!({
+                                "questionId": question_id,
+                                "cancelled": true,
+                            }),
+                        };
+                        let result = question.responder.respond(payload);
+                        let _ = reply.send(result.map_err(|e| e.to_string()));
+                    }
+                    None => {
+                        let _ =
+                            reply.send(Err(format!("unknown question request: {question_id}")));
                     }
                 }
             }

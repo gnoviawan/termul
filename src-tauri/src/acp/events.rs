@@ -45,6 +45,13 @@ pub const EVENT_MODE_UPDATE: &str = "acp:mode_update";
 pub const EVENT_CONFIG_OPTIONS_UPDATE: &str = "acp:config_options_update";
 /// Event name: the agent requested a permission decision from the user.
 pub const EVENT_PERMISSION_REQUEST: &str = "acp:permission_request";
+/// Event name: an agent asked a structured question (issue #411).
+///
+/// The renderer shows a morphing `AskUserQuestion` panel (choice cards,
+/// checkboxes, approval buttons) instead of a free-text prompt; the user's
+/// answer flows back via `acp_answer_question` (desktop) or `answer_question`
+/// (web), mirroring the permission machinery exactly-once.
+pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
 /// Event name: a prompt turn finished with a stop reason.
 pub const EVENT_PROMPT_COMPLETE: &str = "acp:prompt_complete";
 /// Event name: a non-fatal error occurred while talking to the agent.
@@ -197,6 +204,39 @@ pub struct PermissionRequestEvent {
     pub request_id: String,
     pub tool_call: ToolCallUpdate,
     pub options: Vec<PermissionOption>,
+}
+
+/// `acp:question_request` (issue #411)
+///
+/// A structured question from an agent. `question_id` is a stable correlation
+/// id generated server-side (`q-{uuid}`) — the user's answer routes back
+/// through it exactly once. `options` carry an explicit `cardinality`
+/// (`single` | `multi` | absent → `single`) so the renderer can morph the
+/// input area into choice cards, checkboxes, or approval buttons.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserQuestionEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub question_id: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+}
+
+/// One selectable option of an [`AskUserQuestionEvent`].
+///
+/// `value` is the opaque id the agent consumes (stable, single-use); `label`
+/// is the human-readable text; `description` is optional context; `cardinality`
+/// is `single` (default) or `multi`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub value: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cardinality: Option<String>,
 }
 
 /// `acp:prompt_complete`
@@ -505,6 +545,47 @@ mod tests {
         assert_eq!(value["size"], 200_000);
         assert_eq!(value["cost"]["amount"], 0.045);
         assert_eq!(value["cost"]["currency"], "USD");
+    }
+
+    /// Issue #411: `AskUserQuestionEvent` serializes camelCase with a stable
+    /// `questionId`, and `QuestionOption` carries value/label/description/
+    /// cardinality (omitting absent optionals).
+    #[test]
+    fn ask_user_question_serializes_camel_case() {
+        let event = AskUserQuestionEvent {
+            agent_id: AgentId("a1".to_string()),
+            session_id: SessionId::new("sess-1"),
+            question_id: "q-7".to_string(),
+            question: "Which approach?" .to_string(),
+            options: vec![
+                QuestionOption {
+                    value: "plan-a".to_string(),
+                    label: "Plan A".to_string(),
+                    description: Some("Fast, iterative".to_string()),
+                    cardinality: None,
+                },
+                QuestionOption {
+                    value: "both".to_string(),
+                    label: "Both".to_string(),
+                    description: None,
+                    cardinality: Some("multi".to_string()),
+                },
+            ],
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["agentId"], "a1");
+        assert_eq!(value["sessionId"], "sess-1");
+        assert_eq!(value["questionId"], "q-7");
+        assert_eq!(value["question"], "Which approach?");
+        assert_eq!(value["options"][0]["value"], "plan-a");
+        assert_eq!(value["options"][0]["label"], "Plan A");
+        assert_eq!(value["options"][0]["description"], "Fast, iterative");
+        // cardinality absent when None (single is the default)
+        assert!(value["options"][0].get("cardinality").is_none());
+        assert_eq!(value["options"][1]["value"], "both");
+        assert_eq!(value["options"][1]["cardinality"], "multi");
+        assert!(value["options"][1].get("description").is_none());
+        assert_eq!(EVENT_QUESTION_REQUEST, "acp:question_request");
     }
 
     #[test]

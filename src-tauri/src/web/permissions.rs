@@ -627,6 +627,353 @@ impl Default for PermissionRendezvous {
 }
 
 // ---------------------------------------------------------------------------
+// Question rendezvous (issue #411)
+// ---------------------------------------------------------------------------
+
+/// Why a question ticket was resolved as cancelled (structured logging only).
+#[derive(Debug, Clone, Copy)]
+enum QuestionDenyReason {
+    Timeout,
+    Disconnect,
+}
+
+/// Outcome of a successful [`QuestionRendezvous::try_respond`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionRespondOutcome {
+    /// The ticket was unresolved; this answer won and was forwarded to the
+    /// agent. The browser should show success.
+    Resolved,
+}
+
+/// Why a [`QuestionRendezvous::try_respond`] call was rejected. Each variant
+/// maps to a stable WS `err.code` (see [`QuestionRespondError::wire_code`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionRespondError {
+    /// No outstanding ticket for this `question_id` (never seen, resolved +
+    /// evicted, or already timed out). Wire `err.code: "stale"`.
+    NotFound,
+    /// The ticket was already resolved by a *different* client (first-wins).
+    /// Wire `err.code: "stale"`.
+    AlreadyResolved,
+    /// The *same* client already responded to this ticket (double-respond).
+    /// Wire `err.code: "duplicate"`.
+    Duplicate,
+    /// A submitted `value` was not among the ticket's original immutable
+    /// option values (TOCTOU defense — an attacker can't answer with an option
+    /// that wasn't in the original question). Wire `err.code: "permission_denied"`.
+    InvalidOption,
+}
+
+impl QuestionRespondError {
+    /// The stable snake_case wire code for this rejection.
+    #[must_use]
+    pub const fn wire_code(self) -> &'static str {
+        match self {
+            Self::NotFound => "stale",
+            Self::AlreadyResolved => "stale",
+            Self::Duplicate => "duplicate",
+            Self::InvalidOption => "permission_denied",
+        }
+    }
+}
+
+/// A single outstanding question ticket — relay-side metadata only (never
+/// holds the ACP `Responder`).
+struct QuestionTicket {
+    /// Which agent owns the responder (forwarded to `AcpManager::answer_question`).
+    agent_id: AgentId,
+    /// The session the question belongs to (for disconnect-deny + ownership).
+    session_id: String,
+    /// The immutable args snapshot — `options` array from the original
+    /// `AskUserQuestionEvent` payload. Used for TOCTOU re-validation.
+    options: Value,
+    /// `true` when any option declares `cardinality: "multi"` — multi-select
+    /// allows several values; single-select enforces at most one.
+    multi: bool,
+    /// `Some(client)` once a client has won the ticket (first-response-wins).
+    resolved_by: Option<ClientId>,
+    /// Cancel handle for the per-ticket timeout task.
+    timeout_cancel: Option<oneshot::Sender<()>>,
+}
+
+/// Server-side question rendezvous (issue #411) — the structured-question
+/// sibling of [`PermissionRendezvous`].
+///
+/// Holds the relay-side ticket table keyed by `question_id` (globally unique —
+/// safe across agents). `AcpManager` is server-side-only: the desktop path
+/// does not construct a `QuestionRendezvous` at all (it uses the
+/// `acp_answer_question` Tauri command directly).
+pub struct QuestionRendezvous {
+    /// `question_id → ticket` (outstanding tickets only).
+    tickets: Mutex<HashMap<String, QuestionTicket>>,
+    /// The ACP manager — used to forward answers back to the agent's
+    /// `Responder` via the command channel.
+    acp: Arc<AcpManager>,
+    /// The bounded timeout window. Expiry → cancelled.
+    timeout: Duration,
+    /// Tokio runtime handle (see [`PermissionRendezvous::handle`]).
+    handle: Result<tokio::runtime::Handle, tokio::runtime::TryCurrentError>,
+}
+
+impl QuestionRendezvous {
+    /// Create a rendezvous bound to an [`AcpManager`] with the default 60s timeout.
+    #[must_use]
+    pub fn new(acp: Arc<AcpManager>) -> Self {
+        Self::with_timeout(acp, DEFAULT_PERMISSION_TIMEOUT)
+    }
+
+    /// Create a rendezvous with an explicit timeout (testable).
+    #[must_use]
+    pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
+        Self {
+            tickets: Mutex::new(HashMap::new()),
+            acp,
+            timeout,
+            handle: tokio::runtime::Handle::try_current(),
+        }
+    }
+
+    /// The session id a pending `question_id` belongs to, or `None`.
+    #[must_use]
+    pub fn session_for_question(&self, question_id: &str) -> Option<String> {
+        self.tickets
+            .lock()
+            .get(question_id)
+            .map(|t| t.session_id.clone())
+    }
+
+    /// The agent id a pending `question_id` belongs to, or `None`.
+    #[must_use]
+    pub fn agent_for_question(&self, question_id: &str) -> Option<AgentId> {
+        self.tickets
+            .lock()
+            .get(question_id)
+            .map(|t| t.agent_id.clone())
+    }
+
+    /// Whether a `question_id` is currently outstanding (test helper).
+    #[cfg(test)]
+    pub(crate) fn is_outstanding(&self, question_id: &str) -> bool {
+        self.tickets.lock().contains_key(question_id)
+    }
+
+    /// Snapshot a `question_request` event into a ticket + arm the timeout.
+    ///
+    /// Called by [`WsRelaySink::emit`] when it sees `acp:question_request`.
+    /// `options` is the `Value` of the event's `options` field (array of
+    /// `{value, label, description?, cardinality?}`) — the immutable-args
+    /// snapshot for TOCTOU re-validation.
+    pub fn register(
+        self: &Arc<Self>,
+        question_id: String,
+        agent_id: AgentId,
+        session_id: String,
+        options: Value,
+    ) {
+        let multi = options.as_array().is_some_and(|arr| {
+            arr.iter().any(|opt| {
+                opt.get("cardinality")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| c == "multi")
+            })
+        });
+        let ticket = QuestionTicket {
+            agent_id: agent_id.clone(),
+            session_id,
+            options,
+            multi,
+            resolved_by: None,
+            timeout_cancel: None,
+        };
+        self.tickets.lock().insert(question_id.clone(), ticket);
+        self.arm_timeout(question_id, agent_id);
+    }
+
+    /// Arm the per-ticket timeout task (idempotent). Mirrors
+    /// [`PermissionRendezvous::arm_timeout`] but resolves as cancelled.
+    fn arm_timeout(self: &Arc<Self>, question_id: String, agent_id: AgentId) {
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        {
+            let mut tickets = self.tickets.lock();
+            let Some(ticket) = tickets.get_mut(&question_id) else {
+                return;
+            };
+            if ticket.timeout_cancel.is_some() {
+                return;
+            }
+            ticket.timeout_cancel = Some(cancel_tx);
+        }
+        let this = Arc::clone(self);
+        let timeout = self.timeout;
+        let question_id_for_warn = question_id.clone();
+        let future = async move {
+            if tokio::time::timeout(timeout, cancel_rx).await.is_err() {
+                this.deny(&question_id, &agent_id, QuestionDenyReason::Timeout)
+                    .await;
+            }
+        };
+        match &self.handle {
+            Ok(handle) => {
+                handle.spawn(future);
+            }
+            Err(_) => match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(future);
+                }
+                Err(e) => warn!(
+                    "[questions] cannot arm timeout for {question_id_for_warn}: no tokio runtime ({e}); \
+                     ticket will not auto-cancel — construct the rendezvous inside a runtime"
+                ),
+            },
+        }
+    }
+
+    /// Attempt to resolve a ticket with a client's answer (first-response-wins).
+    ///
+    /// On success, the answer is forwarded to [`AcpManager::answer_question`].
+    /// `values == None` resolves as cancelled; `Some(values)` forwards the
+    /// selected option values (TOCTOU-validated against the registered options).
+    pub async fn try_respond(
+        self: &Arc<Self>,
+        client_id: ClientId,
+        question_id: &str,
+        values: Option<&[String]>,
+    ) -> Result<QuestionRespondOutcome, QuestionRespondError> {
+        {
+            let tickets = self.tickets.lock();
+            let Some(ticket) = tickets.get(question_id) else {
+                return Err(QuestionRespondError::NotFound);
+            };
+            if ticket.resolved_by == Some(client_id) {
+                return Err(QuestionRespondError::Duplicate);
+            }
+            if ticket.resolved_by.is_some() {
+                return Err(QuestionRespondError::AlreadyResolved);
+            }
+            // TOCTOU: every submitted value MUST be among the original options.
+            // Cancel (None) is always allowed (the user may dismiss).
+            if let Some(values) = values {
+                for v in values {
+                    if !question_value_is_valid(&ticket.options, v) {
+                        return Err(QuestionRespondError::InvalidOption);
+                    }
+                }
+                if !ticket.multi && values.len() > 1 {
+                    return Err(QuestionRespondError::InvalidOption);
+                }
+            }
+        }
+
+        let (agent_id, _session_id) = {
+            let mut tickets = self.tickets.lock();
+            let Some(ticket) = tickets.get_mut(question_id) else {
+                return Err(QuestionRespondError::NotFound);
+            };
+            if ticket.resolved_by == Some(client_id) {
+                return Err(QuestionRespondError::Duplicate);
+            }
+            if ticket.resolved_by.is_some() {
+                return Err(QuestionRespondError::AlreadyResolved);
+            }
+            ticket.resolved_by = Some(client_id);
+            if let Some(cancel) = ticket.timeout_cancel.take() {
+                let _ = cancel.send(());
+            }
+            (ticket.agent_id.clone(), ticket.session_id.clone())
+        };
+
+        let values = values.map(|v| v.to_vec());
+        if let Err(e) = self
+            .acp
+            .answer_question(&agent_id, question_id.to_string(), values)
+            .await
+        {
+            if e.contains("unknown question request") {
+                warn!(
+                    "[questions] answer_question {question_id} — agent has no outstanding request: {e}"
+                );
+                self.tickets.lock().remove(question_id);
+                return Err(QuestionRespondError::NotFound);
+            }
+            warn!("[questions] answer_question {question_id} failed: {e}");
+        }
+
+        self.tickets.lock().remove(question_id);
+        Ok(QuestionRespondOutcome::Resolved)
+    }
+
+    /// On browser disconnect, resolve every outstanding ticket whose session no
+    /// longer has any OTHER subscribed client as cancelled (mirrors
+    /// [`PermissionRendezvous::deny_all_for_client`]).
+    pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
+    where
+        F: Fn(&str) -> usize,
+    {
+        let to_deny: Vec<(String, AgentId)> = {
+            let tickets = self.tickets.lock();
+            tickets
+                .iter()
+                .filter(|(_, t)| t.resolved_by.is_none() && session_subscribers(&t.session_id) == 0)
+                .map(|(qid, t)| (qid.clone(), t.agent_id.clone()))
+                .collect()
+        };
+        for (question_id, agent_id) in to_deny {
+            self.deny(&question_id, &agent_id, QuestionDenyReason::Disconnect)
+                .await;
+        }
+    }
+
+    /// Resolve a ticket as cancelled (values=None).
+    async fn deny(
+        self: &Arc<Self>,
+        question_id: &str,
+        agent_id: &AgentId,
+        reason: QuestionDenyReason,
+    ) {
+        let mut cancel = false;
+        {
+            let mut tickets = self.tickets.lock();
+            if let Some(mut ticket) = tickets.remove(question_id) {
+                if ticket.resolved_by.is_some() {
+                    return;
+                }
+                if let Some(tx) = ticket.timeout_cancel.take() {
+                    let _ = tx.send(());
+                }
+                cancel = true;
+            }
+        }
+        if cancel {
+            if let Err(e) = self
+                .acp
+                .answer_question(agent_id, question_id.to_string(), None)
+                .await
+            {
+                warn!("[questions] deny ({reason:?}) for {question_id} failed to reach agent: {e}");
+            }
+        }
+    }
+}
+
+impl Default for QuestionRendezvous {
+    fn default() -> Self {
+        Self::new(Arc::new(AcpManager::new(vec![])))
+    }
+}
+
+/// Whether `value` appears in the immutable `options` snapshot's `value`
+/// fields (TOCTOU re-validation).
+fn question_value_is_valid(options: &Value, value: &str) -> bool {
+    options.as_array().is_some_and(|arr| {
+        arr.iter().any(|opt| {
+            opt.get("value")
+                .and_then(Value::as_str)
+                .is_some_and(|v| v == value)
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing; wire field in 1.8)
 // ---------------------------------------------------------------------------
 
@@ -855,6 +1202,24 @@ mod tests {
         ))
     }
 
+    /// Build `options` JSON matching the `AskUserQuestionEvent` wire shape
+    /// (issue #411) — single-select options (no `cardinality` → single).
+    fn question_options_value(values: &[&str]) -> Value {
+        json!(values
+            .iter()
+            .map(|v| json!({ "value": v, "label": v }))
+            .collect::<Vec<_>>())
+    }
+
+    /// A question rendezvous bound to a no-op `AcpManager` with the default 60s
+    /// timeout (issue #411). Construct INSIDE a runtime context.
+    fn test_question_rendezvous() -> Arc<QuestionRendezvous> {
+        Arc::new(QuestionRendezvous::with_timeout(
+            Arc::new(AcpManager::new(vec![])),
+            Duration::from_secs(60),
+        ))
+    }
+
     /// Story 1.7 AC3: first-response-wins — a second client's `try_respond` is
     /// rejected. The first response resolves + evicts the ticket; the second
     /// therefore sees `NotFound` (the ticket is gone) or `AlreadyResolved` (the
@@ -895,14 +1260,209 @@ mod tests {
         });
     }
 
-    /// Story 1.7 AC3: duplicate — the SAME client responding twice is `Duplicate`
-    /// (→ wire `err.code: "duplicate"`). The first response resolves (evicts)
-    /// the ticket; the same-client second call sees `NotFound` first. The
-    /// `Duplicate` path is the race where the ticket is still outstanding when
-    /// the same client retries — here we assert the wire-code mapping directly.
+    /// Issue #411: first-response-wins for questions — the second answer is
+    /// rejected `stale` regardless of which rejection variant fires.
     #[test]
-    fn duplicate_wire_code_is_duplicate() {
-        assert_eq!(RespondError::Duplicate.wire_code(), "duplicate");
+    fn question_first_response_wins_second_is_rejected_stale() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-1".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a", "plan-b"]),
+            );
+            let first = rdz
+                .try_respond(client, "q-1", Some(&["plan-a".to_string()]))
+                .await;
+            assert_eq!(first, Ok(QuestionRespondOutcome::Resolved));
+            let second = rdz
+                .try_respond(client, "q-1", Some(&["plan-b".to_string()]))
+                .await;
+            assert!(
+                matches!(
+                    second,
+                    Err(QuestionRespondError::NotFound)
+                        | Err(QuestionRespondError::AlreadyResolved)
+                ),
+                "second response must be rejected (stale), got {second:?}"
+            );
+            assert_eq!(
+                second.unwrap_err().wire_code(),
+                "stale",
+                "first-wins rejection wires as `stale`"
+            );
+        });
+    }
+
+    /// Issue #411: TOCTOU — a value not among the original immutable options
+    /// is rejected as `InvalidOption` (→ `permission_denied`), and the ticket
+    /// stays outstanding so a valid answer can still win.
+    #[test]
+    fn question_toctou_invalid_value_is_rejected() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-toctou".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a", "plan-b"]),
+            );
+            let outcome = rdz
+                .try_respond(client, "q-toctou", Some(&["escalate".to_string()]))
+                .await;
+            assert_eq!(outcome, Err(QuestionRespondError::InvalidOption));
+            assert_eq!(
+                QuestionRespondError::InvalidOption.wire_code(),
+                "permission_denied"
+            );
+            assert!(rdz.is_outstanding("q-toctou"));
+            let ok = rdz
+                .try_respond(client, "q-toctou", Some(&["plan-a".to_string()]))
+                .await;
+            assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
+        });
+    }
+
+    /// Issue #411: single-select enforces at-most-one value; multi-select
+    /// allows several (as long as every value is a registered option).
+    #[test]
+    fn question_cardinality_single_rejects_multiple_values() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-single".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a", "plan-b"]),
+            );
+            let rejected = rdz
+                .try_respond(
+                    client,
+                    "q-single",
+                    Some(&["plan-a".to_string(), "plan-b".to_string()]),
+                )
+                .await;
+            assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
+            // multi-select accepts several valid values
+            rdz.register(
+                "q-multi".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                serde_json::json!([
+                    { "value": "a", "label": "A", "cardinality": "multi" },
+                    { "value": "b", "label": "B", "cardinality": "multi" },
+                ]),
+            );
+            let ok = rdz
+                .try_respond(
+                    client,
+                    "q-multi",
+                    Some(&["a".to_string(), "b".to_string()]),
+                )
+                .await;
+            assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
+        });
+    }
+
+    /// Issue #411: cancel (values=None) is always allowed — resolves the
+    /// ticket as cancelled without TOCTOU option validation.
+    #[test]
+    fn question_cancel_none_resolves_and_evicts() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-cancel".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            let outcome = rdz.try_respond(client, "q-cancel", None).await;
+            assert_eq!(outcome, Ok(QuestionRespondOutcome::Resolved));
+            assert!(!rdz.is_outstanding("q-cancel"));
+            let stale = rdz.try_respond(client, "q-cancel", None).await;
+            assert_eq!(stale, Err(QuestionRespondError::NotFound));
+        });
+    }
+
+    /// Issue #411: disconnect-deny — when the last subscriber leaves the
+    /// session, its outstanding questions are resolved cancelled.
+    #[test]
+    fn question_disconnect_denies_when_no_subscribers_remain() {
+        let rdz = test_question_rendezvous();
+        block_on(async {
+            rdz.register(
+                "q-disc".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            // zero remaining subscribers → deny
+            rdz.deny_all_for_client(|_| 0).await;
+            assert!(!rdz.is_outstanding("q-disc"));
+            // with a remaining subscriber → untouched
+            rdz.register(
+                "q-keep".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            rdz.deny_all_for_client(|_| 1).await;
+            assert!(rdz.is_outstanding("q-keep"));
+        });
+    }
+
+    /// Issue #411: timeout resolves the ticket as cancelled (expiry promotes).
+    #[test]
+    fn question_timeout_deny_resolves_and_evicts() {
+        let rdz = Arc::new(QuestionRendezvous::with_timeout(
+            Arc::new(AcpManager::new(vec![])),
+            Duration::from_millis(30),
+        ));
+        block_on(async {
+            rdz.register(
+                "q-timeout".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            assert!(!rdz.is_outstanding("q-timeout"));
+            let stale = rdz
+                .try_respond(ClientId::new(), "q-timeout", Some(&["plan-a".to_string()]))
+                .await;
+            assert_eq!(stale, Err(QuestionRespondError::NotFound));
+        });
+    }
+
+    /// Issue #411: same-client double-respond — exactly one wins; the loser is
+    /// `stale`-coded.
+    #[test]
+    fn question_same_client_double_respond_is_rejected() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-dup".to_string(),
+                AgentId("a1".to_string()),
+                "sess-dup".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            let answer = vec!["plan-a".to_string()];
+            let (a, b) = tokio::join!(
+                rdz.try_respond(client, "q-dup", Some(&answer)),
+                rdz.try_respond(client, "q-dup", Some(&answer)),
+            );
+            let loser = if a.is_ok() { b } else { a };
+            let winner = if a.is_ok() { a } else { b };
+            assert!(winner.is_ok(), "one answer must win: ({a:?}, {b:?})");
+            assert!(loser.is_err(), "the other must be rejected");
+            assert_eq!(loser.unwrap_err().wire_code(), "stale");
+        });
     }
 
     /// Story 1.7 AC3: TOCTOU — an `option_id` not in the original immutable
@@ -1226,6 +1786,16 @@ mod tests {
                 .await;
             assert!(!rdz.is_outstanding("perm-race"));
         });
+    }
+
+    /// Story 1.7 AC3: duplicate — the SAME client responding twice is `Duplicate`
+    /// (→ wire `err.code: "duplicate"`). The first response resolves (evicts)
+    /// the ticket; the same-client second call sees `NotFound` first. The
+    /// `Duplicate` path is the race where the ticket is still outstanding when
+    /// the same client retries — here we assert the wire-code mapping directly.
+    #[test]
+    fn duplicate_wire_code_is_duplicate() {
+        assert_eq!(RespondError::Duplicate.wire_code(), "duplicate");
     }
 
     /// Story 1.7 AC3 (same-client double-respond): the SAME client responding

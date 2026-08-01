@@ -130,6 +130,7 @@ const FRESH = {
   plans: {},
   commands: {},
   pendingPermissions: {},
+  pendingQuestions: {},
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
@@ -1068,6 +1069,88 @@ describe('acp-store', () => {
     })
     store._onAgentDisconnected({ agentId: 'agent-1' })
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
+  })
+
+  it('question_request is stored and answerQuestion clears it exactly once (issue #411)', async () => {
+    seedSession('s1', 'agent-1')
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-1',
+      question: 'Which approach?',
+      options: [
+        { value: 'plan-a', label: 'Plan A', description: 'Fast' },
+        { value: 'plan-b', label: 'Plan B' }
+      ]
+    })
+    expect(useAcpStore.getState().pendingQuestions['q-1']).toBeTruthy()
+    await useAcpStore.getState().answerQuestion('q-1', ['plan-a'])
+    expect(useAcpStore.getState().pendingQuestions['q-1']).toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_answer_question', {
+      agentId: 'agent-1',
+      questionId: 'q-1',
+      values: ['plan-a']
+    })
+  })
+
+  it('duplicate question_id keeps the first entry (issue #411)', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-1',
+      question: 'First',
+      options: []
+    })
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-1',
+      question: 'Second (duplicate)',
+      options: []
+    })
+    expect(useAcpStore.getState().pendingQuestions['q-1'].question).toBe('First')
+  })
+
+  it('prompt_complete and session/agent teardown drop pending questions (issue #411)', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    const seed = (id: string) =>
+      store._onQuestionRequest({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        questionId: id,
+        question: 'Q',
+        options: []
+      })
+    seed('q-1')
+    store._onPromptComplete({ agentId: 'agent-1', sessionId: 's1', stopReason: 'cancelled' })
+    expect(useAcpStore.getState().pendingQuestions['q-1']).toBeUndefined()
+
+    seed('q-2')
+    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    expect(useAcpStore.getState().pendingQuestions['q-2']).toBeUndefined()
+
+    seed('q-3')
+    store._onAgentDisconnected({ agentId: 'agent-1' })
+    expect(useAcpStore.getState().pendingQuestions['q-3']).toBeUndefined()
+  })
+
+  it('answerQuestion is re-entrancy safe: second call is a no-op (issue #411)', async () => {
+    seedSession('s1', 'agent-1')
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-1',
+      question: 'Q',
+      options: [{ value: 'a', label: 'A' }]
+    })
+    const first = useAcpStore.getState().answerQuestion('q-1', ['a'])
+    const second = useAcpStore.getState().answerQuestion('q-1', ['a'])
+    await Promise.all([first, second])
+    expect(invoke).toHaveBeenCalledTimes(1)
   })
 
   it('_onToolCall upserts by toolCallId so duplicates produce one entry', async () => {
@@ -4875,7 +4958,8 @@ describe('warm session pool', () => {
       sessions: {},
       activeSessionId: null,
       messages: {},
-      pendingPermissions: {}
+      pendingPermissions: {},
+      pendingQuestions: {}
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()

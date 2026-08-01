@@ -1362,6 +1362,7 @@ pub fn run() {
             acp::commands::acp_set_mode,
             acp::commands::acp_set_model,
             acp::commands::acp_respond_permission,
+            acp::commands::acp_answer_question,
             acp::commands::acp_authenticate,
             acp::commands::acp_probe_runtime,
             acp_registry_snapshot::acp_fetch_registry_snapshot,

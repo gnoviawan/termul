@@ -336,6 +336,31 @@ export interface PermissionRequestEvent {
   toolCall: ToolCallUpdate
   options: PermissionOption[]
 }
+
+/** One selectable option of an `AskUserQuestionEvent` (issue #411). */
+export interface QuestionOption {
+  /** Opaque id the agent consumes (stable, single-use). */
+  value: string
+  /** Human-readable option text. */
+  label: string
+  /** Optional context shown under the label. */
+  description?: string
+  /** `single` (default) or `multi`. */
+  cardinality?: string
+}
+
+/**
+ * `acp:question_request` payload (issue #411) — a structured question from an
+ * agent. `questionId` is a stable correlation id generated server-side; the
+ * user's answer routes back through it exactly once via `answerQuestion`.
+ */
+export interface AskUserQuestionEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  questionId: string
+  question: string
+  options: QuestionOption[]
+}
 export interface PromptCompleteEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -408,6 +433,7 @@ export const ACP_EVENTS = {
   modeUpdate: 'acp:mode_update',
   configOptionsUpdate: 'acp:config_options_update',
   permissionRequest: 'acp:permission_request',
+  questionRequest: 'acp:question_request',
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
   agentCrashed: 'acp:agent_crashed',
@@ -554,6 +580,18 @@ export async function acpRespondPermission(
   await getAcpTransport().respondPermission(agentId, requestId, optionId)
 }
 
+/**
+ * Answer a structured question (issue #411). `values == null`/empty cancels;
+ * otherwise submits the selected option values exactly once.
+ */
+export async function acpAnswerQuestion(
+  agentId: AgentId,
+  questionId: string,
+  values?: string[]
+): Promise<void> {
+  await getAcpTransport().answerQuestion(agentId, questionId, values)
+}
+
 export async function acpAuthenticate(agentId: AgentId, methodId: string): Promise<void> {
   await getAcpTransport().authenticate(agentId, methodId)
 }
@@ -584,6 +622,7 @@ export const acpApi = {
   setMode: acpSetMode,
   setModel: acpSetModel,
   respondPermission: acpRespondPermission,
+  answerQuestion: acpAnswerQuestion,
   authenticate: acpAuthenticate,
   installRegistryBinary: acpInstallRegistryBinary,
   probeRuntime: acpProbeRuntime,

@@ -94,6 +94,7 @@ export interface AcpTransport {
   setMode(agentId: AgentId, sessionId: SessionId, modeId: string): Promise<void>
   setModel(agentId: AgentId, sessionId: SessionId, modelId: string): Promise<void>
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
+  answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(agentId: AgentId, methodId: string): Promise<void>
   /** Web/remote only: switch now or report that the switch was queued. */
@@ -180,6 +181,9 @@ function createTauriAcpTransport(): AcpTransport {
     },
     respondPermission: async (agentId, requestId, optionId) => {
       await invoke('acp_respond_permission', { agentId, requestId, optionId })
+    },
+    answerQuestion: async (agentId, questionId, values) => {
+      await invoke('acp_answer_question', { agentId, questionId, values })
     },
     authenticate: async (agentId, methodId) => {
       await invoke('acp_authenticate', { agentId, methodId })
@@ -623,6 +627,10 @@ export class WsAcpTransport implements AcpTransport {
 
   async respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void> {
     await this.request('respond_permission', { agentId, requestId, optionId })
+  }
+
+  async answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void> {
+    await this.request('answer_question', { agentId, questionId, values })
   }
 
   /** Agent method auth — distinct from relay `authenticate` token gate. */

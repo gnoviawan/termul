@@ -207,6 +207,34 @@ pub async fn acp_respond_permission(
     }
 }
 
+/// Route a structured-question answer (issue #411) to a waiting agent request.
+///
+/// Mirrors [`acp_respond_permission`]: `values == None` cancels the question;
+/// `Some(values)` submits the selected option values. When this command loses
+/// the race (the phone resolved first, or the user clicked twice),
+/// `take_question` returns `None` and the driver replies
+/// `Err("unknown question request: …")`. That is a benign "already resolved"
+/// outcome — surface it as `Ok(())` so the renderer doesn't show a confusing
+/// error for the loser of a race the user intended to win.
+#[tauri::command]
+pub async fn acp_answer_question(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    question_id: String,
+    values: Option<Vec<String>>,
+) -> Result<(), String> {
+    match manager
+        .answer_question(&agent_id, question_id, values)
+        .await
+    {
+        Ok(()) => Ok(()),
+        // Loser of a first-response-wins race: the question was already
+        // resolved by the other path. Treat as success (idempotent resolve).
+        Err(e) if e.starts_with("unknown question request") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.
 #[tauri::command]
 pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {

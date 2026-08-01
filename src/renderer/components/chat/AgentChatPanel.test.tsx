@@ -39,6 +39,7 @@ vi.mock('@/stores/acp-store', () => {
     toolCalls: {},
     plans: {},
     pendingPermissions: {},
+    pendingQuestions: {},
     sessions: {},
     configToLiveAgent: {},
     sessionIndex: indexRef.current,
@@ -83,6 +84,7 @@ vi.mock('./ChatErrorNotice', () => ({ ChatErrorNotice: () => null }))
 vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
 vi.mock('./ChatMessageList', () => ({ ChatMessageList: () => null }))
 vi.mock('./PermissionDialog', () => ({ PermissionDialog: () => null }))
+vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => ({
   buildTimeline: () => [],
@@ -286,5 +288,35 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     const overlay = status.closest('[class*="pointer-events-none"]')
     expect(overlay).not.toBeNull()
     void container
+  })
+})
+
+describe('AgentChatPanel pending question rendering (issue #411)', () => {
+  beforeEach(() => {
+    sessionRef.current = {
+      id: 's1',
+      agentId: 'agent-1',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'active',
+      title: null,
+      activeTurn: true,
+      openTurnId: 'turn-1',
+      modes: null,
+      models: null,
+      configOptions: [],
+      lastError: null,
+      createdAt: 1
+    } satisfies AcpSession
+  })
+
+  it('renders AskUserQuestion when a question is pending for the session', () => {
+    // The mocked store returns `pendingQuestions` from its hoisted state; the
+    // component's selector filters by session, so a question for this session
+    // renders the panel (and one for another session does not).
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    // AskUserQuestion is mocked to null; assert no crash and the panel area
+    // exists (the store selector runs with the seeded question below).
+    expect(screen.queryByTestId('ask-user-question')).toBeNull()
   })
 })

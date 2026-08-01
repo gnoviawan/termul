@@ -149,6 +149,11 @@ pub struct WsRelaySink {
     /// events into a relay-side ticket table that enforces the rendezvous
     /// policy (timeout, at-most-one, first-wins, disconnect-deny, TOCTOU).
     rendezvous: Mutex<Option<Arc<crate::web::permissions::PermissionRendezvous>>>,
+    /// Server-side question rendezvous (issue #411). `None` on the desktop
+    /// path (the browser-less flow uses the `acp_answer_question` Tauri
+    /// command directly). When set, `emit` snapshots `acp:question_request`
+    /// events into a relay-side ticket table (first-wins, TOCTOU, timeout).
+    question_rendezvous: Mutex<Option<Arc<crate::web::permissions::QuestionRendezvous>>>,
     /// Server-side turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing).
     /// Always present (cheap to construct; no external handle). 1.8's
     /// `prompt_complete` / `send_prompt` handlers read this via
@@ -233,6 +238,7 @@ impl WsRelaySink {
             event_log_capacity: event_log_capacity.max(1),
             lossy_capacity: lossy_capacity.max(1),
             rendezvous: Mutex::new(None),
+            question_rendezvous: Mutex::new(None),
             turn_watermark: crate::web::permissions::TurnWatermark::new(),
             persistence: None,
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
@@ -289,6 +295,24 @@ impl WsRelaySink {
     #[must_use]
     pub fn rendezvous(&self) -> Option<Arc<crate::web::permissions::PermissionRendezvous>> {
         self.rendezvous.lock().clone()
+    }
+
+    /// Attach the server-side question rendezvous (issue #411). Server-only;
+    /// when set, `emit` snapshots `acp:question_request` events into the
+    /// rendezvous so the `/ws` `answer_question` handler can enforce the
+    /// rendezvous policy (first-wins, TOCTOU, timeout).
+    pub fn set_question_rendezvous(
+        &self,
+        rendezvous: Arc<crate::web::permissions::QuestionRendezvous>,
+    ) {
+        *self.question_rendezvous.lock() = Some(rendezvous);
+    }
+
+    /// The attached question rendezvous, if any (server path). Used by the `/ws`
+    /// `answer_question` handler + disconnect deny-all cleanup.
+    #[must_use]
+    pub fn question_rendezvous(&self) -> Option<Arc<crate::web::permissions::QuestionRendezvous>> {
+        self.question_rendezvous.lock().clone()
     }
 
     /// Number of clients currently subscribed to `session_id` (Story 1.7
@@ -758,6 +782,41 @@ impl EventSink for WsRelaySink {
                         .cloned()
                         .unwrap_or(Value::Array(vec![]));
                     rdz.register(request_id, agent_id, session_id, options);
+                }
+            }
+        }
+        // Issue #411: snapshot `question_request` events into the server-side
+        // question rendezvous (if attached). The ticket holds the immutable
+        // args (the `options` array) for TOCTOU re-validation + arms the
+        // bounded timeout. Runs only on the server path.
+        if type_ == "question_request" {
+            if let Some(rdz) = self.question_rendezvous() {
+                let payload = &event.payload;
+                let question_id = payload
+                    .get("questionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if question_id.is_empty() {
+                    warn!(
+                        "[questions] dropping question_request with no questionId (dispatcher bug?)"
+                    );
+                } else {
+                    let agent_id = payload
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .map(|s| crate::acp::AgentId(s.to_string()))
+                        .unwrap_or_else(|| crate::acp::AgentId("unknown".to_string()));
+                    let session_id = payload
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let options = payload
+                        .get("options")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
+                    rdz.register(question_id, agent_id, session_id, options);
                 }
             }
         }

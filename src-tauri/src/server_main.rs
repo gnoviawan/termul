@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
-    seed_from_file, serve, PermissionRendezvous, ProjectRegistry, ServerConfig, WsRelaySink,
+    seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
+    WsRelaySink,
 };
 use termul_manager_lib::{AcpManager, FileProjectRegistry, SessionPersistence};
 use tracing::info;
@@ -91,6 +92,17 @@ fn main() -> ExitCode {
             Duration::from_secs(cfg.permission_timeout_secs),
         ));
         ws_relay.set_rendezvous(rendezvous);
+        // Issue #411: attach the server-side question rendezvous (bounded
+        // timeout, first-response-wins, TOCTOU). The relay snapshots
+        // `acp:question_request` events into it; the `/ws` `answer_question`
+        // handler + disconnect cleanup enforce the policy. The desktop path
+        // does NOT attach one (it uses the `acp_answer_question` Tauri command
+        // directly).
+        let question_rendezvous = Arc::new(QuestionRendezvous::with_timeout(
+            Arc::clone(&acp),
+            Duration::from_secs(cfg.permission_timeout_secs),
+        ));
+        ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
         // standalone binary is the source of truth — it seeds the registry
         // from the file-backed `FileProjectRegistry` at startup (when

@@ -28,6 +28,7 @@ pub mod ws;
 pub use chat_history_cache::ChatHistoryCache;
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
+pub use permissions::QuestionRendezvous;
 pub use project_registry::{
     seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload,
 };

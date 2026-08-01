@@ -12,6 +12,7 @@ import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
+import { AskUserQuestion } from './AskUserQuestion'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -89,6 +90,12 @@ export function AgentChatPanel({
   const pendingPermission = useAcpStore(
     useShallow(
       (s) => Object.values(s.pendingPermissions).find((p) => p.sessionId === sessionId) ?? null
+    )
+  )
+  // The oldest pending structured question for THIS session (issue #411).
+  const pendingQuestion = useAcpStore(
+    useShallow(
+      (s) => Object.values(s.pendingQuestions).find((q) => q.sessionId === sessionId) ?? null
     )
   )
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
@@ -477,6 +484,7 @@ export function AgentChatPanel({
         seedNonce={seed?.nonce}
       />
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
+      {pendingQuestion && !isClosed && <AskUserQuestion question={pendingQuestion} />}
     </div>
   )
 }

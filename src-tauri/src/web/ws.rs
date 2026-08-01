@@ -564,6 +564,14 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             rdz.deny_all_for_client(move |sid| relay_for_count.session_subscriber_count(sid))
                 .await;
         }
+        // Issue #411: on browser disconnect, resolve every outstanding question
+        // whose session now has zero remaining subscribers as cancelled
+        // (mirrors the permission disconnect-deny above).
+        if let Some(qrdz) = relay.question_rendezvous() {
+            let relay_for_count = Arc::clone(&relay);
+            qrdz.deny_all_for_client(move |sid| relay_for_count.session_subscriber_count(sid))
+                .await;
+        }
     });
 
     // Drop the original sender so the write loop ends when the read task
@@ -688,6 +696,11 @@ async fn handle_request(
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
         // which resolves the agent's `Responder` on the driver thread.
         "respond_permission" => handle_respond_permission(id, &req.payload, relay, subscribed_clients).await,
+        // Issue #411: `answer_question` — route the browser's structured-question
+        // answer through the server-side question rendezvous (first-response-wins,
+        // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves
+        // the agent's `Responder` on the driver thread.
+        "answer_question" => handle_answer_question(id, &req.payload, relay, subscribed_clients).await,
         // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
@@ -2264,6 +2277,121 @@ async fn handle_respond_permission(
     }
 }
 
+/// CamelCase `answer_question` payload (issue #411) — mirrors the client
+/// `acp-transport.ts: answerQuestion(agentId, questionId, values?)`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnswerQuestionPayload {
+    agent_id: crate::acp::AgentId,
+    question_id: String,
+    /// `None` / omitted → cancel; `Some(values)` → selected option values.
+    #[serde(default)]
+    values: Option<Vec<String>>,
+}
+
+/// Wire `answer_question` → [`crate::web::permissions::QuestionRendezvous`]
+/// (first-response-wins, TOCTOU re-validation) → `AcpManager::answer_question`
+/// (resolves the agent `Responder` on the driver thread). Maps the rendezvous
+/// outcome/error to a stable `err.code` (mirrors `handle_respond_permission`).
+///
+/// Requires a server-side question rendezvous attached to the relay
+/// (`relay.question_rendezvous()`). On the desktop path (no rendezvous) the
+/// browser never reaches this handler — the desktop uses the `acp_answer_question`
+/// Tauri command directly.
+async fn handle_answer_question(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    subscribed_clients: &[(String, ClientId)],
+) -> WsReply {
+    let Some(rdz) = relay.question_rendezvous() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::NotImplemented,
+            "question rendezvous is not attached (desktop path uses the Tauri command)",
+        );
+    };
+
+    let parsed: AnswerQuestionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed answer_question payload (want agentId, questionId, values?): {e}"),
+            );
+        }
+    };
+    if parsed.question_id.is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "questionId is required");
+    }
+
+    // Defense in depth: the payload's `agentId` must match the ticket's agent.
+    let Some(ticket_agent) = rdz.agent_for_question(&parsed.question_id) else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Stale,
+            "no outstanding question for this questionId",
+        );
+    };
+    if ticket_agent != parsed.agent_id {
+        return WsReply::err(
+            id,
+            WsErrorCode::PermissionDenied,
+            "agentId does not match the question's agent",
+        );
+    }
+
+    // Ownership check: the connection MUST be subscribed to the question's
+    // session (NFR5 — no cross-session question resolution).
+    let Some(session_id) = rdz.session_for_question(&parsed.question_id) else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Stale,
+            "no outstanding question for this questionId",
+        );
+    };
+    let Some((_, client_id)) = subscribed_clients
+        .iter()
+        .find(|(sid, _)| *sid == session_id)
+    else {
+        return WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            "this connection is not subscribed to the question's session",
+        );
+    };
+    let client_id = *client_id;
+
+    let values = parsed.values.as_deref();
+    match rdz.try_respond(client_id, &parsed.question_id, values).await {
+        Ok(crate::web::permissions::QuestionRespondOutcome::Resolved) => {
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(err) => {
+            let (code, msg) = match err {
+                crate::web::permissions::QuestionRespondError::NotFound => (
+                    WsErrorCode::Stale,
+                    "no outstanding question for this questionId",
+                ),
+                crate::web::permissions::QuestionRespondError::AlreadyResolved => (
+                    WsErrorCode::Stale,
+                    "this question was already answered by another client (first-response-wins)",
+                ),
+                crate::web::permissions::QuestionRespondError::Duplicate => (
+                    WsErrorCode::Duplicate,
+                    "this client already answered this question",
+                ),
+                crate::web::permissions::QuestionRespondError::InvalidOption => (
+                    WsErrorCode::PermissionDenied,
+                    "a value is not among the original question options (TOCTOU defense)",
+                ),
+            };
+            WsReply::err(id, code, msg)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -3052,6 +3180,263 @@ mod tests {
         let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs.clone(),
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "permission_denied");
+    }
+
+    /// Helper (issue #411): build a relay + question rendezvous, subscribe a
+    /// connection to a session, and register a question ticket via `emit` (the
+    /// production path). Returns the (relay, subs) ready for a `handle_request`
+    /// call.
+    fn relay_with_subscribed_question(
+        agent_id: &str,
+        session_id: &str,
+        question_id: &str,
+        options: &[&str],
+    ) -> (Arc<WsRelaySink>, Vec<(String, ClientId)>) {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let relay = Arc::new(WsRelaySink::new());
+        relay.set_question_rendezvous(Arc::new(
+            crate::web::permissions::QuestionRendezvous::default(),
+        ));
+        let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
+        let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
+        let options_value = serde_json::Value::Array(
+            options
+                .iter()
+                .map(|v| serde_json::json!({ "value": v, "label": v }))
+                .collect(),
+        );
+        relay.emit(&AcpEvent {
+            sid: Some(session_id.to_string()),
+            type_: "acp:question_request",
+            payload: serde_json::json!({
+                "agentId": agent_id,
+                "sessionId": session_id,
+                "questionId": question_id,
+                "question": "Which approach?",
+                "options": options_value,
+            }),
+        });
+        (relay, subs)
+    }
+
+    /// Issue #411: without a question rendezvous attached (desktop path), the
+    /// `answer_question` handler replies `not_implemented`.
+    #[test]
+    fn handle_answer_question_without_rendezvous_is_not_implemented() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-x"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_implemented");
+    }
+
+    /// Issue #411: a malformed `answer_question` payload is rejected with
+    /// `unsupported`.
+    #[test]
+    fn handle_answer_question_malformed_payload_is_unsupported() {
+        let relay = Arc::new(WsRelaySink::new());
+        relay.set_question_rendezvous(Arc::new(
+            crate::web::permissions::QuestionRendezvous::default(),
+        ));
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut subs = Vec::new();
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// Issue #411: an `answer_question` whose `agentId` differs from the
+    /// ticket's agent is rejected `permission_denied` (defense-in-depth).
+    #[test]
+    fn handle_answer_question_wrong_agent_is_permission_denied() {
+        let (relay, subs) = relay_with_subscribed_question("a1", "sess-1", "q-1", &["plan-a"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs.clone(),
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "permission_denied");
+    }
+
+    /// Issue #411: a connection NOT subscribed to the question's session is
+    /// rejected `not_found` (NFR5 ownership check).
+    #[test]
+    fn handle_answer_question_not_subscribed_is_not_found() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        relay.set_question_rendezvous(Arc::new(
+            crate::web::permissions::QuestionRendezvous::default(),
+        ));
+        let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
+        let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
+        relay.emit(&AcpEvent {
+            sid: Some("sess-A".to_string()),
+            type_: "acp:question_request",
+            payload: serde_json::json!({
+                "agentId": "a1", "sessionId": "sess-A", "questionId": "q-A",
+                "question": "Q", "options": [{ "value": "plan-a", "label": "Plan A" }]
+            }),
+        });
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs.clone(),
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Issue #411: a valid `answer_question` from a subscribed connection
+    /// resolves the ticket (ok); a second frame for the same questionId is
+    /// rejected `stale` (handler-level first-response-wins).
+    #[test]
+    fn handle_answer_question_resolves_then_second_is_stale() {
+        let (relay, subs) = relay_with_subscribed_question("a1", "sess-1", "q-1", &["plan-a"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let ok_reply = block_on(handle_request(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs.clone(),
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(ok_reply.ok, "first answer wins: {:?}", ok_reply.err);
+        let stale_reply = block_on(handle_request(
+            r#"{"id":"r2","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            None,
+            &tx,
+            &mut subs.clone(),
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(!stale_reply.ok);
+        assert_eq!(stale_reply.err.unwrap().code, "stale");
+    }
+
+    /// Issue #411: an option value not in the original options is rejected
+    /// `permission_denied` end-to-end (TOCTOU through the handler).
+    #[test]
+    fn handle_answer_question_invalid_option_is_permission_denied() {
+        let (relay, subs) = relay_with_subscribed_question("a1", "sess-1", "q-1", &["plan-a"]);
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut authed = true;
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let reply = block_on(handle_request(
+            r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
             &mut authed,
             &acp,
             &relay,

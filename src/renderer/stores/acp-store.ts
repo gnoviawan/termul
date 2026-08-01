@@ -44,6 +44,7 @@ import {
   type AgentErrorEvent,
   type AgentId,
   type AgentSpawnedEvent,
+  type AskUserQuestionEvent,
   type AuthMethod,
   type AvailableCommand,
   acpApi,
@@ -58,6 +59,7 @@ import {
   type PlanEntry,
   type PlanUpdateEvent,
   type PromptCompleteEvent,
+  type QuestionOption,
   type SessionClosedEvent,
   type SessionConfigOption,
   type SessionCreatedEvent,
@@ -205,6 +207,15 @@ export interface PendingPermission {
   toolCall: unknown
 }
 
+/** A pending structured question (issue #411), keyed by `questionId`. */
+export interface PendingQuestion {
+  questionId: string
+  agentId: AgentId
+  sessionId: SessionId
+  question: string
+  options: QuestionOption[]
+}
+
 interface AcpState {
   // Agent registry
   agents: Record<
@@ -294,6 +305,7 @@ interface AcpState {
   plans: Record<SessionId, PlanEntry[]>
   commands: Record<SessionId, AvailableCommand[]>
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
+  pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
@@ -483,6 +495,9 @@ interface AcpState {
   // Actions — permission (P3 drives the UI; method available now)
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
 
+  // Actions — structured questions (issue #411)
+  answerQuestion: (questionId: string, values?: string[]) => Promise<void>
+
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
   _onSessionCreated: (e: SessionCreatedEvent) => void
@@ -497,6 +512,7 @@ interface AcpState {
   _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
   _onUsageUpdate: (e: UsageUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent) => void
+  _onQuestionRequest: (e: AskUserQuestionEvent) => void
   _onPromptComplete: (e: PromptCompleteEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
@@ -736,6 +752,30 @@ function dropPermissionsForAgent(
   pending: Record<string, PendingPermission>,
   agentId: AgentId
 ): Record<string, PendingPermission> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].agentId === agentId) delete next[id]
+  }
+  return next
+}
+
+/** Remove all pending questions belonging to a session (issue #411). */
+function dropQuestionsForSession(
+  pending: Record<string, PendingQuestion>,
+  sessionId: SessionId
+): Record<string, PendingQuestion> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].sessionId === sessionId) delete next[id]
+  }
+  return next
+}
+
+/** Remove all pending questions belonging to an agent (issue #411). */
+function dropQuestionsForAgent(
+  pending: Record<string, PendingQuestion>,
+  agentId: AgentId
+): Record<string, PendingQuestion> {
   const next = { ...pending }
   for (const id of Object.keys(next)) {
     if (next[id].agentId === agentId) delete next[id]
@@ -2259,6 +2299,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   plans: {},
   commands: {},
   pendingPermissions: {},
+  pendingQuestions: {},
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
@@ -2343,7 +2384,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus,
         configToLiveAgent,
         sessions,
-        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId)
+        pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId),
+        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId)
       }
     })
   },
@@ -2545,6 +2587,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       return {
         sessions,
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
+        pendingQuestions: dropQuestionsForSession(s.pendingQuestions, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
@@ -3777,6 +3820,25 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
+  answerQuestion: async (questionId, values) => {
+    const pending = get().pendingQuestions[questionId]
+    if (!pending) return
+    // Optimistically remove so a rapid double-click can't fire a second backend
+    // call for the same question (which would error as 'unknown question request').
+    set((s) => {
+      const pendingQuestions = { ...s.pendingQuestions }
+      delete pendingQuestions[questionId]
+      return { pendingQuestions }
+    })
+    try {
+      await acpApi.answerQuestion(pending.agentId, questionId, values)
+    } catch (err) {
+      // Restore the entry so the user can retry.
+      set((s) => ({ pendingQuestions: { ...s.pendingQuestions, [questionId]: pending } }))
+      throw err
+    }
+  },
+
   // --- Event reducers ------------------------------------------------------
 
   _onAgentSpawned: (e) =>
@@ -4130,6 +4192,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }),
 
+  _onQuestionRequest: (e) =>
+    set((s) => {
+      // Keep an existing pending question for this id; never silently drop it.
+      if (s.pendingQuestions[e.questionId]) return {}
+      return {
+        pendingQuestions: {
+          ...s.pendingQuestions,
+          [e.questionId]: {
+            questionId: e.questionId,
+            agentId: e.agentId,
+            sessionId: e.sessionId,
+            question: e.question,
+            options: e.options
+          }
+        }
+      }
+    }),
+
   _onPromptComplete: (e) => {
     // Flush any coalesced streaming updates so the final transcript is
     // consistent before the turn status flips.
@@ -4140,11 +4220,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // A finished turn abandons any unanswered permission for this session;
       // the backend resolves it 'cancelled', so clear the stale store entry too.
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-      if (!session) return { messages, pendingPermissions }
+      const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
+      if (!session) return { messages, pendingPermissions, pendingQuestions }
       const note = noteForStopReason(e.stopReason)
       return {
         messages,
         pendingPermissions,
+        pendingQuestions,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
@@ -4341,6 +4423,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
+        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, e.agentId),
         discoveredSessions,
         preparedSessions
       }
@@ -4388,6 +4471,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             sessions,
             preparedSessions,
             pendingPermissions: dropPermissionsForSession(s.pendingPermissions, e.sessionId),
+            pendingQuestions: dropQuestionsForSession(s.pendingQuestions, e.sessionId),
             ...dropSessionTranscriptState(s, e.sessionId)
           }
         })
@@ -4401,14 +4485,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => {
       const session = s.sessions[e.sessionId]
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+      const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
       if (!session) {
         return {
           pendingPermissions,
+          pendingQuestions,
           ...dropSessionTranscriptState(s, e.sessionId)
         }
       }
       return {
         pendingPermissions,
+        pendingQuestions,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
@@ -4569,6 +4656,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
       useAcpStore.getState()._onPermissionRequest(e)
+    ),
+    acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e) =>
+      useAcpStore.getState()._onQuestionRequest(e)
     ),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e) =>
       useAcpStore.getState()._onPromptComplete(e)

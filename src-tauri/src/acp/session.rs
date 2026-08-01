@@ -16,6 +16,7 @@
 
 use agent_client_protocol::schema::RequestPermissionResponse;
 use agent_client_protocol::Responder;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
@@ -29,11 +30,26 @@ pub(crate) struct PendingPermission {
     pub responder: Responder<RequestPermissionResponse>,
 }
 
+/// A structured question (issue #411) awaiting the user's answer.
+///
+/// The `responder` completes the agent's in-flight `_session/question` extension
+/// request once the user answers (or the turn is cancelled / drained). The
+/// response is an untyped JSON value (the ACP extension surface has no typed
+/// question response), so the `serde_json::Value` is `Send` and can cross the
+/// driver thread boundary inside `DriverState`'s `Arc<Mutex<..>>`.
+pub(crate) struct PendingQuestion {
+    pub session_id: String,
+    pub question_id: String,
+    pub responder: Responder<Value>,
+}
+
 /// Mutable state shared across a single agent's driver thread.
 #[derive(Default)]
 pub(crate) struct DriverState {
     /// Permission requests keyed by a globally-unique correlation id.
     pending_permissions: HashMap<String, PendingPermission>,
+    /// Structured questions (issue #411) keyed by a globally-unique question id.
+    pending_questions: HashMap<String, PendingQuestion>,
     /// Canonicalized workspace root per active session, used to sandbox `fs`
     /// reads/writes to the session's `cwd`.
     session_roots: HashMap<String, PathBuf>,
@@ -81,6 +97,57 @@ impl DriverState {
     /// Remove and return a pending permission by its correlation id.
     pub(crate) fn take_permission(&mut self, request_id: &str) -> Option<PendingPermission> {
         self.pending_permissions.remove(request_id)
+    }
+
+    /// Register a pending structured question (issue #411) and return its
+    /// globally-unique correlation id.
+    ///
+    /// The id embeds a UUID (mirroring `register_permission`'s `perm-{uuid}`
+    /// style, but with a `q-` prefix) so it never collides across agents.
+    pub(crate) fn register_question(
+        &mut self,
+        session_id: String,
+        responder: Responder<Value>,
+    ) -> String {
+        let question_id = format!("q-{}", uuid::Uuid::new_v4());
+        self.pending_questions.insert(
+            question_id.clone(),
+            PendingQuestion {
+                session_id,
+                question_id: question_id.clone(),
+                responder,
+            },
+        );
+        question_id
+    }
+
+    /// Remove and return a pending question by its correlation id.
+    pub(crate) fn take_question(&mut self, question_id: &str) -> Option<PendingQuestion> {
+        self.pending_questions.remove(question_id)
+    }
+
+    /// Remove and return all pending questions belonging to a session.
+    ///
+    /// Used on cancellation and on prompt completion to resolve every
+    /// outstanding question for the session (cancelled).
+    pub(crate) fn drain_session_questions(&mut self, session_id: &str) -> Vec<PendingQuestion> {
+        let ids: Vec<String> = self
+            .pending_questions
+            .iter()
+            .filter(|(_, q)| q.session_id == session_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.pending_questions.remove(&id))
+            .collect()
+    }
+
+    /// Remove and return every pending question, regardless of session.
+    pub(crate) fn drain_all_questions(&mut self) -> Vec<PendingQuestion> {
+        self.pending_questions
+            .drain()
+            .map(|(_, q)| q)
+            .collect()
     }
 
     /// Remove and return all pending permissions belonging to a session.
@@ -192,6 +259,12 @@ impl DriverState {
         }
         self.drain_session(session_id)
     }
+
+    /// Mark a session's turn finished and return any still-pending questions
+    /// for that session (to be resolved cancelled). Idempotent.
+    pub(crate) fn finish_turn_questions(&mut self, session_id: &str) -> Vec<PendingQuestion> {
+        self.drain_session_questions(session_id)
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +282,16 @@ mod tests {
         let b = format!("perm-{}", uuid::Uuid::new_v4());
         assert_ne!(a, b);
         assert!(a.starts_with("perm-"));
+    }
+
+    #[test]
+    fn question_ids_are_globally_unique_and_prefixed() {
+        // Issue #411: question ids use the same UUID scheme as permission ids
+        // but with a `q-` prefix so the two correlation spaces never collide.
+        let a = format!("q-{}", uuid::Uuid::new_v4());
+        let b = format!("q-{}", uuid::Uuid::new_v4());
+        assert_ne!(a, b);
+        assert!(a.starts_with("q-"));
     }
 
     #[test]
