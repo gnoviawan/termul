@@ -76,6 +76,7 @@ import {
   type UsageUpdateEvent,
   type UserPromptEvent
 } from '@/lib/acp-api'
+import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
   deleteSessionPayload,
   deriveTitle,
@@ -308,6 +309,8 @@ interface AcpState {
    * (which fires when `openHistorySession` is in flight — both can show).
    */
   transportReconnecting: boolean
+  /** Sessions recovered live-only after stale because no server snapshot exists. */
+  degradedRecoverySessions: Record<SessionId, true>
   /** Target project waiting for the current turn to finish, if any. */
   queuedProjectSwitchId: string | null
   /** Target project whose switch just failed (transient inline indicator). */
@@ -2262,6 +2265,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
+  degradedRecoverySessions: {},
   queuedProjectSwitchId: null,
   failedProjectSwitchId: null,
 
@@ -4442,6 +4446,85 @@ let teardown: Array<() => void> = []
  * no-op until the returned teardown runs. Returns a teardown that detaches all
  * listeners.
  */
+async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
+  if ('degraded' in recovery) {
+    useAcpStore.setState((state) => {
+      const session = state.sessions[recovery.sessionId]
+      return {
+        degradedRecoverySessions: {
+          ...state.degradedRecoverySessions,
+          [recovery.sessionId]: true
+        },
+        sessions: session
+          ? {
+              ...state.sessions,
+              [recovery.sessionId]: {
+                ...session,
+                lastError:
+                  'Connection recovered live-only; events emitted while disconnected may be missing.'
+              }
+            }
+          : state.sessions
+      }
+    })
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.recovery',
+      message: `Live-only stale recovery for session ${recovery.sessionId} is degraded`
+    })
+    return
+  }
+
+  const messages: ChatMessage[] = []
+  for (const event of recovery.events) {
+    const payload = event.payload as Record<string, unknown>
+    if (event.type === 'user_prompt') {
+      const turnId = typeof payload.turnId === 'string' ? payload.turnId : `seq-${event.seq}`
+      const blocks = Array.isArray(payload.content) ? (payload.content as ContentBlock[]) : []
+      const message: ChatMessage = {
+        id: `turn:${turnId}`,
+        role: 'user',
+        blocks,
+        streaming: false,
+        timestamp: Date.now(),
+        seq: event.seq
+      }
+      messages.push(message)
+    } else if (event.type === 'message_chunk') {
+      const role = payload.role === 'thought' ? 'thought' : 'agent'
+      const content = payload.content as ContentBlock | undefined
+      if (!content) continue
+      const key = `snapshot:${role}:${event.seq}`
+      const message: ChatMessage = {
+        id: key,
+        role,
+        blocks: [content],
+        streaming: false,
+        timestamp: Date.now(),
+        seq: event.seq
+      }
+      messages.push(message)
+    }
+  }
+  useAcpStore.setState((current) => {
+    const session = current.sessions[recovery.sessionId]
+    const replacing = messages.length > 0
+    return {
+      messages: replacing
+        ? { ...current.messages, [recovery.sessionId]: messages }
+        : current.messages,
+      toolCalls: replacing ? { ...current.toolCalls, [recovery.sessionId]: [] } : current.toolCalls,
+      degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
+      sessions: session
+        ? {
+            ...current.sessions,
+            [recovery.sessionId]: { ...session, lastError: null }
+          }
+        : current.sessions
+    }
+  })
+}
+
 export function initAcpEventListeners(): () => void {
   if (listenersInitialized) {
     return () => {
@@ -4457,11 +4540,20 @@ export function initAcpEventListeners(): () => void {
   // `false`. The listener is idempotent: re-registration overwrites the
   // previous callback.
   const transport = getAcpTransport()
-  if (typeof transport.setReconnectListener === 'function') {
-    transport.setReconnectListener((reconnecting) => {
+  const connection = new AcpConnectionCoordinator(transport, {
+    installRecovery: installTransportRecovery,
+    pendingPermissionSessions: () => [
+      ...new Set(
+        Object.values(useAcpStore.getState().pendingPermissions).map(
+          (permission) => permission.sessionId
+        )
+      )
+    ],
+    setReconnecting: (reconnecting) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
-    })
-  }
+    }
+  })
+  connection.attach()
   const applyCompletedProjectSwitch = (event: ProjectSwitchCompletedEvent): void => {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]

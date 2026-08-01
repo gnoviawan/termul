@@ -35,6 +35,15 @@ class FakeWebSocket {
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
   switchProjectReply: unknown = null
+  historyMode: 'server' | 'live_only' = 'server'
+  runtimePolicy = {
+    turnTimeoutMs: 3_600_000,
+    promptInactivityTimeoutMs: 3_600_000,
+    permissionReconnectGraceMs: 15_000,
+    pingIntervalMs: 20_000,
+    pongTimeoutMs: 75_000
+  }
+  snapshotEvents: unknown[] = []
   reopenOutcome: unknown = {
     modes: {
       currentModeId: 'ask',
@@ -68,7 +77,11 @@ class FakeWebSocket {
         })
         return
       }
-      this.emitReply({ id: req.id, ok: true, payload: {} })
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: { historyMode: this.historyMode, runtimePolicy: this.runtimePolicy }
+      })
       return
     }
     if (req.type === 'ping') {
@@ -91,6 +104,15 @@ class FakeWebSocket {
         id: req.id,
         ok: true,
         payload: { sessionId: payload.sessionId, replayed: 0 }
+      })
+      return
+    }
+    if (req.type === 'recover_session_snapshot') {
+      const payload = req.payload as { sessionId: string }
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: { sessionId: payload.sessionId, watermark: 42, events: this.snapshotEvents }
       })
       return
     }
@@ -529,20 +551,46 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('on stale subscribe clears buffers and resubscribes live-only', async () => {
+  it('on stale subscribe installs an atomic server-history snapshot', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
     })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => {
+      recoveries.push(recovery)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.snapshotEvents = [
+      { sid: 's1', seq: 42, type: 'message_chunk', payload: { content: { text: 'snapshot' } } }
+    ]
+
+    await transport.subscribeSession('s1', 99)
+
+    expect(recoveries).toEqual([{ sessionId: 's1', watermark: 42, events: sock.snapshotEvents }])
+    expect(transport.getSessionCursor('s1')).toBe(42)
+    const types = sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)
+    expect(types).toContain('recover_session_snapshot')
+    transport.dispose()
+  })
+
+  it('reports degraded recovery in live-only mode instead of silent success', async () => {
+    class LiveOnlySocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.historyMode = 'live_only'
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: LiveOnlySocket as unknown as typeof WebSocket
+    })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => recoveries.push(recovery))
     await transport.connect()
     await transport.subscribeSession('s1', 99)
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    const subscribeFrames = sock.sent
-      .map((s) => JSON.parse(s) as { type: string; payload: { lastSeq?: number } })
-      .filter((f) => f.type === 'subscribe')
-    expect(subscribeFrames.length).toBeGreaterThanOrEqual(2)
-    const retry = subscribeFrames[subscribeFrames.length - 1]
-    expect(retry.payload.lastSeq).toBeUndefined()
+    expect(recoveries).toEqual([{ sessionId: 's1', degraded: true }])
     transport.dispose()
   })
 
@@ -561,6 +609,7 @@ describe('WsAcpTransport', () => {
             resolve: (v: unknown) => void
             reject: (e: unknown) => void
             timer: ReturnType<typeof setTimeout>
+            type: 'ping'
           }
         >
       }
@@ -569,7 +618,8 @@ describe('WsAcpTransport', () => {
       pendingMap.set('hung-rpc', {
         resolve: () => undefined,
         reject,
-        timer: setTimeout(() => undefined, 60_000)
+        timer: setTimeout(() => undefined, 60_000),
+        type: 'ping'
       })
     })
     sock.close()
@@ -641,7 +691,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('loadSession and resumeSession return the reopen snapshot before subscribing', async () => {
+  it('loadSession and resumeSession force subscriptions with explicit replay boundaries', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -658,6 +708,11 @@ describe('WsAcpTransport', () => {
     expect(types).toContain('load_session')
     expect(types).toContain('resume_session')
     expect(types.filter((type) => type === 'subscribe')).toHaveLength(2)
+    const subscriptions = sock.sent
+      .map((frame) => JSON.parse(frame) as { type: string; payload: { lastSeq?: number } })
+      .filter((frame) => frame.type === 'subscribe')
+    expect(subscriptions).toHaveLength(2)
+    expect(subscriptions.every((frame) => frame.payload.lastSeq === 0)).toBe(true)
     transport.dispose()
   })
 
@@ -833,7 +888,7 @@ describe('WsAcpTransport', () => {
     expect(second.dispose).toHaveBeenCalledOnce()
   })
 
-  it('keeps send_prompt pending past the 60s default (matches server turn budget)', async () => {
+  it('keeps send_prompt pending past the former 610s deadline and uses negotiated policy', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -858,12 +913,12 @@ describe('WsAcpTransport', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(settled).toBeUndefined()
 
-    await vi.advanceTimersByTimeAsync(540_000) // total 600s — server turn budget elapsed
-    // Client budget = server budget + grace, so the generic timeout must NOT
-    // fire yet (the server's typed `turn timeout` reply should win the race).
+    await vi.advanceTimersByTimeAsync(550_000) // total 610s — former client deadline
     expect(settled).toBeUndefined()
 
-    await vi.advanceTimersByTimeAsync(10_000) // total 610s — client grace fires
+    await vi.advanceTimersByTimeAsync(2_999_999) // total 3,609,999ms
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1) // negotiated 3600s inactivity + 10s grace
     await Promise.resolve()
     expect(settled).toMatchObject({
       err: expect.objectContaining({
@@ -872,6 +927,48 @@ describe('WsAcpTransport', () => {
         message: 'Request send_prompt timed out'
       })
     })
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it('refreshes send_prompt inactivity only for matching-session sequenced events', async () => {
+    vi.useFakeTimers()
+    class ShortInactivitySocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.runtimePolicy = {
+          ...this.runtimePolicy,
+          promptInactivityTimeoutMs: 1_000
+        }
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: ShortInactivitySocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: ShortInactivitySocket }).socket
+    sock.holdSendPrompt = true
+
+    const pending = transport.sendPrompt('a1', 's1', 'long turn')
+    let settled = false
+    void pending.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      }
+    )
+    await vi.advanceTimersByTimeAsync(900)
+    sock.emit({ sid: 'other', seq: 1, type: 'message_chunk', payload: {} })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(settled).toBe(false)
+    sock.emit({ sid: 's1', seq: 1, type: 'message_chunk', payload: {} })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_200)
+    await expect(pending).rejects.toMatchObject({ code: 'timeout' })
     transport.dispose()
     vi.useRealTimers()
   })

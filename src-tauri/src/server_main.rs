@@ -89,9 +89,10 @@ fn main() -> ExitCode {
         // `/ws` `respond_permission` handler + disconnect cleanup enforce the
         // policy. The desktop path does NOT attach a rendezvous (it uses the
         // `acp_respond_permission` Tauri command directly).
-        let rendezvous = Arc::new(PermissionRendezvous::with_timeout(
+        let rendezvous = Arc::new(PermissionRendezvous::with_policy(
             Arc::clone(&acp),
             Duration::from_secs(cfg.permission_timeout_secs),
+            Duration::from_secs(cfg.permission_reconnect_grace_secs),
         ));
         ws_relay.set_rendezvous(rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
@@ -168,12 +169,13 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH]\n\n\
      Options:\n\
        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
        --port PORT                 Bind port (default: 8080)\n\
        --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
+       --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
        --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\

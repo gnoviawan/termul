@@ -124,7 +124,8 @@ export const WS_REQUEST_TYPES = [
   'ping',
   'list_persisted_sessions',
   'open_persisted_session',
-  'get_session_payload'
+  'get_session_payload',
+  'recover_session_snapshot'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -213,6 +214,30 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
 }
 
 export type HistoryMode = 'server' | 'live_only'
+
+/** Additive policy negotiated during the relay authenticate handshake. */
+export interface AcpRuntimePolicy {
+  /** Authoritative absolute server turn ceiling. */
+  turnTimeoutMs: number
+  /** Matching session activity refreshes the renderer timer to this budget. */
+  promptInactivityTimeoutMs: number
+  /** Grace before a last-subscriber disconnect denies pending permissions. */
+  permissionReconnectGraceMs: number
+  pingIntervalMs: number
+  pongTimeoutMs: number
+}
+
+export interface AcpAuthenticateReply {
+  historyMode?: HistoryMode
+  runtimePolicy?: AcpRuntimePolicy
+}
+
+/** Atomic stale-recovery payload emitted before post-watermark live events. */
+export interface SessionSnapshotEvent {
+  sessionId: string
+  watermark: number
+  events: WsEvent[]
+}
 
 export interface PersistedSessionSummary {
   storageKey: string

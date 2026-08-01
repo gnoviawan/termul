@@ -279,6 +279,10 @@ impl RemoteServerState {
                 .rendezvous()
                 .map(|r| r.timeout().as_secs())
                 .unwrap_or(60),
+            permission_reconnect_grace_secs: ws_relay
+                .rendezvous()
+                .map(|r| r.disconnect_grace().as_secs())
+                .unwrap_or(15),
             project_root,
             // Desktop-hosted shared-live mode queries the live desktop
             // `AcpManager` via the in-memory renderer-fed registry, NOT a

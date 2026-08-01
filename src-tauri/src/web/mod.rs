@@ -36,7 +36,9 @@ pub use sink::{
     broadcast_chat_history_changed, broadcast_projects_changed, fan_out, EventSink,
     TauriEventSink, WsRelaySink,
 };
-pub use ws::{AppState, HistoryMode, ReliabilityTier, SequencedEvent, WsErrorCode};
+pub use ws::{
+    AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode,
+};
 
 use std::future::Future;
 use std::net::SocketAddr;

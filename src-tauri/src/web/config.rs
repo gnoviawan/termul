@@ -152,6 +152,9 @@ pub struct ServerConfig {
     /// Permission-rendezvous timeout in seconds (Story 1.7 / FR14). On expiry
     /// the pending permission resolves as deny (`Cancelled`). Default 60.
     pub permission_timeout_secs: u64,
+    /// Last-subscriber disconnect grace before pending permissions are denied.
+    /// The original per-ticket timeout continues running during this grace.
+    pub permission_reconnect_grace_secs: u64,
     /// PR-S4: project-root boundary enforced by the fs_api routes. Requests
     /// whose canonicalized target path resolves outside this root are
     /// refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit
@@ -197,6 +200,7 @@ impl ServerConfig {
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
+        let mut permission_reconnect_grace_secs: u64 = 15;
         // PR-S4: when `--project-root` is absent, fall back to the env var or
         // the user's home directory via `default_project_root()`. The
         // resolved value is run through `resolve_and_validate_project_root`
@@ -276,6 +280,26 @@ impl ServerConfig {
                         ));
                     }
                     permission_timeout_secs = parsed;
+                }
+                "--permission-reconnect-grace" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message(
+                            "missing value for --permission-reconnect-grace".into(),
+                        )
+                    })?;
+                    let parsed = value.as_ref().parse::<u64>().map_err(|_| {
+                        ParseCliError::Message(format!(
+                            "invalid --permission-reconnect-grace '{}': expected a positive integer (seconds)",
+                            value.as_ref()
+                        ))
+                    })?;
+                    if parsed == 0 {
+                        return Err(ParseCliError::Message(
+                            "invalid --permission-reconnect-grace '0': use a positive integer (seconds)"
+                                .into(),
+                        ));
+                    }
+                    permission_reconnect_grace_secs = parsed;
                 }
                 "--project-root" => {
                     let value = iter.next().ok_or_else(|| {
@@ -388,6 +412,7 @@ impl ServerConfig {
             port,
             event_log_capacity,
             permission_timeout_secs,
+            permission_reconnect_grace_secs,
             project_root,
             projects_file,
             sessions_dir: Some(sessions_dir),
@@ -510,6 +535,7 @@ mod tests {
             port: 8080,
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
+            permission_reconnect_grace_secs: 15,
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
@@ -524,6 +550,7 @@ mod tests {
             port: 8080,
             event_log_capacity: 4096,
             permission_timeout_secs: 60,
+            permission_reconnect_grace_secs: 15,
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
@@ -543,6 +570,10 @@ mod tests {
         assert_eq!(
             cfg.permission_timeout_secs, 60,
             "default permission-timeout is 60s (Story 1.7 / FR14)"
+        );
+        assert_eq!(
+            cfg.permission_reconnect_grace_secs, 15,
+            "default reconnect grace is 15s"
         );
         // PR-S4: project_root defaults to $HOME / $USERPROFILE when the env var
         // is unset. The CI hosts in this repo all set $HOME, so the resolved
@@ -626,6 +657,21 @@ mod tests {
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.event_log_capacity, 4096);
+    }
+
+    #[test]
+    fn from_args_accepts_permission_reconnect_grace() {
+        let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"])
+            .expect("parse");
+        assert_eq!(cfg.permission_reconnect_grace_secs, 20);
+    }
+
+    #[test]
+    fn from_args_rejects_permission_reconnect_grace_zero() {
+        assert!(matches!(
+            ServerConfig::from_args(["--permission-reconnect-grace", "0"]),
+            Err(ParseCliError::Message(_))
+        ));
     }
 
     #[test]
