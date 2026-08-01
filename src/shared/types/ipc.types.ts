@@ -21,6 +21,13 @@ export interface TerminalSpawnOptions {
   args?: string[]
   /** Descriptive marker for the session type. Defaults to 'shell'. */
   kind?: 'shell' | 'agent'
+  /**
+   * Project-scoping id. The web/remote terminal server (terminal_ws.rs)
+   * requires a non-empty projectId on every spawn (project-scoped security);
+   * desktop treats it as optional (SpawnOptions.project_id is Option<String>
+   * with #[serde(default)]). Renderers populate it at project-scoped call sites.
+   */
+  projectId?: string
   // Index signature to satisfy Tauri's InvokeArgs constraint
   [key: string]: unknown
 }

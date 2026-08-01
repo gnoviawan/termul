@@ -81,6 +81,7 @@ export async function spawnTerminalInPane(
     const spawnResult = await terminalApi.spawn({
       shell,
       cwd,
+      projectId,
       ...(hasProjectEnv ? { env } : {})
     })
 

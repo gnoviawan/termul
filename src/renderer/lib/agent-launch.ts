@@ -117,6 +117,7 @@ export async function launchAgentInPane(
     const { program, args } = buildAgentArgv(def, prompt)
 
     const spawnResult = await terminalApi.spawn({
+      projectId,
       cwd,
       program,
       args,
