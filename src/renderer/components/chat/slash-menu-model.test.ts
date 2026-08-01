@@ -4,7 +4,9 @@ import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   applyCommandToInput,
   buildSlashSections,
+  findSlashTrigger,
   isSlashTrigger,
+  isSlashTriggerAny,
   type SlashConfigItem,
   type SlashModeItem,
   slashFilter
@@ -74,6 +76,56 @@ describe('slash trigger detection', () => {
     expect(applyCommandToInput('/com', 'compact')).toBe('/compact ')
     expect(applyCommandToInput('/', 'research')).toBe('/research ')
   })
+})
+
+describe('mid-text slash trigger detection', () => {
+  it('findSlashTrigger detects a leading slash token', () => {
+    const result = findSlashTrigger('/com')
+    expect(result).toEqual({ start: 0, end: 4, filter: 'com' })
+  })
+  it('findSlashTrigger detects a lone leading slash', () => {
+    const result = findSlashTrigger('/')
+    expect(result).toEqual({ start: 0, end: 1, filter: '' })
+  })
+  it('findSlashTrigger detects a mid-text slash after whitespace', () => {
+    const result = findSlashTrigger('hello /comp')
+    expect(result).toEqual({ start: 6, end: 11, filter: 'comp' })
+  })
+  it('findSlashTrigger detects a mid-text lone slash after whitespace', () => {
+    const result = findSlashTrigger('hello /')
+    expect(result).toEqual({ start: 6, end: 7, filter: '' })
+  })
+  it('findSlashTrigger returns null for slash without preceding whitespace', () => {
+    expect(findSlashTrigger('hello/')).toBeNull()
+    expect(findSlashTrigger('ab/comp')).toBeNull()
+  })
+  it('findSlashTrigger returns null for plain text', () => {
+    expect(findSlashTrigger('hello')).toBeNull()
+    expect(findSlashTrigger('')).toBeNull()
+  })
+  it('findSlashTrigger respects caret position', () => {
+    // Caret is before the token end — should not match
+    expect(findSlashTrigger('hello /comp', 8)).toBeNull()
+    // Caret is at the token end — should match
+    expect(findSlashTrigger('hello /comp', 11)).toEqual({ start: 6, end: 11, filter: 'comp' })
+  })
+
+  it('isSlashTriggerAny detects both leading and mid-text triggers', () => {
+    expect(isSlashTriggerAny('/')).toBe(true)
+    expect(isSlashTriggerAny('/com')).toBe(true)
+    expect(isSlashTriggerAny('hello /comp')).toBe(true)
+    expect(isSlashTriggerAny('hello /')).toBe(true)
+    expect(isSlashTriggerAny('hello/')).toBe(false)
+    expect(isSlashTriggerAny('hello')).toBe(false)
+    expect(isSlashTriggerAny('')).toBe(false)
+  })
+
+  it('slashFilter extracts filter from mid-text triggers', () => {
+    expect(slashFilter('hello /comp')).toBe('comp')
+    expect(slashFilter('hello /')).toBe('')
+    expect(slashFilter('ab/')).toBe('')
+  })
+
 })
 
 describe('buildSlashSections', () => {
