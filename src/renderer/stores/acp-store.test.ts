@@ -3870,6 +3870,49 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionIndex).toHaveLength(0)
   })
 
+  it('preserves a concurrent index update while durable history deletion is pending', async () => {
+    const deleteGate = deferred<void>()
+    const { queueSessionPayloadDelete } = await import('@/lib/acp-history-persistence')
+    vi.mocked(queueSessionPayloadDelete).mockReturnValueOnce(deleteGate.promise)
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's-delete',
+          agentId: 'a',
+          title: 'Delete me',
+          cwd: '',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    })
+
+    const deleting = useAcpStore.getState().deleteHistorySession('s-delete')
+    useAcpStore.setState((state) => ({
+      sessionIndex: [
+        ...state.sessionIndex,
+        {
+          id: 's-concurrent',
+          agentId: 'b',
+          title: 'Concurrent update',
+          cwd: '/work',
+          projectId: 'p2',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    deleteGate.resolve()
+    await deleting
+
+    expect(useAcpStore.getState().sessionIndex.map((entry) => entry.id)).toEqual(['s-concurrent'])
+  })
+
   it('keeps the index entry when durable history deletion fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { queueSessionPayloadDelete } = await import('@/lib/acp-history-persistence')

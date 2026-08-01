@@ -3555,7 +3555,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     inFlightHistoryOpens.delete(id)
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)
-    const next = get().sessionIndex.filter((e) => e.id !== id)
     try {
       await queueSessionPayloadDelete(id)
       set((s) => {
@@ -3572,7 +3571,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           }
         }
         return {
-          sessionIndex: next,
+          sessionIndex: s.sessionIndex.filter((e) => e.id !== id),
           sessions,
           openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
           discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
