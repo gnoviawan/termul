@@ -125,7 +125,7 @@ mod tests {
             pty,
             relay: Arc::new(WsRelaySink::new()),
             registry: Arc::new(ProjectRegistry::new()),
-            chat_history_cache: None,
+            chat_history_store: None,
             registry_persistence: None,
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
