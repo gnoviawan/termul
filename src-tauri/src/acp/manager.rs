@@ -1818,7 +1818,7 @@ async fn run_command_loop(
         .client_capabilities(client::client_capabilities(allow_terminal));
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
-    match init_outcome {
+    let supports_session_close = match init_outcome {
         Ok(Ok(response)) => {
             // Propagate the FULL advertised auth methods (opaque
             // id/name/optional description) so the renderer can offer a Sign-in
@@ -1827,6 +1827,7 @@ async fn run_command_loop(
             let auth_methods = to_auth_method_infos(&response.auth_methods);
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
+            let supports_session_close = session_caps.close.is_some();
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
                  loadSession={} sessionCapabilities.list={} resume={} close={}",
@@ -1835,7 +1836,7 @@ async fn run_command_loop(
                 response.agent_capabilities.load_session,
                 session_caps.list.is_some(),
                 session_caps.resume.is_some(),
-                session_caps.close.is_some(),
+                supports_session_close,
             );
 
             spawned.store(true, Ordering::Release);
@@ -1843,6 +1844,7 @@ async fn run_command_loop(
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
+            supports_session_close
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -1853,7 +1855,7 @@ async fn run_command_loop(
             let _ = init_tx.send(Err(message.clone()));
             return Err(agent_client_protocol::Error::internal_error().data(message));
         }
-    }
+    };
 
     // Step 2: command loop.
     //
@@ -2432,6 +2434,7 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let dispose_state = driver_state.clone();
+                let close_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     if let Some(waiter) = waiter {
                         let timeout = CANCEL_GRACE + Duration::from_millis(250);
@@ -2455,12 +2458,55 @@ async fn run_command_loop(
                             }
                         }
                     }
+                    {
+                        let state = dispose_state.lock();
+                        if state.is_turn_active(&session_id.0) {
+                            send_reply(
+                                &task_slot,
+                                Err("ephemeral session turn is still active".to_string()),
+                            );
+                            return;
+                        }
+                        if !state.is_ephemeral(&session_id.0) {
+                            send_reply(&task_slot, Err("session is not ephemeral".to_string()));
+                            return;
+                        }
+                    }
+
+                    // The temporary session is now idle and still protected by
+                    // the authoritative ephemeral marker. Ask capable agents to
+                    // release their session-side resources, but never let a
+                    // stale or wedged `session/close` prevent local cleanup. The
+                    // short bound keeps disposal responsive.
+                    if supports_session_close {
+                        let close_timeout = CANCEL_GRACE;
+                        match tokio::time::timeout(
+                            close_timeout,
+                            close_cx
+                                .send_request(CloseSessionRequest::new(&session_id))
+                                .block_task(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => log::debug!(
+                                "[acp] ephemeral session {} close failed: {error}",
+                                session_id.0
+                            ),
+                            Err(_) => log::warn!(
+                                "[acp] ephemeral session {} close timed out after {close_timeout:?}",
+                                session_id.0
+                            ),
+                        }
+                    }
+
                     let (permissions, questions) = {
                         let mut state = dispose_state.lock();
                         if state.is_turn_active(&session_id.0) {
                             send_reply(
                                 &task_slot,
-                                Err("ephemeral session turn is still active".to_string()),
+                                Err("ephemeral session turn became active during disposal"
+                                    .to_string()),
                             );
                             return;
                         }

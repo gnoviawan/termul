@@ -140,10 +140,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const generationToken = React.useRef(0)
   const currentCwd = React.useRef(cwd)
   const currentStatuses = React.useRef(statuses)
-  currentCwd.current = cwd
-  currentStatuses.current = statuses
 
   const currentDiff = selectedFile ? diffs[diffKey(cwd, selectedFile, selectedStaged)] : null
+
+  useEffect(() => {
+    currentCwd.current = cwd
+    currentStatuses.current = statuses
+  }, [cwd, statuses])
 
   useEffect(() => {
     if (isVisible) {

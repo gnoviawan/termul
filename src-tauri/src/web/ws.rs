@@ -2142,7 +2142,12 @@ async fn handle_send_prompt(
         .await
     {
         Ok(value) => value,
-        Err(error) => return acp_err_to_reply(id, error),
+        Err(error) => {
+            relay
+                .turn_watermark()
+                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
+            return acp_err_to_reply(id, error);
+        }
     };
 
     let prompt_payload = json!({
