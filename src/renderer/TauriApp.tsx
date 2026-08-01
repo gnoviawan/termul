@@ -45,6 +45,20 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
 const queryClient = new QueryClient()
 
+// Prevent the default webview context menu (Inspect, Back, etc.) from appearing
+// on right-click. Custom context menus (FileExplorer, ProjectSidebar) already
+// call e.preventDefault() in their React handlers and render their own UI,
+// so they are unaffected by this capture-phase listener.
+function usePreventDefaultContextMenu(): void {
+  useEffect(() => {
+    const handler = (e: MouseEvent): void => {
+      e.preventDefault()
+    }
+    document.addEventListener('contextmenu', handler, { capture: true })
+    return () => document.removeEventListener('contextmenu', handler, { capture: true })
+  }, [])
+}
+
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
   useTerminalAutoSave()
@@ -74,6 +88,7 @@ function AppEffects(): null {
   useAcpHistorySync()
   useAcpMcp()
   usePreventFileDropNavigation()
+  usePreventDefaultContextMenu()
 
   // Initialize desktop notification permissions once at app startup
   // so the OS permission prompt appears early, not on first terminal exit
