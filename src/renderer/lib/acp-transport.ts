@@ -18,8 +18,11 @@ import type {
   SwitchProjectReply
 } from '@shared/types/web-projects.types'
 import {
+  type AcpAuthenticateReply,
+  type AcpRuntimePolicy,
   type HistoryMode,
   type PersistedSessionSummary,
+  type SessionSnapshotEvent,
   WS_ERROR_CODES,
   type WsEvent,
   type WsReply,
@@ -116,6 +119,13 @@ export interface AcpTransport {
    * checks for the method before calling it.
    */
   setReconnectListener?(listener: (reconnecting: boolean) => void): void
+  setRecoveryHandler?(
+    handler: (
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+    ) => Promise<void>
+  ): void
+  getSessionCursor?(sessionId: SessionId): number | null
+  setReconnectPriorityProvider?(provider: () => SessionId[]): void
   dispose(): void
 }
 
@@ -239,6 +249,7 @@ const REQUEST_TIMEOUT_MS = 60_000
  */
 const SEND_PROMPT_GRACE_MS = 10_000
 /**
+ * Fallback only until the authenticate reply publishes the authoritative policy.
  * Timeout for `send_prompt`, which awaits the full agent turn on the server.
  * Stays slightly above Rust `TURN_TIMEOUT` (600s / `TERMUL_ACP_TURN_TIMEOUT_SECS`)
  * plus {@link SEND_PROMPT_GRACE_MS} so the server's specific `turn timeout`
@@ -251,7 +262,7 @@ const SEND_PROMPT_GRACE_MS = 10_000
  * this constant must be raised to match (ideally the server would publish its
  * turn budget to the client — tracked separately).
  */
-const SEND_PROMPT_TIMEOUT_MS = 600_000 + SEND_PROMPT_GRACE_MS
+const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
 /**
@@ -286,14 +297,12 @@ const HEARTBEAT_INTERVAL_MS = 30_000
  */
 const HEARTBEAT_FAILURE_THRESHOLD = 2
 
-function requestTimeoutMs(type: WsRequestType): number {
-  return type === 'send_prompt' ? SEND_PROMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS
-}
-
 type Pending = {
   resolve: (value: unknown) => void
   reject: (err: unknown) => void
   timer: ReturnType<typeof setTimeout>
+  type: WsRequestType
+  sessionId?: string
 }
 
 type EventListener = (payload: unknown) => void
@@ -308,6 +317,7 @@ export class WsAcpTransport implements AcpTransport {
   private socket: WebSocket | null = null
   private authed = false
   private negotiatedHistoryMode: HistoryMode = 'live_only'
+  private runtimePolicy: AcpRuntimePolicy | null = null
   private connecting: Promise<void> | null = null
   private disposed = false
   private reconnectAttempt = 0
@@ -329,8 +339,12 @@ export class WsAcpTransport implements AcpTransport {
   private readonly lastSeq = new Map<string, number>()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
-  /** Idempotent prompt_complete turn ids already delivered. */
-  private readonly seenTurnIds = new Set<string>()
+  /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
+  private readonly seenTurnIds = new Map<string, Set<string>>()
+  private recoveryHandler?: (
+    recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+  ) => Promise<void>
+  private reconnectPriorityProvider?: () => SessionId[]
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
   /**
@@ -357,6 +371,22 @@ export class WsAcpTransport implements AcpTransport {
    */
   setReconnectListener(listener: (reconnecting: boolean) => void): void {
     this.onReconnectStateChange = listener
+  }
+
+  setRecoveryHandler(
+    handler: (
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+    ) => Promise<void>
+  ): void {
+    this.recoveryHandler = handler
+  }
+
+  setReconnectPriorityProvider(provider: () => SessionId[]): void {
+    this.reconnectPriorityProvider = provider
+  }
+
+  getSessionCursor(sessionId: SessionId): number | null {
+    return this.lastSeq.get(sessionId) ?? null
   }
 
   async connect(): Promise<void> {
@@ -411,10 +441,19 @@ export class WsAcpTransport implements AcpTransport {
       await this.request('subscribe', payload)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
-        // Stale: clear cursor + turn-id dedup, then live-only resubscribe (no lastSeq).
+        if (this.negotiatedHistoryMode === 'server') {
+          const recovery = await this.request<SessionSnapshotEvent>('recover_session_snapshot', {
+            sessionId
+          })
+          this.lastSeq.set(sessionId, recovery.watermark)
+          this.seenTurnIds.delete(sessionId)
+          await this.recoveryHandler?.(recovery)
+          return
+        }
         this.lastSeq.delete(sessionId)
-        this.seenTurnIds.clear()
+        this.seenTurnIds.delete(sessionId)
         await this.request('subscribe', { sessionId })
+        await this.recoveryHandler?.({ sessionId, degraded: true })
         return
       }
       throw err
@@ -535,7 +574,7 @@ export class WsAcpTransport implements AcpTransport {
       sessionId,
       cwd
     })
-    await this.subscribeSession(sessionId)
+    await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
   }
 
@@ -549,7 +588,7 @@ export class WsAcpTransport implements AcpTransport {
       sessionId,
       cwd
     })
-    await this.subscribeSession(sessionId)
+    await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
   }
 
@@ -872,10 +911,15 @@ export class WsAcpTransport implements AcpTransport {
     try {
       await this.connect()
       this.reconnectAttempt = 0
-      for (const sid of [...this.subscribed]) {
+      const prioritized = this.reconnectPriorityProvider?.() ?? []
+      const ordered = [
+        ...prioritized.filter((sid) => this.subscribed.has(sid)),
+        ...[...this.subscribed].filter((sid) => !prioritized.includes(sid))
+      ]
+      for (const sid of ordered) {
         const last = this.lastSeq.get(sid)
-        // Force re-subscribe after reconnect; pass cursor when known.
-        await this.subscribeSession(sid, last ?? null, true)
+        // Force re-subscribe after reconnect; pass an explicit boundary.
+        await this.subscribeSession(sid, last ?? 0, true)
       }
       // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and all
       // sessions are re-subscribed so the overlay stays visible for the
@@ -927,10 +971,11 @@ export class WsAcpTransport implements AcpTransport {
       // Send directly (socket is already open); do NOT call request()→connect()
       // or we deadlock on the in-flight connect promise.
       try {
-        const auth = await this.sendWhenOpen<{ historyMode?: HistoryMode }>('authenticate', {
+        const auth = await this.sendWhenOpen<AcpAuthenticateReply>('authenticate', {
           token: 'dev'
         })
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
+        this.runtimePolicy = auth?.runtimePolicy ?? null
         this.authed = true
         // Start the application-level heartbeat now that the socket is OPEN
         // + authed — it refreshes the server keepalive watchdog through proxies
@@ -959,6 +1004,7 @@ export class WsAcpTransport implements AcpTransport {
     }
 
     const sid = evt.sid
+    this.refreshPromptActivity(sid)
     const tier = wsTierOf(evt.type)
     const last = this.lastSeq.get(sid) ?? 0
 
@@ -974,7 +1020,7 @@ export class WsAcpTransport implements AcpTransport {
     // an unfillable pre-subscribe gap.
     if (tier === 'idempotent' && evt.type === 'prompt_complete') {
       const turnId = extractTurnId(evt.payload)
-      if (turnId && this.seenTurnIds.has(turnId)) {
+      if (turnId && this.seenTurnIds.get(sid)?.has(turnId)) {
         this.lastSeq.set(sid, evt.seq)
         return
       }
@@ -993,7 +1039,14 @@ export class WsAcpTransport implements AcpTransport {
     this.lastSeq.set(sid, evt.seq)
     if (evt.type === 'prompt_complete') {
       const turnId = extractTurnId(evt.payload)
-      if (turnId) this.seenTurnIds.add(turnId)
+      if (turnId) {
+        let seen = this.seenTurnIds.get(sid)
+        if (!seen) {
+          seen = new Set()
+          this.seenTurnIds.set(sid, seen)
+        }
+        seen.add(turnId)
+      }
     }
     this.emitLocal(evt.type, evt.payload)
   }
@@ -1010,6 +1063,20 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
+  private refreshPromptActivity(sessionId: string): void {
+    const timeoutMs =
+      (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
+      SEND_PROMPT_GRACE_MS
+    for (const [id, pending] of this.pending) {
+      if (pending.type !== 'send_prompt' || pending.sessionId !== sessionId) continue
+      clearTimeout(pending.timer)
+      pending.timer = setTimeout(() => {
+        this.pending.delete(id)
+        pending.reject(new AcpTransportError('timeout', 'Request send_prompt timed out'))
+      }, timeoutMs)
+    }
+  }
+
   private request<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
     // Ensure connected first (unless socket already open — avoids reconnect loops).
     if (this.socket?.readyState === WebSocket.OPEN) {
@@ -1023,14 +1090,27 @@ export class WsAcpTransport implements AcpTransport {
     return new Promise<T>((resolve, reject) => {
       const id = crypto.randomUUID()
       const frame: WsRequest = { id, type, payload }
+      const payloadRecord =
+        payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null
+      const sessionId =
+        type === 'send_prompt' && typeof payloadRecord?.sessionId === 'string'
+          ? payloadRecord.sessionId
+          : undefined
+      const timeoutMs =
+        type === 'send_prompt'
+          ? (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
+            SEND_PROMPT_GRACE_MS
+          : REQUEST_TIMEOUT_MS
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new AcpTransportError('timeout', `Request ${type} timed out`))
-      }, requestTimeoutMs(type))
+      }, timeoutMs)
       this.pending.set(id, {
         resolve: (v) => resolve(v as T),
         reject,
-        timer
+        timer,
+        type,
+        sessionId
       })
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         clearTimeout(timer)

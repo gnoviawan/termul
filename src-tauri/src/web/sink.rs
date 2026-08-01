@@ -167,6 +167,9 @@ struct SessionState {
     last_seq: u64,
     /// Bounded ring; oldest evicted when `len > capacity`.
     events: VecDeque<SequencedEvent>,
+    /// Complete in-memory session event snapshot for atomic stale recovery on
+    /// desktop shared-live, where no file-backed event persistence exists.
+    snapshot_events: Vec<SequencedEvent>,
     /// `seq` of the oldest event currently in the ring (for cursor-gap detect).
     base_seq: u64,
 }
@@ -311,6 +314,23 @@ impl WsRelaySink {
         &self.turn_watermark
     }
 
+    /// Current session sequence frontier. Used as the snapshot watermark.
+    #[must_use]
+    pub fn session_watermark(&self, session_id: &str) -> u64 {
+        self.sessions
+            .lock()
+            .get(session_id)
+            .map_or_else(
+                || {
+                    self.persistence
+                        .as_ref()
+                        .and_then(|persistence| persistence.last_seq(session_id).ok())
+                        .unwrap_or(0)
+                },
+                |state| state.last_seq,
+            )
+    }
+
     /// Assign seq + append under the sessions lock (atomic w.r.t. concurrent emits).
     fn assign_and_append(&self, sid: &str, type_: &str, payload: Value) -> SequencedEvent {
         let mut sessions = self.sessions.lock();
@@ -324,6 +344,7 @@ impl WsRelaySink {
             .or_insert_with(|| SessionState {
                 last_seq: durable_last,
                 events: VecDeque::new(),
+                snapshot_events: Vec::new(),
                 base_seq: 1,
             });
         state.last_seq = state.last_seq.saturating_add(1);
@@ -333,6 +354,7 @@ impl WsRelaySink {
             state.base_seq = seq;
         }
         state.events.push_back(se.clone());
+        state.snapshot_events.push(se.clone());
         while state.events.len() > self.event_log_capacity {
             state.events.pop_front();
             state.base_seq = state
@@ -533,6 +555,41 @@ impl WsRelaySink {
             }
             return (client_id, rx, ReplayResult::Ok(count));
         }
+    }
+
+    /// Atomically register a client and capture the complete session event
+    /// snapshot plus its sequence watermark. The sessions lock is held across
+    /// capture + registration, so subsequent emits are strictly post-watermark.
+    pub async fn subscribe_snapshot(
+        &self,
+        sid: &str,
+    ) -> (
+        ClientId,
+        mpsc::UnboundedReceiver<SequencedEvent>,
+        Vec<SequencedEvent>,
+        u64,
+    ) {
+        let client_id = ClientId::new();
+        let (tx, rx) = mpsc::unbounded_channel::<SequencedEvent>();
+        let gate = {
+            let mut gates = self.replay_gates.lock().await;
+            gates
+                .entry(sid.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _replay_guard = gate.lock().await;
+        if let Some(persistence) = &self.persistence {
+            let _ = persistence.flush_session(sid).await;
+        }
+        let sessions = self.sessions.lock();
+        let (snapshot, watermark) = sessions.get(sid).map_or_else(
+            || (Vec::new(), 0),
+            |state| (state.snapshot_events.clone(), state.last_seq),
+        );
+        self.register(client_id, sid, tx);
+        drop(sessions);
+        (client_id, rx, snapshot, watermark)
     }
 
     /// Authoritative server-authored user prompt: assign the relay sequence,

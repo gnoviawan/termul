@@ -306,6 +306,30 @@ pub enum HistoryMode {
     LiveOnly,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimePolicy {
+    pub turn_timeout_ms: u64,
+    pub prompt_inactivity_timeout_ms: u64,
+    pub permission_reconnect_grace_ms: u64,
+    pub ping_interval_ms: u64,
+    pub pong_timeout_ms: u64,
+}
+
+impl RuntimePolicy {
+    #[must_use]
+    pub fn resolved(permission_reconnect_grace: Duration) -> Self {
+        let turn_timeout = crate::acp::manager::resolved_turn_timeout();
+        Self {
+            turn_timeout_ms: turn_timeout.as_millis() as u64,
+            prompt_inactivity_timeout_ms: turn_timeout.as_millis() as u64,
+            permission_reconnect_grace_ms: permission_reconnect_grace.as_millis() as u64,
+            ping_interval_ms: PING_INTERVAL.as_millis() as u64,
+            pong_timeout_ms: PONG_TIMEOUT.as_millis() as u64,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WS upgrade handler + relay loop (AC1 + AC9 + AC10)
 // ---------------------------------------------------------------------------
@@ -549,7 +573,10 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                 }
             }
         }
-        // Cleanup subscriptions for this connection.
+        // Cleanup subscriptions for this connection. Retain the affected
+        // session ids so last-subscriber permission grace can be scheduled.
+        let disconnected_sessions: std::collections::HashSet<String> =
+            subscribed_clients.iter().map(|(sid, _)| sid.clone()).collect();
         for (sid, cid) in subscribed_clients.drain(..) {
             relay.unsubscribe(&sid, cid);
         }
@@ -560,9 +587,16 @@ async fn run_relay(socket: WebSocket, state: AppState) {
         // client can still legitimately respond. `relay.session_subscriber_count`
         // reports the post-unsubscribe count.
         if let Some(rdz) = relay.rendezvous() {
-            let relay_for_count = Arc::clone(&relay);
-            rdz.deny_all_for_client(move |sid| relay_for_count.session_subscriber_count(sid))
-                .await;
+            let orphan_sessions: std::collections::HashSet<String> = disconnected_sessions
+                .into_iter()
+                .filter(|sid| relay.session_subscriber_count(sid) == 0)
+                .collect();
+            for sid in orphan_sessions {
+                let relay_for_count = Arc::clone(&relay);
+                rdz.schedule_disconnect_grace(sid, move |session_id| {
+                    relay_for_count.session_subscriber_count(session_id)
+                });
+            }
         }
     });
 
@@ -643,7 +677,18 @@ async fn handle_request(
             // Placeholder (AC10): accept any token, mark authed. Epic 2 wires
             // the real cookie/token gate.
             *authed = true;
-            return WsReply::ok(id, Some(json!({ "historyMode": history_mode })));
+            let reconnect_grace = relay
+                .rendezvous()
+                .map_or(Duration::from_secs(15), |rendezvous| {
+                    rendezvous.disconnect_grace()
+                });
+            return WsReply::ok(
+                id,
+                Some(json!({
+                    "historyMode": history_mode,
+                    "runtimePolicy": RuntimePolicy::resolved(reconnect_grace),
+                })),
+            );
         }
         return WsReply::err(
             id,
@@ -682,6 +727,17 @@ async fn handle_request(
         }
         "get_session_payload" => {
             handle_get_session_payload(id, &req.payload, relay, chat_history_cache, history_mode)
+        }
+        "recover_session_snapshot" => {
+            handle_recover_session_snapshot(
+                id,
+                &req.payload,
+                relay,
+                out_tx,
+                subscribed_clients,
+                history_mode,
+            )
+            .await
         }
         // Story 1.7: `respond_permission` — route the browser's permission
         // decision through the server-side rendezvous (first-response-wins,
@@ -862,6 +918,76 @@ fn handle_get_session_payload(
     // here. Until then a VPS without the cache returns not_found.
     let _ = relay;
     WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+}
+
+async fn handle_recover_session_snapshot(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    out_tx: &mpsc::UnboundedSender<Outbound>,
+    subscribed_clients: &mut Vec<(String, ClientId)>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "atomic snapshot recovery is unavailable in live-only mode",
+        );
+    }
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RecoverSnapshotRequest {
+        session_id: String,
+    }
+    let parsed: RecoverSnapshotRequest = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed recover_session_snapshot payload: {error}"),
+            )
+        }
+    };
+    if parsed.session_id.is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
+    }
+    let prior_clients: Vec<ClientId> = subscribed_clients
+        .iter()
+        .filter(|(sid, _)| sid == &parsed.session_id)
+        .map(|(_, client_id)| *client_id)
+        .collect();
+    let (client_id, mut rx, events, watermark) =
+        relay.subscribe_snapshot(&parsed.session_id).await;
+    subscribed_clients.retain(|(sid, client_id)| {
+        if sid == &parsed.session_id && prior_clients.contains(client_id) {
+            relay.unsubscribe(sid, *client_id);
+            false
+        } else {
+            true
+        }
+    });
+    subscribed_clients.push((parsed.session_id.clone(), client_id));
+    if let Some(rendezvous) = relay.rendezvous() {
+        rendezvous.cancel_disconnect_grace(&parsed.session_id);
+    }
+    let forward_tx = out_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if forward_tx.send(Outbound::Event(event)).is_err() {
+                break;
+            }
+        }
+    });
+    WsReply::ok(
+        id,
+        Some(json!({
+            "sessionId": parsed.session_id,
+            "watermark": watermark,
+            "events": events,
+        })),
+    )
 }
 
 async fn handle_open_persisted_session(
@@ -2093,25 +2219,38 @@ async fn handle_subscribe(
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
 
-    // Re-subscribe: drop any prior ClientId for this session on this connection.
-    subscribed_clients.retain(|(sid, cid)| {
-        if sid == &parsed.session_id {
-            relay.unsubscribe(sid, *cid);
-            false
-        } else {
-            true
-        }
-    });
+    // Do not drop the currently-live subscription until the replacement is
+    // successfully registered. This preserves pending-permission ownership on
+    // stale/failure and lets grace cancellation happen only after resubscribe.
+    let prior_clients: Vec<ClientId> = subscribed_clients
+        .iter()
+        .filter(|(sid, _)| sid == &parsed.session_id)
+        .map(|(_, client_id)| *client_id)
+        .collect();
 
     let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
-        ReplayResult::Stale => WsReply::err(
-            id,
-            WsErrorCode::Stale,
-            "cursor is older than the event log; re-sync live-only (omit lastSeq)",
-        ),
+        ReplayResult::Stale => {
+            relay.unregister_client(client_id);
+            WsReply::err(
+                id,
+                WsErrorCode::Stale,
+                "cursor is older than the event log; request an atomic session snapshot",
+            )
+        }
         ReplayResult::Ok(replayed) => {
+            subscribed_clients.retain(|(sid, cid)| {
+                if sid == &parsed.session_id && prior_clients.contains(cid) {
+                    relay.unsubscribe(sid, *cid);
+                    false
+                } else {
+                    true
+                }
+            });
             subscribed_clients.push((parsed.session_id.clone(), client_id));
+            if let Some(rendezvous) = relay.rendezvous() {
+                rendezvous.cancel_disconnect_grace(&parsed.session_id);
+            }
             let forward_tx = out_tx.clone();
             tokio::spawn(async move {
                 while let Some(evt) = rx.recv().await {

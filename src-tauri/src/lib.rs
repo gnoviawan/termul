@@ -1057,9 +1057,10 @@ pub fn run() {
             // the main thread and is not guaranteed to be inside a tokio runtime
             // context, so capturing the handle here keeps `arm_timeout` reliable
             // when it runs later on the agent driver thread.
-            let rendezvous = Arc::new(PermissionRendezvous::with_handle(
+            let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
                 Arc::clone(&acp_manager),
                 std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(15),
                 tauri::async_runtime::handle().inner().clone(),
             ));
             ws_relay.set_rendezvous(rendezvous);

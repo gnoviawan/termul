@@ -119,7 +119,7 @@ fn session_reopen_timeout() -> Duration {
 /// `TERMUL_ACP_TURN_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
 /// [`TURN_TIMEOUT`]. Bounds a wedged agent turn so `send_prompt`'s oneshot
 /// fails with a typed timeout error → Error state (not parked forever).
-fn turn_timeout() -> Duration {
+pub fn resolved_turn_timeout() -> Duration {
     std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1831,7 +1831,7 @@ async fn run_command_loop(
                     // CANCEL_GRACE race, then fail with a typed timeout error
                     // → the `send_prompt` reply surfaces it; `acp-store` sets
                     // `status: 'error'`.
-                    let turn_deadline = turn_timeout();
+                    let turn_deadline = resolved_turn_timeout();
                     let outcome: Result<StopReason, String> = tokio::select! {
                         result = &mut prompt => {
                             result.map(|r| r.stop_reason).map_err(|e| e.to_string())

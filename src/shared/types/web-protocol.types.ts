@@ -78,7 +78,10 @@ export const WS_EVENT_TYPES = [
   // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
   // Fired when the renderer-fed ChatHistoryCache mutates so connected web
   // clients refetch the session index.
-  'chat_history_changed'
+  'chat_history_changed',
+  // Server-history stale recovery. The payload carries an atomic transcript
+  // snapshot plus the relay watermark that gates subsequent live events.
+  'session_snapshot'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -124,7 +127,8 @@ export const WS_REQUEST_TYPES = [
   'ping',
   'list_persisted_sessions',
   'open_persisted_session',
-  'get_session_payload'
+  'get_session_payload',
+  'recover_session_snapshot'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -209,10 +213,35 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   project_switch_completed: WS_RELAY_TIERS.RELIABLE,
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  chat_history_changed: WS_RELAY_TIERS.RELIABLE
+  chat_history_changed: WS_RELAY_TIERS.RELIABLE,
+  session_snapshot: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'
+
+/** Additive policy negotiated during the relay authenticate handshake. */
+export interface AcpRuntimePolicy {
+  /** Authoritative absolute server turn ceiling. */
+  turnTimeoutMs: number
+  /** Matching session activity refreshes the renderer timer to this budget. */
+  promptInactivityTimeoutMs: number
+  /** Grace before a last-subscriber disconnect denies pending permissions. */
+  permissionReconnectGraceMs: number
+  pingIntervalMs: number
+  pongTimeoutMs: number
+}
+
+export interface AcpAuthenticateReply {
+  historyMode: HistoryMode
+  runtimePolicy: AcpRuntimePolicy
+}
+
+/** Atomic stale-recovery payload emitted before post-watermark live events. */
+export interface SessionSnapshotEvent {
+  sessionId: string
+  watermark: number
+  events: WsEvent[]
+}
 
 export interface PersistedSessionSummary {
   storageKey: string

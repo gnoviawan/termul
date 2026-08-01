@@ -45,6 +45,8 @@ use crate::web::sink::ClientId;
 /// Default permission timeout (60s) — the bounded rendezvous window.
 /// Expiry resolves the permission as deny (`Cancelled`). Per FR14 / NFR7-adjacent.
 pub const DEFAULT_PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default last-subscriber reconnect grace. The ticket timeout keeps running.
+pub const DEFAULT_PERMISSION_RECONNECT_GRACE: Duration = Duration::from_secs(15);
 
 /// Outcome of a successful [`PermissionRendezvous::try_respond`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +161,10 @@ pub struct PermissionRendezvous {
     acp: Arc<AcpManager>,
     /// The bounded timeout window. Expiry → deny.
     timeout: Duration,
+    /// Grace before disconnect orphaning resolves a session's pending tickets.
+    disconnect_grace: Duration,
+    /// Per-session cancellation for an armed disconnect grace.
+    disconnect_graces: Mutex<HashMap<String, oneshot::Sender<()>>>,
     /// A handle to the server's tokio runtime. Captured at construction so the
     /// per-ticket timeout can be armed from ANY thread (the relay's `emit` runs
     /// on the per-agent driver thread — a plain `std::thread`, NOT a tokio
@@ -192,11 +198,22 @@ impl PermissionRendezvous {
     /// thread.
     #[must_use]
     pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
+        Self::with_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE)
+    }
+
+    #[must_use]
+    pub fn with_policy(
+        acp: Arc<AcpManager>,
+        timeout: Duration,
+        disconnect_grace: Duration,
+    ) -> Self {
         Self {
             tickets: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             acp,
             timeout,
+            disconnect_grace,
+            disconnect_graces: Mutex::new(HashMap::new()),
             handle: tokio::runtime::Handle::try_current(),
         }
     }
@@ -214,11 +231,23 @@ impl PermissionRendezvous {
         timeout: Duration,
         handle: tokio::runtime::Handle,
     ) -> Self {
+        Self::with_handle_and_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE, handle)
+    }
+
+    #[must_use]
+    pub fn with_handle_and_policy(
+        acp: Arc<AcpManager>,
+        timeout: Duration,
+        disconnect_grace: Duration,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             tickets: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             acp,
             timeout,
+            disconnect_grace,
+            disconnect_graces: Mutex::new(HashMap::new()),
             handle: Ok(handle),
         }
     }
@@ -227,6 +256,66 @@ impl PermissionRendezvous {
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    #[must_use]
+    pub fn disconnect_grace(&self) -> Duration {
+        self.disconnect_grace
+    }
+
+    /// Cancel an orphan grace only after a replacement subscription is live.
+    pub fn cancel_disconnect_grace(&self, session_id: &str) {
+        if let Some(cancel) = self.disconnect_graces.lock().remove(session_id) {
+            let _ = cancel.send(());
+            tracing::info!(session_id, "permission disconnect grace cancelled after resubscribe");
+        }
+    }
+
+    /// Arm a bounded last-subscriber grace. Expiry rechecks the relay count;
+    /// the original per-ticket timeout remains armed throughout.
+    pub fn schedule_disconnect_grace<F>(
+        self: &Arc<Self>,
+        session_id: String,
+        subscriber_count: F,
+    ) where
+        F: Fn(&str) -> usize + Send + Sync + 'static,
+    {
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        if let Some(previous) = self
+            .disconnect_graces
+            .lock()
+            .insert(session_id.clone(), cancel_tx)
+        {
+            let _ = previous.send(());
+        }
+        let this = Arc::clone(self);
+        let grace = self.disconnect_grace;
+        let session_id_for_warn = session_id.clone();
+        let future = async move {
+            if tokio::time::timeout(grace, cancel_rx).await.is_ok() {
+                return;
+            }
+            this.disconnect_graces.lock().remove(&session_id);
+            if subscriber_count(&session_id) != 0 {
+                tracing::info!(session_id, "permission disconnect grace expired with subscriber restored");
+                return;
+            }
+            tracing::warn!(session_id, grace_ms = grace.as_millis(), "permission disconnect grace expired; denying pending tickets");
+            this.deny_orphaned_session(&session_id).await;
+        };
+        match &self.handle {
+            Ok(handle) => {
+                handle.spawn(future);
+            }
+            Err(_) => match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(future);
+                }
+                Err(error) => warn!(
+                    "[permissions] cannot arm disconnect grace for {session_id_for_warn}: {error}"
+                ),
+            },
+        }
     }
 
     /// The session id a pending `request_id` belongs to, or `None` if there is
@@ -469,58 +558,61 @@ impl PermissionRendezvous {
     /// subscriber on its session — otherwise a remaining client can still
     /// legitimately respond. `session_subscribers` reports the count of clients
     /// STILL subscribed (after the disconnecting one was unregistered).
-    pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
-    where
-        F: Fn(&str) -> usize,
-    {
-        // Collect outstanding tickets whose session now has zero remaining
-        // subscribers, PLUS the queued tickets for those same sessions (FR14:
-        // "all pending permissions resolve" — queued ones are pending too).
+    async fn deny_orphaned_session(self: &Arc<Self>, session_id: &str) {
         let (to_deny, queued_to_deny): (Vec<RequestAgentPair>, Vec<RequestAgentPair>) = {
             let tickets = self.tickets.lock();
-            // Sessions with an outstanding unresolved ticket AND zero remaining
-            // subscribers (these get the full deny path: remove + forward + promote).
-            let orphan_sessions: Vec<String> = tickets
+            let outstanding = tickets
                 .iter()
-                .filter(|(_, t)| t.resolved_by.is_none() && session_subscribers(&t.session_id) == 0)
-                .map(|(_, t)| t.session_id.clone())
+                .filter(|(_, ticket)| {
+                    ticket.resolved_by.is_none() && ticket.session_id == session_id
+                })
+                .map(|(request_id, ticket)| (request_id.clone(), ticket.agent_id.clone()))
                 .collect();
-            let outstanding: Vec<(String, AgentId)> = tickets
-                .iter()
-                .filter(|(_, t)| t.resolved_by.is_none() && session_subscribers(&t.session_id) == 0)
-                .map(|(rid, t)| (rid.clone(), t.agent_id.clone()))
-                .collect();
-            // Drain the queued tickets for the orphaned sessions too (imperative
-            // loop — a `filter_map` closure can't return `&mut SessionQueue` out
-            // of the captured `sessions` map).
-            let mut queued: Vec<(String, AgentId)> = Vec::new();
-            {
-                let mut sessions = self.sessions.lock();
-                for sid in &orphan_sessions {
-                    if let Some(q) = sessions.get_mut(sid) {
-                        for qt in q.queued.drain(..) {
-                            queued.push((qt.request_id, qt.agent_id));
-                        }
-                    }
-                }
-            }
+            let queued = self
+                .sessions
+                .lock()
+                .get_mut(session_id)
+                .map(|queue| {
+                    queue
+                        .queued
+                        .drain(..)
+                        .map(|ticket| (ticket.request_id, ticket.agent_id))
+                        .collect()
+                })
+                .unwrap_or_default();
             (outstanding, queued)
         };
         for (request_id, agent_id) in to_deny {
             self.deny(&request_id, &agent_id, DenyReason::Disconnect)
                 .await;
         }
-        // Resolve the drained queued tickets as deny directly (they were never
-        // armed with a timeout and never in `self.tickets`, so `deny`'s
-        // `remove` would no-op — forward the deny to the agent inline).
         for (request_id, agent_id) in queued_to_deny {
-            if let Err(e) = self
+            if let Err(error) = self
                 .acp
                 .respond_permission(&agent_id, request_id.clone(), None)
                 .await
             {
-                warn!("[permissions] disconnect-deny (queued) for {request_id} failed: {e}");
+                warn!("[permissions] disconnect-deny (queued) for {request_id} failed: {error}");
             }
+        }
+    }
+
+    /// Compatibility helper used by tests and explicit immediate cleanup paths.
+    pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
+    where
+        F: Fn(&str) -> usize,
+    {
+        let orphan_sessions: std::collections::HashSet<String> = self
+            .tickets
+            .lock()
+            .values()
+            .filter(|ticket| {
+                ticket.resolved_by.is_none() && session_subscribers(&ticket.session_id) == 0
+            })
+            .map(|ticket| ticket.session_id.clone())
+            .collect();
+        for session_id in orphan_sessions {
+            self.deny_orphaned_session(&session_id).await;
         }
     }
 
