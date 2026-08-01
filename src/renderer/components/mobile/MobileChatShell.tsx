@@ -65,25 +65,37 @@ export function MobileChatShell({
   const navigate = useNavigate()
   const activeProject = useActiveProject()
 
-  const { activeTab, activeTerminal, terminalTabs } = useWorkspaceStore((s) => {
+  // Active tab — return the stable Tab object reference held in the store
+  // tree. Stable references compare with Object.is, so no `useShallow` is
+  // needed. Returning a new object/array literal here would make every
+  // getSnapshot() differ and trigger an infinite re-render loop
+  // (React error #185 / Maximum update depth exceeded).
+  const activeTab = useWorkspaceStore((s) => {
     const leaves = getAllLeafPanes(s.root)
     const pane = leaves.find((p) => p.id === s.activePaneId) ?? leaves[0]
-    const tab = pane?.tabs.find((t) => t.id === pane.activeTabId) ?? null
-    // Flatten terminal tabs from ALL leaf panes, not just the active one.
-    const allTerminalTabs = leaves.flatMap((leaf) =>
+    return pane?.tabs.find((t) => t.id === pane.activeTabId) ?? null
+  })
+
+  // Active terminal — subscribe to the terminal store directly (not via
+  // getState() inside the workspace selector) so updates are observed and the
+  // returned reference stays stable across unrelated workspace changes.
+  const activeTerminalId = activeTab?.type === 'terminal' ? activeTab.terminalId : undefined
+  const activeTerminal = useTerminalStore((s) =>
+    activeTerminalId ? s.terminals.find((terminal) => terminal.id === activeTerminalId) : undefined
+  )
+
+  // Terminal tabs across ALL leaf panes. Derive via useMemo from the stable
+  // `root` reference so the wrapper objects are only rebuilt when the tree
+  // actually changes — never on every render (which would re-trigger the loop).
+  const workspaceRoot = useWorkspaceStore((s) => s.root)
+  const terminalTabs = useMemo(() => {
+    const leaves = getAllLeafPanes(workspaceRoot)
+    return leaves.flatMap((leaf) =>
       (leaf.tabs ?? [])
         .filter((t) => t.type === 'terminal')
         .map((t) => ({ tab: t, paneId: leaf.id }))
     )
-    return {
-      activeTab: tab,
-      activeTerminal:
-        tab?.type === 'terminal'
-          ? useTerminalStore.getState().terminals.find((terminal) => terminal.id === tab.terminalId)
-          : undefined,
-      terminalTabs: allTerminalTabs
-    }
-  })
+  }, [workspaceRoot])
 
   const activeSessionId = activeTab?.type === 'agent-chat' ? activeTab.sessionId : null
 
