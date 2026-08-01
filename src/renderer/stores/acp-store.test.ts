@@ -3973,7 +3973,7 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/work',
-      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node' }]
+      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }]
     })
     expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(1)
     expect(toastWarning).toHaveBeenCalledWith(

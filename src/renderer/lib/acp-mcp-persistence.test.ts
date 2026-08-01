@@ -60,14 +60,19 @@ describe('MCP registry helpers', () => {
     expect(
       selectMcpServersForAgent(registry, { mcpCapabilities: { http: false, acp: true } })
     ).toEqual({
-      servers: [{ type: 'stdio', name: 'Files', command: 'npx' }],
+      servers: [{ type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] }],
       skipped: [{ id: 'http', name: 'HTTP API', transport: 'http' }],
       pending: false
     })
     expect(selectMcpServersForAgent(registry, { mcpCapabilities: { http: true } }).servers).toEqual(
       [
-        { type: 'stdio', name: 'Files', command: 'npx' },
-        { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp' }
+        { type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] },
+        {
+          type: 'http',
+          name: 'HTTP API',
+          url: 'https://example.com/mcp',
+          headers: []
+        }
       ]
     )
   })
@@ -75,8 +80,13 @@ describe('MCP registry helpers', () => {
   it('keeps enabled transports while capabilities are still pending', () => {
     expect(selectMcpServersForAgent(registry, null)).toEqual({
       servers: [
-        { type: 'stdio', name: 'Files', command: 'npx' },
-        { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp' }
+        { type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] },
+        {
+          type: 'http',
+          name: 'HTTP API',
+          url: 'https://example.com/mcp',
+          headers: []
+        }
       ],
       skipped: [],
       pending: true
@@ -85,8 +95,8 @@ describe('MCP registry helpers', () => {
 
   it('strips registry-only fields when building explicit selections', () => {
     expect(buildMcpServers(registry, ['http', 'stdio'])).toEqual([
-      { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp' },
-      { type: 'stdio', name: 'Files', command: 'npx' }
+      { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp', headers: [] },
+      { type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] }
     ])
   })
 })

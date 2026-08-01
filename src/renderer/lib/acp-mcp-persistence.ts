@@ -56,7 +56,23 @@ export function validateMcpServer(server: Partial<McpServerConfig>): McpValidati
 
 function toWireServer(entry: StoredMcpServer): McpServer {
   const { id: _id, enabled: _enabled, ...server } = entry
-  return server as McpServer
+  // The ACP `McpServer` schema requires `args` + `env` (stdio) and `headers`
+  // (http/sse) as non-optional arrays. The on-disk normalizer omits these
+  // when empty, so re-fill them here to keep the wire payload deserializable.
+  switch (transportOf(server)) {
+    case 'stdio': {
+      const { name, command, args, env } = server as Extract<McpServerConfig, { type?: 'stdio' }>
+      return { type: 'stdio', name, command, args: args ?? [], env: env ?? [] }
+    }
+    case 'http': {
+      const { name, url, headers } = server as Extract<McpServerConfig, { type: 'http' }>
+      return { type: 'http', name, url, headers: headers ?? [] }
+    }
+    case 'sse': {
+      const { name, url, headers } = server as Extract<McpServerConfig, { type: 'sse' }>
+      return { type: 'sse', name, url, headers: headers ?? [] }
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
