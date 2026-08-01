@@ -38,7 +38,8 @@ describe('describeToolCall', () => {
     )
     expect(s.verb).toBe('Edited')
     expect(s.primary).toBe('UiKit.tsx')
-    expect(s.detail).toBe('+5 \u22123')
+    // LCS of [a,b,c] vs [a,B,c,d,e] is [a,c] (len 2) → +3 −1 (not +5 −3)
+    expect(s.detail).toBe('+3 \u22121')
   })
 
   it('shows only additions for a new file', () => {

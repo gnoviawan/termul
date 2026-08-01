@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
-import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   applyCommandToInput,
   buildSlashSections,
+  findSlashTrigger,
   isSlashTrigger,
+  isSlashTriggerAny,
   type SlashConfigItem,
   type SlashModeItem,
   slashFilter
@@ -50,11 +51,6 @@ const modes: SessionModeState = {
   ]
 }
 
-const skills: AgentSkillSummary[] = [
-  { name: 'investigate', description: 'Run an investigation', scope: 'project' },
-  { name: 'review', description: 'Review code', scope: 'global' }
-]
-
 describe('slash trigger detection', () => {
   it('opens on a lone slash and a leading slash token', () => {
     expect(isSlashTrigger('/')).toBe(true)
@@ -76,20 +72,57 @@ describe('slash trigger detection', () => {
   })
 })
 
-describe('buildSlashSections', () => {
-  it('lists skills before commands', () => {
-    const sections = buildSlashSections({
-      commands,
-      configOptions: [],
-      modes: null,
-      skills,
-      filter: ''
-    })
-    expect(sections[0].id).toBe('skills')
-    expect(sections[1].id).toBe('commands')
+describe('mid-text slash trigger detection', () => {
+  it('findSlashTrigger detects a leading slash token', () => {
+    const result = findSlashTrigger('/com')
+    expect(result).toEqual({ start: 0, end: 4, filter: 'com' })
+  })
+  it('findSlashTrigger detects a lone leading slash', () => {
+    const result = findSlashTrigger('/')
+    expect(result).toEqual({ start: 0, end: 1, filter: '' })
+  })
+  it('findSlashTrigger detects a mid-text slash after whitespace', () => {
+    const result = findSlashTrigger('hello /comp')
+    expect(result).toEqual({ start: 6, end: 11, filter: 'comp' })
+  })
+  it('findSlashTrigger detects a mid-text lone slash after whitespace', () => {
+    const result = findSlashTrigger('hello /')
+    expect(result).toEqual({ start: 6, end: 7, filter: '' })
+  })
+  it('findSlashTrigger returns null for slash without preceding whitespace', () => {
+    expect(findSlashTrigger('hello/')).toBeNull()
+    expect(findSlashTrigger('ab/comp')).toBeNull()
+  })
+  it('findSlashTrigger returns null for plain text', () => {
+    expect(findSlashTrigger('hello')).toBeNull()
+    expect(findSlashTrigger('')).toBeNull()
+  })
+  it('findSlashTrigger respects caret position', () => {
+    // Caret is before the token end — should not match
+    expect(findSlashTrigger('hello /comp', 8)).toBeNull()
+    // Caret is at the token end — should match
+    expect(findSlashTrigger('hello /comp', 11)).toEqual({ start: 6, end: 11, filter: 'comp' })
   })
 
-  it('lists commands first when no skills', () => {
+  it('isSlashTriggerAny detects both leading and mid-text triggers', () => {
+    expect(isSlashTriggerAny('/')).toBe(true)
+    expect(isSlashTriggerAny('/com')).toBe(true)
+    expect(isSlashTriggerAny('hello /comp')).toBe(true)
+    expect(isSlashTriggerAny('hello /')).toBe(true)
+    expect(isSlashTriggerAny('hello/')).toBe(false)
+    expect(isSlashTriggerAny('hello')).toBe(false)
+    expect(isSlashTriggerAny('')).toBe(false)
+  })
+
+  it('slashFilter extracts filter from mid-text triggers', () => {
+    expect(slashFilter('hello /comp')).toBe('comp')
+    expect(slashFilter('hello /')).toBe('')
+    expect(slashFilter('ab/')).toBe('')
+  })
+})
+
+describe('buildSlashSections', () => {
+  it('lists commands first', () => {
     const sections = buildSlashSections({ commands, configOptions: [], modes: null, filter: '' })
     expect(sections[0].id).toBe('commands')
     expect(sections[0].items).toHaveLength(2)

@@ -10,7 +10,6 @@ import type {
   SessionMode,
   SessionModeState
 } from '@/lib/acp-api'
-import type { AgentSkillSummary } from '@/lib/skills-api'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -35,14 +34,7 @@ export interface SlashModeItem {
   selected: boolean
 }
 
-export interface SlashSkillItem {
-  kind: 'skill'
-  name: string
-  description: string | null
-  scope: string
-}
-
-export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem | SlashSkillItem
+export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem
 
 export interface SlashSection {
   /** Stable key for the section. */
@@ -56,7 +48,6 @@ export interface SlashMenuInput {
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
-  skills?: AgentSkillSummary[]
   /** The text after the leading `/`, used to filter. */
   filter: string
 }
@@ -88,20 +79,8 @@ function headingForCategory(category: string | null | undefined, fallbackName: s
  * legacy Modes section is emitted if modes exist.
  */
 export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
-  const { commands, configOptions, modes, skills = [], filter } = input
+  const { commands, configOptions, modes, filter } = input
   const sections: SlashSection[] = []
-
-  const skillItems: SlashItem[] = skills
-    .filter((s) => matches(filter, s.name, s.description))
-    .map((s) => ({
-      kind: 'skill',
-      name: s.name,
-      description: s.description || null,
-      scope: s.scope
-    }))
-  if (skillItems.length > 0) {
-    sections.push({ id: 'skills', heading: 'Skills', items: skillItems })
-  }
 
   const commandItems: SlashItem[] = commands
     .filter((c) => matches(filter, c.name, c.description))
@@ -153,9 +132,58 @@ export function isSlashTrigger(value: string): boolean {
   return /^\/\S*$/.test(value)
 }
 
-/** Extract the filter text after a leading `/` (empty string for a lone `/`). */
+/** Result of detecting a slash trigger token at any position in the input. */
+export interface SlashTriggerMatch {
+  /** Start index of the `/` character. */
+  start: number
+  /** End index (exclusive) of the trigger token. */
+  end: number
+  /** The text after the leading `/` (empty string for a lone `/`). */
+  filter: string
+}
+
+/**
+ * Detect a slash-trigger token at any position in the input value.
+ *
+ * A trigger is a `/` followed by optional non-space characters, where either:
+ * - It is at the start of the input, OR
+ * - It is preceded by whitespace.
+ *
+ * This enables mid-text slash menu invocation (e.g. "hello /comp").
+ * Returns null when no trigger is found.
+ */
+export function findSlashTrigger(value: string, caret?: number): SlashTriggerMatch | null {
+  // Leading-only fast path (preserves exact original behavior).
+  if (isSlashTrigger(value)) {
+    return { start: 0, end: value.length, filter: value.slice(1) }
+  }
+  // Scan for / preceded by whitespace or start-of-string.
+  const regex = /(?:^|\s)(\/(\S*))$/g
+  let match: RegExpExecArray | null
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+  while ((match = regex.exec(value)) !== null) {
+    // Group 1 is the full /token, group 2 is the filter text after /.
+    const fullToken = match[1]
+    const filter = match[2] ?? ''
+    const start = match.index + (match[0].length - fullToken.length)
+    const end = start + fullToken.length
+    // If a caret position is given, only match if the caret is at or past the token.
+    if (caret !== undefined && caret < end) continue
+    return { start, end, filter }
+  }
+  return null
+}
+
+/** Extract the filter text from a slash trigger (works with both leading and mid-text). */
 export function slashFilter(value: string): string {
-  return isSlashTrigger(value) ? value.slice(1) : ''
+  if (isSlashTrigger(value)) return value.slice(1)
+  const mid = findSlashTrigger(value)
+  return mid ? mid.filter : ''
+}
+
+/** True when the input value contains a slash trigger at any position. */
+export function isSlashTriggerAny(value: string): boolean {
+  return isSlashTrigger(value) || findSlashTrigger(value) !== null
 }
 
 /** Replace a leading `/token` with `/<name> ` when a command is chosen. */

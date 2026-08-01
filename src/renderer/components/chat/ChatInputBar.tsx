@@ -10,12 +10,6 @@ import {
   useRef,
   useState
 } from 'react'
-import { toast } from 'sonner'
-import {
-  buildPromptWithLoadedSkill,
-  type LoadedAgentSkill,
-  useAgentSkills
-} from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -32,6 +26,7 @@ import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -42,15 +37,14 @@ import {
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
-import { LoadedSkillChip } from './LoadedSkillChip'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
-  applyCommandToInput,
   buildSlashSections,
-  isSlashTrigger,
+  findSlashTrigger,
+  isSlashTriggerAny,
   type SlashItem,
   slashFilter
 } from './slash-menu-model'
@@ -68,8 +62,6 @@ const EMBOSSED_BUTTON =
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
   session: AcpSession
-  /** Project/worktree root used to discover project-local skills. */
-  projectRoot?: string
   /** Whether a prompt turn is currently active (disables send, enables cancel). */
   busy: boolean
   /** Whether the session is closed/disconnected (fully disables input). */
@@ -104,7 +96,6 @@ interface ChatInputBarProps {
 
 export function ChatInputBar({
   session,
-  projectRoot,
   busy,
   disabled,
   imageCapable = false,
@@ -133,7 +124,6 @@ export function ChatInputBar({
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
-  const { skills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
@@ -141,7 +131,7 @@ export function ChatInputBar({
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
   const mcpCount = session.mcpServerCount ?? globalMcpCount
   const [value, setValue] = useState('')
-  const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
+  const [activeCommand, setActiveCommand] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -211,7 +201,7 @@ export function ChatInputBar({
     if (dragDepth.current === 0) setDragActive(false)
   }, [canDropPaste])
 
-  const slashOpen = isSlashTrigger(value) && !disabled
+  const slashOpen = isSlashTriggerAny(value) && !disabled
   const filter = slashFilter(value)
   const {
     onInput,
@@ -230,58 +220,53 @@ export function ChatInputBar({
   } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
 
   const sections = useMemo(
-    () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
-    [slashOpen, commands, configOptions, modes, skills, filter]
+    () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, filter }) : []),
+    [slashOpen, commands, configOptions, modes, filter]
   )
 
   const canSend =
     !disabled &&
     !sending &&
-    (value.trim().length > 0 || loadedSkill !== null || attachments.length > 0)
+    (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
   const submit = useCallback(async () => {
     const userText = value.trim()
     const hasAttachments = attachments.length > 0
-    if ((!userText && !loadedSkill && !hasAttachments) || disabled || sending) return
+    if ((!userText && !activeCommand && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
-      const text = await buildPromptWithLoadedSkill(
-        loadedSkill,
-        userText,
-        projectRoot ?? session.cwd
-      )
-      const trimmed = text.trim()
+      // Prepend the active command to the prompt text on send.
+      const withCommand = activeCommand ? `/${activeCommand} ${userText}` : userText
+      const trimmed = withCommand.trim()
       if (!trimmed && !hasAttachments) return
 
       if (hasAttachments) {
         const blocks: ContentBlock[] = []
-        if (trimmed) blocks.push({ type: 'text', text })
+        if (trimmed) blocks.push({ type: 'text', text: withCommand })
         for (const a of attachments) blocks.push(attachmentToBlock(a))
         onSendBlocks(dedupeAttachmentBlocks(blocks))
       } else {
-        onSend(text)
+        onSend(trimmed)
       }
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
-      setLoadedSkill(null)
+      setActiveCommand(null)
       clearAttachments()
       resetMentions()
       resetHeight()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load skill')
     } finally {
       setSending(false)
     }
   }, [
     value,
     attachments,
-    loadedSkill,
+    activeCommand,
     disabled,
     sending,
     clearAttachments,
@@ -290,25 +275,29 @@ export function ChatInputBar({
     onSendBlocks,
     resetHeight,
     resetMentions,
-    projectRoot,
-    session.cwd,
     session.id
   ])
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
-      if (item.kind === 'skill') {
-        setLoadedSkill({ name: item.name, description: item.description ?? '' })
-        setValue('')
-        updateMentions('', 0)
-        resetHeight()
-        textareaRef.current?.focus()
-        return
-      }
       if (item.kind === 'command') {
-        const next = applyCommandToInput(value, item.name)
-        setValue(next)
-        updateMentions(next, next.length)
+        // Set the command chip instead of inserting bare text into the textarea.
+        // If the trigger was mid-text, replace the /token portion in the input.
+        const midTrigger = findSlashTrigger(value)
+        if (midTrigger && midTrigger.start > 0) {
+          // Mid-text trigger: remove the /token from the input, keep the rest
+          const before = value.slice(0, midTrigger.start).trimEnd()
+          const after = value.slice(midTrigger.end).trimStart()
+          const remaining = [before, after].filter(Boolean).join(' ')
+          setValue(remaining)
+          updateMentions(remaining, remaining.length)
+        } else {
+          // Leading or standalone trigger: clear the input
+          setValue('')
+          updateMentions('', 0)
+        }
+        setActiveCommand(item.name)
+        resetHeight()
         textareaRef.current?.focus()
         return
       }
@@ -335,6 +324,7 @@ export function ChatInputBar({
           menuRef: slashMenuRef,
           onClearInput: () => {
             setValue('')
+            setActiveCommand(null)
             updateMentions('', 0)
             resetHeight()
           }
@@ -378,6 +368,7 @@ export function ChatInputBar({
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
+    setActiveCommand(null)
     updateMentions(next, next.length)
     const el = textareaRef.current
     if (!el) return
@@ -493,8 +484,14 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
-            {loadedSkill && (
-              <LoadedSkillChip skill={loadedSkill} onRemove={() => setLoadedSkill(null)} />
+            {activeCommand && (
+              <CommandChip
+                name={activeCommand}
+                onRemove={() => {
+                  setActiveCommand(null)
+                  textareaRef.current?.focus()
+                }}
+              />
             )}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
@@ -529,7 +526,7 @@ export function ChatInputBar({
                 placeholder={
                   disabled
                     ? 'Session closed'
-                    : loadedSkill
+                    : activeCommand
                       ? 'Add a message (optional)…'
                       : 'Ask anything… (/ for commands, @ for files)'
                 }

@@ -119,11 +119,21 @@ fn session_new_timeout() -> Duration {
 /// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (seconds, must be > 0). Set to 0 to
 /// disable the warmup entirely. Defaults to [`FIRST_PROMPT_WARMUP_TIMEOUT`].
 fn first_prompt_warmup_timeout() -> Duration {
-    let secs: u64 = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT.as_secs());
-    Duration::from_secs(secs)
+    let raw = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS");
+    match raw {
+        Ok(v) => match v.parse::<u64>() {
+            Ok(secs) => Duration::from_secs(secs),
+            Err(_) => {
+                log::warn!(
+                    "[acp] TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS={v:?} is not a valid \
+                     unsigned integer; falling back to {:?}",
+                    FIRST_PROMPT_WARMUP_TIMEOUT
+                );
+                FIRST_PROMPT_WARMUP_TIMEOUT
+            }
+        },
+        _ => FIRST_PROMPT_WARMUP_TIMEOUT,
+    }
 }
 
 /// `session/load` / `session/resume` timeout, overridable via
@@ -1919,6 +1929,27 @@ async fn run_command_loop(
                                                 );
                                                 return;
                                             }
+                                        }
+                                        // Drain any pending permissions/questions
+                                        // the warmup turn may have raised, so
+                                        // they don't block the user's first real
+                                        // prompt. Mirrors CancelPrompt and
+                                        // SendPrompt completion cleanup.
+                                        let pending = req_state.lock().drain_session(&session_id.0);
+                                        for permission in pending {
+                                            let _ = permission.responder.respond(
+                                                RequestPermissionResponse::new(
+                                                    RequestPermissionOutcome::Cancelled,
+                                                ),
+                                            );
+                                        }
+                                        let pending_questions =
+                                            req_state.lock().drain_session_questions(&session_id.0);
+                                        for question in pending_questions {
+                                            let _ = question.responder.respond(serde_json::json!({
+                                                "questionId": question.question_id,
+                                                "cancelled": true,
+                                            }));
                                         }
                                     }
                                 }
