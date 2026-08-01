@@ -1,9 +1,10 @@
 /**
  * ACP (Agent Client Protocol) renderer facade.
  *
- * This is the ONLY module in the renderer that talks to the P0 ACP backend
- * (Tauri commands `acp_*` / events `acp:*`, or the web WS relay). Components
- * and the acp-store go through here.
+ * This module defines the renderer-facing ACP API types and wrappers over the
+ * ACP backend (Tauri commands `acp_*` / events `acp:*`, or the web WS relay).
+ * Components and the acp-store go through here; `acp-transport.ts` owns the
+ * underlying request/connection path.
  *
  * Transport selection (Story 1.6): `getAcpTransport()` picks Tauri IPC when
  * `isTauriContext()` is true, otherwise the multiplexed WS client. Public
@@ -26,9 +27,9 @@ export type SessionId = string
 // --- ACP schema mirrors (only the fields the UI needs) ---------------------
 
 /**
- * Tagged content block. Only `text` is fully handled in P1; other block types
- * (image/audio/resource/resource_link/…) carry their protocol fields in the
- * index signature and render as a placeholder.
+ * Tagged content block. `text` is rendered directly; `image`/`audio`/`resource`/
+ * `resource_link`/… blocks render through `MediaBlocks` (lightbox, bounded inline
+ * audio, or attachment cards) — see `components/chat/ChatMessage.tsx`.
  */
 export interface ContentBlock {
   type: string
@@ -97,7 +98,7 @@ export interface AgentCapabilities {
   [k: string]: unknown
 }
 
-/** A tool call (P3 renders these). ACP schema, camelCase on the wire. */
+/** A tool call (rendered by the tool-call UI). ACP schema, camelCase on the wire. */
 export type ToolKind =
   | 'read'
   | 'edit'

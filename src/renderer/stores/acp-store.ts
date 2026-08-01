@@ -5,7 +5,7 @@
  * All backend access goes through `@/lib/acp-api`. Backend events are wired into
  * this store exactly once via `initAcpEventListeners()` (called at app mount).
  *
- * P1 scope: text conversations. `toolCalls`, `plans`, `commands`,
+ * Scope: text conversations plus `toolCalls`, `plans`, `commands`,
  * `pendingPermissions`, and config/mode state are tracked here; tool, plan,
  * permission, and slash-command UI render them when present.
  *
@@ -293,7 +293,7 @@ interface AcpState {
   /** ACP agent-plan entries per session (`session/update` plan, full replace). */
   plans: Record<SessionId, PlanEntry[]>
   commands: Record<SessionId, AvailableCommand[]>
-  pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
+  pendingPermissions: Record<string, PendingPermission> // keyed by requestId
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
@@ -336,7 +336,7 @@ interface AcpState {
   switchProject: (projectId: string) => Promise<SwitchProjectReply>
   setFailedProjectSwitch: (projectId: string | null) => void
 
-  // Actions — configured agents (P4)
+  // Actions — configured agents
   loadAgentConfigs: () => Promise<void>
   saveAgentConfig: (config: StoredAgentConfig) => Promise<void>
   deleteAgentConfig: (id: string) => Promise<void>
@@ -431,7 +431,7 @@ interface AcpState {
   /** Drain stale pooled sessions for `cwd` (other agents) and seed `configId`'s pool. */
   retargetWarmPool: (configId: string, cwd: string, projectId: string) => void
 
-  // Actions — chat history (P5)
+  // Actions — chat history
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   deleteHistorySession: (id: string) => Promise<void>
@@ -457,7 +457,7 @@ interface AcpState {
     projectId: string
   ) => Promise<void>
 
-  // Actions — MCP server registry (P6)
+  // Actions — MCP server registry
   loadMcpServers: () => Promise<void>
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
@@ -475,12 +475,12 @@ interface AcpState {
   /** Cancel the active turn if needed, then send a queued prompt immediately. */
   sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
 
-  // Actions — config (P2 drives the UI; method available now)
+  // Actions — config
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
   setModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
-  // Actions — permission (P3 drives the UI; method available now)
+  // Actions — permission
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
 
   // Internal event reducers (exposed for tests)
@@ -1572,14 +1572,14 @@ function waitForSpawnDetails(get: () => AcpState, agentId: AgentId): Promise<voi
 
 /**
  * Run ACP `authenticate` before `session/new` when the agent advertises auth
- * methods (P1). Waits for spawn details, then:
+ * methods. Waits for spawn details, then:
  *   - no valid method → resolve (no-auth agent; unchanged spawn→session flow),
  *   - exactly one valid method → `authenticate(methodId)`,
  *   - more than one → reject with {@link AmbiguousAuthError} (never silently
  *     choose a method).
  *
- * A method whose id is empty/whitespace is ignored (P5). Concurrent calls for
- * the same agent share one in-flight authenticate (P2). On success the agent is
+ * A method whose id is empty/whitespace is ignored. Concurrent calls for
+ * the same agent share one in-flight authenticate. On success the agent is
  * remembered so a reused agent is not re-authenticated.
  */
 function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promise<void> {
@@ -1591,7 +1591,7 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
     try {
       await waitForSpawnDetails(get, agentId)
       const methods = get().agents[agentId]?.authMethods ?? []
-      // P5: ignore empty/whitespace ids — an unusable method must not be sent.
+      // Ignore empty/whitespace ids — an unusable method must not be sent.
       const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
       if (valid.length === 0) return
       if (valid.length > 1) throw new AmbiguousAuthError(valid)
@@ -1606,7 +1606,7 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
 }
 
 /**
- * Evict a live agent after a transport/connection failure (P3/P8): a destroyed
+ * Evict a live agent after a transport/connection failure: a destroyed
  * stream or refused connection means the process cannot be reused, so it is
  * killed and dropped from reuse state before any retry (a fresh spawn follows).
  * A failed kill is logged and swallowed — the agent is being discarded anyway.
@@ -1616,7 +1616,7 @@ async function evictAgentForTransport(get: () => AcpState, agentId: AgentId): Pr
   try {
     await get().killAgent(agentId)
   } catch (err) {
-    // P8: surface the kill failure without letting it mask the setup error.
+    // Surface the kill failure without letting it mask the setup error.
     console.warn('[acp] failed to kill agent during transport eviction', agentId, err)
   }
 }
@@ -2350,7 +2350,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   authenticateAgent: async (agentId, methodId) => {
     // Share a single in-flight authenticate with `authenticateBeforeSession`
-    // (P2): a launcher Sign-in click concurrent with a background
+    // A launcher Sign-in click concurrent with a background
     // `prepareChat` must issue one round-trip, not two. Keyed by agent —
     // auto-auth only fires for the single unambiguous method, the same one
     // Sign-in uses, so concurrent callers share the same request.
@@ -2367,7 +2367,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     try {
-      // Authenticate (single unambiguous method) BEFORE session/new (P1).
+      // Authenticate (single unambiguous method) BEFORE session/new.
       await authenticateBeforeSession(get, agentId)
       const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
       const sessionId = outcome.sessionId
@@ -2427,7 +2427,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // Broken stream/connection: discard the process so retry spawns fresh.
         await evictAgentForTransport(get, agentId)
       } else if (category === 'auth') {
-        // Allow a manual Sign-in + retry to re-authenticate (P3).
+        // Allow a manual Sign-in + retry to re-authenticate.
         authenticatedAgents.delete(agentId)
       }
       throw err
@@ -2766,7 +2766,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         console.warn('[acp] prepareChat failed', configId, err)
         if (inFlightPrepared.get(key) === task) {
           const config = get().agentConfigs.find((c) => c.id === configId)
-          // Classify from the RAW error (P4) so the launcher can render a
+          // Classify from the RAW error so the launcher can render a
           // category-specific label/action; `detail` carries the friendly text.
           const classified = classifySetupError(err, config)
           set((s) => ({
