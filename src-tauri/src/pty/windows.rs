@@ -3,9 +3,9 @@
 //! This module provides Windows-specific PTY spawning functionality using ConPTY.
 
 use std::fs::File;
-use winapi::ctypes::c_void;
 use std::mem::{size_of, MaybeUninit};
 use std::os::windows::io::FromRawHandle;
+use winapi::ctypes::c_void;
 
 /// ADR-004.2: Build a Windows command-line string from an argv array using the
 /// `CommandLineToArgvW` escaping rules.
@@ -517,13 +517,19 @@ mod tests {
         use std::collections::HashMap;
 
         let mut env = HashMap::new();
-        env.insert("Path".to_string(), std::env::var("PATH").unwrap_or_default());
+        env.insert(
+            "Path".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
 
         let (reader, writer, pid, process_handle, job_handle, conpty_handles) =
             spawn_conpty("cmd.exe", None, 80, 24, &env).expect("spawn_conpty failed");
 
         assert_ne!(pid, 0, "expected a valid child pid");
-        assert!(!job_handle.is_null(), "child must be assigned to a Job Object");
+        assert!(
+            !job_handle.is_null(),
+            "child must be assigned to a Job Object"
+        );
         assert!(
             is_process_alive(pid),
             "child should be running immediately after spawn"
@@ -565,8 +571,7 @@ mod tests {
                 return false;
             }
             let mut code: u32 = 0;
-            let ok =
-                winapi::um::processthreadsapi::GetExitCodeProcess(handle, &mut code);
+            let ok = winapi::um::processthreadsapi::GetExitCodeProcess(handle, &mut code);
             winapi::um::handleapi::CloseHandle(handle);
             ok != 0 && code == winapi::um::minwinbase::STILL_ACTIVE
         }
@@ -618,19 +623,13 @@ mod tests {
     fn backslashes_before_quote_are_doubled_plus_escaped_quote() {
         // Input: a\\"b  (two backslashes then a quote)
         // Expected inside quotes: a\\\\\"b -> four backslashes + escaped quote
-        assert_eq!(
-            cmdline("p", &["a\\\\\"b"]),
-            "p \"a\\\\\\\\\\\"b\""
-        );
+        assert_eq!(cmdline("p", &["a\\\\\"b"]), "p \"a\\\\\\\\\\\"b\"");
     }
 
     #[test]
     fn interior_backslashes_stay_literal_when_quoted() {
         // Backslashes not adjacent to a quote are literal even inside quotes.
-        assert_eq!(
-            cmdline("p", &["a\\b c"]),
-            "p \"a\\b c\""
-        );
+        assert_eq!(cmdline("p", &["a\\b c"]), "p \"a\\b c\"");
     }
 
     #[test]
@@ -675,6 +674,9 @@ mod tests {
 
     #[test]
     fn non_ascii_arg_passes_through() {
-        assert_eq!(cmdline("p", &["caf\u{e9} \u{2014} test"]), "p \"caf\u{e9} \u{2014} test\"");
+        assert_eq!(
+            cmdline("p", &["caf\u{e9} \u{2014} test"]),
+            "p \"caf\u{e9} \u{2014} test\""
+        );
     }
 }

@@ -179,19 +179,18 @@ impl AgentConfig {
         // `node.exe <script>`, prepending the script ahead of the user args.
         // A resolution failure falls back to the legacy PATH/PATHEXT lookup so
         // any real spawn error stays observable.
-        let (command, args): (String, Vec<String>) = match crate::pty::manager::resolve_spawn_program(
-            &self.command,
-        ) {
-            Ok(resolved) => {
-                let mut args = resolved.prepend_args;
-                args.extend(self.args.iter().cloned());
-                (resolved.program, args)
-            }
-            Err(_) => (
-                crate::trackers::git_tracker::resolve_executable(&self.command),
-                self.args.clone(),
-            ),
-        };
+        let (command, args): (String, Vec<String>) =
+            match crate::pty::manager::resolve_spawn_program(&self.command) {
+                Ok(resolved) => {
+                    let mut args = resolved.prepend_args;
+                    args.extend(self.args.iter().cloned());
+                    (resolved.program, args)
+                }
+                Err(_) => (
+                    crate::trackers::git_tracker::resolve_executable(&self.command),
+                    self.args.clone(),
+                ),
+            };
 
         // On non-Windows `resolve_spawn_program` returns a bare command name
         // unchanged, leaving PATH resolution to whoever spawns the process. The

@@ -130,9 +130,14 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   return (await acpHistoryApi.list()).sessions
 }
 
+type PendingHistoryWaiter = {
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+
 type PendingHistoryOperation =
-  | { kind: 'save'; payload: SessionPayload; waiters: Array<() => void> }
-  | { kind: 'delete'; waiters: Array<() => void> }
+  | { kind: 'save'; payload: SessionPayload; waiters: PendingHistoryWaiter[] }
+  | { kind: 'delete'; waiters: PendingHistoryWaiter[] }
 
 const pendingHistoryOperations = new Map<string, PendingHistoryOperation>()
 const deletedSessionIds = new Set<string>()
@@ -149,12 +154,20 @@ async function drainHistoryOperations(): Promise<void> {
     const [sessionId, operation] = next
     pendingHistoryOperations.delete(sessionId)
     try {
-      if (operation.kind === 'save') await saveSessionPayload(sessionId, operation.payload)
-      else await deleteSessionPayload(sessionId)
+      if (operation.kind === 'save') {
+        await saveSessionPayload(sessionId, operation.payload)
+      } else {
+        await deleteSessionPayload(sessionId)
+        deletedSessionIds.delete(sessionId)
+      }
+      for (const waiter of operation.waiters) waiter.resolve()
     } catch (error) {
       console.error('[acp] failed to persist session history', error)
-    } finally {
-      for (const resolve of operation.waiters) resolve()
+      if (operation.kind === 'delete') {
+        for (const waiter of operation.waiters) waiter.reject(error)
+      } else {
+        for (const waiter of operation.waiters) waiter.resolve()
+      }
     }
   }
 }
@@ -170,9 +183,10 @@ function ensureHistoryDrain(): void {
 /** Coalesce streaming writes so only the latest full payload per session is retained. */
 export function queueSessionPayloadSave(id: string, payload: SessionPayload): Promise<void> {
   if (deletedSessionIds.has(id)) return Promise.resolve()
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const existing = pendingHistoryOperations.get(id)
-    const waiters = existing ? [...existing.waiters, resolve] : [resolve]
+    const waiter = { resolve, reject }
+    const waiters = existing ? [...existing.waiters, waiter] : [waiter]
     pendingHistoryOperations.set(id, { kind: 'save', payload, waiters })
     ensureHistoryDrain()
   })
@@ -183,9 +197,10 @@ export function queueSessionPayloadDelete(id: string): Promise<void> {
   deletedSessionIds.add(id)
   payloadCache.delete(id)
   pinnedPayloads.delete(id)
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const existing = pendingHistoryOperations.get(id)
-    const waiters = existing ? [...existing.waiters, resolve] : [resolve]
+    const waiter = { resolve, reject }
+    const waiters = existing ? [...existing.waiters, waiter] : [waiter]
     pendingHistoryOperations.set(id, { kind: 'delete', waiters })
     ensureHistoryDrain()
   })

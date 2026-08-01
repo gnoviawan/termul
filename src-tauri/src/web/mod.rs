@@ -100,9 +100,9 @@ pub async fn serve(
         exit_code_tracker,
         ws_relay,
         registry,
-        // The standalone VPS binary has no renderer-fed cache; it relies on
-        // its file-backed `SessionPersistence` (Story 4.3). Desktop-hosted
-        // seeds the cache via `remote_sync_chat_history` instead.
+        // The standalone VPS binary has no desktop chat-history store; it
+        // relies on file-backed `SessionPersistence` (Story 4.3). The desktop
+        // host attaches its Rust-owned durable history store instead.
         None,
         registry_persistence,
         projects_file,
@@ -195,8 +195,8 @@ pub async fn serve_router(
         );
     }
 
-    // Advertise `Server` history mode when EITHER the renderer-fed cache is
-    // attached (desktop-hosted) OR the file-backed persistence is attached
+    // Advertise `Server` history mode when EITHER the durable Rust history
+    // store is attached (desktop-hosted) OR file-backed persistence is attached
     // (standalone VPS, Story 4.3). Otherwise the web client negotiates
     // `live_only` (no stored transcript mirror).
     let history_mode = if chat_history_store.is_some() || ws_relay.persistence().is_some() {

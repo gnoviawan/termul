@@ -661,8 +661,7 @@ mod tests {
 
     #[test]
     fn from_args_accepts_permission_reconnect_grace() {
-        let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"])
-            .expect("parse");
+        let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"]).expect("parse");
         assert_eq!(cfg.permission_reconnect_grace_secs, 20);
     }
 

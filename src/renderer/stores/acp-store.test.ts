@@ -548,10 +548,8 @@ describe('acp-store', () => {
     const [entry] = useAcpStore.getState().sessionIndex
     expect(entry.title).toBe('siapa itu faiz intifada?')
     expect(entry.messageCount).toBe(1)
-    const { queueSessionPayloadSave: saveSessionPayload } = await import(
-      '@/lib/acp-history-persistence'
-    )
-    expect(saveSessionPayload).toHaveBeenCalledWith(
+    const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
+    expect(queueSessionPayloadSave).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({
         metadata: expect.objectContaining({ title: 'siapa itu faiz intifada?' }),
@@ -886,17 +884,15 @@ describe('acp-store', () => {
       role: 'agent',
       content: { type: 'text', text: 'the answer' }
     })
-    const { queueSessionPayloadSave: saveSessionPayload } = await import(
-      '@/lib/acp-history-persistence'
-    )
-    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
+    ;(queueSessionPayloadSave as ReturnType<typeof vi.fn>).mockClear()
     useAcpStore.getState()._onPromptComplete({
       agentId: 'agent-1',
       sessionId: 's1',
       stopReason: 'end_turn'
     })
     await flushTurnEnd()
-    expect(saveSessionPayload).toHaveBeenCalledWith(
+    expect(queueSessionPayloadSave).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({
         messages: [expect.objectContaining({ role: 'agent', streaming: false })]
@@ -909,10 +905,10 @@ describe('acp-store', () => {
     // persist must not write it back.
     seedSession('s1', 'agent-1')
     // No sessionIndex entry for s1 (deleted).
-    const { queueSessionPayloadSave: saveSessionPayload, saveSessionIndex } = await import(
+    const { queueSessionPayloadSave, saveSessionIndex } = await import(
       '@/lib/acp-history-persistence'
     )
-    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    ;(queueSessionPayloadSave as ReturnType<typeof vi.fn>).mockClear()
     ;(saveSessionIndex as ReturnType<typeof vi.fn>).mockClear()
     useAcpStore.getState()._onPromptComplete({
       agentId: 'agent-1',
@@ -920,7 +916,7 @@ describe('acp-store', () => {
       stopReason: 'end_turn'
     })
     await flushTurnEnd()
-    expect(saveSessionPayload).not.toHaveBeenCalled()
+    expect(queueSessionPayloadSave).not.toHaveBeenCalled()
     expect(useAcpStore.getState().sessionIndex).toEqual([])
   })
 
@@ -3422,7 +3418,7 @@ describe('acp-store', () => {
         }
       ]
     }))
-    const { loadSessionPayload, queueSessionPayloadSave: saveSessionPayload } = await import(
+    const { loadSessionPayload, queueSessionPayloadSave } = await import(
       '@/lib/acp-history-persistence'
     )
     ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -3439,7 +3435,7 @@ describe('acp-store', () => {
       },
       messages: []
     })
-    ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
+    ;(queueSessionPayloadSave as ReturnType<typeof vi.fn>).mockClear()
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd !== 'acp_load_session') {
         throw new Error(`unexpected invoke command in mid-persist test: ${cmd}`)
@@ -3459,7 +3455,7 @@ describe('acp-store', () => {
       return undefined
     })
     await useAcpStore.getState().openHistorySession('s-midpersist')
-    expect(saveSessionPayload).not.toHaveBeenCalled()
+    expect(queueSessionPayloadSave).not.toHaveBeenCalled()
     vi.mocked(invoke).mockReset()
   })
 
@@ -3606,6 +3602,32 @@ describe('acp-store', () => {
     })
     await useAcpStore.getState().deleteHistorySession('s1')
     expect(useAcpStore.getState().sessionIndex).toHaveLength(0)
+  })
+
+  it('keeps the index entry when durable history deletion fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { queueSessionPayloadDelete } = await import('@/lib/acp-history-persistence')
+    vi.mocked(queueSessionPayloadDelete).mockRejectedValueOnce(new Error('delete failed'))
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's-delete-fail',
+          agentId: 'a',
+          title: 'T',
+          cwd: '',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    })
+
+    await useAcpStore.getState().deleteHistorySession('s-delete-fail')
+
+    expect(useAcpStore.getState().sessionIndex.map((entry) => entry.id)).toContain('s-delete-fail')
+    consoleError.mockRestore()
   })
 
   it('MCP registry CRUD persists and removes (P6)', async () => {
@@ -4692,16 +4714,14 @@ describe('acp-store transcript eviction (WebView memory)', () => {
   })
 
   it('second close after eviction does not persist empty messages', async () => {
-    const { queueSessionPayloadSave: saveSessionPayload } = await import(
-      '@/lib/acp-history-persistence'
-    )
+    const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
     seedTranscript('sess-twice')
     vi.mocked(invoke).mockResolvedValue(undefined)
     await useAcpStore.getState().closeSession('sess-twice')
     await new Promise((resolve) => setTimeout(resolve, 0))
-    vi.mocked(saveSessionPayload).mockClear()
+    vi.mocked(queueSessionPayloadSave).mockClear()
     await useAcpStore.getState().closeSession('sess-twice')
-    expect(saveSessionPayload).not.toHaveBeenCalled()
+    expect(queueSessionPayloadSave).not.toHaveBeenCalled()
   })
 
   it('openHistorySession reloads messages after prior close eviction', async () => {

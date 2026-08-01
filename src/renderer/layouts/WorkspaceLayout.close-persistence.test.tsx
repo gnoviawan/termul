@@ -467,6 +467,22 @@ describe('WorkspaceLayout close persistence', () => {
     })
   })
 
+  it('still closes when the Rust-backed ACP history flush rejects', async () => {
+    mockFlushSessionHistory.mockRejectedValueOnce(new Error('flush failed'))
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockRespondToClose).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
   it('flushes pending persistence writes after saving all dirty files', async () => {
     mockEditorStoreState.getDirtyFileCount.mockReset()
     mockEditorStoreState.getDirtyFileCount.mockReturnValueOnce(2).mockReturnValueOnce(0)

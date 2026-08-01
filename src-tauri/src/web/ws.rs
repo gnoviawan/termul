@@ -288,7 +288,7 @@ pub struct AppState {
     /// In-memory, renderer-fed project registry — source for `GET /projects`
     /// + `switch_project` cwd resolution. Empty on the standalone path.
     pub registry: Arc<ProjectRegistry>,
-    /// In-memory, renderer-fed chat-history cache (Epic-4 bridge) — source for
+    /// Durable, disk-backed Rust chat-history store — source for
     /// `list_persisted_sessions` + `get_session_payload` + switch-back reopen
     /// on the desktop-hosted path. `None` on the standalone VPS (which uses
     /// file-backed `SessionPersistence` for Story 4.3).
@@ -947,8 +947,8 @@ async fn handle_list_persisted_sessions(
 }
 
 /// `get_session_payload` — fetch the FULL stored transcript (`{ metadata,
-/// messages }`) for a session id. Desktop-hosted path reads the renderer-fed
-/// in-memory cache; the standalone VPS falls through to `SessionPersistence`
+/// messages }`) for a session id. Desktop-hosted path reads the durable Rust
+/// history store; the standalone VPS falls through to `SessionPersistence`
 /// once Story 4.3 attaches its file-backed payload fetch. Returns
 /// `{ ok:false, err:'not_found' }` when the id is absent (web shows "chat
 /// unavailable").
@@ -1423,7 +1423,7 @@ async fn try_reopen_session_for_switch(
     target: &ProjectSwitchContext,
 ) -> Result<Option<SessionId>, String> {
     // Resolve the current agent's stable namespace (config id or safe
-    // fallback) so the cache filters candidates to sessions owned by the
+    // fallback) so the durable store filters candidates to sessions owned by the
     // SAME agent namespace — not just any resumable session for
     // (project_id, cwd). Falls back to the unfiltered lookup when the
     // namespace cannot be resolved (agent unknown / has no stable
@@ -1437,7 +1437,7 @@ async fn try_reopen_session_for_switch(
         return Ok(None);
     };
     let session_id = SessionId(entry.id.clone());
-    // Prefer resume; fall back to load. The cache's `resumeEligible` flag
+    // Prefer resume; fall back to load. The store's `resumeEligible` flag
     // only guarantees the session has SOME stable agent namespace — it does
     // NOT guarantee that namespace matches the current agent. The
     // `agent_namespace` filter above (patch #4) narrows candidates to the
@@ -1496,7 +1496,7 @@ async fn execute_project_switch(
     let mcp_server_count = target.mcp_servers.len();
     // Switch-back reopen (Epic-4 bridge): before minting a new session, look up
     // the most-recent resumable session for the target `(project_id, cwd)` in
-    // the renderer-fed cache. If found AND the agent has the `load`/`resume`
+    // the durable Rust history store. If found AND the agent has the `load`/`resume`
     // capability, reopen it so the web client restores the previous
     // conversation instead of starting a blank chat (mirrors desktop's
     // "restore the last tab"). Falls back to `new_session_with_context` when

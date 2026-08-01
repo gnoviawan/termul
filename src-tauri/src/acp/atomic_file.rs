@@ -49,7 +49,9 @@ pub fn backup_corrupt(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     for attempt in 0..1000u32 {
         let backup = path.with_file_name(format!(
             "{}.corrupt-{}-{attempt}.bak",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("artifact"),
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("artifact"),
             unique_suffix()
         ));
         match fs::OpenOptions::new()
@@ -76,7 +78,9 @@ pub fn backup_corrupt(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
 fn temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(
         "{}.{}.{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("artifact"),
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("artifact"),
         std::process::id(),
         unique_suffix()
     ))

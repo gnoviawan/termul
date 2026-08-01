@@ -211,12 +211,12 @@ impl ChatHistoryStore {
         let (mut entry, message_count) = validate_payload(&payload, Some(session_id))?;
         entry.message_count = message_count;
         let path = self.payload_path(session_id)?;
-        let previous_payload = fs::read(&path).ok();
         let file = PayloadFile {
             schema_version: CHAT_HISTORY_SCHEMA_VERSION,
             payload,
         };
         let mut state = self.state.lock();
+        let previous_payload = fs::read(&path).ok();
         atomic_file::replace(&path, &serde_json::to_vec_pretty(&file)?)?;
         let mut sessions = state.sessions.clone();
         sessions.retain(|existing| existing.id != session_id);
@@ -239,8 +239,8 @@ impl ChatHistoryStore {
     pub fn delete(&self, session_id: &str) -> Result<()> {
         validate_session_id(session_id)?;
         let path = self.payload_path(session_id)?;
-        let previous_payload = fs::read(&path).ok();
         let mut state = self.state.lock();
+        let previous_payload = fs::read(&path).ok();
         match fs::remove_file(&path) {
             Ok(()) => sync_dir(&self.root.join(PAYLOADS_DIR))?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -379,7 +379,8 @@ fn recover_payload_index(root: &Path) -> Result<Vec<ChatHistoryIndexEntry>> {
             }
             Ok(_)
             | Err(ChatHistoryStoreError::Json(_))
-            | Err(ChatHistoryStoreError::InvalidPayload(_)) => {
+            | Err(ChatHistoryStoreError::InvalidPayload(_))
+            | Err(ChatHistoryStoreError::UnsupportedVersion { .. }) => {
                 quarantine(&path, &bytes)?;
             }
             Err(error) => return Err(error),
@@ -542,6 +543,33 @@ mod tests {
     }
 
     #[test]
+    fn recovery_quarantines_unsupported_payload_versions_and_keeps_valid_sessions() {
+        let root = temp_dir("unsupported-payload-recovery");
+        let store = ChatHistoryStore::open(root.clone()).unwrap();
+        store.save("good", payload("good", 2)).unwrap();
+        drop(store);
+        fs::remove_file(root.join(INDEX_FILE)).unwrap();
+        let future_path = root
+            .join(PAYLOADS_DIR)
+            .join(canonical_payload_name("future"));
+        fs::write(
+            &future_path,
+            br#"{"schemaVersion":99,"payload":{"metadata":{"id":"future"}}}"#,
+        )
+        .unwrap();
+
+        let reopened = ChatHistoryStore::open(root.clone()).unwrap();
+        assert_eq!(reopened.list().0.len(), 1);
+        assert_eq!(reopened.list().0[0].id, "good");
+        assert!(!future_path.exists());
+        assert!(fs::read_dir(root.join(PAYLOADS_DIR))
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains("corrupt-")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn session_id_bound_keeps_filename_component_safe() {
         assert!(validate_session_id(&"x".repeat(MAX_SESSION_ID_BYTES)).is_ok());
         assert!(matches!(
@@ -571,6 +599,7 @@ mod tests {
     #[test]
     fn find_most_recent_filters_and_breaks_ties() {
         let store = ChatHistoryStore::new();
+        let root = store.root().to_path_buf();
         for value in [
             payload_with("old", Some("one"), "p", "/a", 1),
             payload_with("new", Some("one"), "p", "/a", 5),
@@ -612,6 +641,8 @@ mod tests {
                 .id,
             "b"
         );
+        drop(store);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -418,6 +418,24 @@ describe('serialized save/delete/close barriers', () => {
     expect(mockHistoryApi.delete).toHaveBeenCalledWith('deleted')
   })
 
+  it('rejects a queued delete failure and keeps the tombstone until a successful retry', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockHistoryApi.delete.mockRejectedValueOnce(new Error('delete failed'))
+
+    await expect(queueSessionPayloadDelete('recreated')).rejects.toThrow('delete failed')
+    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'blocked')]))
+    expect(mockHistoryApi.save).not.toHaveBeenCalledWith('recreated', expect.anything())
+
+    await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
+    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'saved')]))
+    await waitForPendingSessionIndexWrite()
+    expect(mockHistoryApi.save).toHaveBeenCalledWith(
+      'recreated',
+      expect.objectContaining({ messages: [msg('user', 'saved')] })
+    )
+    consoleError.mockRestore()
+  })
+
   it('flush waits for a gated tracked session save before invoking Rust flush', async () => {
     let releaseSave!: () => void
     mockHistoryApi.save.mockImplementationOnce(

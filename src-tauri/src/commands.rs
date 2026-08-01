@@ -3187,7 +3187,8 @@ pub async fn acp_history_get(
     session_id: String,
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
 ) -> Result<IpcResult<Option<serde_json::Value>>, String> {
-    log::info!("[acp-history] get start session_id={}", session_id);
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] get start session_id={}", log_session_id);
     let task_store = store.inner().clone();
     let task_id = session_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || task_store.get(&task_id))
@@ -3195,17 +3196,17 @@ pub async fn acp_history_get(
         .map_err(|error| error.to_string())?;
     match result {
         Ok(payload) => {
-            log::info!("[acp-history] get success session_id={}", session_id);
+            log::info!("[acp-history] get success session_id={}", log_session_id);
             Ok(IpcResult::success(Some(payload)))
         }
         Err(crate::acp::ChatHistoryStoreError::SessionNotFound) => {
-            log::info!("[acp-history] get not_found session_id={}", session_id);
+            log::info!("[acp-history] get not_found session_id={}", log_session_id);
             Ok(IpcResult::success(None))
         }
         Err(error) => {
             log::error!(
                 "[acp-history] get failure session_id={} error={}",
-                session_id,
+                log_session_id,
                 error
             );
             Ok(IpcResult::error(
@@ -3223,7 +3224,8 @@ pub async fn acp_history_save(
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    log::info!("[acp-history] save start session_id={}", session_id);
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] save start session_id={}", log_session_id);
     let task_store = store.inner().clone();
     let task_id = session_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || task_store.save(&task_id, payload))
@@ -3232,13 +3234,13 @@ pub async fn acp_history_save(
     match result {
         Ok(()) => {
             crate::web::broadcast_chat_history_changed(ws_relay.inner());
-            log::info!("[acp-history] save success session_id={}", session_id);
+            log::info!("[acp-history] save success session_id={}", log_session_id);
             Ok(IpcResult::success(()))
         }
         Err(error) => {
             log::error!(
                 "[acp-history] save failure session_id={} error={}",
-                session_id,
+                log_session_id,
                 error
             );
             Ok(IpcResult::error(
@@ -3255,7 +3257,8 @@ pub async fn acp_history_delete(
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    log::info!("[acp-history] delete start session_id={}", session_id);
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] delete start session_id={}", log_session_id);
     let task_store = store.inner().clone();
     let task_id = session_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || task_store.delete(&task_id))
@@ -3264,13 +3267,13 @@ pub async fn acp_history_delete(
     match result {
         Ok(()) => {
             crate::web::broadcast_chat_history_changed(ws_relay.inner());
-            log::info!("[acp-history] delete success session_id={}", session_id);
+            log::info!("[acp-history] delete success session_id={}", log_session_id);
             Ok(IpcResult::success(()))
         }
         Err(error) => {
             log::error!(
                 "[acp-history] delete failure session_id={} error={}",
-                session_id,
+                log_session_id,
                 error
             );
             Ok(IpcResult::error(
@@ -3310,7 +3313,12 @@ pub async fn acp_history_mark_legacy_import_complete(
     store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
 ) -> Result<IpcResult<()>, String> {
     log::info!("[acp-history] legacy marker start");
-    match store.mark_legacy_import_complete() {
+    let task_store = store.inner().clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || task_store.mark_legacy_import_complete())
+            .await
+            .map_err(|error| error.to_string())?;
+    match result {
         Ok(()) => {
             log::info!("[acp-history] legacy marker success");
             Ok(IpcResult::success(()))

@@ -95,7 +95,10 @@ pub fn delete_credentials(profile_id: &str) -> Result<(), String> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!("Failed to delete credentials: {}", errors.join("; ")))
+        Err(format!(
+            "Failed to delete credentials: {}",
+            errors.join("; ")
+        ))
     }
 }
 
@@ -109,8 +112,8 @@ pub fn delete_credentials(profile_id: &str) -> Result<(), String> {
 pub fn self_test() -> Result<(), String> {
     let key = format!("__selftest-{}", uuid::Uuid::new_v4());
     let probe = "ok";
-    let entry = Entry::new(SERVICE_NAME, &key)
-        .map_err(|e| format!("keyring unavailable: {}", e))?;
+    let entry =
+        Entry::new(SERVICE_NAME, &key).map_err(|e| format!("keyring unavailable: {}", e))?;
     entry
         .set_password(probe)
         .map_err(|e| format!("keyring write failed: {}", e))?;

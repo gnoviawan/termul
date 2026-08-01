@@ -283,10 +283,7 @@ fn resolve_request_path(path: &Path) -> Result<PathBuf, (String, &'static str)> 
         let canonical_parent = loop {
             let Some(parent) = ancestor.parent() else {
                 return Err((
-                    format!(
-                        "path '{}' has no existing ancestor",
-                        path.display()
-                    ),
+                    format!("path '{}' has no existing ancestor", path.display()),
                     "READ_ERROR",
                 ));
             };
@@ -536,57 +533,58 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
         Err((msg, code)) => {
-            return (StatusCode::OK, Json(IpcBody::<FileContentDto>::err(msg, code)));
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<FileContentDto>::err(msg, code)),
+            );
         }
     };
-    let result = tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
-        let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
-        if metadata.is_dir() {
-            return Err((
-                "cannot read a directory as a file".to_string(),
-                "READ_ERROR",
-            ));
-        }
-        let size = metadata.len();
-        if size > MAX_FILE_SIZE {
-            return Err((
-                format!("File too large ({size} bytes, max {MAX_FILE_SIZE})"),
-                "FILE_TOO_LARGE",
-            ));
-        }
-        let modified_at = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let bytes = fs::read(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
-        // Binary detection: control bytes (0x00-0x08) in the first 512
-        // bytes — mirrors the renderer's `isBinaryFile` regex `/[\x00-\x08]/`
-        // so the web path rejects binaries exactly like desktop.
-        let sample_end = bytes.len().min(512);
-        if bytes[..sample_end].iter().any(|&b| b <= 0x08) {
-            return Err((
-                "Binary file cannot be displayed".to_string(),
-                "BINARY_FILE",
-            ));
-        }
-        // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
-        // would replace invalid bytes with U+FFFD and let the editor save the
-        // corrupted content back over the original file. Desktop's
-        // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
-        // contract so the web path never silently corrupts a file.
-        let content = String::from_utf8(bytes)
-            .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
-        Ok(FileContentDto {
-            content,
-            encoding: "utf-8".to_string(),
-            size,
-            modified_at,
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
+            let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+            if metadata.is_dir() {
+                return Err((
+                    "cannot read a directory as a file".to_string(),
+                    "READ_ERROR",
+                ));
+            }
+            let size = metadata.len();
+            if size > MAX_FILE_SIZE {
+                return Err((
+                    format!("File too large ({size} bytes, max {MAX_FILE_SIZE})"),
+                    "FILE_TOO_LARGE",
+                ));
+            }
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let bytes = fs::read(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+            // Binary detection: control bytes (0x00-0x08) in the first 512
+            // bytes — mirrors the renderer's `isBinaryFile` regex `/[\x00-\x08]/`
+            // so the web path rejects binaries exactly like desktop.
+            let sample_end = bytes.len().min(512);
+            if bytes[..sample_end].iter().any(|&b| b <= 0x08) {
+                return Err(("Binary file cannot be displayed".to_string(), "BINARY_FILE"));
+            }
+            // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
+            // would replace invalid bytes with U+FFFD and let the editor save the
+            // corrupted content back over the original file. Desktop's
+            // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
+            // contract so the web path never silently corrupts a file.
+            let content = String::from_utf8(bytes)
+                .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
+            Ok(FileContentDto {
+                content,
+                encoding: "utf-8".to_string(),
+                size,
+                modified_at,
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("read task failed: {e}"));
+        .await
+        .map_err(|e| format!("read task failed: {e}"));
     let body = match result {
         Ok(Ok(fc)) => IpcBody::ok(fc),
         Ok(Err((msg, code))) => IpcBody::<FileContentDto>::err(msg, code),
@@ -1370,7 +1368,11 @@ mod tests {
         let resp = post_json(test_state_with_root(root.path()), "/fs/mkdir", &req_body).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "mkdir outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "mkdir outside root should succeed: {:?}",
+            body.error
+        );
         assert!(target.is_dir(), "directory outside root must be created");
     }
 
@@ -1403,7 +1405,11 @@ mod tests {
         let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "pwn" });
         let resp = post_json(test_state_with_root(root.path()), "/fs/write", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "write outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "write outside root should succeed: {:?}",
+            body.error
+        );
         assert!(target.exists(), "file outside root must be written");
         assert_eq!(fs::read_to_string(&target).unwrap(), "pwn");
     }
@@ -1422,7 +1428,11 @@ mod tests {
         );
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "ls outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "ls outside root should succeed: {:?}",
+            body.error
+        );
         let entries = body.data.expect("entries");
         assert!(
             entries.iter().any(|e| e.name == "marker.txt"),
@@ -1522,7 +1532,11 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&target.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "read outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "read outside root should succeed: {:?}",
+            body.error
+        );
         assert_eq!(body.data.expect("content").content, "pwn");
     }
 
@@ -1533,7 +1547,10 @@ mod tests {
         let inside = root.path().join("sub");
         fs::create_dir_all(&inside).expect("mkdir inside");
         let traversal = inside.join("..").join("..").join("etc");
-        let uri = format!("/fs/read?path={}", urlencoding(&traversal.to_string_lossy()));
+        let uri = format!(
+            "/fs/read?path={}",
+            urlencoding(&traversal.to_string_lossy())
+        );
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "traversal must be refused");
@@ -1588,7 +1605,10 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "non-UTF-8 text must be refused, not lossy-decoded");
+        assert!(
+            !body.success,
+            "non-UTF-8 text must be refused, not lossy-decoded"
+        );
         assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
     }
 
@@ -1605,7 +1625,10 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "oversized file must be refused before reading");
+        assert!(
+            !body.success,
+            "oversized file must be refused before reading"
+        );
         assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
     }
 
@@ -1648,7 +1671,11 @@ mod tests {
         let req_body = serde_json::json!({ "path": target.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "delete outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "delete outside root should succeed: {:?}",
+            body.error
+        );
         assert!(!target.exists(), "file outside root must be deleted");
     }
 
@@ -1680,7 +1707,8 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = root.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(body.success, "rename must succeed");
@@ -1698,7 +1726,8 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = root.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json_from(
             test_state_with_root(root.path()),
             "/fs/rename",
@@ -1710,7 +1739,10 @@ mod tests {
         assert!(!body.success, "non-loopback rename must be refused");
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
         assert!(from.exists(), "refused rename must not move the source");
-        assert!(!to.exists(), "refused rename must not create the destination");
+        assert!(
+            !to.exists(),
+            "refused rename must not create the destination"
+        );
     }
 
     /// `/fs/rename` allows a destination outside the project root (the jail
@@ -1722,10 +1754,15 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = outside.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "rename to outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "rename to outside root should succeed: {:?}",
+            body.error
+        );
         assert!(!from.exists(), "source must be gone after rename");
         assert!(to.exists(), "destination must exist after rename");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
@@ -1738,7 +1775,8 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = root.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(body.success, "copy must succeed");
@@ -1755,7 +1793,8 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = root.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json_from(
             test_state_with_root(root.path()),
             "/fs/copy",
@@ -1780,10 +1819,15 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = outside.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "copy to outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "copy to outside root should succeed: {:?}",
+            body.error
+        );
         assert!(from.exists(), "source must remain after copy");
         assert!(to.exists(), "destination must exist after copy");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");

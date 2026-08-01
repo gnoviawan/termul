@@ -115,7 +115,9 @@ pub async fn acp_send_prompt(
     };
     // Desktop path: no client turn-id (the renderer's dedup is Tauri-event-
     // based; the WS `turnId` field is Story 1.8's web concern). Pass `None`.
-    manager.send_prompt(&agent_id, session_id, blocks, None).await
+    manager
+        .send_prompt(&agent_id, session_id, blocks, None)
+        .await
 }
 
 /// Cancel the active turn for a session.

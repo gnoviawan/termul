@@ -1095,14 +1095,9 @@ function persistSession(
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
   const payload: SessionPayload = { metadata: entry, messages }
-  // Track the index write so the close path (closeAppWithPersistenceFlush)
-  // can await it before window.destroy(). trackPendingIndexWrite takes a
-  // factory so the write does not start until prior tracked writes finish —
-  // this serializes overlapping persist/delete writes to the same Tauri Store
-  // key and prevents a stale write from landing last. Errors are logged inside
-  // the tracker. The payload write below uses writeDebounced() and is covered
-  // by flushPendingWrites(); the index write uses write() (non-debounced) and
-  // is NOT covered, hence the explicit tracking.
+  // Rust owns the durable index and updates it with the payload in the queued
+  // save. saveSessionIndexToDisk remains a compatibility no-op for non-desktop
+  // callers while queueSessionPayloadSave owns the serialized durable write.
   void saveSessionIndexToDisk(nextIndex)
   void queueSessionPayloadSave(sessionId, payload)
 }
@@ -3319,36 +3314,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)
     const next = get().sessionIndex.filter((e) => e.id !== id)
-    set((s) => {
-      // If the chat is open in a pane, mark its live session closed so the pane
-      // reflects the deletion instead of showing stale content.
-      const sessions = { ...s.sessions }
-      if (sessions[id]) {
-        sessions[id] = {
-          ...sessions[id],
-          status: 'closed',
-          activeTurn: false,
-          openTurnId: null,
-          replaying: null
-        }
-      }
-      return {
-        sessionIndex: next,
-        sessions,
-        openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
-        discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
-        ...dropSessionTranscriptState(s, id)
-      }
-    })
-    // Reclaim any app-owned temp files staged for this session.
-    void deleteSessionTempFiles(id)
     try {
-      // Await the tracked index write (serialized with other index writes) so
-      // the index reflects the deletion before the payload is removed. The
-      // tracker swallows/logs index-write errors, so this await resolves even
-      // on failure; deleteSessionPayload failures are caught below.
-      await saveSessionIndexToDisk(next)
       await queueSessionPayloadDelete(id)
+      set((s) => {
+        // Only publish deletion after the Rust store confirms the durable
+        // payload/index removal, so a failed delete cannot diverge on restart.
+        const sessions = { ...s.sessions }
+        if (sessions[id]) {
+          sessions[id] = {
+            ...sessions[id],
+            status: 'closed',
+            activeTurn: false,
+            openTurnId: null,
+            replaying: null
+          }
+        }
+        return {
+          sessionIndex: next,
+          sessions,
+          openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
+          discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
+          ...dropSessionTranscriptState(s, id)
+        }
+      })
+      // Reclaim any app-owned temp files staged for this session.
+      void deleteSessionTempFiles(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)
     }

@@ -35,9 +35,8 @@ use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
     McpServer, ModelId, NewSessionRequest, PromptRequest, ProtocolVersion,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome,
-    SessionConfigOption, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    SetSessionModelRequest, StopReason,
+    ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionModelState,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
@@ -299,7 +298,9 @@ impl agent_client_protocol::JsonRpcMessage for AskUserQuestionRequest {
         "_session/question"
     }
 
-    fn to_untyped_message(&self) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
+    fn to_untyped_message(
+        &self,
+    ) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
         agent_client_protocol::UntypedMessage::new("_session/question", self)
     }
 
@@ -619,10 +620,7 @@ impl AcpManager {
     /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
     /// unknown. Used by the switch-back reopen filter so only sessions owned
     /// by the same agent namespace are candidates (patch #4).
-    pub fn stable_agent_namespace(
-        &self,
-        agent_id: &AgentId,
-    ) -> Result<Option<String>, String> {
+    pub fn stable_agent_namespace(&self, agent_id: &AgentId) -> Result<Option<String>, String> {
         self.agents
             .lock()
             .get(agent_id)
@@ -1722,8 +1720,7 @@ async fn run_command_loop(
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
             let auth_methods = to_auth_method_infos(&response.auth_methods);
-            let auth_method_ids: Vec<&str> =
-                auth_methods.iter().map(|m| m.id.as_str()).collect();
+            let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
@@ -1837,27 +1834,21 @@ async fn run_command_loop(
                             // See: https://github.com/svkozak/pi-acp/issues/94
                             let warmup_timeout = first_prompt_warmup_timeout();
                             if warmup_timeout.as_secs() > 0 {
-                                let warmup_content = vec![
-                                    agent_client_protocol::schema::ContentBlock::Text(
+                                let warmup_content =
+                                    vec![agent_client_protocol::schema::ContentBlock::Text(
                                         agent_client_protocol::schema::TextContent::new(
                                             " ".to_string(),
                                         ),
-                                    ),
-                                ];
-                                let warmup_request = PromptRequest::new(
-                                    &session_id,
-                                    warmup_content,
-                                );
+                                    )];
+                                let warmup_request =
+                                    PromptRequest::new(&session_id, warmup_content);
                                 log::info!(
                                     "[acp] {req_agent_id} first-prompt warmup started \
                                      (timeout {warmup_timeout:?})"
                                 );
-                                let warmup =
-                                    req_cx.send_request(warmup_request).block_task();
+                                let warmup = req_cx.send_request(warmup_request).block_task();
                                 tokio::pin!(warmup);
-                                match tokio::time::timeout(warmup_timeout, &mut warmup)
-                                    .await
-                                {
+                                match tokio::time::timeout(warmup_timeout, &mut warmup).await {
                                     Ok(Ok(_response)) => {
                                         log::info!(
                                             "[acp] {req_agent_id} first-prompt warmup \
@@ -1879,9 +1870,7 @@ async fn run_command_loop(
                                         // Signal cancel so pi-acp's in-flight
                                         // warmup turn can settle.
                                         let _ = req_cx
-                                            .send_notification(
-                                                CancelNotification::new(&session_id),
-                                            )
+                                            .send_notification(CancelNotification::new(&session_id))
                                             .map_err(|e| {
                                                 log::debug!(
                                                     "[acp] warmup cancel notification \
@@ -1895,11 +1884,7 @@ async fn run_command_loop(
                                         // pending turn in pi-acp when the user
                                         // sends their first prompt. Mirrors the
                                         // SendPrompt handler's cancel-grace race.
-                                        match tokio::time::timeout(
-                                            CANCEL_GRACE,
-                                            &mut warmup,
-                                        )
-                                        .await
+                                        match tokio::time::timeout(CANCEL_GRACE, &mut warmup).await
                                         {
                                             Ok(Ok(_)) => {
                                                 log::info!(
@@ -2066,7 +2051,8 @@ async fn run_command_loop(
                         }
                         // Issue #411: resolve outstanding questions for the
                         // closed session as cancelled too.
-                        let pending_questions = req_state.lock().finish_turn_questions(&session_id.0);
+                        let pending_questions =
+                            req_state.lock().finish_turn_questions(&session_id.0);
                         for question in pending_questions {
                             let _ = question.responder.respond(serde_json::json!({
                                 "questionId": question.question_id,
@@ -2280,7 +2266,10 @@ async fn run_command_loop(
             }
 
             AcpCommand::OwnsSession { session_id, reply } => {
-                let _ = reply.send(Ok(driver_state.lock().session_root(&session_id.0).is_some()));
+                let _ = reply.send(Ok(driver_state
+                    .lock()
+                    .session_root(&session_id.0)
+                    .is_some()));
             }
 
             AcpCommand::IsTurnActive { session_id, reply } => {
@@ -2442,8 +2431,7 @@ async fn run_command_loop(
                         let _ = reply.send(result.map_err(|e| e.to_string()));
                     }
                     None => {
-                        let _ =
-                            reply.send(Err(format!("unknown question request: {question_id}")));
+                        let _ = reply.send(Err(format!("unknown question request: {question_id}")));
                     }
                 }
             }
@@ -2738,32 +2726,28 @@ mod tests {
         let response = LoadSessionResponse::new()
             .modes(modes.clone())
             .config_options(Vec::<SessionConfigOption>::new());
-        let outcome = run_session_reopen(
-            "session/load",
-            "sess-load",
-            "/work",
-            &state,
-            async move { Ok::<_, String>(response) },
-        )
-        .await
-        .unwrap();
+        let outcome =
+            run_session_reopen("session/load", "sess-load", "/work", &state, async move {
+                Ok::<_, String>(response)
+            })
+            .await
+            .unwrap();
 
         assert_eq!(outcome.modes, Some(modes));
         assert_eq!(outcome.models, None);
         assert_eq!(outcome.config_options, Some(vec![]));
-        assert_eq!(state.lock().session_root("sess-load"), Some(PathBuf::from("/work")));
+        assert_eq!(
+            state.lock().session_root("sess-load"),
+            Some(PathBuf::from("/work"))
+        );
     }
 
     #[tokio::test]
     async fn session_resume_reopen_preserves_omitted_fields() {
         let state = Mutex::new(DriverState::new());
-        let outcome = run_session_reopen(
-            "session/resume",
-            "sess-resume",
-            "/work",
-            &state,
-            async { Ok::<_, String>(ResumeSessionResponse::new()) },
-        )
+        let outcome = run_session_reopen("session/resume", "sess-resume", "/work", &state, async {
+            Ok::<_, String>(ResumeSessionResponse::new())
+        })
         .await
         .unwrap();
 
@@ -2775,7 +2759,10 @@ mod tests {
                 config_options: None,
             }
         );
-        assert_eq!(serde_json::to_value(&outcome).unwrap(), serde_json::json!({}));
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).

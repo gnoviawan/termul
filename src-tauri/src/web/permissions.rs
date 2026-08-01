@@ -268,17 +268,17 @@ impl PermissionRendezvous {
     pub fn cancel_disconnect_grace(&self, session_id: &str) {
         if let Some((_, cancel)) = self.disconnect_graces.lock().remove(session_id) {
             let _ = cancel.send(());
-            tracing::info!(session_id, "permission disconnect grace cancelled after resubscribe");
+            tracing::info!(
+                session_id,
+                "permission disconnect grace cancelled after resubscribe"
+            );
         }
     }
 
     /// Arm a bounded last-subscriber grace. Expiry rechecks the relay count;
     /// the original per-ticket timeout remains armed throughout.
-    pub fn schedule_disconnect_grace<F>(
-        self: &Arc<Self>,
-        session_id: String,
-        subscriber_count: F,
-    ) where
+    pub fn schedule_disconnect_grace<F>(self: &Arc<Self>, session_id: String, subscriber_count: F)
+    where
         F: Fn(&str) -> usize + Send + Sync + 'static,
     {
         static GRACE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -302,18 +302,30 @@ impl PermissionRendezvous {
             // schedule may have replaced us while the timeout was expiring.
             let is_latest = {
                 let graces = this.disconnect_graces.lock();
-                graces.get(&session_id).is_some_and(|(gen, _)| *gen == generation)
+                graces
+                    .get(&session_id)
+                    .is_some_and(|(gen, _)| *gen == generation)
             };
             if !is_latest {
-                tracing::info!(session_id, "permission disconnect grace superseded; skipping deny");
+                tracing::info!(
+                    session_id,
+                    "permission disconnect grace superseded; skipping deny"
+                );
                 return;
             }
             this.disconnect_graces.lock().remove(&session_id);
             if subscriber_count(&session_id) != 0 {
-                tracing::info!(session_id, "permission disconnect grace expired with subscriber restored");
+                tracing::info!(
+                    session_id,
+                    "permission disconnect grace expired with subscriber restored"
+                );
                 return;
             }
-            tracing::warn!(session_id, grace_ms = grace.as_millis(), "permission disconnect grace expired; denying pending tickets");
+            tracing::warn!(
+                session_id,
+                grace_ms = grace.as_millis(),
+                "permission disconnect grace expired; denying pending tickets"
+            );
             this.deny_orphaned_session(&session_id).await;
         };
         match &self.handle {
@@ -1495,11 +1507,7 @@ mod tests {
                 ]),
             );
             let ok = rdz
-                .try_respond(
-                    client,
-                    "q-multi",
-                    Some(&["a".to_string(), "b".to_string()]),
-                )
+                .try_respond(client, "q-multi", Some(&["a".to_string(), "b".to_string()]))
                 .await;
             assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
         });
