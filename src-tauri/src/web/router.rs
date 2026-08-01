@@ -21,6 +21,7 @@ use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::chat_history_cache::ChatHistoryCache;
 use crate::web::fs_api;
+use crate::web::mcp_servers_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
@@ -66,6 +67,10 @@ pub fn router(
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
         .route("/projects", get(projects_api::list))
+        .route(
+            "/mcp-servers",
+            get(mcp_servers_api::get).put(mcp_servers_api::put),
+        )
         // Project-creation fs/git/shell routes (Story: Web/remote project
         // creation). Registered AHEAD of the static fallback so `/health` +
         // `/ws` keep priority and the SPA fallback cannot shadow them.
@@ -118,6 +123,10 @@ pub fn router_with_static(
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
         .route("/projects", get(projects_api::list))
+        .route(
+            "/mcp-servers",
+            get(mcp_servers_api::get).put(mcp_servers_api::put),
+        )
         .route("/fs/mkdir", post(fs_api::mkdir))
         .route("/fs/write", post(fs_api::write))
         .route("/fs/ls", get(fs_api::ls))

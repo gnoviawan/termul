@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Keyboard,
   Monitor,
+  Network,
   Palette,
   RotateCcw,
   Sliders,
@@ -21,6 +22,7 @@ import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
+import { McpServersSettings } from '@/components/settings/McpServersSettings'
 import {
   type SettingsCategory,
   SettingsLayout,
@@ -74,6 +76,7 @@ const APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'behavior', label: 'Terminal Behavior', icon: <Sliders size={16} /> },
   { id: 'project-defaults', label: 'New Project Defaults', icon: <Monitor size={16} /> },
   { id: 'ai-agents', label: 'AI Agents', icon: <Bot size={16} /> },
+  { id: 'mcp-servers', label: 'MCP Servers', icon: <Network size={16} /> },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', icon: <Keyboard size={16} /> },
   { id: 'updates', label: 'Updates', icon: <Download size={16} /> },
   { id: 'diagnostics', label: 'Diagnostics & Logs', icon: <FileText size={16} /> },
@@ -152,6 +155,12 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'AI Agents',
     description: 'View ACP agent availability and warm/auth status.',
     keywords: ['acp', 'agent', 'coding assistant']
+  },
+  {
+    categoryId: 'mcp-servers',
+    label: 'MCP Servers',
+    description: 'Manage global stdio, HTTP, and SSE servers for new agent sessions.',
+    keywords: ['mcp', 'model context protocol', 'stdio', 'http', 'sse']
   },
   {
     categoryId: 'shortcuts',
@@ -732,6 +741,23 @@ export default function AppPreferences(): React.JSX.Element {
               </div>
               <div className="w-2/3">
                 <AcpAgentsSettings />
+              </div>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="mcp-servers">
+            <div className="flex flex-col gap-6 border-b border-border pb-6 lg:flex-row lg:items-start">
+              <div className="w-full pt-1 lg:w-1/3">
+                <div className="flex items-center gap-2">
+                  <Network size={18} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">MCP Servers</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Configure global MCP servers for capability-aware injection into new chats.
+                </p>
+              </div>
+              <div className="w-full lg:w-2/3">
+                <McpServersSettings />
               </div>
             </div>
           </SettingsSection>

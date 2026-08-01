@@ -18,6 +18,7 @@ pub mod assets;
 pub mod chat_history_cache;
 pub mod config;
 pub mod fs_api;
+pub mod mcp_servers_api;
 pub mod permissions;
 pub mod project_registry;
 pub mod projects_api;

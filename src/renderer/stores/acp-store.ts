@@ -94,7 +94,8 @@ import {
 import {
   loadMcpServers as loadMcpServersFromDisk,
   type StoredMcpServer,
-  saveMcpServers as saveMcpServersToDisk
+  saveMcpServers as saveMcpServersToDisk,
+  selectMcpServersForAgent
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 // Story 5.3 (AC3): used to register the WS reconnect listener that flips the
@@ -475,6 +476,7 @@ interface AcpState {
   // Actions — MCP server registry (P6)
   loadMcpServers: () => Promise<void>
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
+  setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
 
   // Actions — conversation
@@ -2415,7 +2417,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     try {
       // Authenticate (single unambiguous method) BEFORE session/new (P1).
       await authenticateBeforeSession(get, agentId)
-      const outcome = await acpApi.newSession(agentId, cwd, mcpServers)
+      const selection =
+        mcpServers === undefined
+          ? selectMcpServersForAgent(get().mcpServers, get().agents[agentId]?.capabilities)
+          : { servers: mcpServers, skipped: [] }
+      const sessionMcpServers = selection.servers
+      if (selection.skipped.length > 0) {
+        toast.warning('Some MCP servers were skipped', {
+          description: `${selection.skipped.map((server) => server.name).join(', ')} require HTTP or SSE support from this agent.`
+        })
+      }
+      const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers)
       const sessionId = outcome.sessionId
       invalidateSessionReopen(sessionId)
       set((s) => {
@@ -2433,7 +2445,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               status: existing?.status === 'closed' ? 'closed' : 'active',
               title: existing?.title ?? null,
               activeTurn: existing?.activeTurn ?? false,
-              mcpServerCount: mcpServers?.length ?? existing?.mcpServerCount ?? 0,
+              mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
               modes: outcome.modes ?? existing?.modes ?? null,
               models: outcome.models ?? existing?.models ?? null,
@@ -3646,31 +3658,67 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   loadMcpServers: async () => {
-    const list = await loadMcpServersFromDisk()
-    set({ mcpServers: list })
+    try {
+      const list = await loadMcpServersFromDisk()
+      set({ mcpServers: list })
+    } catch (err) {
+      void logFrontendError({
+        source: 'acp-store.loadMcpServers',
+        message: `Failed to load MCP registry (${String(err)})`
+      })
+      toast.error('Could not load MCP servers. Try reopening Settings.')
+    }
   },
 
   saveMcpServer: async (server) => {
     const list = get().mcpServers
-    const idx = list.findIndex((s) => s.id === server.id)
-    const next = idx === -1 ? [...list, server] : list.map((s) => (s.id === server.id ? server : s))
+    const idx = list.findIndex((item) => item.id === server.id)
+    const nextServer = { ...server, enabled: server.enabled ?? true }
+    const next =
+      idx === -1
+        ? [...list, nextServer]
+        : list.map((item) => (item.id === server.id ? nextServer : item))
     set({ mcpServers: next })
     try {
       await saveMcpServersToDisk(next)
     } catch (err) {
       set({ mcpServers: list })
+      void logFrontendError({
+        source: 'acp-store.saveMcpServer',
+        message: `Failed to persist MCP registry (${String(err)})`
+      })
+      throw err
+    }
+  },
+
+  setMcpServerEnabled: async (id, enabled) => {
+    const list = get().mcpServers
+    const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
+    set({ mcpServers: next })
+    try {
+      await saveMcpServersToDisk(next)
+    } catch (err) {
+      set({ mcpServers: list })
+      void logFrontendError({
+        source: 'acp-store.setMcpServerEnabled',
+        message: `Failed to persist MCP registry toggle (${String(err)})`
+      })
       throw err
     }
   },
 
   deleteMcpServer: async (id) => {
     const list = get().mcpServers
-    const next = list.filter((s) => s.id !== id)
+    const next = list.filter((server) => server.id !== id)
     set({ mcpServers: next })
     try {
       await saveMcpServersToDisk(next)
     } catch (err) {
       set({ mcpServers: list })
+      void logFrontendError({
+        source: 'acp-store.deleteMcpServer',
+        message: `Failed to persist MCP registry deletion (${String(err)})`
+      })
       throw err
     }
   },

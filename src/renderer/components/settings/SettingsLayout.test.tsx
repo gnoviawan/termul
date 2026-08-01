@@ -50,12 +50,19 @@ beforeEach(() => {
 const categories: SettingsCategory[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'shell', label: 'Shell' },
+  { id: 'mcp-servers', label: 'MCP Servers' },
   { id: 'updates', label: 'Updates' }
 ]
 
 const searchIndex: SettingsSearchEntry[] = [
   { categoryId: 'appearance', label: 'Font Family', description: 'monospace font' },
   { categoryId: 'shell', label: 'Default Shell', keywords: ['bash'] },
+  {
+    categoryId: 'mcp-servers',
+    label: 'MCP Servers',
+    description: 'Manage stdio, HTTP, and SSE servers.',
+    keywords: ['model context protocol']
+  },
   { categoryId: 'updates', label: 'Auto-update', description: 'check for updates' }
 ]
 
@@ -67,6 +74,9 @@ function renderLayout() {
       </SettingsSection>
       <SettingsSection id="shell">
         <h2>Shell</h2>
+      </SettingsSection>
+      <SettingsSection id="mcp-servers">
+        <h2>MCP Servers</h2>
       </SettingsSection>
       <SettingsSection id="updates">
         <h2>Updates</h2>
@@ -121,6 +131,8 @@ describe('SettingsLayout', () => {
     const search = screen.getByLabelText('Search settings')
     fireEvent.change(search, { target: { value: 'bash' } })
     expect(screen.getByText('Default Shell')).toBeInTheDocument()
+    fireEvent.change(search, { target: { value: 'model context protocol' } })
+    expect(screen.getAllByText('MCP Servers').length).toBeGreaterThan(0)
   })
 
   it('shows an empty state when no settings match', () => {

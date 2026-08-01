@@ -92,7 +92,7 @@ export interface SessionReopenOutcome {
 export interface AgentCapabilities {
   loadSession?: boolean
   sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
-  mcpCapabilities?: { http?: boolean; sse?: boolean } | null
+  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
   promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
   [k: string]: unknown
 }

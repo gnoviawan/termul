@@ -67,6 +67,20 @@ async function getJson<T>(path: string): Promise<IpcResult<T>> {
   }
 }
 
+/** PUT JSON and return the typed `IpcResult` body (or NETWORK_ERROR). */
+async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
+  try {
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return await parseBody<T>(res)
+  } catch (err) {
+    return networkError(err instanceof Error ? err.message : String(err))
+  }
+}
+
 /** Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. */
 async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
   if (!res.ok) {
@@ -160,5 +174,16 @@ export const webServerShell = {
 export const webServerProjects = {
   async list(): Promise<IpcResult<ProjectListPayload>> {
     return getJson<ProjectListPayload>('/projects')
+  }
+}
+
+/** Global MCP registry persistence shared by standalone and desktop-hosted web clients. */
+export const webServerMcpServers = {
+  async get(): Promise<IpcResult<unknown>> {
+    return getJson<unknown>('/mcp-servers')
+  },
+
+  async put(registry: unknown[]): Promise<IpcResult<void>> {
+    return putJson<void>('/mcp-servers', registry)
   }
 }

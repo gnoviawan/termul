@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }))
+const { toastError, toastWarning } = vi.hoisted(() => ({
+  toastError: vi.fn(),
+  toastWarning: vi.fn()
+}))
 
 vi.mock('sonner', () => ({
-  toast: { error: toastError }
+  toast: { error: toastError, warning: toastWarning }
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -1825,7 +1828,7 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
-      mcpServers: undefined
+      mcpServers: []
     })
   })
 
@@ -2315,7 +2318,7 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
-      mcpServers: undefined
+      mcpServers: []
     })
   })
 
@@ -3610,6 +3613,63 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
     await useAcpStore.getState().deleteMcpServer('m1')
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
+  })
+
+  it('derives enabled MCP servers from capabilities when no override is supplied', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': { id: 'agent-1', capabilities: { mcpCapabilities: { http: false } } }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      mcpServers: [
+        { id: 'stdio', type: 'stdio', name: 'Files', command: 'node', enabled: true },
+        { id: 'http', type: 'http', name: 'Remote', url: 'https://x.test/mcp', enabled: true },
+        { id: 'off', type: 'stdio', name: 'Off', command: 'node', enabled: false }
+      ]
+    })
+    vi.mocked(invoke).mockResolvedValue({ sessionId: 'derived' })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-1',
+      cwd: '/work',
+      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node' }]
+    })
+    expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(1)
+    expect(toastWarning).toHaveBeenCalledWith(
+      'Some MCP servers were skipped',
+      expect.objectContaining({ description: expect.stringContaining('Remote') })
+    )
+  })
+
+  it('preserves an explicit empty MCP override instead of deriving the registry', async () => {
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: {} } },
+      agentStatus: { 'agent-1': 'connected' },
+      mcpServers: [{ id: 'stdio', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+    })
+    vi.mocked(invoke).mockResolvedValue({ sessionId: 'override' })
+    await useAcpStore.getState().createSession('agent-1', '/work', [], 'p1')
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-1',
+      cwd: '/work',
+      mcpServers: []
+    })
+    expect(toastWarning).not.toHaveBeenCalled()
+  })
+
+  it('rolls back an enable toggle when registry persistence fails', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm1', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+    })
+    await expect(useAcpStore.getState().setMcpServerEnabled('m1', false)).rejects.toThrow(
+      'disk full'
+    )
+    expect(useAcpStore.getState().mcpServers[0].enabled).toBe(true)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-store.setMcpServerEnabled' })
+    )
   })
 
   it('startChat forwards selected MCP servers to new_session (P6)', async () => {
