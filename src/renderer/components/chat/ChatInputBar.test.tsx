@@ -433,7 +433,9 @@ describe('ChatInputBar command chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove /compact command' }))
 
     // Chip should be gone
-    expect(screen.queryByRole('button', { name: 'Remove /compact command' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Remove /compact command' })
+    ).not.toBeInTheDocument()
   })
 
   it('opens the slash menu when / is typed with an active command chip', async () => {
@@ -497,7 +499,9 @@ describe('ChatInputBar command chip', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Remove /clear command' })).toBeInTheDocument()
     })
-    expect(screen.queryByRole('button', { name: 'Remove /compact command' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Remove /compact command' })
+    ).not.toBeInTheDocument()
   })
 
   it('sends just the command when no message is typed', async () => {

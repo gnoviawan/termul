@@ -32,6 +32,7 @@ import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -42,7 +43,6 @@ import {
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
-import { CommandChip } from './CommandChip'
 import { LoadedSkillChip } from './LoadedSkillChip'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
@@ -51,7 +51,6 @@ import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
   buildSlashSections,
   findSlashTrigger,
-  isSlashTrigger,
   isSlashTriggerAny,
   type SlashItem,
   slashFilter
@@ -240,7 +239,10 @@ export function ChatInputBar({
   const canSend =
     !disabled &&
     !sending &&
-    (value.trim().length > 0 || loadedSkill !== null || activeCommand !== null || attachments.length > 0)
+    (value.trim().length > 0 ||
+      loadedSkill !== null ||
+      activeCommand !== null ||
+      attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 

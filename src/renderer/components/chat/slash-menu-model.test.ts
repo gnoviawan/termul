@@ -125,7 +125,6 @@ describe('mid-text slash trigger detection', () => {
     expect(slashFilter('hello /')).toBe('')
     expect(slashFilter('ab/')).toBe('')
   })
-
 })
 
 describe('buildSlashSections', () => {

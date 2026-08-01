@@ -215,5 +215,3 @@ export function applyCommandToInput(value: string, commandName: string): string 
   // Defensive: if somehow not a trigger, append.
   return `${value}/${commandName} `
 }
-
-

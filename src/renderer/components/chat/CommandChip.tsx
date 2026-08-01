@@ -8,11 +8,7 @@ interface CommandChipProps {
 }
 
 /** Shows the active slash command above a prompt input as a chip. */
-export function CommandChip({
-  name,
-  onRemove,
-  className
-}: CommandChipProps): React.JSX.Element {
+export function CommandChip({ name, onRemove, className }: CommandChipProps): React.JSX.Element {
   return (
     <div className={cn('flex items-start gap-2 border-b border-border/40 px-4 py-1.5', className)}>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
