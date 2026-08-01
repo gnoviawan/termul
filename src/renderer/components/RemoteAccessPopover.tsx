@@ -5,10 +5,8 @@ import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { toProjectSummaries } from '@/hooks/use-projects-persistence'
-import { toPersistedSessionSummaries } from '@/lib/acp-history-persistence'
-import { remoteServerApi, syncChatHistory, syncProjects } from '@/lib/api'
+import { remoteServerApi, syncProjects } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
@@ -67,30 +65,8 @@ export function RemoteAccessPopover(): React.JSX.Element {
           if (!syncResult.success) {
             toast.error(`Failed to seed remote project list: ${syncResult.error}`)
           }
-          // Seed the chat-history cache (index + visible payloads) so the web
-          // sidebar shows the desktop's chats immediately (the live-push path
-          // in `useAcpHistorySync` + `persistSession` keeps it in sync).
-          // Await the session-index load first so the seed is not empty (the
-          // app-mount load in `useAcpHistory` may race with server-start).
-          await useAcpStore.getState().loadSessionIndex()
-          const { sessionIndex, messages } = useAcpStore.getState()
-          const payloads: Record<string, unknown> = {}
-          for (const entry of sessionIndex) {
-            if (entry.id in messages) {
-              payloads[entry.id] = { metadata: entry, messages: messages[entry.id] }
-            }
-          }
-          // Await + inspect (mirrors the projects seed above): a failed seed
-          // leaves the web sidebar empty until the live-push path in
-          // `useAcpHistorySync` + `persistSession` re-syncs — surface it.
-          // Remote access stays enabled; the live-push path recovers.
-          const chatResult = await syncChatHistory(
-            toPersistedSessionSummaries(sessionIndex),
-            Object.keys(payloads).length > 0 ? payloads : undefined
-          )
-          if (!chatResult.success) {
-            toast.error(`Failed to seed remote chat history: ${chatResult.error}`)
-          }
+          // Desktop-hosted browser history reads the durable Rust provider
+          // directly, so no renderer transcript seed is needed.
         }
       } else {
         setRemoteError(result.error)

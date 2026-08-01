@@ -15,7 +15,6 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
-pub mod chat_history_cache;
 pub mod config;
 pub mod fs_api;
 pub mod permissions;
@@ -26,7 +25,6 @@ pub mod sink;
 pub mod terminal_ws;
 pub mod ws;
 
-pub use chat_history_cache::ChatHistoryCache;
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
 pub use permissions::QuestionRendezvous;
@@ -34,12 +32,10 @@ pub use project_registry::{
     seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload,
 };
 pub use sink::{
-    broadcast_chat_history_changed, broadcast_projects_changed, fan_out, EventSink,
-    TauriEventSink, WsRelaySink,
+    broadcast_chat_history_changed, broadcast_projects_changed, fan_out, EventSink, TauriEventSink,
+    WsRelaySink,
 };
-pub use ws::{
-    AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode,
-};
+pub use ws::{AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode};
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -174,7 +170,7 @@ pub async fn serve_router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
-    chat_history_cache: Option<Arc<ChatHistoryCache>>,
+    chat_history_store: Option<Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
@@ -203,7 +199,7 @@ pub async fn serve_router(
     // attached (desktop-hosted) OR the file-backed persistence is attached
     // (standalone VPS, Story 4.3). Otherwise the web client negotiates
     // `live_only` (no stored transcript mirror).
-    let history_mode = if chat_history_cache.is_some() || ws_relay.persistence().is_some() {
+    let history_mode = if chat_history_store.is_some() || ws_relay.persistence().is_some() {
         HistoryMode::Server
     } else {
         HistoryMode::LiveOnly
@@ -217,7 +213,7 @@ pub async fn serve_router(
         exit_code_tracker,
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
-        chat_history_cache,
+        chat_history_store,
         registry_persistence,
         projects_file,
         cfg.project_root.clone(),

@@ -1,14 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mockTransport = {
-  historyMode: vi.fn(() => 'tauri_store' as const),
-  listPersistedSessions: vi.fn(),
-  openPersistedSession: vi.fn(),
-  getSessionPayload: vi.fn()
-}
+const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
+  mockTransport: {
+    historyMode: vi.fn(() => 'tauri_store' as const),
+    listPersistedSessions: vi.fn(),
+    openPersistedSession: vi.fn(),
+    getSessionPayload: vi.fn()
+  },
+  mockHistoryApi: {
+    list: vi.fn(),
+    get: vi.fn(),
+    save: vi.fn(),
+    delete: vi.fn(),
+    flush: vi.fn(),
+    markLegacyImportComplete: vi.fn()
+  }
+}))
 
 vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
-
+vi.mock('@/lib/acp-history-api', () => ({ acpHistoryApi: mockHistoryApi }))
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: vi.fn(),
@@ -21,20 +31,29 @@ vi.mock('@/lib/api', () => ({
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage } from '@/stores/acp-store'
 import {
+  _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
   deriveTitle,
+  flushSessionHistory,
+  getCachedSessionPayload,
   groupSessionsByRecency,
+  INACTIVE_PAYLOAD_CACHE_BUDGET,
   loadSessionIndex,
   loadSessionPayload,
+  markSessionPayloadPinned,
+  queueSessionPayloadDelete,
+  queueSessionPayloadSave,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
   type SessionIndexEntry,
+  type SessionPayload,
   saveSessionPayload,
   scopeSessionIndex,
   sessionPayloadKey,
+  setCachedSessionPayload,
   toPersistedSessionSummaries,
   trackPendingIndexWrite,
-  WIPE_MIGRATION_KEY,
+  unpinSessionPayload,
   waitForPendingSessionIndexWrite
 } from './acp-history-persistence'
 
@@ -42,69 +61,115 @@ function msg(role: ChatMessage['role'], text: string): ChatMessage {
   return { id: `m-${text}`, role, blocks: [{ type: 'text', text }], streaming: false, timestamp: 0 }
 }
 
-describe('deriveTitle', () => {
-  it('uses the first user message text', () => {
-    expect(deriveTitle([msg('agent', 'hi'), msg('user', 'Refactor the auth module')], 'a1')).toBe(
-      'Refactor the auth module'
-    )
+function entry(id: string, overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry {
+  return {
+    id,
+    agentId: 'agent-1',
+    agentConfigId: 'cfg-1',
+    title: `Chat ${id}`,
+    cwd: '/project',
+    projectId: 'project-1',
+    createdAt: 1,
+    lastActivityAt: 2,
+    messageCount: 0,
+    status: 'closed',
+    ...overrides
+  }
+}
+
+function payload(id: string, messages: ChatMessage[] = []): SessionPayload {
+  return { metadata: entry(id, { messageCount: messages.length }), messages }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  _clearPayloadCacheForTesting()
+  _resetPendingIndexWriteTrackerForTesting()
+  mockTransport.historyMode.mockReturnValue('tauri_store')
+  mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
+  mockHistoryApi.get.mockResolvedValue(null)
+  mockHistoryApi.save.mockResolvedValue(undefined)
+  mockHistoryApi.delete.mockResolvedValue(undefined)
+  mockHistoryApi.flush.mockResolvedValue(undefined)
+  mockHistoryApi.markLegacyImportComplete.mockResolvedValue(undefined)
+  ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+    success: false,
+    code: 'KEY_NOT_FOUND',
+    error: 'not found'
   })
-  it('truncates long titles', () => {
-    const long = 'x'.repeat(60)
-    expect(deriveTitle([msg('user', long)], 'a1')).toBe(`${'x'.repeat(40)}…`)
-  })
-  it('falls back to the provided title when no user message', () => {
-    expect(deriveTitle([msg('agent', 'hello')], 'Untitled Chat 1')).toBe('Untitled Chat 1')
-  })
+  ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+  ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
 })
 
-describe('groupSessionsByRecency', () => {
-  const now = new Date('2026-05-30T12:00:00').getTime()
-  function entry(id: string, lastActivityAt: number): SessionIndexEntry {
-    return {
-      id,
-      agentId: 'a',
-      title: id,
-      cwd: '',
-      projectId: 'p1',
-      createdAt: 0,
-      lastActivityAt,
-      messageCount: 0,
-      status: 'active'
-    }
-  }
-  it('buckets by today/yesterday/earlier and sorts newest-first', () => {
-    const today1 = new Date('2026-05-30T09:00:00').getTime()
-    const today2 = new Date('2026-05-30T11:00:00').getTime()
-    const yest = new Date('2026-05-29T10:00:00').getTime()
-    const old = new Date('2026-05-01T10:00:00').getTime()
+describe('pure history helpers', () => {
+  it('derives, truncates, and falls back for titles', () => {
+    expect(deriveTitle([msg('agent', 'hi'), msg('user', 'Refactor auth')], 'fallback')).toBe(
+      'Refactor auth'
+    )
+    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(40)}…`)
+    expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
+  })
+
+  it('groups by recency and scopes by project/cwd with fallback', () => {
+    const now = new Date('2026-05-30T12:00:00').getTime()
     const groups = groupSessionsByRecency(
-      [entry('t1', today1), entry('t2', today2), entry('y', yest), entry('o', old)],
+      [
+        entry('today', { lastActivityAt: new Date('2026-05-30T11:00:00').getTime() }),
+        entry('yesterday', { lastActivityAt: new Date('2026-05-29T11:00:00').getTime() }),
+        entry('old', { lastActivityAt: new Date('2026-05-01T11:00:00').getTime() })
+      ],
       now
     )
-    expect(groups.map((g) => g.group)).toEqual(['Today', 'Yesterday', 'Earlier'])
-    expect(groups[0].entries.map((e) => e.id)).toEqual(['t2', 't1']) // newest first
+    expect(groups.map(({ group }) => group)).toEqual(['Today', 'Yesterday', 'Earlier'])
+
+    const entries = [
+      entry('exact', { cwd: '/a' }),
+      entry('other-cwd', { cwd: '/b' }),
+      entry('other-project', { projectId: 'project-2', cwd: '/a' })
+    ]
+    expect(scopeSessionIndex(entries, 'project-1', '/a').map(({ id }) => id)).toEqual(['exact'])
+    expect(scopeSessionIndex(entries, 'project-1', '/missing').map(({ id }) => id)).toEqual([
+      'exact',
+      'other-cwd'
+    ])
+    expect(scopeSessionIndex(entries, '', '/a')).toEqual([])
   })
-  it('omits empty groups', () => {
-    const groups = groupSessionsByRecency([entry('o', new Date('2026-05-01').getTime())], now)
-    expect(groups.map((g) => g.group)).toEqual(['Earlier'])
+
+  it('preserves the existing browser summary wire shape', () => {
+    expect(toPersistedSessionSummaries([entry('s-1', { status: 'initializing' })])[0]).toEqual(
+      expect.objectContaining({
+        sessionId: 's-1',
+        stableAgentNamespace: 'config:cfg-1',
+        status: 'active',
+        resumeEligible: true
+      })
+    )
   })
 })
 
-describe('persistence I/O', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockTransport.historyMode.mockReturnValue('tauri_store')
+describe('provider routing', () => {
+  it('loads desktop index from the Rust facade, including fresh empty state', async () => {
+    mockHistoryApi.list.mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
+    await expect(loadSessionIndex()).resolves.toEqual([])
+    expect(mockHistoryApi.list).toHaveBeenCalledTimes(1)
+    expect(persistenceApi.read).not.toHaveBeenCalled()
+
+    mockHistoryApi.list.mockResolvedValueOnce({
+      sessions: [entry('stored')],
+      legacyImportComplete: true
+    })
+    await expect(loadSessionIndex()).resolves.toEqual([entry('stored')])
   })
 
-  it('loads safe summaries from the standalone server provider', async () => {
+  it('keeps standalone server and live-only behavior unchanged', async () => {
     mockTransport.historyMode.mockReturnValue('server')
     mockTransport.listPersistedSessions.mockResolvedValue([
       {
         storageKey: 'opaque',
-        sessionId: 's-server',
-        stableAgentNamespace: 'config:cfg-1',
+        sessionId: 'server-1',
+        stableAgentNamespace: 'config:cfg-server',
         runtimeAgentId: 'runtime-old',
-        projectId: 'p1',
+        projectId: 'project-1',
         cwd: '/srv/project',
         title: 'Server chat',
         createdAt: 1,
@@ -117,450 +182,319 @@ describe('persistence I/O', () => {
       }
     ])
     await expect(loadSessionIndex()).resolves.toEqual([
-      expect.objectContaining({ id: 's-server', agentConfigId: 'cfg-1', title: 'Server chat' })
+      expect.objectContaining({ id: 'server-1', agentConfigId: 'cfg-server' })
     ])
-    expect(persistenceApi.read).not.toHaveBeenCalled()
+    expect(mockHistoryApi.list).not.toHaveBeenCalled()
+
+    mockTransport.historyMode.mockReturnValue('live_only')
+    await expect(loadSessionIndex()).resolves.toEqual([])
   })
 
-  it('loadSessionIndex returns [] on KEY_NOT_FOUND', async () => {
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: false,
-      code: 'KEY_NOT_FOUND'
-    })
-    expect(await loadSessionIndex()).toEqual([])
+  it('routes desktop save/delete/flush to dedicated Rust commands', async () => {
+    const stored = payload('desktop', [msg('user', 'hi')])
+    await saveSessionPayload('desktop', stored)
+    expect(mockHistoryApi.save).toHaveBeenCalledWith('desktop', stored)
+
+    await flushSessionHistory()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
   })
 
-  it('loadSessionIndex returns the stored array', async () => {
-    const list: SessionIndexEntry[] = [
-      {
-        id: 's1',
-        agentId: 'a',
-        title: 'T',
-        cwd: '',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 1,
-        status: 'active'
-      }
-    ]
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true,
-      data: list
-    })
-    expect(await loadSessionIndex()).toEqual(list)
-    expect(persistenceApi.read).toHaveBeenCalledWith(SESSION_INDEX_KEY)
-  })
-
-  it('saveSessionPayload uses the debounced writer under the per-session key', async () => {
-    ;(persistenceApi.writeDebounced as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true
-    })
-    const payload = {
-      metadata: {
-        id: 's1',
-        agentId: 'a',
-        title: 'T',
-        cwd: '',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 0,
-        status: 'active' as const
-      },
-      messages: []
-    }
-    await saveSessionPayload('s1', payload)
-    expect(persistenceApi.writeDebounced).toHaveBeenCalledWith(sessionPayloadKey('s1'), payload)
+  it('always refetches payloads in server mode', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    mockTransport.getSessionPayload
+      .mockResolvedValueOnce(payload('server', [msg('user', 'one')]))
+      .mockResolvedValueOnce(payload('server', [msg('user', 'two')]))
+    expect((await loadSessionPayload('server'))?.messages[0].id).toBe('m-one')
+    expect((await loadSessionPayload('server'))?.messages[0].id).toBe('m-two')
+    expect(mockTransport.getSessionPayload).toHaveBeenCalledTimes(2)
   })
 })
 
-describe('runHistoryWipeMigration', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockTransport.historyMode.mockReturnValue('tauri_store')
+describe('bounded full-payload cache', () => {
+  it('evicts least-recent inactive entries and reloads them from Rust', async () => {
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`s-${index}`, payload(`s-${index}`, [msg('user', `${index}`)]))
+    }
+    expect(getCachedSessionPayload('s-0')).toBeUndefined()
+
+    mockHistoryApi.get.mockResolvedValueOnce(payload('s-0', [msg('user', 'reloaded')]))
+    await expect(loadSessionPayload('s-0')).resolves.toEqual(
+      payload('s-0', [msg('user', 'reloaded')])
+    )
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('s-0')
   })
 
-  it('is a no-op when the v2 flag is already true', async () => {
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true,
-      data: true
-    })
-    await runHistoryWipeMigration()
-    expect(persistenceApi.delete).not.toHaveBeenCalled()
-    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  it('pins trimmed live sessions in addition to the inactive budget', () => {
+    markSessionPayloadPinned('pinned')
+    setCachedSessionPayload('pinned', payload('pinned'))
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`inactive-${index}`, payload(`inactive-${index}`))
+    }
+    expect(getCachedSessionPayload('pinned')).toBeDefined()
+    expect(getCachedSessionPayload('inactive-0')).toBeUndefined()
+    unpinSessionPayload('pinned')
   })
 
-  it('deletes every payload, clears the index, and sets the flag on first run', async () => {
-    const stale: SessionIndexEntry[] = [
-      {
-        id: 'old-1',
-        agentId: 'a',
-        title: 'x',
-        cwd: '/p',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 1,
-        status: 'closed'
-      },
-      {
-        id: 'old-2',
-        agentId: 'a',
-        title: 'y',
-        cwd: '/p',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 2,
-        status: 'closed'
-      }
-    ]
+  it('loads and merges the durable prefix before an evicted cache-miss save', async () => {
+    const old = msg('user', 'old')
+    const retained = msg('agent', 'retained')
+    const latest = msg('agent', 'latest')
+    mockHistoryApi.get.mockResolvedValueOnce(payload('merge', [old, retained]))
+
+    await saveSessionPayload('merge', payload('merge', [retained, latest]))
+
+    expect(mockHistoryApi.save).toHaveBeenCalledWith(
+      'merge',
+      expect.objectContaining({ messages: [old, retained, latest] })
+    )
+    expect(getCachedSessionPayload('merge')?.messages).toEqual([old, retained, latest])
+  })
+})
+
+describe('legacy import', () => {
+  const old1 = payload('old-1', [msg('user', 'one')])
+  const old2 = payload('old-2', [msg('user', 'two'), msg('agent', 'reply')])
+  const index = [old1.metadata, old2.metadata]
+
+  function mockLegacyReads(): void {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // flag not set
-      .mockResolvedValueOnce({ success: true, data: stale }) // index read
-    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+      .mockResolvedValueOnce({ success: true, data: index })
+      .mockResolvedValueOnce({ success: true, data: old1 })
+      .mockResolvedValueOnce({ success: true, data: old2 })
+  }
+
+  it('round-trips every payload before deleting only ACP history keys', async () => {
+    mockLegacyReads()
+    mockHistoryApi.list
+      .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
+      .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
+    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
 
     await runHistoryWipeMigration()
 
+    expect(mockHistoryApi.save).toHaveBeenNthCalledWith(1, 'old-1', old1)
+    expect(mockHistoryApi.save).toHaveBeenNthCalledWith(2, 'old-2', old2)
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('old-1')
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('old-2')
     expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-1'))
     expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-2'))
-    expect(persistenceApi.write).toHaveBeenCalledWith(SESSION_INDEX_KEY, [])
-    expect(persistenceApi.write).toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+    expect(persistenceApi.delete).toHaveBeenCalledWith(SESSION_INDEX_KEY)
+    expect(persistenceApi.delete).toHaveBeenCalledTimes(3)
+    expect(mockHistoryApi.markLegacyImportComplete).toHaveBeenCalledTimes(1)
   })
 
-  it('does not re-run after the flag is set', async () => {
-    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true,
-      data: true
-    })
+  it('is idempotent when Rust marks legacy import complete', async () => {
+    mockHistoryApi.list.mockResolvedValueOnce({ sessions: index, legacyImportComplete: true })
     await runHistoryWipeMigration()
-    await runHistoryWipeMigration()
-    expect(persistenceApi.delete).not.toHaveBeenCalled()
+    expect(persistenceApi.read).not.toHaveBeenCalled()
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
   })
 
-  it('fails closed (throws) on a transient flag-read error and does not wipe', async () => {
+  it('fails closed on a successful non-array legacy index', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      success: false,
-      code: 'READ_ERROR',
-      error: 'storage unavailable'
+      success: true,
+      data: { unexpected: true }
     })
-    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-
-    await expect(runHistoryWipeMigration()).rejects.toThrow('storage unavailable')
-    expect(persistenceApi.delete).not.toHaveBeenCalled()
-    expect(persistenceApi.write).not.toHaveBeenCalledWith(SESSION_INDEX_KEY, [])
-    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+    await expect(runHistoryWipeMigration()).rejects.toThrow('Legacy session index is not an array')
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
   })
 
-  it('fails closed (throws) on a transient index-read error and does not wipe', async () => {
+  it('fails closed when legacy index and payload ids differ', async () => {
     ;(persistenceApi.read as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ success: false, code: 'KEY_NOT_FOUND' }) // flag not set
-      .mockResolvedValueOnce({ success: false, code: 'READ_ERROR', error: 'storage unavailable' }) // index
-    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
+      .mockResolvedValueOnce({ success: true, data: index })
+      .mockResolvedValueOnce({ success: true, data: payload('different') })
+    await expect(runHistoryWipeMigration()).rejects.toThrow('Legacy payload id mismatch')
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
+  })
 
-    await expect(runHistoryWipeMigration()).rejects.toThrow('storage unavailable')
+  it('does not overwrite a newer differing durable payload on retry', async () => {
+    mockLegacyReads()
+    mockHistoryApi.list.mockResolvedValueOnce({
+      sessions: [old1.metadata],
+      legacyImportComplete: false
+    })
+    mockHistoryApi.get.mockResolvedValueOnce(payload('old-1', [msg('user', 'newer')]))
+    await expect(runHistoryWipeMigration()).rejects.toThrow('Durable history differs')
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
     expect(persistenceApi.delete).not.toHaveBeenCalled()
-    expect(persistenceApi.write).not.toHaveBeenCalledWith(WIPE_MIGRATION_KEY, true)
+  })
+
+  it('fails closed when any legacy payload cannot be read', async () => {
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: true, data: index })
+      .mockResolvedValueOnce({ success: true, data: old1 })
+      .mockResolvedValueOnce({ success: false, code: 'READ_ERROR', error: 'payload unavailable' })
+
+    await expect(runHistoryWipeMigration()).rejects.toThrow('payload unavailable')
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when Rust verification fails and retains all legacy keys', async () => {
+    mockLegacyReads()
+    mockHistoryApi.list
+      .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
+      .mockResolvedValueOnce({ sessions: [old1.metadata], legacyImportComplete: false })
+
+    await expect(runHistoryWipeMigration()).rejects.toThrow('Legacy payload verification failed')
+    expect(persistenceApi.delete).not.toHaveBeenCalled()
+    expect(mockHistoryApi.markLegacyImportComplete).not.toHaveBeenCalled()
+  })
+
+  it('restores the complete legacy source if cleanup fails part-way', async () => {
+    mockLegacyReads()
+    mockHistoryApi.list
+      .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
+      .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
+    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
+    ;(persistenceApi.delete as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ success: false, error: 'delete failed', code: 'DELETE_ERROR' })
+
+    await expect(runHistoryWipeMigration()).rejects.toThrow('delete failed')
+    expect(persistenceApi.write).toHaveBeenCalledWith(sessionPayloadKey('old-1'), old1)
+    expect(persistenceApi.write).toHaveBeenCalledWith(sessionPayloadKey('old-2'), old2)
+    expect(persistenceApi.write).toHaveBeenCalledWith(SESSION_INDEX_KEY, index)
+    expect(mockHistoryApi.markLegacyImportComplete).not.toHaveBeenCalled()
+  })
+
+  it('reports rollback write failures', async () => {
+    mockLegacyReads()
+    mockHistoryApi.list
+      .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
+      .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
+    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
+    ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      success: false,
+      error: 'delete failed',
+      code: 'DELETE_ERROR'
+    })
+    ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      error: 'rollback disk full',
+      code: 'WRITE_ERROR'
+    })
+    await expect(runHistoryWipeMigration()).rejects.toThrow('rollback failed: rollback disk full')
   })
 })
 
-describe('trackPendingIndexWrite / waitForPendingSessionIndexWrite', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockTransport.historyMode.mockReturnValue('tauri_store')
-    _resetPendingIndexWriteTrackerForTesting()
-  })
-
-  // Drain the microtask queue (via one macrotask) so promise chains settle
-  // without relying on a fixed number of `await Promise.resolve()` ticks.
+describe('serialized save/delete/close barriers', () => {
   const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-  it('resolves immediately when no pending write has been tracked', async () => {
-    await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
+  it('coalesces repeated streaming saves to the latest pending payload', async () => {
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    mockHistoryApi.save.mockImplementationOnce(() => firstGate)
+    const first = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'one')]))
+    await flush()
+    const second = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'two')]))
+    const third = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'three')]))
+    releaseFirst()
+    await Promise.all([first, second, third, waitForPendingSessionIndexWrite()])
+    expect(mockHistoryApi.save).toHaveBeenCalledTimes(2)
+    expect(mockHistoryApi.save).toHaveBeenLastCalledWith(
+      'stream',
+      expect.objectContaining({ messages: [msg('user', 'three')] })
+    )
   })
 
-  it('waits for an in-flight write to complete', async () => {
-    let resolveWrite: () => void
-    const pending = new Promise<void>((resolve) => {
-      resolveWrite = resolve
-    })
-    void trackPendingIndexWrite(() => pending)
+  it('delete supersedes a stale pending save for the same session', async () => {
+    let releaseOther!: () => void
+    mockHistoryApi.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOther = resolve
+        })
+    )
+    const other = queueSessionPayloadSave('other', payload('other'))
+    await flush()
+    const stale = queueSessionPayloadSave('deleted', payload('deleted', [msg('user', 'stale')]))
+    const deletion = queueSessionPayloadDelete('deleted')
+    releaseOther()
+    await Promise.all([other, stale, deletion, waitForPendingSessionIndexWrite()])
+    expect(mockHistoryApi.save).not.toHaveBeenCalledWith('deleted', expect.anything())
+    expect(mockHistoryApi.delete).toHaveBeenCalledWith('deleted')
+  })
 
-    let waitDone = false
-    void waitForPendingSessionIndexWrite().then(() => {
-      waitDone = true
+  it('flush waits for a gated tracked session save before invoking Rust flush', async () => {
+    let releaseSave!: () => void
+    mockHistoryApi.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        })
+    )
+    void queueSessionPayloadSave('close', payload('close'))
+    let flushed = false
+    void flushSessionHistory().then(() => {
+      flushed = true
+    })
+    await flush()
+    expect(mockHistoryApi.flush).not.toHaveBeenCalled()
+    expect(flushed).toBe(false)
+    releaseSave()
+    await waitForPendingSessionIndexWrite()
+    await flush()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
+    expect(flushed).toBe(true)
+  })
+
+  it('serializes operations so a queued stale save lands before delete', async () => {
+    const order: string[] = []
+    let releaseSave!: () => void
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve
+    })
+    void trackPendingIndexWrite(async () => {
+      order.push('save-start')
+      await saveGate
+      order.push('save-end')
+    })
+    void trackPendingIndexWrite(async () => {
+      order.push('delete')
     })
 
     await flush()
-    expect(waitDone).toBe(false)
-
-    resolveWrite!()
+    expect(order).toEqual(['save-start'])
+    releaseSave()
     await waitForPendingSessionIndexWrite()
-    expect(waitDone).toBe(true)
+    expect(order).toEqual(['save-start', 'save-end', 'delete'])
   })
 
-  it('handles write rejection without throwing and logs the error', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    void trackPendingIndexWrite(() => Promise.reject(new Error('write failed')))
+  it('awaits operations queued while the close barrier is draining', async () => {
+    let releaseFirst!: () => void
+    let releaseSecond!: () => void
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const second = new Promise<void>((resolve) => {
+      releaseSecond = resolve
+    })
+    void trackPendingIndexWrite(() => first)
+    let settled = false
+    void waitForPendingSessionIndexWrite().then(() => {
+      settled = true
+    })
+    await flush()
+    void trackPendingIndexWrite(() => second)
+    releaseFirst()
+    await flush()
+    expect(settled).toBe(false)
+    releaseSecond()
+    await waitForPendingSessionIndexWrite()
+    expect(settled).toBe(true)
+  })
 
-    // The wait function should not throw — errors are logged and swallowed by
-    // trackPendingIndexWrite so the chain never breaks.
+  it('logs write failures without breaking later operations', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    void trackPendingIndexWrite(() => Promise.reject(new Error('failed')))
     await expect(waitForPendingSessionIndexWrite()).resolves.toBeUndefined()
     expect(consoleError).toHaveBeenCalledWith(
-      '[acp] failed to persist session index',
+      '[acp] failed to persist session history',
       expect.any(Error)
     )
     consoleError.mockRestore()
-  })
-
-  it('serializes concurrent writes so a stale write cannot land last', async () => {
-    // Regression for the persist/delete race: the second factory must not be
-    // called until the first write finishes, so writes never overlap on the
-    // same Tauri Store key.
-    const order: string[] = []
-    let resolveFirst: () => void
-    const first = new Promise<void>((resolve) => {
-      resolveFirst = resolve
-    })
-    const firstWrite = vi.fn(() => {
-      order.push('first-start')
-      return first.then(() => {
-        order.push('first-end')
-      })
-    })
-    const secondWrite = vi.fn(() => {
-      order.push('second-start')
-      return Promise.resolve().then(() => {
-        order.push('second-end')
-      })
-    })
-
-    void trackPendingIndexWrite(firstWrite)
-    void trackPendingIndexWrite(secondWrite)
-
-    await flush()
-    expect(firstWrite).toHaveBeenCalledTimes(1)
-    expect(secondWrite).not.toHaveBeenCalled()
-    expect(order).toEqual(['first-start'])
-
-    resolveFirst!()
-    await waitForPendingSessionIndexWrite()
-
-    expect(secondWrite).toHaveBeenCalledTimes(1)
-    // First fully finished before second started → no overlap.
-    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end'])
-  })
-
-  it('awaits a write queued while the close path is draining', async () => {
-    // Regression for the shutdown race: a trackPendingIndexWrite() scheduled
-    // after waitForPendingSessionIndexWrite() started must still be awaited
-    // before the wait resolves — otherwise window.destroy() loses the last
-    // history update.
-    let resolveFirst: () => void
-    const first = new Promise<void>((resolve) => {
-      resolveFirst = resolve
-    })
-    let resolveSecond: () => void
-    const second = new Promise<void>((resolve) => {
-      resolveSecond = resolve
-    })
-
-    void trackPendingIndexWrite(() => first)
-
-    let waitDone = false
-    void waitForPendingSessionIndexWrite().then(() => {
-      waitDone = true
-    })
-    await flush()
-    expect(waitDone).toBe(false)
-
-    // While the first write is still in flight, queue a second write (a final
-    // persistSession firing during shutdown).
-    void trackPendingIndexWrite(() => second)
-
-    // Finishing the first write must NOT release the close wait — the queued
-    // second write is still pending.
-    resolveFirst!()
-    await flush()
-    expect(waitDone).toBe(false)
-
-    resolveSecond!()
-    await waitForPendingSessionIndexWrite()
-    expect(waitDone).toBe(true)
-  })
-})
-
-describe('scopeSessionIndex', () => {
-  function entry(id: string, projectId: string, cwd: string): SessionIndexEntry {
-    return {
-      id,
-      agentId: 'a',
-      title: id,
-      cwd,
-      projectId,
-      createdAt: 0,
-      lastActivityAt: 0,
-      messageCount: 0,
-      status: 'active'
-    }
-  }
-
-  it('returns [] when projectId or cwd is empty', () => {
-    const entries = [entry('s1', 'p1', '/a')]
-    expect(scopeSessionIndex(entries, '', '/a')).toEqual([])
-    expect(scopeSessionIndex(entries, 'p1', '')).toEqual([])
-    expect(scopeSessionIndex(entries, '', '')).toEqual([])
-  })
-
-  it('returns exact (projectId, cwd) matches', () => {
-    const entries = [entry('s1', 'p1', '/a'), entry('s2', 'p1', '/b'), entry('s3', 'p2', '/a')]
-    expect(scopeSessionIndex(entries, 'p1', '/a').map((e) => e.id)).toEqual(['s1'])
-  })
-
-  it('falls back to projectId-only matching when no exact cwd match exists', () => {
-    // Regression: a chat whose worktree/cwd drifted since it was created must
-    // still be reachable instead of silently hidden.
-    const entries = [
-      entry('s1', 'p1', '/old-cwd'),
-      entry('s2', 'p1', '/also-old'),
-      entry('s3', 'p2', '/a')
-    ]
-    expect(
-      scopeSessionIndex(entries, 'p1', '/a')
-        .map((e) => e.id)
-        .sort()
-    ).toEqual(['s1', 's2'])
-  })
-
-  it('does not fall back when exact matches exist', () => {
-    const entries = [entry('s1', 'p1', '/a'), entry('s2', 'p1', '/other')]
-    // Exact match present → only the exact entry is returned (no fallback).
-    expect(scopeSessionIndex(entries, 'p1', '/a').map((e) => e.id)).toEqual(['s1'])
-  })
-
-  it('returns [] when no entry matches projectId at all', () => {
-    const entries = [entry('s1', 'p2', '/a')]
-    expect(scopeSessionIndex(entries, 'p1', '/a')).toEqual([])
-  })
-})
-
-describe('loadSessionPayload — server branch', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockTransport.historyMode.mockReturnValue('tauri_store')
-  })
-
-  it('fetches the full transcript via getSessionPayload (not messages: [])', async () => {
-    mockTransport.historyMode.mockReturnValue('server')
-    const fullPayload = {
-      metadata: {
-        id: 's-9',
-        agentId: 'a',
-        title: 'Chat',
-        cwd: '/c',
-        projectId: 'p1',
-        createdAt: 1,
-        lastActivityAt: 2,
-        messageCount: 2,
-        status: 'closed' as const
-      },
-      messages: [msg('user', 'hi'), msg('agent', 'hello')]
-    }
-    mockTransport.getSessionPayload.mockResolvedValue(fullPayload)
-    const result = await loadSessionPayload('s-9')
-    expect(mockTransport.getSessionPayload).toHaveBeenCalledWith('s-9')
-    expect(mockTransport.openPersistedSession).not.toHaveBeenCalled()
-    expect(result).toEqual(fullPayload)
-    expect(result?.messages).toHaveLength(2)
-  })
-
-  it('returns null when getSessionPayload returns null (not_found)', async () => {
-    mockTransport.historyMode.mockReturnValue('server')
-    mockTransport.getSessionPayload.mockResolvedValue(null)
-    expect(await loadSessionPayload('missing')).toBeNull()
-  })
-})
-
-describe('toPersistedSessionSummaries', () => {
-  it('converts renderer SessionIndexEntry[] to wire PersistedSessionSummary[]', () => {
-    const entries: SessionIndexEntry[] = [
-      {
-        id: 's-1',
-        agentId: 'a1',
-        agentConfigId: 'cfg-1',
-        title: 'Chat',
-        cwd: '/c',
-        projectId: 'p1',
-        createdAt: 1,
-        lastActivityAt: 2,
-        messageCount: 3,
-        status: 'active'
-      }
-    ]
-    const summaries = toPersistedSessionSummaries(entries)
-    expect(summaries).toHaveLength(1)
-    expect(summaries[0]).toEqual({
-      storageKey: 's-1',
-      sessionId: 's-1',
-      stableAgentNamespace: 'config:cfg-1',
-      runtimeAgentId: 'a1',
-      projectId: 'p1',
-      cwd: '/c',
-      title: 'Chat',
-      createdAt: 1,
-      lastActivityAt: 2,
-      status: 'active',
-      messageCount: 3,
-      toolCount: 0,
-      lastSeq: 0,
-      resumeEligible: true
-    })
-  })
-
-  it('maps initializing status to active and derives resumeEligible from agentConfigId', () => {
-    const summaries = toPersistedSessionSummaries([
-      {
-        id: 's-2',
-        agentId: '',
-        title: 'T',
-        cwd: '/c',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 0,
-        status: 'initializing'
-      }
-    ])
-    expect(summaries[0].status).toBe('active')
-    expect(summaries[0].resumeEligible).toBe(false)
-    expect(summaries[0].stableAgentNamespace).toBeNull()
-    expect(summaries[0].runtimeAgentId).toBeUndefined()
-  })
-
-  it('marks a config-less agent with a runtime agentId as resumeEligible', () => {
-    // Ad-hoc / `agent-safe:*` agents have no `agentConfigId` but DO carry a
-    // runtime agentId — they must be reopen candidates (the capability check
-    // still gates the actual reopen). `stableAgentNamespace` stays null
-    // (the backend-computed namespace sync is deferred).
-    const summaries = toPersistedSessionSummaries([
-      {
-        id: 's-adhoc',
-        agentId: 'agent-runtime-1',
-        title: 'Ad-hoc',
-        cwd: '/c',
-        projectId: 'p1',
-        createdAt: 0,
-        lastActivityAt: 0,
-        messageCount: 0,
-        status: 'active'
-      }
-    ])
-    expect(summaries[0].resumeEligible).toBe(true)
-    expect(summaries[0].stableAgentNamespace).toBeNull()
-    expect(summaries[0].runtimeAgentId).toBe('agent-runtime-1')
   })
 })

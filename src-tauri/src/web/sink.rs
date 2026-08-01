@@ -993,8 +993,7 @@ pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, active_project_id: O
 /// Broadcast a `chat_history_changed` agent-level event to every connected
 /// client.
 ///
-/// Called by the `remote_sync_chat_history` command after it updates the
-/// [`crate::web::chat_history_cache::ChatHistoryCache`]. The event is
+/// Called after desktop history mutations or compatibility sync requests. The event is
 /// agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`] fans it out to
 /// ALL connected clients (the wire `type` is `chat_history_changed` — the
 /// `acp:` prefix is stripped by `emit`). The payload is empty `{}`; the web

@@ -21,6 +21,7 @@ const {
   mockUpdatePanelVisibility,
   mockWaitForPendingAppSettingsPersistence,
   mockWaitForPendingSessionIndexWrite,
+  mockFlushSessionHistory,
   mockToastError,
   mockListen
 } = vi.hoisted(() => ({
@@ -84,6 +85,7 @@ const {
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
   mockWaitForPendingSessionIndexWrite: vi.fn(async () => undefined),
+  mockFlushSessionHistory: vi.fn(async () => undefined),
   mockToastError: vi.fn(),
   mockListen: vi.fn(async () => vi.fn())
 }))
@@ -223,6 +225,7 @@ vi.mock('@/hooks/use-app-settings', () => ({
 }))
 
 vi.mock('@/lib/acp-history-persistence', () => ({
+  flushSessionHistory: mockFlushSessionHistory,
   waitForPendingSessionIndexWrite: mockWaitForPendingSessionIndexWrite
 }))
 
@@ -375,6 +378,7 @@ describe('WorkspaceLayout close persistence', () => {
     mockUpdatePanelVisibility.mockResolvedValue(undefined)
     mockWaitForPendingAppSettingsPersistence.mockResolvedValue(undefined)
     mockWaitForPendingSessionIndexWrite.mockResolvedValue(undefined)
+    mockFlushSessionHistory.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
     mockListen.mockResolvedValue(vi.fn())
   })
@@ -444,6 +448,21 @@ describe('WorkspaceLayout close persistence', () => {
 
     await waitFor(() => {
       expect(mockWaitForPendingSessionIndexWrite).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('flushes the Rust-backed ACP history before closing', async () => {
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockFlushSessionHistory).toHaveBeenCalledTimes(1)
       expect(mockRespondToClose).toHaveBeenCalledWith('close')
     })
   })

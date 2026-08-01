@@ -34,6 +34,8 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => {
     loadSessionIndex: vi.fn(async () => []),
     saveSessionIndex: vi.fn(async () => {}),
     saveSessionPayload: vi.fn(async () => {}),
+    queueSessionPayloadSave: vi.fn(async () => {}),
+    queueSessionPayloadDelete: vi.fn(async () => {}),
     // Read-through the module-level cache so tests can seed payloads via
     // setCachedSessionPayload (preferred over per-test mockResolvedValue).
     loadSessionPayload: vi.fn(async (id: string) => actual.getCachedSessionPayload(id) ?? null),
@@ -546,7 +548,9 @@ describe('acp-store', () => {
     const [entry] = useAcpStore.getState().sessionIndex
     expect(entry.title).toBe('siapa itu faiz intifada?')
     expect(entry.messageCount).toBe(1)
-    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    const { queueSessionPayloadSave: saveSessionPayload } = await import(
+      '@/lib/acp-history-persistence'
+    )
     expect(saveSessionPayload).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({
@@ -882,7 +886,9 @@ describe('acp-store', () => {
       role: 'agent',
       content: { type: 'text', text: 'the answer' }
     })
-    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    const { queueSessionPayloadSave: saveSessionPayload } = await import(
+      '@/lib/acp-history-persistence'
+    )
     ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
     useAcpStore.getState()._onPromptComplete({
       agentId: 'agent-1',
@@ -903,7 +909,9 @@ describe('acp-store', () => {
     // persist must not write it back.
     seedSession('s1', 'agent-1')
     // No sessionIndex entry for s1 (deleted).
-    const { saveSessionPayload, saveSessionIndex } = await import('@/lib/acp-history-persistence')
+    const { queueSessionPayloadSave: saveSessionPayload, saveSessionIndex } = await import(
+      '@/lib/acp-history-persistence'
+    )
     ;(saveSessionPayload as ReturnType<typeof vi.fn>).mockClear()
     ;(saveSessionIndex as ReturnType<typeof vi.fn>).mockClear()
     useAcpStore.getState()._onPromptComplete({
@@ -3414,7 +3422,9 @@ describe('acp-store', () => {
         }
       ]
     }))
-    const { loadSessionPayload, saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    const { loadSessionPayload, queueSessionPayloadSave: saveSessionPayload } = await import(
+      '@/lib/acp-history-persistence'
+    )
     ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       metadata: {
         id: 's-midpersist',
@@ -4682,10 +4692,13 @@ describe('acp-store transcript eviction (WebView memory)', () => {
   })
 
   it('second close after eviction does not persist empty messages', async () => {
-    const { saveSessionPayload } = await import('@/lib/acp-history-persistence')
+    const { queueSessionPayloadSave: saveSessionPayload } = await import(
+      '@/lib/acp-history-persistence'
+    )
     seedTranscript('sess-twice')
     vi.mocked(invoke).mockResolvedValue(undefined)
     await useAcpStore.getState().closeSession('sess-twice')
+    await new Promise((resolve) => setTimeout(resolve, 0))
     vi.mocked(saveSessionPayload).mockClear()
     await useAcpStore.getState().closeSession('sess-twice')
     expect(saveSessionPayload).not.toHaveBeenCalled()

@@ -80,16 +80,17 @@ import {
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
-  deleteSessionPayload,
   deriveTitle,
   getCachedSessionPayload,
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
+  markSessionPayloadPinned,
+  queueSessionPayloadDelete,
+  queueSessionPayloadSave,
   type SessionIndexEntry,
   type SessionPayload,
   saveSessionIndex as saveSessionIndexToDisk,
-  saveSessionPayload,
-  trackPendingIndexWrite
+  unpinSessionPayload
 } from '@/lib/acp-history-persistence'
 import {
   loadMcpServers as loadMcpServersFromDisk,
@@ -109,12 +110,10 @@ import {
   type PrepareChatError,
   SETUP_ERROR_LABELS
 } from '@/lib/agents/acp-spawn-errors'
-import { syncChatHistory } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
-import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
   appendQueuedPrompt,
@@ -824,6 +823,7 @@ export const MAX_LIVE_WINDOW_MESSAGES = 300
  */
 function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMessage[] {
   if (messages.length <= MAX_LIVE_WINDOW_MESSAGES) return messages
+  markSessionPayloadPinned(sessionId)
   // Don't trim unless the full payload is cached — otherwise un-persisted
   // messages would be lost (no disk copy to lazy-load from).
   if (!getCachedSessionPayload(sessionId)) return messages
@@ -868,6 +868,7 @@ function dropSessionTranscriptState(
   // never leaks a backfill allowance or an in-flight load guard.
   backfillCounts.delete(sessionId)
   loadingOlderSessions.delete(sessionId)
+  unpinSessionPayload(sessionId)
   return {
     messages: dropRecordKey(state.messages, sessionId),
     toolCalls: dropRecordKey(state.toolCalls, sessionId),
@@ -1102,23 +1103,8 @@ function persistSession(
   // the tracker. The payload write below uses writeDebounced() and is covered
   // by flushPendingWrites(); the index write uses write() (non-debounced) and
   // is NOT covered, hence the explicit tracking.
-  void trackPendingIndexWrite(() => saveSessionIndexToDisk(nextIndex))
-  void saveSessionPayload(sessionId, payload).catch((e) =>
-    console.error('[acp] failed to persist session payload', e)
-  )
-  // Epic-4 bridge: push ONLY this session's payload to the server cache when
-  // the shared-live server is running. The `useAcpHistorySync` hook owns the
-  // index push — it reacts to the `sessionIndex` change this `setIndex` call
-  // triggers, so the index reaches the server exactly once per mutation (not
-  // twice — previously this push also carried the index, causing a double
-  // `set_index` + double broadcast). Fire-and-forget — idempotent.
-  if (useRemoteStatusStore.getState().status?.running) {
-    void syncChatHistory(undefined, {
-      [sessionId]: payload
-    }).catch((err: unknown) => {
-      console.debug('[acp] remote history payload sync failed', err)
-    })
-  }
+  void saveSessionIndexToDisk(nextIndex)
+  void queueSessionPayloadSave(sessionId, payload)
 }
 
 /**
@@ -2599,7 +2585,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // Flush closed status + last transcript to disk while maps still hold it,
     // then drop in-memory maps so WebView2 can reclaim heap. Ephemeral (warm
     // pool) sessions are never mirrored.
-    if (!ephemeralSessionIds.has(sessionId) && get().sessions[sessionId]) {
+    if (
+      !ephemeralSessionIds.has(sessionId) &&
+      get().sessions[sessionId] &&
+      sessionId in get().messages
+    ) {
       persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
     }
     set((s) => dropSessionTranscriptState(s, sessionId))
@@ -3357,8 +3347,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // the index reflects the deletion before the payload is removed. The
       // tracker swallows/logs index-write errors, so this await resolves even
       // on failure; deleteSessionPayload failures are caught below.
-      await trackPendingIndexWrite(() => saveSessionIndexToDisk(next))
-      await deleteSessionPayload(id)
+      await saveSessionIndexToDisk(next)
+      await queueSessionPayloadDelete(id)
     } catch (e) {
       console.error('[acp] failed to delete session history', e)
     }
