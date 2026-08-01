@@ -1907,8 +1907,17 @@ async fn run_command_loop(
                                                 log::warn!(
                                                     "[acp] {req_agent_id} warmup \
                                                      cancel did not settle within \
-                                                     {CANCEL_GRACE:?}; continuing"
+                                                     {CANCEL_GRACE:?}; failing \
+                                                     session creation"
                                                 );
+                                                send_reply(
+                                                    &task_slot,
+                                                    Err(format!(
+                                                        "warmup cancel did not settle \
+                                                         within {CANCEL_GRACE:?}"
+                                                    )),
+                                                );
+                                                return;
                                             }
                                         }
                                     }
