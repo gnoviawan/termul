@@ -43,7 +43,8 @@ describe('MCP registry helpers', () => {
     expect(transportOf({ name: 'fs', command: 'x' })).toBe('stdio')
   })
 
-  it('normalizes legacy enabled state and skips malformed records', () => {
+  it('normalizes legacy enabled state and warns when malformed records are skipped', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(
       normalizeMcpRegistry([
         { id: 'legacy', name: 'Legacy', command: 'node' },
@@ -51,6 +52,8 @@ describe('MCP registry helpers', () => {
         null
       ])
     ).toEqual([{ id: 'legacy', type: 'stdio', name: 'Legacy', command: 'node', enabled: true }])
+    expect(warn).toHaveBeenCalledWith('[mcp] discarded 2 malformed registry entries')
+    warn.mockRestore()
   })
 
   it('selects enabled supported transports and reports unsupported servers', () => {
@@ -58,7 +61,8 @@ describe('MCP registry helpers', () => {
       selectMcpServersForAgent(registry, { mcpCapabilities: { http: false, acp: true } })
     ).toEqual({
       servers: [{ type: 'stdio', name: 'Files', command: 'npx' }],
-      skipped: [{ id: 'http', name: 'HTTP API', transport: 'http' }]
+      skipped: [{ id: 'http', name: 'HTTP API', transport: 'http' }],
+      pending: false
     })
     expect(selectMcpServersForAgent(registry, { mcpCapabilities: { http: true } }).servers).toEqual(
       [
@@ -66,6 +70,17 @@ describe('MCP registry helpers', () => {
         { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp' }
       ]
     )
+  })
+
+  it('keeps enabled transports while capabilities are still pending', () => {
+    expect(selectMcpServersForAgent(registry, null)).toEqual({
+      servers: [
+        { type: 'stdio', name: 'Files', command: 'npx' },
+        { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp' }
+      ],
+      skipped: [],
+      pending: true
+    })
   })
 
   it('strips registry-only fields when building explicit selections', () => {

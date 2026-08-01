@@ -2499,9 +2499,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const selection =
         mcpServers === undefined
           ? selectMcpServersForAgent(get().mcpServers, get().agents[agentId]?.capabilities)
-          : { servers: mcpServers, skipped: [] }
+          : { servers: mcpServers, skipped: [], pending: false }
       const sessionMcpServers = selection.servers
-      if (selection.skipped.length > 0) {
+      if (!selection.pending && selection.skipped.length > 0) {
         toast.warning('Some MCP servers were skipped', {
           description: `${selection.skipped.map((server) => server.name).join(', ')} require HTTP or SSE support from this agent.`
         })
@@ -3319,7 +3319,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         throw new Error('The selected ACP agent is unavailable. Check its configuration and retry')
       }
       const sessionAgentId = agentId
-      const createSessionPromise = get().createSession(sessionAgentId, cwd, undefined, '', {
+      const createSessionPromise = get().createSession(sessionAgentId, cwd, [], '', {
         ephemeral: true,
         backendEphemeral: true
       })

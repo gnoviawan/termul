@@ -23,6 +23,7 @@ export interface SkippedMcpServer {
 export interface McpServerSelection {
   servers: McpServer[]
   skipped: SkippedMcpServer[]
+  pending: boolean
 }
 
 export function transportOf(server: McpServerConfig): McpTransport {
@@ -113,10 +114,14 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
 
 export function normalizeMcpRegistry(value: unknown): StoredMcpServer[] {
   if (!Array.isArray(value)) return []
-  return value.flatMap((entry) => {
-    const normalized = normalizeStoredServer(entry)
-    return normalized ? [normalized] : []
+  const normalized = value.flatMap((entry) => {
+    const server = normalizeStoredServer(entry)
+    return server ? [server] : []
   })
+  if (normalized.length !== value.length) {
+    console.warn(`[mcp] discarded ${value.length - normalized.length} malformed registry entries`)
+  }
+  return normalized
 }
 
 export function buildMcpServers(registry: StoredMcpServer[], selectedIds: string[]): McpServer[] {
@@ -134,18 +139,21 @@ export function selectMcpServersForAgent(
   const servers: McpServer[] = []
   const skipped: SkippedMcpServer[] = []
   const mcpCapabilities = capabilities?.mcpCapabilities
+  const pending = capabilities == null
 
   for (const entry of registry) {
     if (entry.enabled === false) continue
     const transport = transportOf(entry)
-    if (transport === 'stdio' || mcpCapabilities?.[transport] === true) {
+    if (transport === 'stdio' || pending) {
+      servers.push(toWireServer(entry))
+    } else if (mcpCapabilities?.[transport] === true) {
       servers.push(toWireServer(entry))
     } else {
       skipped.push({ id: entry.id, name: entry.name, transport })
     }
   }
 
-  return { servers, skipped }
+  return { servers, skipped, pending }
 }
 
 export async function loadMcpServers(): Promise<StoredMcpServer[]> {

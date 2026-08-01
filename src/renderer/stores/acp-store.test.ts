@@ -304,7 +304,7 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/work',
-      mcpServers: undefined,
+      mcpServers: [],
       ephemeral: true
     })
     expect(useAcpStore.getState().sessions['commit-session']).toBeUndefined()
