@@ -14,29 +14,29 @@
   {
     "id": "amp-acp",
     "name": "Amp",
-    "version": "0.8.1",
+    "version": "0.9.0",
     "description": "ACP wrapper for Amp - the frontier coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./amp-acp",
-          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.8.1/amp-acp-darwin-aarch64.tar.gz"
+          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.9.0/amp-acp-darwin-aarch64.tar.gz"
         },
         "darwin-x86_64": {
           "cmd": "./amp-acp",
-          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.8.1/amp-acp-darwin-x86_64.tar.gz"
+          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.9.0/amp-acp-darwin-x86_64.tar.gz"
         },
         "linux-aarch64": {
           "cmd": "./amp-acp",
-          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.8.1/amp-acp-linux-aarch64.tar.gz"
+          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.9.0/amp-acp-linux-aarch64.tar.gz"
         },
         "linux-x86_64": {
           "cmd": "./amp-acp",
-          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.8.1/amp-acp-linux-x86_64.tar.gz"
+          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.9.0/amp-acp-linux-x86_64.tar.gz"
         },
         "windows-x86_64": {
           "cmd": "amp-acp.exe",
-          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.8.1/amp-acp-windows-x86_64.zip"
+          "archive": "https://github.com/tao12345666333/amp-acp/releases/download/v0.9.0/amp-acp-windows-x86_64.zip"
         }
       }
     }
