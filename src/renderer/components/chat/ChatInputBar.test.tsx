@@ -343,3 +343,243 @@ describe('ChatInputBar morph button', () => {
     })
   })
 })
+
+describe('ChatInputBar command chip', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function selectSlashOption(name: string | RegExp): void {
+    const listbox = screen.getByRole('listbox')
+    fireEvent.mouseDown(within(listbox).getByText(name))
+  }
+
+  it('renders a command chip when a slash command is selected from the menu', async () => {
+    const commands = [{ name: 'compact', description: 'Compact the conversation' }]
+    renderInputBar({ commands })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    // Menu should open as a listbox
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    // Select the command
+    selectSlashOption('/compact')
+
+    // Command chip should appear
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Textarea should be cleared
+    expect(textarea).toHaveValue('')
+  })
+
+  it('prepends the command to the prompt on send', async () => {
+    const onSend = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands, onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Type a message
+    fireEvent.change(textarea, { target: { value: 'hello' } })
+
+    // Send
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith('/compact hello')
+    })
+  })
+
+  it('removes the command chip when the X button is clicked', async () => {
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Click remove
+    fireEvent.click(screen.getByRole('button', { name: 'Remove /compact command' }))
+
+    // Chip should be gone
+    expect(
+      screen.queryByRole('button', { name: 'Remove /compact command' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('opens the slash menu when / is typed with an active command chip', async () => {
+    const commands = [
+      { name: 'compact', description: 'Compact' },
+      { name: 'clear', description: 'Clear' }
+    ]
+    renderInputBar({ commands })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Type / again to re-open the menu
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+  })
+
+  it('updates the command chip when a different command is selected', async () => {
+    const commands = [
+      { name: 'compact', description: 'Compact' },
+      { name: 'clear', description: 'Clear' }
+    ]
+    renderInputBar({ commands })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Type / again to re-open the menu
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    // Select a different command
+    selectSlashOption('/clear')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /clear command' })).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Remove /compact command' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('sends just the command when no message is typed', async () => {
+    const onSend = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands, onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Send with just the command chip (no text)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith('/compact')
+    })
+  })
+
+  it('clears active command when externally seeded text is applied', async () => {
+    const onSend = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    const { rerender } = renderInputBar({ commands, onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    })
+
+    // Externally seed text (e.g. editing a message)
+    rerender(
+      <TooltipProvider>
+        <ChatInputBar
+          session={session()}
+          busy={false}
+          disabled={false}
+          onSend={onSend}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={commands}
+          configOptions={[]}
+          modes={session().modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          seedText="edited message"
+          seedNonce={1}
+        />
+      </TooltipProvider>
+    )
+
+    // Command chip should be gone after seeding
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Remove /compact command' })
+      ).not.toBeInTheDocument()
+    })
+
+    // Textarea should have the seeded text
+    expect(screen.getByRole('textbox')).toHaveValue('edited message')
+
+    // Send should use only the seeded text (no command prefix)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith('edited message')
+    })
+  })
+})

@@ -26,6 +26,7 @@ import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -41,9 +42,9 @@ import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
-  applyCommandToInput,
   buildSlashSections,
-  isSlashTrigger,
+  findSlashTrigger,
+  isSlashTriggerAny,
   type SlashItem,
   slashFilter
 } from './slash-menu-model'
@@ -130,6 +131,7 @@ export function ChatInputBar({
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
   const mcpCount = session.mcpServerCount ?? globalMcpCount
   const [value, setValue] = useState('')
+  const [activeCommand, setActiveCommand] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -199,7 +201,7 @@ export function ChatInputBar({
     if (dragDepth.current === 0) setDragActive(false)
   }, [canDropPaste])
 
-  const slashOpen = isSlashTrigger(value) && !disabled
+  const slashOpen = isSlashTriggerAny(value) && !disabled
   const filter = slashFilter(value)
   const {
     onInput,
@@ -222,34 +224,39 @@ export function ChatInputBar({
     [slashOpen, commands, configOptions, modes, filter]
   )
 
-  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
+  const canSend =
+    !disabled &&
+    !sending &&
+    (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
   const submit = useCallback(async () => {
     const userText = value.trim()
     const hasAttachments = attachments.length > 0
-    if ((!userText && !hasAttachments) || disabled || sending) return
+    if ((!userText && !activeCommand && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
-      const text = userText
-      const trimmed = text.trim()
+      // Prepend the active command to the prompt text on send.
+      const withCommand = activeCommand ? `/${activeCommand} ${userText}` : userText
+      const trimmed = withCommand.trim()
       if (!trimmed && !hasAttachments) return
 
       if (hasAttachments) {
         const blocks: ContentBlock[] = []
-        if (trimmed) blocks.push({ type: 'text', text })
+        if (trimmed) blocks.push({ type: 'text', text: withCommand })
         for (const a of attachments) blocks.push(attachmentToBlock(a))
         onSendBlocks(dedupeAttachmentBlocks(blocks))
       } else {
-        onSend(text)
+        onSend(trimmed)
       }
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
+      setActiveCommand(null)
       clearAttachments()
       resetMentions()
       resetHeight()
@@ -259,6 +266,7 @@ export function ChatInputBar({
   }, [
     value,
     attachments,
+    activeCommand,
     disabled,
     sending,
     clearAttachments,
@@ -273,9 +281,23 @@ export function ChatInputBar({
   const handleSelect = useCallback(
     (item: SlashItem) => {
       if (item.kind === 'command') {
-        const next = applyCommandToInput(value, item.name)
-        setValue(next)
-        updateMentions(next, next.length)
+        // Set the command chip instead of inserting bare text into the textarea.
+        // If the trigger was mid-text, replace the /token portion in the input.
+        const midTrigger = findSlashTrigger(value)
+        if (midTrigger && midTrigger.start > 0) {
+          // Mid-text trigger: remove the /token from the input, keep the rest
+          const before = value.slice(0, midTrigger.start).trimEnd()
+          const after = value.slice(midTrigger.end).trimStart()
+          const remaining = [before, after].filter(Boolean).join(' ')
+          setValue(remaining)
+          updateMentions(remaining, remaining.length)
+        } else {
+          // Leading or standalone trigger: clear the input
+          setValue('')
+          updateMentions('', 0)
+        }
+        setActiveCommand(item.name)
+        resetHeight()
         textareaRef.current?.focus()
         return
       }
@@ -302,6 +324,7 @@ export function ChatInputBar({
           menuRef: slashMenuRef,
           onClearInput: () => {
             setValue('')
+            setActiveCommand(null)
             updateMentions('', 0)
             resetHeight()
           }
@@ -345,6 +368,7 @@ export function ChatInputBar({
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
+    setActiveCommand(null)
     updateMentions(next, next.length)
     const el = textareaRef.current
     if (!el) return
@@ -460,6 +484,15 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
+            {activeCommand && (
+              <CommandChip
+                name={activeCommand}
+                onRemove={() => {
+                  setActiveCommand(null)
+                  textareaRef.current?.focus()
+                }}
+              />
+            )}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               <textarea
@@ -491,7 +524,11 @@ export function ChatInputBar({
                 disabled={disabled || sending}
                 rows={1}
                 placeholder={
-                  disabled ? 'Session closed' : 'Ask anything… (/ for commands, @ for files)'
+                  disabled
+                    ? 'Session closed'
+                    : activeCommand
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything… (/ for commands, @ for files)'
                 }
                 className={cn(
                   'min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
