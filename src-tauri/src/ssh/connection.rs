@@ -181,7 +181,10 @@ impl SSHConnectionManager {
         let deadline = std::time::Instant::now() + total;
         // Divide the budget across addresses, with a sensible floor so each
         // address still gets a fair attempt.
-        let per_attempt = std::cmp::max(total / resolved.len() as u32, Duration::from_secs(2));
+        let per_attempt = std::cmp::max(
+            total / resolved.len() as u32,
+            Duration::from_secs(2),
+        );
 
         let mut last_err: Option<String> = None;
         for socket_addr in resolved {
@@ -285,8 +288,15 @@ impl SSHConnectionManager {
                 if let Err(e) = known_hosts.read_file(&path, KnownHostFileKind::OpenSSH) {
                     let is_app_file = app_path.as_deref() == Some(path.as_path());
                     if is_app_file {
-                        log::error!("[SSH] Failed to read app known_hosts {:?}: {}", path, e);
-                        return Err(format!("Failed to read app known_hosts {:?}: {}", path, e));
+                        log::error!(
+                            "[SSH] Failed to read app known_hosts {:?}: {}",
+                            path,
+                            e
+                        );
+                        return Err(format!(
+                            "Failed to read app known_hosts {:?}: {}",
+                            path, e
+                        ));
                     }
                     // A genuinely empty file reads as Ok; an error on the user's
                     // file means it is present but unreadable/partially
@@ -328,10 +338,7 @@ impl SSHConnectionManager {
             ssh2::HostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521",
             ssh2::HostKeyType::Ed25519 => "ssh-ed25519",
             ssh2::HostKeyType::Unknown => {
-                log::warn!(
-                    "[SSH] Not persisting host key for {}: unknown key type",
-                    host
-                );
+                log::warn!("[SSH] Not persisting host key for {}: unknown key type", host);
                 return;
             }
         };
@@ -361,11 +368,7 @@ impl SSHConnectionManager {
             }
         }
 
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
+        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
             Ok(mut file) => {
                 #[cfg(unix)]
                 {
@@ -796,8 +799,11 @@ mod tests {
     fn connect_tcp_rejects_unresolvable_host_without_panicking() {
         // A syntactically valid but non-resolvable host must produce a
         // descriptive error rather than the old IP-only parse failure.
-        let err = SSHConnectionManager::connect_tcp("nonexistent.invalid.example.test.", 22)
-            .expect_err("unresolvable host should error");
+        let err = SSHConnectionManager::connect_tcp(
+            "nonexistent.invalid.example.test.",
+            22,
+        )
+        .expect_err("unresolvable host should error");
         assert!(
             err.contains("resolve") || err.contains("TCP connection"),
             "unexpected error message: {}",

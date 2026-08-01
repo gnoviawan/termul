@@ -158,10 +158,7 @@ pub fn resolve_git_binary() -> &'static str {
 pub fn resolve_executable(command: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        if let Some(path) = resolve_command_candidates_from_path(command)
-            .into_iter()
-            .next()
-        {
+        if let Some(path) = resolve_command_candidates_from_path(command).into_iter().next() {
             return path;
         }
         command.to_string()
@@ -1275,13 +1272,13 @@ pub fn git_commit_file(
     // Pass the real OS path (not a lossy String) so a non-UTF-8 temp dir still
     // resolves to the file we actually wrote.
     use std::ffi::OsStr;
-    let mut args: Vec<&OsStr> = vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
+    let mut args: Vec<&OsStr> =
+        vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
     if amend {
         args.push(OsStr::new("--amend"));
     }
 
-    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
-    {
+    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS) {
         Some(output) if output.status.success() => Ok(()),
         Some(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
         None => Err("git commit timed out or failed to start".to_string()),
@@ -1302,8 +1299,8 @@ fn create_commit_message_file(bytes: &[u8]) -> Result<std::path::PathBuf, String
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path =
-            std::env::temp_dir().join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
+        let path = std::env::temp_dir()
+            .join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true) // O_EXCL: fail if the path already exists
@@ -1330,10 +1327,9 @@ pub fn git_push_current(cwd: &str) -> Result<(), String> {
     let branch = GitTracker::check_branch_internal(cwd)
         .ok_or_else(|| "Not on a branch (detached HEAD); cannot push".to_string())?;
 
-    let has_upstream =
-        GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     let args: Vec<&str> = if has_upstream {
         vec!["push"]
@@ -1341,11 +1337,12 @@ pub fn git_push_current(cwd: &str) -> Result<(), String> {
         vec!["push", "--set-upstream", "origin", &branch]
     };
 
-    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS).ok_or_else(|| {
-        "git push did not complete (it timed out, could not start, or the \
+    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
+        .ok_or_else(|| {
+            "git push did not complete (it timed out, could not start, or the \
              remote required interactive credentials)"
-            .to_string()
-    })?;
+                .to_string()
+        })?;
     if output.status.success() {
         Ok(())
     } else {
@@ -1359,17 +1356,15 @@ pub fn git_get_commit_context(cwd: &str) -> Result<GitCommitContext, String> {
     let branch = GitTracker::check_branch_internal(cwd);
     let has_head = repo_has_head(cwd);
 
-    let has_upstream =
-        GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     let (mut ahead, mut behind) = (0u32, 0u32);
     if has_upstream {
-        if let Some(o) = GitTracker::run_git_command(
-            cwd,
-            &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
-        ) {
+        if let Some(o) =
+            GitTracker::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+        {
             if o.status.success() {
                 let counts = String::from_utf8_lossy(&o.stdout);
                 let parts: Vec<&str> = counts.split_whitespace().collect();
@@ -1419,6 +1414,7 @@ fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
 }
 
 impl GitTracker {
+
     /// Start the polling task
     ///
     /// Windows optimizations:
@@ -1994,8 +1990,7 @@ mod tests {
 
     #[test]
     fn test_git_get_status_detail_parses_staged_and_unstaged_entries() {
-        let details =
-            git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
+        let details = git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
         assert_eq!(details.len(), 4);
 
         assert_eq!(details[0].path, "both.txt");
@@ -2131,13 +2126,7 @@ mod tests {
         // fields are NUL-delimited, not whitespace/pipe-delimited.
         let subject = "fix: a | b  with  spaces — café 🚀";
         let out = log_record(
-            "sp00",
-            "sp00",
-            "p0",
-            "",
-            "Ada",
-            "2026-05-30T12:00:00+00:00",
-            subject,
+            "sp00", "sp00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", subject,
         );
         let commits = parse_git_log(&out);
         assert_eq!(commits[0].subject, subject);
@@ -2158,7 +2147,9 @@ mod tests {
         assert!(is_benign_log_failure(
             "fatal: not a git repository (or any of the parent directories): .git"
         ));
-        assert!(is_benign_log_failure("fatal: bad default revision 'HEAD'"));
+        assert!(is_benign_log_failure(
+            "fatal: bad default revision 'HEAD'"
+        ));
         assert!(is_benign_log_failure(
             "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree."
         ));
@@ -2175,15 +2166,7 @@ mod tests {
         // A record with too few fields is dropped; a valid one is kept.
         let out = format!(
             "not\u{0}enough\u{1e}{}",
-            log_record(
-                "ok00",
-                "ok00",
-                "",
-                "",
-                "Ada",
-                "2026-05-30T12:00:00+00:00",
-                "ok"
-            )
+            log_record("ok00", "ok00", "", "", "Ada", "2026-05-30T12:00:00+00:00", "ok")
         );
         let commits = parse_git_log(&out);
         assert_eq!(commits.len(), 1);
@@ -2192,15 +2175,7 @@ mod tests {
 
     #[test]
     fn test_parse_git_log_empty_subject_is_kept() {
-        let out = log_record(
-            "es00",
-            "es00",
-            "p0",
-            "",
-            "Ada",
-            "2026-05-30T12:00:00+00:00",
-            "",
-        );
+        let out = log_record("es00", "es00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", "");
         let commits = parse_git_log(&out);
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].subject, "");
@@ -2391,8 +2366,7 @@ mod tests {
 
     /// Skip the test body (returning true) when git is unavailable in the env.
     fn git_missing() -> bool {
-        GitTracker::run_git_command(std::env::temp_dir().to_str().unwrap(), &["--version"])
-            .is_none()
+        GitTracker::run_git_command(std::env::temp_dir().to_str().unwrap(), &["--version"]).is_none()
     }
 
     #[test]
@@ -2408,10 +2382,7 @@ mod tests {
 
         let cwd = repo.to_str().unwrap();
         git_stage_file(cwd, "a.txt").unwrap();
-        assert!(
-            porcelain(&repo, "a.txt").starts_with("M "),
-            "should be staged"
-        );
+        assert!(porcelain(&repo, "a.txt").starts_with("M "), "should be staged");
 
         git_unstage_file(cwd, "a.txt").unwrap();
         assert!(
@@ -2435,10 +2406,7 @@ mod tests {
 
         // Unstage must NOT delete or revert the working-tree content.
         git_unstage_file(repo.to_str().unwrap(), "a.txt").unwrap();
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "changed\n"
-        );
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "changed\n");
         assert!(porcelain(&repo, "a.txt").starts_with(" M"));
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2472,10 +2440,7 @@ mod tests {
         std::fs::write(repo.join("a.txt"), "dirty\n").unwrap();
 
         git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "orig\n"
-        );
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "orig\n");
         assert!(porcelain(&repo, "a.txt").is_empty(), "clean after discard");
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2498,10 +2463,7 @@ mod tests {
 
         git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
         // Worktree reverts to the staged (index) version, not HEAD.
-        assert_eq!(
-            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-            "staged\n"
-        );
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "staged\n");
         assert!(porcelain(&repo, "a.txt").starts_with("M "));
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2608,10 +2570,7 @@ mod tests {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "main work"]);
         // Force a merge commit (no fast-forward).
-        git(
-            &repo,
-            &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"],
-        );
+        git(&repo, &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"]);
 
         let commits = git_get_log(cwd, None).unwrap();
         let merge = commits
@@ -2640,10 +2599,7 @@ mod tests {
 
     fn count_commits(repo: &std::path::Path) -> usize {
         let out = git(repo, &["rev-list", "--count", "HEAD"]);
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0)
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
     }
 
     #[test]
@@ -2704,11 +2660,7 @@ mod tests {
 
         assert_eq!(count_commits(&repo), 2);
         assert_eq!(last_subject(&repo), "second commit");
-        assert_eq!(
-            staged_entry_count(cwd),
-            Some(0),
-            "index cleared after commit"
-        );
+        assert_eq!(staged_entry_count(cwd), Some(0), "index cleared after commit");
         std::fs::remove_dir_all(&repo).ok();
     }
 

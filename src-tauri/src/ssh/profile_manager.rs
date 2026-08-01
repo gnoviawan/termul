@@ -94,7 +94,10 @@ impl std::fmt::Debug for SSHProfile {
             .field("username", &self.username)
             .field("auth_method", &self.auth_method)
             .field("private_key_path", &self.private_key_path)
-            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field(
+                "password",
+                &self.password.as_ref().map(|_| "<redacted>"),
+            )
             .field(
                 "passphrase",
                 &self.passphrase.as_ref().map(|_| "<redacted>"),
@@ -176,7 +179,7 @@ impl ProfileManager {
             .map_err(|e| format!("Failed to open SSH store: {}", e))?;
 
         let value = store.get(STORE_KEY).unwrap_or(serde_json::json!([]));
-
+        
         let stored: Vec<StoredSSHProfile> = serde_json::from_value(value)
             .map_err(|e| format!("Failed to deserialize SSH profiles: {}", e))?;
 
@@ -349,7 +352,7 @@ impl ProfileManager {
     /// Update last_connected timestamp for a profile
     pub fn update_last_connected(&self, id: &str) -> Result<(), String> {
         let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
-
+        
         // Use cache if available, otherwise load from store
         let mut profiles = match cache.as_ref() {
             Some(cached) => cached.clone(),

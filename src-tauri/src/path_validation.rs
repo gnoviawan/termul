@@ -56,7 +56,10 @@ pub fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
 /// - Path traversal attacks (../, ../../, etc.)
 /// - Absolute paths that escape the project boundary
 /// - Symlink attacks that point outside the project
-pub fn validate_search_path(search_path: &str, project_root: &str) -> Result<PathBuf, String> {
+pub fn validate_search_path(
+    search_path: &str,
+    project_root: &str,
+) -> Result<PathBuf, String> {
     if path_has_parent_dir(search_path) {
         return Err(format!(
             "Invalid search path: path traversal detected in '{}'",
@@ -146,7 +149,9 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside project boundary"));
+        assert!(result
+            .unwrap_err()
+            .contains("outside project boundary"));
 
         cleanup_test_dir(&project_root);
         fs::remove_dir_all(&outside_path).ok();
@@ -219,13 +224,13 @@ mod tests {
                 .expect("failed to create directory symlink for path validation test");
         }
 
-        let result = validate_search_path(
-            symlink_path.to_str().unwrap(),
-            project_root.to_str().unwrap(),
-        );
+        let result =
+            validate_search_path(symlink_path.to_str().unwrap(), project_root.to_str().unwrap());
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside project boundary"));
+        assert!(result
+            .unwrap_err()
+            .contains("outside project boundary"));
 
         cleanup_test_dir(&project_root);
         fs::remove_dir_all(&outside_dir).ok();
@@ -239,7 +244,10 @@ mod tests {
 
         assert!(result.is_ok());
         let canonical = result.unwrap();
-        assert_eq!(canonical, fs::canonicalize(&project_root).unwrap());
+        assert_eq!(
+            canonical,
+            fs::canonicalize(&project_root).unwrap()
+        );
 
         cleanup_test_dir(&project_root);
     }
@@ -250,8 +258,10 @@ mod tests {
         let weird_dir = project_root.join("foo..bar");
         fs::create_dir_all(&weird_dir).expect("Failed to create subdirectory");
 
-        let result =
-            validate_search_path(weird_dir.to_str().unwrap(), project_root.to_str().unwrap());
+        let result = validate_search_path(
+            weird_dir.to_str().unwrap(),
+            project_root.to_str().unwrap(),
+        );
 
         assert!(result.is_ok());
 
@@ -272,10 +282,7 @@ mod tests {
 
     #[test]
     fn test_strip_verbatim_disk_prefix() {
-        assert_eq!(
-            strip_verbatim_prefix(r"\\?\C:\Users\foo").as_ref(),
-            r"C:\Users\foo"
-        );
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\foo").as_ref(), r"C:\Users\foo");
     }
 
     #[test]
@@ -293,10 +300,7 @@ mod tests {
             r"C:\Users\foo\bar"
         );
         // No verbatim prefix -> returned verbatim (string).
-        assert_eq!(
-            strip_verbatim_prefix("/home/user/project").as_ref(),
-            "/home/user/project"
-        );
+        assert_eq!(strip_verbatim_prefix("/home/user/project").as_ref(), "/home/user/project");
     }
 
     #[test]

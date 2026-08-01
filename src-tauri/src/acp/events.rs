@@ -454,10 +454,7 @@ mod tests {
         assert_eq!(value["stopReason"], "end_turn");
         // Story 1.8 T3.2: `turnId` is absent when `None` (byte-identical to
         // pre-1.8 desktop payloads — `skip_serializing_if = "Option::is_none"`).
-        assert!(
-            value.get("turnId").is_none(),
-            "turnId must be absent when None"
-        );
+        assert!(value.get("turnId").is_none(), "turnId must be absent when None");
     }
 
     #[test]
@@ -559,7 +556,7 @@ mod tests {
             agent_id: AgentId("a1".to_string()),
             session_id: SessionId::new("sess-1"),
             question_id: "q-7".to_string(),
-            question: "Which approach?".to_string(),
+            question: "Which approach?" .to_string(),
             options: vec![
                 QuestionOption {
                     value: "plan-a".to_string(),

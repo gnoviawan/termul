@@ -178,13 +178,12 @@ pub fn parse_ssh_config_content(content: &str) -> Vec<ParsedSSHProfile> {
                     profiles.push(profile);
                 }
             }
-
+            
             // Split multi-host lines: "Host a b c" should create 3 profiles
-            let hosts: Vec<&str> = value
-                .split_whitespace()
+            let hosts: Vec<&str> = value.split_whitespace()
                 .filter(|h| !h.contains('*') && !h.contains('?')) // Skip wildcards
                 .collect();
-
+            
             if hosts.is_empty() {
                 current_host = None;
                 current_options.clear();

@@ -142,7 +142,9 @@ impl PortForwardManager {
         // Store the handle
         {
             let mut forwards = self.forwards.write();
-            let conn_forwards = forwards.entry(connection_id.to_string()).or_default();
+            let conn_forwards = forwards
+                .entry(connection_id.to_string())
+                .or_default();
 
             conn_forwards.insert(
                 forward_id.clone(),

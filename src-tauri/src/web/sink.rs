@@ -341,15 +341,18 @@ impl WsRelaySink {
     /// Current session sequence frontier. Used as the snapshot watermark.
     #[must_use]
     pub fn session_watermark(&self, session_id: &str) -> u64 {
-        self.sessions.lock().get(session_id).map_or_else(
-            || {
-                self.persistence
-                    .as_ref()
-                    .and_then(|persistence| persistence.last_seq(session_id).ok())
-                    .unwrap_or(0)
-            },
-            |state| state.last_seq,
-        )
+        self.sessions
+            .lock()
+            .get(session_id)
+            .map_or_else(
+                || {
+                    self.persistence
+                        .as_ref()
+                        .and_then(|persistence| persistence.last_seq(session_id).ok())
+                        .unwrap_or(0)
+                },
+                |state| state.last_seq,
+            )
     }
 
     /// Assign seq + append under the sessions lock (atomic w.r.t. concurrent emits).
@@ -563,9 +566,9 @@ impl WsRelaySink {
             // was evicted while disk replay was in flight, drop the state lock,
             // flush/re-read durable history, and retry before registering.
             let frontier = last_seq;
-            let first_missing = cursor
-                .checked_add(1)
-                .and_then(|start| (start..=frontier).find(|seq| !by_seq.contains_key(seq)));
+            let first_missing = cursor.checked_add(1).and_then(|start| {
+                (start..=frontier).find(|seq| !by_seq.contains_key(seq))
+            });
             if first_missing.is_some() {
                 if self.persistence.is_none() || base_seq <= cursor.saturating_add(1) {
                     return (client_id, rx, ReplayResult::Stale);
@@ -1369,8 +1372,9 @@ mod tests {
         let hook = crate::acp::session_persistence::ReplayTestHook::new(entered_tx);
         persistence.set_replay_test_hook(hook.clone());
         let subscribe_relay = relay.clone();
-        let subscribe =
-            tokio::spawn(async move { subscribe_relay.subscribe("sess-durable", Some(0)).await });
+        let subscribe = tokio::spawn(async move {
+            subscribe_relay.subscribe("sess-durable", Some(0)).await
+        });
         tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
             .await
             .unwrap();

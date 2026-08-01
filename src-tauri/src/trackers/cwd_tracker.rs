@@ -239,9 +239,7 @@ impl CwdTracker {
                             // Only emit event if CWD actually changed
                             if state.last_known_cwd != new_cwd {
                                 state.last_known_cwd = new_cwd.clone();
-                                if let Some(git) =
-                                    git_tracker.read().as_ref().and_then(|g| g.upgrade())
-                                {
+                                if let Some(git) = git_tracker.read().as_ref().and_then(|g| g.upgrade()) {
                                     git.update_terminal_cwd(&terminal_id, new_cwd.clone());
                                 }
 
@@ -442,4 +440,5 @@ mod tests {
 
         assert!(!poll_executed);
     }
+
 }

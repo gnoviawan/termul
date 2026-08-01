@@ -68,7 +68,10 @@ pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
 /// `None` the absolute path is resolved directly (no longer denied). `root`
 /// remains in the signature as the session `cwd` for future relative-path
 /// resolution; it is not used for containment.
-async fn scope_to_workspace(requested: &Path, _root: Option<&Path>) -> Result<PathBuf, acp::Error> {
+async fn scope_to_workspace(
+    requested: &Path,
+    _root: Option<&Path>,
+) -> Result<PathBuf, acp::Error> {
     if !requested.is_absolute() {
         return Err(acp::Error::invalid_params()
             .data(format!("path must be absolute: {}", requested.display())));
@@ -100,8 +103,10 @@ async fn scope_to_workspace(requested: &Path, _root: Option<&Path>) -> Result<Pa
             Err(_) => match ancestor.parent() {
                 Some(parent) if parent != ancestor => ancestor = parent,
                 _ => {
-                    return Err(acp::Error::invalid_params()
-                        .data(format!("path cannot be resolved: {}", requested.display())));
+                    return Err(acp::Error::invalid_params().data(format!(
+                        "path cannot be resolved: {}",
+                        requested.display()
+                    )));
                 }
             },
         }
@@ -199,12 +204,7 @@ pub fn emit_session_update(
                 role: ChunkRole::User,
                 content: chunk.content,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_MESSAGE_CHUNK,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let preview = match &chunk.content {
@@ -229,12 +229,7 @@ pub fn emit_session_update(
                 role: ChunkRole::Agent,
                 content: chunk.content,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_MESSAGE_CHUNK,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
             let event = MessageChunkEvent {
@@ -243,12 +238,7 @@ pub fn emit_session_update(
                 role: ChunkRole::Thought,
                 content: chunk.content,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_MESSAGE_CHUNK,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MESSAGE_CHUNK, &event);
         }
         SessionUpdate::ToolCall(tool_call) => {
             let event = ToolCallEvent {
@@ -256,12 +246,7 @@ pub fn emit_session_update(
                 session_id,
                 tool_call,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_TOOL_CALL,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL, &event);
         }
         SessionUpdate::ToolCallUpdate(update) => {
             let event = ToolCallUpdateEvent {
@@ -269,12 +254,7 @@ pub fn emit_session_update(
                 session_id,
                 update,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_TOOL_CALL_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_TOOL_CALL_UPDATE, &event);
         }
         SessionUpdate::Plan(plan) => {
             // ACP agent-plan: each update is a full replace; forward verbatim.
@@ -284,12 +264,7 @@ pub fn emit_session_update(
                 session_id,
                 plan,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_PLAN_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_PLAN_UPDATE, &event);
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
             let event = CommandsUpdateEvent {
@@ -297,12 +272,7 @@ pub fn emit_session_update(
                 session_id,
                 available_commands: update.available_commands,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_COMMANDS_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_COMMANDS_UPDATE, &event);
         }
         SessionUpdate::CurrentModeUpdate(update) => {
             let event = ModeUpdateEvent {
@@ -311,12 +281,7 @@ pub fn emit_session_update(
                 current_mode_id: update.current_mode_id,
                 available_modes: Vec::new(),
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_MODE_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_MODE_UPDATE, &event);
         }
         SessionUpdate::ConfigOptionUpdate(update) => {
             let event = ConfigOptionsUpdateEvent {
@@ -324,12 +289,7 @@ pub fn emit_session_update(
                 session_id,
                 config_options: update.config_options,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_CONFIG_OPTIONS_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_CONFIG_OPTIONS_UPDATE, &event);
         }
         SessionUpdate::SessionInfoUpdate(update) => {
             // `title` is `MaybeUndefined<String>`: Undefined = not sent (skip),
@@ -342,12 +302,7 @@ pub fn emit_session_update(
                         session_id,
                         title: None,
                     };
-                    events::fan_out(
-                        sinks,
-                        Some(event.session_id.0.as_str()),
-                        events::EVENT_SESSION_INFO_UPDATE,
-                        &event,
-                    );
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
                 }
                 Some(Some(t)) => {
                     let event = SessionInfoUpdateEvent {
@@ -355,12 +310,7 @@ pub fn emit_session_update(
                         session_id,
                         title: Some(t.clone()),
                     };
-                    events::fan_out(
-                        sinks,
-                        Some(event.session_id.0.as_str()),
-                        events::EVENT_SESSION_INFO_UPDATE,
-                        &event,
-                    );
+                    events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_SESSION_INFO_UPDATE, &event);
                 }
             }
         }
@@ -376,12 +326,7 @@ pub fn emit_session_update(
                 size: update.size,
                 cost,
             };
-            events::fan_out(
-                sinks,
-                Some(event.session_id.0.as_str()),
-                events::EVENT_USAGE_UPDATE,
-                &event,
-            );
+            events::fan_out(sinks, Some(event.session_id.0.as_str()), events::EVENT_USAGE_UPDATE, &event);
         }
         // Any future (non_exhaustive) variants have no dedicated event;
         // ignore them — but log so a silently-dropped update can be diagnosed
@@ -550,18 +495,14 @@ mod tests {
         std::fs::write(&path, "a\r\nb\r\nc\r\n").unwrap();
 
         // Take all three lines starting at line 1: must be byte-identical.
-        let req = ReadTextFileRequest::new("sess", &path)
-            .line(1u32)
-            .limit(3u32);
+        let req = ReadTextFileRequest::new("sess", &path).line(1u32).limit(3u32);
         let resp = handle_read_text_file(&req, Some(workspace.as_path()))
             .await
             .unwrap();
         assert_eq!(resp.content, "a\r\nb\r\nc\r\n");
 
         // Take the middle line: keep its CRLF terminator.
-        let req = ReadTextFileRequest::new("sess", &path)
-            .line(2u32)
-            .limit(1u32);
+        let req = ReadTextFileRequest::new("sess", &path).line(2u32).limit(1u32);
         let resp = handle_read_text_file(&req, Some(workspace.as_path()))
             .await
             .unwrap();

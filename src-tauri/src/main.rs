@@ -11,11 +11,7 @@ fn main() {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var(
             "RUST_LOG",
-            if cfg!(debug_assertions) {
-                "debug"
-            } else {
-                "info"
-            },
+            if cfg!(debug_assertions) { "debug" } else { "info" },
         );
     }
 

@@ -484,8 +484,8 @@ impl SessionPersistence {
             }
             records
         })
-        .await
-        .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
+            .await
+            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
     }
 
     #[cfg(test)]

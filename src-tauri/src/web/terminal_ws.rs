@@ -5,9 +5,9 @@
 //! operations are project-scoped: a connection may only interact with terminals
 //! whose `project_id` it has been authorized for via spawn or explicit attach.
 
-use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use parking_lot::RwLock;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -54,7 +54,8 @@ async fn run(socket: WebSocket, state: AppState) {
 
     // Per-connection authorization: terminal IDs this socket may operate on.
     // Shared with the event-forwarding task so it can see updates.
-    let authorized: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+    let authorized: Arc<RwLock<HashSet<String>>> =
+        Arc::new(RwLock::new(HashSet::new()));
     // Per-terminal output forwarding tasks.
     let attachments: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
@@ -74,10 +75,14 @@ async fn run(socket: WebSocket, state: AppState) {
                     if !event_authorized.read().contains(&terminal_id) {
                         continue;
                     }
-                    let payload = serde_json::to_value(&event).unwrap_or_else(|_| json!({}));
-                    if send_json(&event_tx, json!({ "type": "event", "payload": payload }))
-                        .await
-                        .is_err()
+                    let payload = serde_json::to_value(&event)
+                        .unwrap_or_else(|_| json!({}));
+                    if send_json(
+                        &event_tx,
+                        json!({ "type": "event", "payload": payload }),
+                    )
+                    .await
+                    .is_err()
                     {
                         break;
                     }
@@ -97,9 +102,7 @@ async fn run(socket: WebSocket, state: AppState) {
 
     while let Some(frame) = stream.next().await {
         let Ok(message) = frame else { break };
-        let Message::Text(text) = message else {
-            continue;
-        };
+        let Message::Text(text) = message else { continue };
         let request = match serde_json::from_str::<Request>(&text) {
             Ok(request) => request,
             Err(error) => {
@@ -127,10 +130,7 @@ async fn run(socket: WebSocket, state: AppState) {
     for task in ctx.attachments.values() {
         task.abort();
     }
-    info!(
-        "[terminal-ws] client disconnected; {} PTY(s) preserved",
-        ctx.authorized.read().len()
-    );
+    info!("[terminal-ws] client disconnected; {} PTY(s) preserved", ctx.authorized.read().len());
     drop(tx);
     let _ = write_task.await;
 }
@@ -171,12 +171,7 @@ async fn handle(
                 .map_err(|e| ("VALIDATION_ERROR", e.to_string()))?;
             // Require project_id so the terminal is scoped — do not default
             // to a literal that any client can target.
-            if options
-                .project_id
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .is_none()
-            {
+            if options.project_id.as_deref().filter(|s| !s.is_empty()).is_none() {
                 return Err((
                     "VALIDATION_ERROR",
                     "spawn requires a non-empty projectId".to_string(),
@@ -198,10 +193,7 @@ async fn handle(
         "write" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             let data = string_field(&request.payload, "data")?;
             state
@@ -214,10 +206,7 @@ async fn handle(
         "resize" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             let cols = u16_field(&request.payload, "cols")?;
             let rows = u16_field(&request.payload, "rows")?;
@@ -250,12 +239,11 @@ async fn handle(
         }
         "attach" => {
             let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
-            let last_seq = request.payload["lastSeq"].as_u64().unwrap_or(0);
+            let last_seq = request.payload["lastSeq"]
+                .as_u64()
+                .unwrap_or(0);
             let instance = state.pty.get(&terminal_id).ok_or_else(|| {
-                (
-                    "TERMINAL_NOT_FOUND",
-                    format!("Terminal not found: {terminal_id}"),
-                )
+                ("TERMINAL_NOT_FOUND", format!("Terminal not found: {terminal_id}"))
             })?;
             // attach does NOT authorize — only spawn does. This prevents a
             // client from self-authorizing for any terminal ID it discovers.
@@ -355,50 +343,35 @@ async fn handle(
         "get_cwd" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             Ok(json!(state.cwd_tracker.get_cwd(terminal_id)))
         }
         "get_git_branch" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             Ok(json!(state.git_tracker.get_branch(terminal_id)))
         }
         "get_git_status" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             Ok(json!(state.git_tracker.get_status(terminal_id)))
         }
         "get_exit_code" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             Ok(json!(state.exit_code_tracker.get_exit_code(terminal_id)))
         }
         "add_renderer_ref" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             state
                 .pty
@@ -409,10 +382,7 @@ async fn handle(
         "remove_renderer_ref" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             state
                 .pty
@@ -423,10 +393,7 @@ async fn handle(
         "set_protected" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
             }
             let protected = request.payload["protected"].as_bool().unwrap_or(true);
             state.pty.set_protected(terminal_id, protected);
@@ -436,10 +403,7 @@ async fn handle(
             // Global setting — require at least one authorized terminal to
             // prevent arbitrary clients from changing lifecycle policy.
             if ctx.authorized.read().is_empty() {
-                return Err((
-                    "UNAUTHORIZED",
-                    "Not authorized to update orphan detection".to_string(),
-                ));
+                return Err(("UNAUTHORIZED", "Not authorized to update orphan detection".to_string()));
             }
             let enabled = request.payload["enabled"].as_bool().unwrap_or(true);
             let timeout = request.payload["timeout"]

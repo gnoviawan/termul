@@ -144,7 +144,10 @@ impl DriverState {
 
     /// Remove and return every pending question, regardless of session.
     pub(crate) fn drain_all_questions(&mut self) -> Vec<PendingQuestion> {
-        self.pending_questions.drain().map(|(_, q)| q).collect()
+        self.pending_questions
+            .drain()
+            .map(|(_, q)| q)
+            .collect()
     }
 
     /// Remove and return all pending permissions belonging to a session.
