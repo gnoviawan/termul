@@ -550,38 +550,37 @@ impl PermissionRendezvous {
         Ok(RespondOutcome::Resolved)
     }
 
-    /// On browser disconnect, resolve every outstanding ticket whose session no
-    /// longer has any OTHER subscribed client as deny (FR14: disconnect → deny),
-    /// AND drain each such session's queued (not-yet-outstanding) tickets too.
-    ///
-    /// A ticket is denied only when the disconnecting client was the last
-    /// subscriber on its session — otherwise a remaining client can still
-    /// legitimately respond. `session_subscribers` reports the count of clients
-    /// STILL subscribed (after the disconnecting one was unregistered).
+    /// Deny every outstanding + queued ticket for a single session (called by
+    /// [`Self::deny_all_for_client`] after the grace window). Drains the
+    /// session queue and resolves each outstanding ticket as deny.
     async fn deny_orphaned_session(self: &Arc<Self>, session_id: &str) {
-        let (to_deny, queued_to_deny): (Vec<RequestAgentPair>, Vec<RequestAgentPair>) = {
+        // Collect outstanding RequestAgentPair lists from `tickets` in a scoped
+        // guard, drop the tickets lock, then drain the session queue under the
+        // `sessions` lock separately. `register` acquires sessions→tickets;
+        // holding tickets while acquiring sessions here would invert the order
+        // and risk deadlock.
+        let to_deny: Vec<RequestAgentPair> = {
             let tickets = self.tickets.lock();
-            let outstanding = tickets
+            tickets
                 .iter()
                 .filter(|(_, ticket)| {
                     ticket.resolved_by.is_none() && ticket.session_id == session_id
                 })
                 .map(|(request_id, ticket)| (request_id.clone(), ticket.agent_id.clone()))
-                .collect();
-            let queued = self
-                .sessions
-                .lock()
-                .get_mut(session_id)
-                .map(|queue| {
-                    queue
-                        .queued
-                        .drain(..)
-                        .map(|ticket| (ticket.request_id, ticket.agent_id))
-                        .collect()
-                })
-                .unwrap_or_default();
-            (outstanding, queued)
+                .collect()
         };
+        let queued_to_deny: Vec<RequestAgentPair> = self
+            .sessions
+            .lock()
+            .get_mut(session_id)
+            .map(|queue| {
+                queue
+                    .queued
+                    .drain(..)
+                    .map(|ticket| (ticket.request_id, ticket.agent_id))
+                    .collect()
+            })
+            .unwrap_or_default();
         for (request_id, agent_id) in to_deny {
             self.deny(&request_id, &agent_id, DenyReason::Disconnect)
                 .await;
@@ -597,7 +596,14 @@ impl PermissionRendezvous {
         }
     }
 
-    /// Compatibility helper used by tests and explicit immediate cleanup paths.
+    /// On browser disconnect, resolve every outstanding ticket whose session no
+    /// longer has any OTHER subscribed client as deny (FR14: disconnect → deny),
+    /// AND drain each such session's queued (not-yet-outstanding) tickets too.
+    ///
+    /// A ticket is denied only when the disconnecting client was the last
+    /// subscriber on its session — otherwise a remaining client can still
+    /// legitimately respond. `session_subscribers` reports the count of clients
+    /// STILL subscribed (after the disconnecting one was unregistered).
     pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
     where
         F: Fn(&str) -> usize,

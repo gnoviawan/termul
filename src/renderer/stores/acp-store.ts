@@ -4475,8 +4475,6 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
     return
   }
 
-  const state = useAcpStore.getState()
-  const session = state.sessions[recovery.sessionId]
   const messages: ChatMessage[] = []
   for (const event of recovery.events) {
     const payload = event.payload as Record<string, unknown>
@@ -4508,16 +4506,23 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
       messages.push(message)
     }
   }
-  useAcpStore.setState((current) => ({
-    messages: { ...current.messages, [recovery.sessionId]: messages },
-    degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
-    sessions: session
-      ? {
-          ...current.sessions,
-          [recovery.sessionId]: { ...session, lastError: null }
-        }
-      : current.sessions
-  }))
+  useAcpStore.setState((current) => {
+    const session = current.sessions[recovery.sessionId]
+    const replacing = messages.length > 0
+    return {
+      messages: replacing
+        ? { ...current.messages, [recovery.sessionId]: messages }
+        : current.messages,
+      toolCalls: replacing ? { ...current.toolCalls, [recovery.sessionId]: [] } : current.toolCalls,
+      degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
+      sessions: session
+        ? {
+            ...current.sessions,
+            [recovery.sessionId]: { ...session, lastError: null }
+          }
+        : current.sessions
+    }
+  })
 }
 
 export function initAcpEventListeners(): () => void {

@@ -711,6 +711,7 @@ describe('WsAcpTransport', () => {
     const subscriptions = sock.sent
       .map((frame) => JSON.parse(frame) as { type: string; payload: { lastSeq?: number } })
       .filter((frame) => frame.type === 'subscribe')
+    expect(subscriptions).toHaveLength(2)
     expect(subscriptions.every((frame) => frame.payload.lastSeq === 0)).toBe(true)
     transport.dispose()
   })
@@ -932,16 +933,22 @@ describe('WsAcpTransport', () => {
 
   it('refreshes send_prompt inactivity only for matching-session sequenced events', async () => {
     vi.useFakeTimers()
+    class ShortInactivitySocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.runtimePolicy = {
+          ...this.runtimePolicy,
+          promptInactivityTimeoutMs: 1_000
+        }
+      }
+    }
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+      WebSocketImpl: ShortInactivitySocket as unknown as typeof WebSocket
     })
     await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const sock = (transport as unknown as { socket: ShortInactivitySocket }).socket
     sock.holdSendPrompt = true
-    sock.runtimePolicy.promptInactivityTimeoutMs = 1_000
-    ;(transport as unknown as { runtimePolicy: FakeWebSocket['runtimePolicy'] }).runtimePolicy =
-      sock.runtimePolicy
 
     const pending = transport.sendPrompt('a1', 's1', 'long turn')
     let settled = false

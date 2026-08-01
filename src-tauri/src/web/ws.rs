@@ -41,7 +41,7 @@ use tracing::warn;
 
 use crate::acp::config::AgentConfig;
 use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
-use crate::web::permissions::TurnClaim;
+use crate::web::permissions::{TurnClaim, DEFAULT_PERMISSION_RECONNECT_GRACE};
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
 use crate::web::sink::{broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink};
 
@@ -322,7 +322,11 @@ impl RuntimePolicy {
         let turn_timeout = crate::acp::manager::resolved_turn_timeout();
         Self {
             turn_timeout_ms: turn_timeout.as_millis() as u64,
-            prompt_inactivity_timeout_ms: turn_timeout.as_millis() as u64,
+            // The inactivity budget — refreshed on matching-session activity but
+            // strictly shorter than the absolute turn ceiling so a stalled turn
+            // still times out even with intermittent activity. Half the turn
+            // timeout keeps the inactivity budget proportional to the ceiling.
+            prompt_inactivity_timeout_ms: (turn_timeout.as_millis() as u64 / 2).max(1),
             permission_reconnect_grace_ms: permission_reconnect_grace.as_millis() as u64,
             ping_interval_ms: PING_INTERVAL.as_millis() as u64,
             pong_timeout_ms: PONG_TIMEOUT.as_millis() as u64,
@@ -679,7 +683,7 @@ async fn handle_request(
             *authed = true;
             let reconnect_grace = relay
                 .rendezvous()
-                .map_or(Duration::from_secs(15), |rendezvous| {
+                .map_or(DEFAULT_PERMISSION_RECONNECT_GRACE, |rendezvous| {
                     rendezvous.disconnect_grace()
                 });
             return WsReply::ok(
@@ -959,7 +963,16 @@ async fn handle_recover_session_snapshot(
         .map(|(_, client_id)| *client_id)
         .collect();
     let (client_id, mut rx, events, watermark) =
-        relay.subscribe_snapshot(&parsed.session_id).await;
+        match relay.subscribe_snapshot(&parsed.session_id).await {
+            Ok(result) => result,
+            Err(_) => {
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    "session snapshot not found",
+                );
+            }
+        };
     subscribed_clients.retain(|(sid, client_id)| {
         if sid == &parsed.session_id && prior_clients.contains(client_id) {
             relay.unsubscribe(sid, *client_id);

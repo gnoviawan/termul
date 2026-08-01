@@ -78,10 +78,7 @@ export const WS_EVENT_TYPES = [
   // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
   // Fired when the renderer-fed ChatHistoryCache mutates so connected web
   // clients refetch the session index.
-  'chat_history_changed',
-  // Server-history stale recovery. The payload carries an atomic transcript
-  // snapshot plus the relay watermark that gates subsequent live events.
-  'session_snapshot'
+  'chat_history_changed'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -213,8 +210,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   project_switch_completed: WS_RELAY_TIERS.RELIABLE,
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  chat_history_changed: WS_RELAY_TIERS.RELIABLE,
-  session_snapshot: WS_RELAY_TIERS.RELIABLE
+  chat_history_changed: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'
@@ -232,8 +228,8 @@ export interface AcpRuntimePolicy {
 }
 
 export interface AcpAuthenticateReply {
-  historyMode: HistoryMode
-  runtimePolicy: AcpRuntimePolicy
+  historyMode?: HistoryMode
+  runtimePolicy?: AcpRuntimePolicy
 }
 
 /** Atomic stale-recovery payload emitted before post-watermark live events. */

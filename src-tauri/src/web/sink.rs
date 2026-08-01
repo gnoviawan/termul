@@ -354,7 +354,16 @@ impl WsRelaySink {
             state.base_seq = seq;
         }
         state.events.push_back(se.clone());
-        state.snapshot_events.push(se.clone());
+        // Desktop shared-live only: maintain a bounded in-memory snapshot for
+        // atomic stale recovery. When persistence is available, do NOT maintain
+        // `snapshot_events` at all — `subscribe_snapshot` rebuilds the snapshot
+        // from durable history instead (avoids unbounded growth).
+        if self.persistence.is_none() {
+            state.snapshot_events.push(se.clone());
+            while state.snapshot_events.len() > self.event_log_capacity {
+                state.snapshot_events.remove(0);
+            }
+        }
         while state.events.len() > self.event_log_capacity {
             state.events.pop_front();
             state.base_seq = state
@@ -560,15 +569,24 @@ impl WsRelaySink {
     /// Atomically register a client and capture the complete session event
     /// snapshot plus its sequence watermark. The sessions lock is held across
     /// capture + registration, so subsequent emits are strictly post-watermark.
+    ///
+    /// When persistence is available, the snapshot is rebuilt from durable
+    /// history (the in-memory `snapshot_events` is NOT maintained on that path
+    /// — see `assign_and_append`). If the session is truly unknown to
+    /// persistence, an `Err` is propagated so the caller returns `not_found`
+    /// instead of an empty snapshot that would wipe transcripts.
     pub async fn subscribe_snapshot(
         &self,
         sid: &str,
-    ) -> (
-        ClientId,
-        mpsc::UnboundedReceiver<SequencedEvent>,
-        Vec<SequencedEvent>,
-        u64,
-    ) {
+    ) -> Result<
+        (
+            ClientId,
+            mpsc::UnboundedReceiver<SequencedEvent>,
+            Vec<SequencedEvent>,
+            u64,
+        ),
+        String,
+    > {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::unbounded_channel::<SequencedEvent>();
         let gate = {
@@ -580,8 +598,31 @@ impl WsRelaySink {
         };
         let _replay_guard = gate.lock().await;
         if let Some(persistence) = &self.persistence {
+            // Persistence is available: rebuild the snapshot from durable
+            // history (do NOT maintain `snapshot_events` on this path).
             let _ = persistence.flush_session(sid).await;
+            let watermark = persistence
+                .last_seq(sid)
+                .map_err(|error| error.to_string())?;
+            let records = persistence
+                .replay_after_async(sid.to_string(), 0)
+                .await
+                .map_err(|error| error.to_string())?;
+            let snapshot: Vec<SequencedEvent> = records
+                .into_iter()
+                .map(|record| {
+                    SequencedEvent::new(
+                        Some(record.session_id),
+                        record.seq,
+                        record.type_,
+                        record.payload,
+                    )
+                })
+                .collect();
+            self.register(client_id, sid, tx);
+            return Ok((client_id, rx, snapshot, watermark));
         }
+        // Desktop shared-live: use the bounded in-memory `snapshot_events`.
         let sessions = self.sessions.lock();
         let (snapshot, watermark) = sessions.get(sid).map_or_else(
             || (Vec::new(), 0),
@@ -589,7 +630,7 @@ impl WsRelaySink {
         );
         self.register(client_id, sid, tx);
         drop(sessions);
-        (client_id, rx, snapshot, watermark)
+        Ok((client_id, rx, snapshot, watermark))
     }
 
     /// Authoritative server-authored user prompt: assign the relay sequence,

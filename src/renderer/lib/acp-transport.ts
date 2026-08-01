@@ -303,6 +303,9 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>
   type: WsRequestType
   sessionId?: string
+  /** Absolute deadline (epoch-ms) for send_prompt — the inactivity timer never
+   * extends past it. `undefined` for non-send_prompt requests. */
+  deadline?: number
 }
 
 type EventListener = (payload: unknown) => void
@@ -448,6 +451,9 @@ export class WsAcpTransport implements AcpTransport {
           this.lastSeq.set(sessionId, recovery.watermark)
           this.seenTurnIds.delete(sessionId)
           await this.recoveryHandler?.(recovery)
+          // handle_recover_session_snapshot server-side re-registers the
+          // subscription for continued live delivery — no separate subscribe
+          // call needed here.
           return
         }
         this.lastSeq.delete(sessionId)
@@ -919,7 +925,13 @@ export class WsAcpTransport implements AcpTransport {
       for (const sid of ordered) {
         const last = this.lastSeq.get(sid)
         // Force re-subscribe after reconnect; pass an explicit boundary.
-        await this.subscribeSession(sid, last ?? 0, true)
+        // A single failing session must NOT abort the whole resubscribe pass —
+        // log + continue so remaining sessions still recover.
+        try {
+          await this.subscribeSession(sid, last ?? 0, true)
+        } catch (err) {
+          console.error('[acp-transport] resubscribe failed for session', sid, err)
+        }
       }
       // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and all
       // sessions are re-subscribed so the overlay stays visible for the
@@ -1064,16 +1076,20 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private refreshPromptActivity(sessionId: string): void {
-    const timeoutMs =
+    const inactivityMs =
       (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
       SEND_PROMPT_GRACE_MS
+    const now = Date.now()
     for (const [id, pending] of this.pending) {
       if (pending.type !== 'send_prompt' || pending.sessionId !== sessionId) continue
+      // Reset the inactivity timer but never extend past the absolute deadline.
+      const remaining = pending.deadline != null ? pending.deadline - now : inactivityMs
+      const timerMs = Math.min(inactivityMs, Math.max(0, remaining))
       clearTimeout(pending.timer)
       pending.timer = setTimeout(() => {
         this.pending.delete(id)
         pending.reject(new AcpTransportError('timeout', 'Request send_prompt timed out'))
-      }, timeoutMs)
+      }, timerMs)
     }
   }
 
@@ -1096,21 +1112,30 @@ export class WsAcpTransport implements AcpTransport {
         type === 'send_prompt' && typeof payloadRecord?.sessionId === 'string'
           ? payloadRecord.sessionId
           : undefined
-      const timeoutMs =
-        type === 'send_prompt'
-          ? (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
-            SEND_PROMPT_GRACE_MS
-          : REQUEST_TIMEOUT_MS
+      const isSendPrompt = type === 'send_prompt'
+      const inactivityMs = isSendPrompt
+        ? (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
+          SEND_PROMPT_GRACE_MS
+        : REQUEST_TIMEOUT_MS
+      // Absolute ceiling: the inactivity refresh never extends past this
+      // deadline so a long-stalled turn still times out despite intermittent
+      // activity.
+      const deadline = isSendPrompt
+        ? Date.now() +
+          (this.runtimePolicy?.turnTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
+          SEND_PROMPT_GRACE_MS
+        : undefined
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new AcpTransportError('timeout', `Request ${type} timed out`))
-      }, timeoutMs)
+      }, inactivityMs)
       this.pending.set(id, {
         resolve: (v) => resolve(v as T),
         reject,
         timer,
         type,
-        sessionId
+        sessionId,
+        deadline
       })
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         clearTimeout(timer)

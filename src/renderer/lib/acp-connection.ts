@@ -25,8 +25,4 @@ export class AcpConnectionCoordinator {
     this.transport.setReconnectPriorityProvider?.(this.options.pendingPermissionSessions)
     this.transport.setRecoveryHandler?.(this.options.installRecovery)
   }
-
-  cursor(sessionId: SessionId): number | null {
-    return this.transport.getSessionCursor?.(sessionId) ?? null
-  }
 }
