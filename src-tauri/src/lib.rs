@@ -131,7 +131,8 @@ pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker};
 // binary (Story 1.2) will instead pass a `WsRelaySink`-backed list with no
 // `AppHandle` at all.
 use web::{
-    ChatHistoryCache, PermissionRendezvous, ProjectRegistry, TauriEventSink, WsRelaySink,
+    ChatHistoryCache, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, TauriEventSink,
+    WsRelaySink,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1063,6 +1064,16 @@ pub fn run() {
                 tauri::async_runtime::handle().inner().clone(),
             ));
             ws_relay.set_rendezvous(rendezvous);
+            // Attach the server-side question rendezvous so a phone attached
+            // to a desktop host can answer structured questions over WS too
+            // (desktop renderer answers via the `acp_answer_question` Tauri
+            // command; first-response-wins across both paths).
+            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle(
+                Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(60),
+                tauri::async_runtime::handle().inner().clone(),
+            ));
+            ws_relay.set_question_rendezvous(question_rendezvous);
             app.manage(acp_manager);
             app.manage(ws_relay);
 

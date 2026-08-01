@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'
 
@@ -77,7 +77,19 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
                 : 'border-border hover:bg-accent'
             )}
           >
-            {multi && <Checkbox checked={selected.includes(option.value)} className="mt-0.5" />}
+            {multi && (
+              <span
+                aria-hidden
+                className={cn(
+                  'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                  selected.includes(option.value)
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border'
+                )}
+              >
+                {selected.includes(option.value) && <Check className="h-3 w-3" />}
+              </span>
+            )}
             <span className="min-w-0">
               <span className="block font-medium">{option.label}</span>
               {option.description && (

@@ -733,6 +733,27 @@ impl QuestionRendezvous {
         }
     }
 
+    /// Create a rendezvous with an explicit runtime handle + timeout.
+    ///
+    /// Use this when construction happens outside a guaranteed-runtime context
+    /// (the desktop path in Tauri's `setup`) but a runtime handle is available
+    /// via `tauri::async_runtime::handle()`. Passing the handle explicitly makes
+    /// `arm_timeout` reliable — it does not depend on `Handle::try_current()`
+    /// succeeding at construction time.
+    #[must_use]
+    pub fn with_handle(
+        acp: Arc<AcpManager>,
+        timeout: Duration,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            tickets: Mutex::new(HashMap::new()),
+            acp,
+            timeout,
+            handle: Ok(handle),
+        }
+    }
+
     /// The session id a pending `question_id` belongs to, or `None`.
     #[must_use]
     pub fn session_for_question(&self, question_id: &str) -> Option<String> {
@@ -853,6 +874,11 @@ impl QuestionRendezvous {
             // TOCTOU: every submitted value MUST be among the original options.
             // Cancel (None) is always allowed (the user may dismiss).
             if let Some(values) = values {
+                // An empty array is neither a selection nor a cancel — clients
+                // must send `None` to cancel.
+                if values.is_empty() {
+                    return Err(QuestionRespondError::InvalidOption);
+                }
                 for v in values {
                     if !question_value_is_valid(&ticket.options, v) {
                         return Err(QuestionRespondError::InvalidOption);
@@ -1363,6 +1389,29 @@ mod tests {
                     "q-multi",
                     Some(&["a".to_string(), "b".to_string()]),
                 )
+                .await;
+            assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
+        });
+    }
+
+    /// Issue #411: an EMPTY values array is neither a selection nor a cancel
+    /// — it must be rejected (clients send `None` to cancel). CodeRabbit.
+    #[test]
+    fn question_empty_values_array_is_rejected() {
+        let rdz = test_question_rendezvous();
+        let client = ClientId::new();
+        block_on(async {
+            rdz.register(
+                "q-empty".to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                question_options_value(&["plan-a"]),
+            );
+            let rejected = rdz.try_respond(client, "q-empty", Some(&[])).await;
+            assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
+            // Ticket stays outstanding; a real answer still works.
+            let ok = rdz
+                .try_respond(client, "q-empty", Some(&["plan-a".to_string()]))
                 .await;
             assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
         });
