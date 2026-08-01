@@ -26,8 +26,7 @@ vi.mock('@/lib/api', () => ({
     stop: () => stopMock(),
     status: vi.fn()
   },
-  syncProjects: vi.fn(() => Promise.resolve({ success: true, data: undefined })),
-  syncChatHistory: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  syncProjects: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -57,7 +56,7 @@ vi.mock('@/lib/acp-history-persistence', () => ({
 // Silence sonner toasts in test output.
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
-import { syncChatHistory, syncProjects } from '@/lib/api'
+import { syncProjects } from '@/lib/api'
 import { useRemoteStatus } from '@/stores/remote-status-store'
 
 const RUNNING: RemoteStatus = {
@@ -141,10 +140,10 @@ describe('RemoteAccessPopover', () => {
     })
     expect(startMock).toHaveBeenCalledWith()
     expect(setStatus).toHaveBeenCalledWith(RUNNING)
-    // Epic-4 bridge: project list + chat-history seeded on success.
+    // Project metadata is seeded; chat history is read directly from the
+    // durable Rust provider by the desktop-hosted browser.
     await waitFor(() => {
       expect(syncProjects).toHaveBeenCalledTimes(1)
-      expect(syncChatHistory).toHaveBeenCalledTimes(1)
     })
   })
 })
