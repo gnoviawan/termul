@@ -16,8 +16,17 @@ export const TURN_CLEAR_TIMEOUT_MS = 5000
 /** A user prompt waiting to send after the current turn finishes. */
 export interface QueuedPrompt {
   id: string
+  /** Wire blocks dispatched to the agent (path-framed skill text). */
   blocks: ContentBlock[]
   createdAt: number
+  /**
+   * Display blocks stored in the optimistic user message when this queue item
+   * flushes (token text → inline chips in the timeline). When omitted, the wire
+   * blocks are used for display (display == wire). Preserved across enqueue +
+   * recover so the queue preview and the flushed optimistic message keep chips
+   * while the dispatch still sends the wire.
+   */
+  displayBlocks?: ContentBlock[]
 }
 
 export interface TurnBusySession {
@@ -73,12 +82,14 @@ export function appendQueuedPrompt(
   queues: PromptQueueMap,
   sessionId: SessionId,
   blocks: ContentBlock[],
-  createId: () => string
+  createId: () => string,
+  displayBlocks?: ContentBlock[]
 ): PromptQueueMap {
   const item: QueuedPrompt = {
     id: createId(),
     blocks,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...(displayBlocks ? { displayBlocks } : {})
   }
   return {
     ...queues,
@@ -90,6 +101,8 @@ export interface RecoverPromptArgs {
   sessionId: SessionId
   userMessage: RecoverableChatMessage
   blocks: ContentBlock[]
+  /** Display blocks to preserve on the re-queued item (token text → chips). */
+  displayBlocks?: ContentBlock[]
   previousOpenTurnId: string | null
   attemptedTurnId: string
   createQueueId: () => string
@@ -116,6 +129,7 @@ export function buildRecoverPromptToQueuePatch(
     sessionId,
     userMessage,
     blocks,
+    displayBlocks,
     previousOpenTurnId,
     attemptedTurnId,
     createQueueId,
@@ -131,7 +145,7 @@ export function buildRecoverPromptToQueuePatch(
         ...state.promptQueues,
         [sessionId]: [queuedOrigin, ...(state.promptQueues[sessionId] ?? [])]
       }
-    : appendQueuedPrompt(state.promptQueues, sessionId, blocks, createQueueId)
+    : appendQueuedPrompt(state.promptQueues, sessionId, blocks, createQueueId, displayBlocks)
 
   return {
     messages: {

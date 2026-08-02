@@ -29,7 +29,7 @@ import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
-import { parseSkillSegments } from '@/lib/skill-tokens'
+import { parseSkillSegments, replaceSkillTokensInline } from '@/lib/skill-tokens'
 import { stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
@@ -78,7 +78,7 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         ? text
         : segments.map((seg, i) =>
             seg.kind === 'skill' ? (
-              <SkillChip key={`skill-${i}`} name={seg.name} readOnly />
+              <SkillChip key={`skill-${i}`} name={seg.name} />
             ) : (
               <span key={`text-${i}`}>{seg.text}</span>
             )
@@ -527,7 +527,10 @@ function ChatMessageComponent({
               animateEnter={animateEnter}
             >
               <MessageActions
-                text={text}
+                // Copy a display-safe string: tokens become `(name)` so the
+                // clipboard never carries private-use sentinels. Edit keeps the
+                // raw token text so the composer re-seeds with chips inline.
+                text={replaceSkillTokensInline(text)}
                 align="end"
                 pinned={actionsPinned}
                 onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}

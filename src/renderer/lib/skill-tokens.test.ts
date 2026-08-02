@@ -13,7 +13,7 @@ import {
 const T = (name: string): string => skillToken(name)
 
 describe('parseSkillSegments', () => {
-  it('returns a single empty text segment for an empty value', () => {
+  it('returns no segments for an empty value', () => {
     expect(parseSkillSegments('')).toEqual([])
   })
 
@@ -76,7 +76,8 @@ describe('insertSkillToken', () => {
   })
 
   it('deletes the preceding filter range when splicing (the / trigger text)', () => {
-    // value = "use this skill /" caret at end (15), deleteBefore=1 removes the "/"
+    // value = "use this skill /" (length 16); caret at end; deleteBefore=1
+    // removes the trailing "/".
     const { value, caret } = insertSkillToken('use this skill /', 16, 'git-worktree', 1)
     expect(value).toBe(`use this skill ${T('git-worktree')} `)
     expect(caret).toBe(value.length)

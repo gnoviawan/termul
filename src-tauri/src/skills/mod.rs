@@ -168,8 +168,11 @@ fn scan_skills_dir(
             continue;
         }
         let description = frontmatter.get("description").cloned().unwrap_or_default();
-        // Canonicalize the SKILL.md path so the renderer-side wire prompt can
-        // cite a stable absolute path for the agent to read at prompt time.
+        // Absolute SKILL.md path derived from the (already-absolute) scan root,
+        // so the renderer-side wire prompt can cite it for the agent to read at
+        // prompt time. Not canonicalized: `fs::canonicalize` would yield a
+        // `\\?\`-prefixed UNC path on Windows that is ugly to cite in the wire
+        // prompt, and the scan root is already absolute.
         let path = skill_md.to_string_lossy().to_string();
 
         out.insert(
@@ -187,11 +190,18 @@ fn scan_skills_dir(
 }
 
 /// List installed skills. Project-local entries override global names.
-pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSummary>, String> {
+///
+/// `home_root` is the global skills root (`~/.agents/skills`) to scan, injected
+/// so tests can supply a temp home without mutating the process-wide `HOME`
+/// (which would race with other tests reading `home_skills_root()`).
+pub fn list_agent_skills_with_home(
+    home_root: &Path,
+    project_root: Option<&str>
+) -> Result<Vec<AgentSkillSummary>, String> {
     log::debug!("listing agent skills, project_root={project_root:?}");
     let mut by_name: HashMap<String, AgentSkillSummary> = HashMap::new();
 
-    scan_skills_dir(&home_skills_root()?, "global", &mut by_name)?;
+    scan_skills_dir(home_root, "global", &mut by_name)?;
 
     if let Some(root) = project_root.filter(|s| !s.is_empty()) {
         let project_skills = PathBuf::from(root).join(".agents").join("skills");
@@ -204,7 +214,16 @@ pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSum
     Ok(skills)
 }
 
-fn resolve_skill_path(name: &str, project_root: Option<&str>) -> Result<(PathBuf, String), String> {
+/// List installed skills using the real user home (`~/.agents/skills`).
+pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSummary>, String> {
+    list_agent_skills_with_home(&home_skills_root()?, project_root)
+}
+
+fn resolve_skill_path_with_home(
+    name: &str,
+    project_root: Option<&str>,
+    home_root: &Path
+) -> Result<(PathBuf, String), String> {
     validate_skill_name(name)?;
 
     if let Some(root) = project_root.filter(|s| !s.is_empty()) {
@@ -218,7 +237,7 @@ fn resolve_skill_path(name: &str, project_root: Option<&str>) -> Result<(PathBuf
         }
     }
 
-    let global_skill = home_skills_root()?.join(name).join("SKILL.md");
+    let global_skill = home_root.join(name).join("SKILL.md");
     if global_skill.is_file() {
         return Ok((global_skill, "global".to_string()));
     }
@@ -227,11 +246,15 @@ fn resolve_skill_path(name: &str, project_root: Option<&str>) -> Result<(PathBuf
 }
 
 /// Read a skill's markdown body. Project-local overrides global.
-pub fn read_agent_skill(
+///
+/// `home_root` is injected (see `list_agent_skills_with_home`) so tests can
+/// resolve a global skill against a temp home without mutating `HOME`.
+pub fn read_agent_skill_with_home(
     name: &str,
-    project_root: Option<&str>,
+    home_root: &Path,
+    project_root: Option<&str>
 ) -> Result<AgentSkillContent, String> {
-    let (path, scope) = resolve_skill_path(name, project_root).map_err(|e| {
+    let (path, scope) = resolve_skill_path_with_home(name, project_root, home_root).map_err(|e| {
         log::warn!("agent skill '{name}' could not be resolved: {e}");
         e
     })?;
@@ -255,6 +278,14 @@ pub fn read_agent_skill(
         body,
         path,
     })
+}
+
+/// Read a skill's markdown body using the real user home (`~/.agents/skills`).
+pub fn read_agent_skill(
+    name: &str,
+    project_root: Option<&str>
+) -> Result<AgentSkillContent, String> {
+    read_agent_skill_with_home(name, &home_skills_root()?, project_root)
 }
 
 #[cfg(test)]
@@ -320,27 +351,20 @@ mod tests {
         .unwrap();
         let expected_skill_md = skill_dir.join("SKILL.md");
 
-        let prev_home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-        std::env::set_var("HOME", home.to_string_lossy().to_string());
-        let result = std::panic::catch_unwind(|| {
-            // No project root → only the global skill is discovered.
-            let listed = list_agent_skills(None).unwrap();
-            let summary = listed
-                .iter()
-                .find(|s| s.name == "global-skill" && s.scope == "global")
-                .expect("global skill should be listed");
-            assert_eq!(summary.path, expected_skill_md.to_string_lossy().to_string());
+        // Inject the temp skills root directly via the `_with_home` variants
+        // instead of mutating the process-wide `HOME` (which would race with
+        // any other test reading `home_skills_root()`).
+        let listed = list_agent_skills_with_home(&global_root, None).unwrap();
+        let summary = listed
+            .iter()
+            .find(|s| s.name == "global-skill" && s.scope == "global")
+            .expect("global skill should be listed");
+        assert_eq!(summary.path, expected_skill_md.to_string_lossy().to_string());
 
-            let content = read_agent_skill("global-skill", None).unwrap();
-            assert_eq!(content.scope, "global");
-            assert_eq!(content.path, expected_skill_md.to_string_lossy().to_string());
-        });
-        // Restore HOME/USERPROFILE so other tests don't see the temp home.
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        assert!(result.is_ok(), "global skill path population failed");
+        let content = read_agent_skill_with_home("global-skill", &global_root, None).unwrap();
+        assert_eq!(content.scope, "global");
+        assert_eq!(content.path, expected_skill_md.to_string_lossy().to_string());
+
         let _ = fs::remove_dir_all(home);
     }
 

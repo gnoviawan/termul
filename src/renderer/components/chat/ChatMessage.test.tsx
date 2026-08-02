@@ -320,31 +320,32 @@ describe('ChatMessage', () => {
 
     it('renders inline skill chips for token text in a user bubble', () => {
       const text = `use this ${T('git-worktree')} and then ${T('release-version')}`
-      render(
+      const { container } = render(
         <TooltipProvider>
           <ChatMessage message={userMessage(text)} />
         </TooltipProvider>
       )
 
-      // Each chip name renders as a visible inline pill (read-only, no X).
+      // Each chip name renders as a visible inline pill; the chip's Sparkles
+      // icon (lucide-sparkles) is the chip-specific marker.
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('release-version')).toBeInTheDocument()
+      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
       // The plain text segments render too (regex tolerates the surrounding
       // whitespace the segment carries next to the chips).
       expect(screen.getByText(/use this/)).toBeInTheDocument()
       expect(screen.getByText(/and then/)).toBeInTheDocument()
-      // No remove buttons — timeline chips are read-only.
-      expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
     })
 
     it('renders plain user text verbatim (no chip parsing) when there are no tokens', () => {
-      render(
+      const { container } = render(
         <TooltipProvider>
           <ChatMessage message={userMessage('just plain text')} />
         </TooltipProvider>
       )
       expect(screen.getByText('just plain text')).toBeInTheDocument()
-      expect(screen.queryByText(/skill/i)).not.toBeInTheDocument()
+      // No chip rendered: the chip's Sparkles icon is absent.
+      expect(container.querySelector('.lucide-sparkles')).toBeNull()
     })
   })
 })

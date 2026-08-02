@@ -1,13 +1,8 @@
-import { Sparkles, X } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface SkillChipProps {
   name: string
-  /** Click handler for the X button. When omitted or `readOnly` is set, the X
-   * button is hidden (timeline + overlay render read-only chips). */
-  onRemove?: () => void
-  /** Hide the remove button (timeline rendering, transparent-textarea overlay). */
-  readOnly?: boolean
   className?: string
 }
 
@@ -21,15 +16,12 @@ interface SkillChipProps {
  * occupies exactly one line box (`inline-flex items-center align-baseline
  * leading-none h-[1.1em]`, horizontal-only `px-1.5` padding, no vertical
  * padding) — the transparent textarea text and the overlay stay caret-aligned.
- * In the composer, the chip is read-only (Backspace removes it via the token
- * model, not the X button); in the timeline it is always read-only.
+ * Always read-only: in the composer Backspace removes a chip via the token
+ * model (`removeSkillTokenBeforeCaret`), not an X button; in the timeline the
+ * chip is non-interactive. (No `onRemove` prop — verified unused across all
+ * callers: `SkillComposerOverlay` + `ChatMessage` both pass `readOnly`.)
  */
-export function SkillChip({
-  name,
-  onRemove,
-  readOnly = false,
-  className
-}: SkillChipProps): React.JSX.Element {
+export function SkillChip({ name, className }: SkillChipProps): React.JSX.Element {
   return (
     <span
       className={cn(
@@ -40,17 +32,6 @@ export function SkillChip({
     >
       <Sparkles size={12} className="shrink-0" aria-hidden="true" />
       <span className="max-w-[40ch] truncate">{name}</span>
-      {!readOnly && onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="ml-0.5 inline-flex shrink-0 items-center rounded-full p-0.5 hover:bg-primary/20 hover:text-primary"
-          aria-label={`Remove ${name} skill`}
-          title="Remove skill"
-        >
-          <X size={12} />
-        </button>
-      )}
     </span>
   )
 }

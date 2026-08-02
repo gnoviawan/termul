@@ -82,7 +82,9 @@ export function PromptQueuePanel({
         <QueueSectionContent>
           <QueueList>
             {items.map((item) => {
-              const preview = previewQueuedPrompt(item.blocks)
+              // Preview the display (token) blocks so the queue reads as the
+              // user's typed text + chips, not the path-framed wire payload.
+              const preview = previewQueuedPrompt(item.displayBlocks ?? item.blocks)
               const summary = preview.text || preview.attachments[0]?.filename || '(queued message)'
               const hasAttachments = preview.attachments.length > 0
 

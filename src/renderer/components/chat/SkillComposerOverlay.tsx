@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 import { parseSkillSegments } from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
 import { SkillChip } from './SkillChip'
@@ -86,22 +86,42 @@ export function SkillComposerOverlay({
 }: SkillComposerOverlayProps): React.JSX.Element | null {
   const [metrics, setMetrics] = useState<TextareaMetrics | null>(null)
   const [scroll, setScroll] = useState({ top: 0, left: 0 })
+  // Previous metrics serialized, so a re-read that yields identical values does
+  // not trigger a state update (avoids churn re-renders on every keystroke).
+  const prevMetricsKeyRef = useRef<string>('')
 
-  // Read the textarea's computed metrics so the overlay text wraps identically.
-  // The ResizeObserver catches every textarea resize (including the auto-grow
-  // height change when the value changes), so the metrics stay current without
-  // listing `value` as a dependency (mutating it doesn't re-run the effect).
-  useEffect(() => {
+  // Read the textarea's computed metrics, skipping the setState when nothing
+  // changed. Stable callback shared by the mount/resize effect and the
+  // value-change effect below.
+  const readMetricsIfChanged = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
-    const read = (): void => setMetrics(readMetrics(ta))
-    read()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(read) : null
+    const next = readMetrics(ta)
+    const key = JSON.stringify(next)
+    if (key === prevMetricsKeyRef.current) return
+    prevMetricsKeyRef.current = key
+    setMetrics(next)
+  }, [textareaRef])
+
+  // Mount + resize-driven re-read. The ResizeObserver catches every textarea
+  // resize (including the auto-grow height change when the value changes).
+  useEffect(() => {
+    readMetricsIfChanged()
+    const ta = textareaRef.current
+    if (!ta) return
+    const ro =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(readMetricsIfChanged) : null
     ro?.observe(ta)
     return () => {
       ro?.disconnect()
     }
-  }, [textareaRef])
+  }, [textareaRef, readMetricsIfChanged])
+
+  // (Value-driven changes are covered by the ResizeObserver above: typing onto a
+  // new line auto-grows the textarea box, which fires the observer and re-reads.
+  // Typing on an unchanged line box changes no metrics, so no re-read is needed.
+  // A font-family/theme switch without a box resize is a known rare gap — it
+  // would need a theme-change signal this component does not own.)
 
   // Sync scroll position from the textarea to the overlay content so long
   // text stays aligned when the textarea scrolls.
@@ -167,7 +187,7 @@ export function SkillComposerOverlay({
         ) : (
           segments.map((seg, i) =>
             seg.kind === 'skill' ? (
-              <SkillChip key={`skill-${i}`} name={seg.name} readOnly />
+              <SkillChip key={`skill-${i}`} name={seg.name} />
             ) : (
               <span key={`text-${i}`}>{seg.text}</span>
             )

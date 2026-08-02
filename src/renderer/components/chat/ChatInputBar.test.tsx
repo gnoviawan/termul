@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { ContentBlock, SessionConfigOption } from '@/lib/acp-api'
 import { skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
@@ -770,7 +770,8 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
   }
 
   /** The transparent-textarea overlay renders the chip name as a visible span;
-   *  after the slash menu closes it is the stable selector for the inline chip. */
+   *  `findByText` already retries until the overlay paints, so await it
+   *  directly (no `waitFor(expect(...))` wrapper needed). */
   async function findChip(name: string): Promise<HTMLElement> {
     return screen.findByText(name, { ignore: 'option' })
   }
@@ -793,7 +794,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
     // The `/` filter text is removed and a token is spliced inline; the
     // transparent-textarea overlay renders the chip name as a visible span.
-    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    await findChip('git-worktree')
     // The textarea value now carries the token (filter text removed).
     expect(textarea).toHaveValue(`use this skill ${T('git-worktree')} `)
   })
@@ -807,14 +808,14 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    await findChip('git-worktree')
 
     // Re-open the menu after the chip + trailing space, then pick a second skill.
     fireEvent.change(textarea, { target: { value: `${T('git-worktree')} then do /` } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/release-version')
 
-    await waitFor(() => expect(findChip('release-version')).toBeDefined())
+    await findChip('release-version')
     // Both chips are present; the value carries two tokens.
     expect(textarea).toHaveValue(`${T('git-worktree')} then do ${T('release-version')} `)
   })
@@ -828,7 +829,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    await findChip('git-worktree')
 
     // Pick the same skill again — the second pick splices a second token (the
     // wire header dedupes by name, but inline positions are preserved).
@@ -850,7 +851,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    await findChip('git-worktree')
     const valueWithToken = `use this ${T('git-worktree')} `
     expect(textarea).toHaveValue(valueWithToken)
 
@@ -894,7 +895,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    await findChip('git-worktree')
     // Type after the chip + trailing space.
     fireEvent.change(textarea, {
       target: { value: `${T('git-worktree')} and then` }
@@ -909,8 +910,11 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
         [{ type: 'text', text: displayText }]
       )
     )
-    // Wire never carries a bare /skill-name; it cites the path.
-    expect(onSendBlocks.mock.calls[0]![0][0]).not.toContain('/git-worktree')
+    // Wire never carries a bare `/git-worktree` command token — only the cited
+    // skills/git-worktree/SKILL.md path (preceded by `s`, not whitespace) and
+    // the inline `(git-worktree)` replacement. Whitespace-bounded so the path
+    // isn't mistaken for a command.
+    expect(onSendBlocks.mock.calls[0]![0][0]!.text).not.toMatch(/(^|\s)\/git-worktree(?=\s|$)/)
     // The token is cleared after send.
     await waitFor(() => expect(textarea).toHaveValue(''))
   })
@@ -928,7 +932,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/pathless')
 
-    await waitFor(() => expect(findChip('pathless')).toBeDefined())
+    await findChip('pathless')
     fireEvent.change(textarea, { target: { value: `${T('pathless')} hi` } })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 

@@ -26,7 +26,8 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import {
   extractSkillNames,
   insertSkillToken,
-  removeSkillTokenBeforeCaret
+  removeSkillTokenBeforeCaret,
+  SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
@@ -143,7 +144,7 @@ export function ChatInputBar({
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
-  const { skills } = useAgentSkills(projectRoot ?? session.cwd)
+  const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
@@ -308,14 +309,21 @@ export function ChatInputBar({
   } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
 
   const sections = useMemo(
-    () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
-    [slashOpen, commands, configOptions, modes, skills, filter]
+    () =>
+      slashOpen
+        ? buildSlashSections({ commands, configOptions, modes, skills: availableSkills, filter })
+        : [],
+    [slashOpen, commands, configOptions, modes, availableSkills, filter]
   )
 
   const canSend =
     !disabled &&
     !sending &&
     (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
+  // The transparent-textarea overlay is only needed when the value carries a
+  // skill token; otherwise keep the textarea text visible so plain typing,
+  // overlay first-paint, and any overlay failure never render invisible text.
+  const hasSkillToken = value.includes(SKILL_TOKEN_START)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
@@ -327,11 +335,19 @@ export function ChatInputBar({
     setSending(true)
     try {
       // Extract the inline skill tokens carried in the value and resolve each
-      // name to its captured SKILL.md path. A skill surfaced without a path
+      // name to its SKILL.md path. Paths come from `skillPathsRef` (captured at
+      // pick time) first, then fall back to the currently-available skills list
+      // — so editing + re-sending a chip message (where the ref is empty
+      // because paths aren't persisted with the message) still resolves paths
+      // from the live skills list. A skill surfaced without a path in either
       // (e.g. a future web skill with no parity route) blocks the send — HALT
       // with a clear error so the user can remove the chip.
       const skillNames = extractSkillNames(value)
-      const skills = skillNames.map((name) => ({ name, path: skillPathsRef.current[name] ?? '' }))
+      const skills = skillNames.map((name) => ({
+        name,
+        path:
+          skillPathsRef.current[name] ?? availableSkills.find((s) => s.name === name)?.path ?? ''
+      }))
       const missingPath = skills.find((s) => !s.path)
       if (missingPath) {
         throw new Error(`Skill '${missingPath.name}' is missing a path`)
@@ -399,6 +415,7 @@ export function ChatInputBar({
     value,
     attachments,
     activeCommand,
+    availableSkills,
     disabled,
     sending,
     clearAttachments,
@@ -481,8 +498,9 @@ export function ChatInputBar({
       // Backspace over an inline skill token (caret immediately after a chip,
       // no active selection): remove the whole token plus the splicer's
       // trailing space. Falls through to the default one-char backspace when
-      // the caret is in plain text.
-      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      // the caret is in plain text. Alt is excluded so macOS Option+Backspace
+      // (delete-word) doesn't slice a token and leave orphan sentinels.
+      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const el = e.currentTarget
         const caret = el.selectionStart ?? 0
         const selEnd = el.selectionEnd ?? 0
@@ -726,7 +744,7 @@ export function ChatInputBar({
                 }
                 className={cn(
                   'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
-                  'text-transparent caret-foreground',
+                  hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
                   'placeholder:text-muted-foreground focus:outline-none',
                   'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
                 )}

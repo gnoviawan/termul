@@ -918,6 +918,7 @@ function recoverPromptToQueue(
   sessionId: SessionId,
   userMessage: ChatMessage,
   blocks: ContentBlock[],
+  displayBlocks: ContentBlock[] | undefined,
   previousOpenTurnId: string | null,
   attemptedTurnId: string,
   queuedOrigin?: QueuedPrompt
@@ -927,6 +928,7 @@ function recoverPromptToQueue(
       sessionId,
       userMessage,
       blocks,
+      displayBlocks,
       previousOpenTurnId,
       attemptedTurnId,
       createQueueId: nextQueueId,
@@ -961,7 +963,8 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
     sessionId,
     next.blocks,
     (s, turnId) => acpApi.sendPromptBlocks(s.agentId, sessionId, next.blocks, turnId),
-    next
+    next,
+    next.displayBlocks ? { displayBlocks: next.displayBlocks } : undefined
   ).catch((err) => {
     // Busy recovery is handled inside runPromptTurn (FIFO restore via queuedOrigin).
     if (isPromptTurnInProgressError(err)) return
@@ -2163,7 +2166,13 @@ async function runPromptTurn(
         }
       }
       return {
-        promptQueues: appendQueuedPrompt(s.promptQueues, sessionId, userBlocks, nextQueueId)
+        promptQueues: appendQueuedPrompt(
+          s.promptQueues,
+          sessionId,
+          userBlocks,
+          nextQueueId,
+          options?.displayBlocks
+        )
       }
     }
 
@@ -2240,6 +2249,7 @@ async function runPromptTurn(
         sessionId,
         userMessage,
         userBlocks,
+        options?.displayBlocks,
         previousOpenTurnId,
         openTurnId,
         queuedOrigin
@@ -4126,7 +4136,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessionId,
         item.blocks,
         (s, turnId) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks, turnId),
-        item
+        item,
+        item.displayBlocks ? { displayBlocks: item.displayBlocks } : undefined
       )
     } catch (err) {
       set((s) => ({

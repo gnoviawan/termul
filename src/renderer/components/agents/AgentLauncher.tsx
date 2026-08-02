@@ -62,7 +62,8 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import {
   extractSkillNames,
   insertSkillToken,
-  removeSkillTokenBeforeCaret
+  removeSkillTokenBeforeCaret,
+  SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { cn } from '@/lib/utils'
@@ -802,8 +803,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       // Backspace over an inline skill token (caret immediately after a chip,
       // no active selection): remove the whole token plus the splicer's
       // trailing space. Falls through to the default one-char backspace when
-      // the caret is in plain text.
-      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      // the caret is in plain text. Alt is excluded so macOS Option+Backspace
+      // (delete-word) doesn't slice a token and leave orphan sentinels.
+      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const el = e.currentTarget
         const caret = el.selectionStart ?? 0
         const selEnd = el.selectionEnd ?? 0
@@ -870,6 +872,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
     (prompt.trim().length > 0 || attachments.length > 0)
+  // The transparent-textarea overlay is only needed when the value carries a
+  // skill token; otherwise keep the textarea text visible so plain typing,
+  // overlay first-paint, and any overlay failure never render invisible text.
+  const hasSkillToken = prompt.includes(SKILL_TOKEN_START)
 
   return (
     <div
@@ -986,7 +992,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 rows={2}
                 aria-label="Agent prompt"
                 autoFocus
-                className="relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed text-transparent caret-foreground outline-none placeholder:text-muted-foreground/55"
+                className={cn(
+                  'relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55',
+                  hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground'
+                )}
               />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">

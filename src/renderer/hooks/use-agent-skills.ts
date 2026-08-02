@@ -3,14 +3,6 @@ import { logFrontendError } from '@/lib/log-api'
 import { type AgentSkillSummary, skillsApi } from '@/lib/skills-api'
 import { type FramedSkill, formatPromptWithSkills } from '@/lib/skills-prompt'
 
-export interface LoadedAgentSkill {
-  name: string
-  description: string
-  /** Absolute `SKILL.md` path captured at pick time so the wire prompt can cite
-   * it synchronously at send time — no IPC read at send, so it cannot fail. */
-  path: string
-}
-
 export function useAgentSkills(projectRoot: string | undefined): {
   skills: AgentSkillSummary[]
   loading: boolean

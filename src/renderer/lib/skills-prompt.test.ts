@@ -74,7 +74,7 @@ describe('formatPromptWithSkills (path-based wire framing)', () => {
     expect(formatPromptWithSkills([GIT], '')).toBe(`# Agent Skills\n\n${GIT.name}: ${GIT.path}`)
   })
 
-  it('returns only the skills section when the user text is token-only', () => {
+  it('keeps the (name) body when the user text is token-only', () => {
     expect(formatPromptWithSkills([GIT], T('git-worktree'))).toBe(
       `# Agent Skills\n\n${GIT.name}: ${GIT.path}\n\n---\n\n(git-worktree)`
     )

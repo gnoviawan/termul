@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { extractSkillNames } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
@@ -75,6 +77,10 @@ export function AgentChatPanel({
 }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
+  // Available skills (with paths) so retry can re-frame the wire from the
+  // token names in the last user message (skill paths are not persisted with
+  // the message — see the spec's Never: no new ContentBlock type).
+  const { skills: availableSkills } = useAgentSkills(session?.cwd)
   const imageCapable = useAcpStore((s) =>
     session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
   )
@@ -279,16 +285,35 @@ export function AgentChatPanel({
       })
       return
     }
-    const hasStructuredBlocks = lastUserBlocks.some((b) => b.type !== 'text')
-    // On retry, re-dispatch the last user message's blocks and pass them as the
-    // display blocks too so the timeline keeps rendering inline skill chips. The
-    // agent receives the stored blocks (token text degrades gracefully — skill
-    // names ride inside the private-use sentinels; re-framing the wire on retry
-    // is a v1 gap since the original wire is not persisted separately).
-    const task = hasStructuredBlocks
-      ? sendPromptBlocks(sessionId, lastUserBlocks, { displayBlocks: lastUserBlocks })
-      : sendPrompt(sessionId, lastUserText.trim())
-    void task.catch((err) => {
+    // Re-frame the wire from the skill token names in the last user message's
+    // text blocks + the currently-available skills' paths (skill paths are not
+    // persisted with the message — the spec's Never forbids a new ContentBlock
+    // type, so the wire is reconstructed at retry time like the composer does).
+    // The display (token) blocks are passed through unchanged so the timeline
+    // keeps rendering inline chips. If a skill name no longer resolves to a
+    // path (e.g. the skill was uninstalled), surface a clear error and abort.
+    const tokenText = lastUserText
+    const skillNames = extractSkillNames(tokenText)
+    const skills = skillNames.map((name) => ({
+      name,
+      path: availableSkills.find((s) => s.name === name)?.path ?? ''
+    }))
+    const missingPath = skills.find((s) => !s.path)
+    if (missingPath) {
+      toast.error(`Skill '${missingPath.name}' is missing a path`)
+      return
+    }
+    const wireText = skills.length > 0 ? buildPromptWithLoadedSkills(skills, tokenText) : tokenText
+    // Build wire blocks: replace the text payload with the re-framed wire text,
+    // preserving non-text (image/resource) blocks from the original message.
+    const wireBlocks: ContentBlock[] = []
+    const wireTrimmed = wireText.trim()
+    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireText })
+    for (const b of lastUserBlocks) {
+      if (b.type !== 'text') wireBlocks.push(b)
+    }
+    // Display = the original (token) blocks so the timeline keeps chips.
+    void sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: lastUserBlocks }).catch((err) => {
       if (isAgentDeadError(err)) return
       toast.error(`Failed to send: ${String(err)}`)
     })
@@ -296,7 +321,7 @@ export function AgentChatPanel({
     lastUserBlocks,
     canRetryLastUserTurn,
     lastUserText,
-    sendPrompt,
+    availableSkills,
     sendPromptBlocks,
     retryCrashedSession,
     sessionId,
