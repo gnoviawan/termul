@@ -232,7 +232,7 @@ describe('ChatMessageList', () => {
     expect(screen.getByText('Reading files')).toBeInTheDocument()
   })
 
-  it('keeps a failed tool-only turn open and visible', () => {
+  it('collapses a failed tool-only turn but flags it for attention', () => {
     render(
       <ChatMessageList
         items={[userItem, failedToolItem]}
@@ -243,7 +243,6 @@ describe('ChatMessageList', () => {
     )
 
     const trigger = screen.getByRole('button', { name: /Worked.*needs attention/ })
-    expect(trigger).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('Run checks')).toBeInTheDocument()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
 })
