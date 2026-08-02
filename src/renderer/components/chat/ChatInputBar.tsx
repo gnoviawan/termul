@@ -701,54 +701,63 @@ export function ChatInputBar({
               />
             )}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
-            <div className="relative px-4 pb-1.5 pt-3.5">
+            <div className="px-4 pb-1.5 pt-3.5">
               {/* Transparent-textarea overlay: mirrors the value with inline
                   SkillChip pills. The textarea text is transparent with a
-                  visible caret; this overlay renders the visible text + chips in
-                  the same metrics so the caret stays aligned. */}
-              <SkillComposerOverlay textareaRef={textareaRef} value={value} />
-              <textarea
-                ref={textareaRef}
-                value={value}
-                onChange={onInput}
-                onKeyDown={handleKeyDown}
-                onKeyUp={onKeyUp}
-                onSelect={onSelect}
-                onPaste={handlePaste}
-                // Story 5.3 (T2.3): on mobile web when the OSK is open, scroll
-                // the textarea into view once per OSK-open window so iOS Safari
-                // doesn't leave the input under the keyboard. rAF-deferred to
-                // let layout settle. Guarded against focus-loop thrash (the OSK
-                // can re-focus the textarea as it animates; only the first
-                // focus per OSK-open window triggers the scroll).
-                onFocus={() => {
-                  setFocused(true)
-                  // OSK-open scroll is handled by the `osk.isOskOpen`
-                  // transition effect above (the OSK state can lag the focus
-                  // event, so reading it here was unreliable).
-                }}
-                onBlur={() => setFocused(false)}
-                // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
-                // Do NOT change Enter keyboard semantics — handleKeyDown still
-                // routes Enter→send only when the slash menu is closed.
-                inputMode="text"
-                enterKeyHint="send"
-                disabled={disabled || sending}
-                rows={1}
-                placeholder={
-                  disabled
-                    ? 'Session closed'
-                    : activeCommand
-                      ? 'Add a message (optional)…'
-                      : 'Ask anything… (/ for commands, @ for files)'
-                }
-                className={cn(
-                  'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
-                  hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
-                  'placeholder:text-muted-foreground focus:outline-none',
-                  'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
-                )}
-              />
+                  visible caret; this overlay renders the visible text + chips
+                  in the same metrics so the caret stays aligned.
+
+                  The overlay is `absolute inset-0`, so its containing block
+                  must be a box that exactly matches the textarea — not the
+                  padded parent (which would shift the overlay up-left by the
+                  parent's padding and paint chips above the caret). The inner
+                  `relative` wrapper has no padding, so its box == the
+                  textarea's box and the overlay stays caret-aligned. */}
+              <div className="relative">
+                <SkillComposerOverlay textareaRef={textareaRef} value={value} />
+                <textarea
+                  ref={textareaRef}
+                  value={value}
+                  onChange={onInput}
+                  onKeyDown={handleKeyDown}
+                  onKeyUp={onKeyUp}
+                  onSelect={onSelect}
+                  onPaste={handlePaste}
+                  // Story 5.3 (T2.3): on mobile web when the OSK is open, scroll
+                  // the textarea into view once per OSK-open window so iOS Safari
+                  // doesn't leave the input under the keyboard. rAF-deferred to
+                  // let layout settle. Guarded against focus-loop thrash (the OSK
+                  // can re-focus the textarea as it animates; only the first
+                  // focus per OSK-open window triggers the scroll).
+                  onFocus={() => {
+                    setFocused(true)
+                    // OSK-open scroll is handled by the `osk.isOskOpen`
+                    // transition effect above (the OSK state can lag the focus
+                    // event, so reading it here was unreliable).
+                  }}
+                  onBlur={() => setFocused(false)}
+                  // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
+                  // Do NOT change Enter keyboard semantics — handleKeyDown still
+                  // routes Enter→send only when the slash menu is closed.
+                  inputMode="text"
+                  enterKeyHint="send"
+                  disabled={disabled || sending}
+                  rows={1}
+                  placeholder={
+                    disabled
+                      ? 'Session closed'
+                      : activeCommand
+                        ? 'Add a message (optional)…'
+                        : 'Ask anything… (/ for commands, @ for files)'
+                  }
+                  className={cn(
+                    'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
+                    hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
+                    'placeholder:text-muted-foreground focus:outline-none',
+                    'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
+                  )}
+                />
+              </div>
             </div>
             <div
               className="flex items-center justify-between gap-3 px-2.5 pb-2.5"

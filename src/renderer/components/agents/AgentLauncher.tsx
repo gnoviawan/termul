@@ -974,29 +974,38 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               onRemove={removeAttachment}
               className="px-5 pt-4"
             />
-            <div className="relative px-5 pb-2 pt-4">
+            <div className="px-5 pb-2 pt-4">
               {/* Transparent-textarea overlay: mirrors the value with inline
                   SkillChip pills. The textarea text is transparent with a
                   visible caret; this overlay renders the visible text + chips
-                  in the same metrics so the caret stays aligned. */}
-              <SkillComposerOverlay textareaRef={textareaRef} value={prompt} />
-              <textarea
-                ref={textareaRef}
-                value={prompt}
-                onChange={onInput}
-                onKeyDown={handleKeyDown}
-                onKeyUp={onKeyUp}
-                onSelect={onSelect}
-                onPaste={handlePaste}
-                placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
-                rows={2}
-                aria-label="Agent prompt"
-                autoFocus
-                className={cn(
-                  'relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55',
-                  hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground'
-                )}
-              />
+                  in the same metrics so the caret stays aligned.
+
+                  The overlay is `absolute inset-0`, so its containing block
+                  must be a box that exactly matches the textarea — not the
+                  padded parent (which would shift the overlay up-left by the
+                  parent's padding and paint chips above the caret). The inner
+                  `relative` wrapper has no padding, so its box == the
+                  textarea's box and the overlay stays caret-aligned. */}
+              <div className="relative">
+                <SkillComposerOverlay textareaRef={textareaRef} value={prompt} />
+                <textarea
+                  ref={textareaRef}
+                  value={prompt}
+                  onChange={onInput}
+                  onKeyDown={handleKeyDown}
+                  onKeyUp={onKeyUp}
+                  onSelect={onSelect}
+                  onPaste={handlePaste}
+                  placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
+                  rows={2}
+                  aria-label="Agent prompt"
+                  autoFocus
+                  className={cn(
+                    'relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55',
+                    hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground'
+                  )}
+                />
+              </div>
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />

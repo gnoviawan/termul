@@ -2178,8 +2178,24 @@ async function runPromptTurn(
 
     openTurnId = newId('turn')
     if (skipUserAppend) {
-      userMessage =
-        [...(s.messages[sessionId] ?? [])].reverse().find((m) => m.role === 'user') ?? null
+      // Reuse the trailing optimistic user message (the launch placeholder
+      // or a seeded follow-up) instead of appending a new one — but RE-STAMP
+      // its id to `turn:<turnId>`. The placeholder mints `msg-<uuid>`, so
+      // without this re-stamp a display≠wire turn (e.g. skill chips: tokens
+      // in the optimistic display, path-framed text in the server echo)
+      // would fail `_onUserPrompt`'s `turn:<id>` dedup on BOTH checks (id
+      // mismatch + block mismatch) and render a second user bubble from the
+      // echo. The display blocks are preserved verbatim — only the id moves
+      // to the namespace the server echo will cite.
+      const list = s.messages[sessionId] ?? []
+      let userIndex = -1
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].role === 'user') {
+          userIndex = i
+          break
+        }
+      }
+      userMessage = userIndex >= 0 ? { ...list[userIndex], id: `turn:${turnId}` } : null
       if (!userMessage) {
         userMessage = {
           id: `turn:${turnId}`,
@@ -2192,7 +2208,7 @@ async function runPromptTurn(
         return {
           messages: {
             ...s.messages,
-            [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
+            [sessionId]: [...list, userMessage]
           },
           plans: dropPlanForSession(s.plans, sessionId),
           sessions: {
@@ -2201,7 +2217,14 @@ async function runPromptTurn(
           }
         }
       }
+      const rebrandedList = list.slice()
+      rebrandedList[userIndex] = userMessage
       return {
+        messages: {
+          ...s.messages,
+          [sessionId]: rebrandedList
+        },
+        plans: dropPlanForSession(s.plans, sessionId),
         sessions: {
           ...s.sessions,
           [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }

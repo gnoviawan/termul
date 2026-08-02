@@ -845,6 +845,68 @@ describe('acp-store', () => {
     expect(after[0].blocks).toEqual(display)
   })
 
+  it('skipUserAppend re-stamps the placeholder user message id so a display!=wire echo does not double-bubble', async () => {
+    // Regression for the launch-with-skills duplicate-text bug. The launch
+    // placeholder mints an optimistic user message with `msg-<uuid>` id and
+    // DISPLAY (token) blocks; finalizeChatLaunch then runs runPromptTurn with
+    // `skipUserAppend: true` and WIRE (path-framed) blocks. The reused message
+    // must be re-stamped to `turn:<turnId>` so the server `user_prompt` echo
+    // (same turnId, wire blocks) dedups by id — otherwise BOTH dedup checks
+    // fail (id mismatch + display!=wire block mismatch) and the echo appends a
+    // second user bubble. Covers the path the sendPromptBlocks tests above do
+    // NOT exercise (those mint the optimistic message with `turn:<id>` here).
+    seedSession('s1', 'agent-1', false)
+    const display = [{ type: 'text', text: '\uE000git-worktree\uE001 hi' }]
+    const wire = [
+      {
+        type: 'text',
+        text: '# Agent Skills\n\ngit-worktree: /p/SKILL.md\n\n---\n\n(git-worktree) hi'
+      }
+    ]
+    // Simulate createLaunchPlaceholder's optimistic user message: msg-<uuid>
+    // id + display (token) blocks.
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'msg-placeholder-1',
+            role: 'user',
+            blocks: display,
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ]
+      }
+    })
+    // Never resolve so the turn stays active for the echo assertion.
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPromptBlocks('s1', wire, { skipUserAppend: true })
+    await Promise.resolve()
+
+    const seeded = useAcpStore.getState().messages['s1']
+    expect(seeded).toHaveLength(1)
+    // The placeholder id was re-stamped to `turn:<turnId>` (no new bubble).
+    expect(seeded[0].id.startsWith('turn:')).toBe(true)
+    expect(seeded[0].id).not.toBe('msg-placeholder-1')
+    // The display (token) blocks are preserved — the agent receives the wire.
+    expect(seeded[0].blocks).toEqual(display)
+    const turnId = seeded[0].id.slice('turn:'.length)
+
+    // Server echoes the WIRE blocks for the same turn id. Must dedup by id
+    // (not append a second user bubble) and must NOT overwrite the display.
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId,
+      content: wire
+    })
+    const finalMessages = useAcpStore.getState().messages['s1']
+    expect(finalMessages).toHaveLength(1)
+    expect(finalMessages[0].id).toBe(`turn:${turnId}`)
+    expect(finalMessages[0].blocks).toEqual(display)
+  })
+
   it('sendPrompt updates the persisted history title from the first user message', async () => {
     seedSession('s1', 'agent-09d39730', false)
     useAcpStore.setState({
