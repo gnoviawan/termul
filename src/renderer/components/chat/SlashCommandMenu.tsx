@@ -1,4 +1,4 @@
-import { SlidersHorizontal, TerminalSquare } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { SlashItem, SlashSection } from './slash-menu-model'
@@ -25,14 +25,17 @@ function itemKey(item: SlashItem): string {
       return `config:${item.configId}:${item.valueId}`
     case 'mode':
       return `mode:${item.modeId}`
+    case 'skill':
+      return `skill:${item.name}`
   }
 }
 
 function slashItemToComposer(item: SlashItem): ComposerMenuItem {
-  const isCommand = item.kind === 'command'
-  const Icon = item.kind === 'command' ? TerminalSquare : SlidersHorizontal
-  const label = isCommand ? `/${item.name}` : item.label
-  const selected = item.kind !== 'command' && item.selected
+  const isCommandOrSkill = item.kind === 'command' || item.kind === 'skill'
+  const Icon =
+    item.kind === 'command' ? TerminalSquare : item.kind === 'skill' ? Sparkles : SlidersHorizontal
+  const label = isCommandOrSkill ? `/${item.name}` : item.label
+  const selected = !isCommandOrSkill && item.selected
   return {
     key: itemKey(item),
     label,

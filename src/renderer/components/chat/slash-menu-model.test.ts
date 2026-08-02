@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   applyCommandToInput,
   buildSlashSections,
@@ -50,6 +51,11 @@ const modes: SessionModeState = {
     { id: 'code', name: 'Code' }
   ]
 }
+
+const skills: AgentSkillSummary[] = [
+  { name: 'investigate', description: 'Run an investigation', scope: 'project' },
+  { name: 'review', description: 'Review code', scope: 'global' }
+]
 
 describe('slash trigger detection', () => {
   it('opens on a lone slash and a leading slash token', () => {
@@ -122,10 +128,45 @@ describe('mid-text slash trigger detection', () => {
 })
 
 describe('buildSlashSections', () => {
-  it('lists commands first', () => {
+  it('lists skills before commands', () => {
+    const sections = buildSlashSections({
+      commands,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    expect(sections[0].id).toBe('skills')
+    expect(sections[1].id).toBe('commands')
+  })
+
+  it('lists commands first when no skills', () => {
     const sections = buildSlashSections({ commands, configOptions: [], modes: null, filter: '' })
     expect(sections[0].id).toBe('commands')
     expect(sections[0].items).toHaveLength(2)
+  })
+
+  it('dedupes a skill whose name collides with an ACP command (command wins)', () => {
+    // A skill named `compact` collides with the `compact` command — the skill
+    // is dropped so the name appears once (Commands), not twice.
+    const overlapping: AgentSkillSummary[] = [
+      { name: 'compact', description: 'A skill called compact', scope: 'project' },
+      { name: 'investigate', description: 'Run an investigation', scope: 'project' }
+    ]
+    const sections = buildSlashSections({
+      commands,
+      configOptions: [],
+      modes: null,
+      skills: overlapping,
+      filter: ''
+    })
+    expect(sections[0].id).toBe('skills')
+    const skillNames = sections[0].items.map((i) => (i.kind === 'skill' ? i.name : ''))
+    expect(skillNames).toEqual(['investigate'])
+    const commandSection = sections.find((s) => s.id === 'commands')!
+    expect(commandSection.items.map((i) => (i.kind === 'command' ? i.name : ''))).toContain(
+      'compact'
+    )
   })
 
   it('renders one section per config option with category headings', () => {

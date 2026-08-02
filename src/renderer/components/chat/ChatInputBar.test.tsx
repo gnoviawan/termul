@@ -23,6 +23,11 @@ const { mockSetConfig, mockSetMode, mockSetModel, mockMcpCount, mockReadDir } = 
 
 vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
 
+vi.mock('@/hooks/use-agent-skills', () => ({
+  useAgentSkills: () => ({ skills: [] }),
+  buildPromptWithLoadedSkill: vi.fn(async (_skill, text: string) => text)
+}))
+
 vi.mock('@/stores/acp-store', () => ({
   useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' }),
   useSessionUsage: () => null,
