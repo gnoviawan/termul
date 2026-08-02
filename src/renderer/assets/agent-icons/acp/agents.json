@@ -70,11 +70,11 @@
   {
     "id": "claude-acp",
     "name": "Claude Agent",
-    "version": "0.64.0",
+    "version": "0.64.1",
     "description": "ACP wrapper for Anthropic's Claude",
     "distribution": {
       "npx": {
-        "package": "@agentclientprotocol/claude-agent-acp@0.64.0"
+        "package": "@agentclientprotocol/claude-agent-acp@0.64.1"
       }
     }
   },
@@ -105,11 +105,11 @@
   {
     "id": "codex-acp",
     "name": "Codex",
-    "version": "1.1.8",
+    "version": "1.1.9",
     "description": "ACP adapter for OpenAI's coding assistant",
     "distribution": {
       "npx": {
-        "package": "@agentclientprotocol/codex-acp@1.1.8"
+        "package": "@agentclientprotocol/codex-acp@1.1.9"
       }
     }
   },
