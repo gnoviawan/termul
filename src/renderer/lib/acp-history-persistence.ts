@@ -24,6 +24,13 @@ export interface SessionIndexEntry {
   createdAt: number
   lastActivityAt: number
   messageCount: number
+  /**
+   * Highest persisted message `seq` for this session (R3 / parent-spec R2
+   * index-list completeness). Optional: absent on entries loaded from a Rust
+   * index that does not yet surface it (degrades to 0, the pre-R3 value).
+   * `get_session_cursor` remains the authoritative functional cursor.
+   */
+  lastSeq?: number
   status: SessionStatus
 }
 
@@ -52,7 +59,7 @@ export function toPersistedSessionSummaries(
     status: entry.status === 'initializing' ? 'active' : entry.status,
     messageCount: entry.messageCount,
     toolCount: 0,
-    lastSeq: 0,
+    lastSeq: entry.lastSeq ?? 0,
     resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
   }))
 }

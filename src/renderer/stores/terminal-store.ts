@@ -509,7 +509,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 ptyId: newPtyId,
                 healthStatus: 'running',
                 transcript: undefined,
-                pendingScrollback: undefined
+                pendingScrollback: undefined,
+                pendingModes: undefined
               }
             : t
         ),

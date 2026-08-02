@@ -1,3 +1,5 @@
+import type { TerminalModes } from './ipc.types'
+
 // Persisted terminal data (subset of Terminal for storage)
 export interface PersistedTerminal {
   id: string
@@ -6,6 +8,12 @@ export interface PersistedTerminal {
   cwd?: string
   scrollback?: string[] // Legacy text snapshot for restoration fallback
   transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration; cap at renderer MAX_TRANSCRIPT_CHARS to avoid unbounded persistence
+  /**
+   * Captured DEC private-mode snapshot (R3). Replayed before `scrollback` on
+   * restore via `buildRehydrateSequences` so an alt-screen TUI (vim/tmux/less)
+   * screen/modes survive refresh. Optional — absence degrades to content-only.
+   */
+  modes?: TerminalModes
   // ADR-004.4: terminal-native agent metadata. Persisted so a restored agent
   // terminal re-spawns the agent TUI — but the seed prompt is intentionally NOT
   // persisted, so restore boots the agent fresh rather than re-submitting a

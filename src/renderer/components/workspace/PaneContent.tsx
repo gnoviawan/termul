@@ -313,6 +313,7 @@ export function PaneContent({
                         }
                       }}
                       initialScrollback={terminal.pendingScrollback}
+                      initialModes={terminal.pendingModes}
                       className="w-full h-full"
                       isVisible={isVisible}
                     />

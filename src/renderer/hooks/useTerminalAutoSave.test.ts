@@ -11,10 +11,11 @@ const { mockRecordTerminalContinuityEvent } = vi.hoisted(() => ({
   mockRecordTerminalContinuityEvent: vi.fn()
 }))
 
+import type { TerminalModes } from '@shared/types/ipc.types'
 import type { Terminal } from '@/types/project'
 import type { PersistedTerminal } from '../../shared/types/persistence.types'
 import { useTerminalStore } from '../stores/terminal-store'
-import { extractScrollback } from '../utils/terminal-registry'
+import { extractScrollback, getTerminalModes } from '../utils/terminal-registry'
 
 // Mock terminal-registry
 vi.mock('../utils/terminal-registry', () => ({
@@ -22,7 +23,9 @@ vi.mock('../utils/terminal-registry', () => ({
     // Return mock scrollback for testing
     if (terminalId === '1' || terminalId === 'pty-1') return ['line 1', 'line 2']
     return undefined
-  })
+  }),
+  // R3: no tracker registered in tests → undefined (content-only restore).
+  getTerminalModes: vi.fn(() => undefined)
 }))
 
 vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
@@ -159,6 +162,54 @@ describe('useTerminalAutoSave', () => {
       serializeTerminalsForProject(terminals, 'proj-1', '1')
 
       expect(extractScrollback).toHaveBeenCalledWith('pty-1')
+    })
+
+    it('captures DEC modes via getTerminalModes keyed by ptyId ?? id (R3)', () => {
+      const modes: TerminalModes = {
+        alternateScreen: true,
+        bracketedPaste: true,
+        applicationCursor: false,
+        mouseTracking: null,
+        sgrMouseMode: false,
+        sgrMousePixelsMode: false
+      }
+      vi.mocked(getTerminalModes).mockReturnValue(modes)
+
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      // R3: modes travel alongside scrollback, keyed by the same registry id.
+      expect(getTerminalModes).toHaveBeenCalledWith('pty-1')
+      expect(result.terminals[0].modes).toEqual(modes)
+
+      // Restore the content-only default for subsequent tests.
+      vi.mocked(getTerminalModes).mockReturnValue(undefined)
+    })
+
+    it('omits modes when no tracker is registered (content-only, R3 degrade)', () => {
+      const terminals: Terminal[] = [
+        {
+          id: '1',
+          ptyId: 'pty-1',
+          name: 'Terminal 1',
+          projectId: 'proj-1',
+          shell: 'powershell'
+        }
+      ]
+
+      const result = serializeTerminalsForProject(terminals, 'proj-1', '1')
+
+      expect(getTerminalModes).toHaveBeenCalledWith('pty-1')
+      expect(result.terminals[0]).not.toHaveProperty('modes')
     })
 
     it('should prefer extracted scrollback over transcript when available', () => {

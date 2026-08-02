@@ -1,9 +1,9 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
-import type { GitStatus } from '@shared/types/ipc.types'
+import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 
 // Re-export for convenience
-export type { GitStatus }
+export type { GitStatus, TerminalModes }
 
 export type ProjectColor =
   | 'blue'
@@ -78,6 +78,12 @@ export interface Terminal {
   output?: TerminalLine[]
   pendingScrollback?: string[] // Legacy text snapshot to restore on terminal mount
   transcript?: string // Raw PTY transcript used for ANSI/styling-preserving restoration
+  /**
+   * Captured DEC private-mode snapshot (R3) to replay before `pendingScrollback`
+   * on terminal mount, so an alt-screen TUI (vim/tmux/less) restores its
+   * screen/modes. Optional — absence degrades to content-only restore.
+   */
+  pendingModes?: TerminalModes
   detachedOutput?: string // Raw PTY output captured while no renderer is mounted
   rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status

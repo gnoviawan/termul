@@ -1113,6 +1113,10 @@ function persistSession(
     createdAt: session.createdAt,
     lastActivityAt: Date.now(),
     messageCount: messages.length,
+    // R3: surface the real persisted max message seq in the index-list (the
+    // minor deferred item; get_session_cursor stays the functional cursor).
+    // seq is optional on legacy messages, so degrade to 0 when absent.
+    lastSeq: messages.reduce((max, m) => Math.max(max, typeof m.seq === 'number' ? m.seq : 0), 0),
     status: session.status
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]

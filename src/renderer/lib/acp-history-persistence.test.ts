@@ -145,6 +145,17 @@ describe('pure history helpers', () => {
       })
     )
   })
+
+  it('surfaces the real persisted lastSeq and degrades to 0 when absent', () => {
+    // R3 / parent-spec R2 index-list completeness: the summary must carry the
+    // real max message seq when the index entry has it.
+    const withSeq = toPersistedSessionSummaries([entry('seq-7', { lastSeq: 7 })])[0]
+    expect(withSeq.lastSeq).toBe(7)
+
+    // Absent (old save or Rust index that does not surface it) → 0 (pre-R3).
+    const withoutSeq = toPersistedSessionSummaries([entry('seq-0')])[0]
+    expect(withoutSeq.lastSeq).toBe(0)
+  })
 })
 
 describe('provider routing', () => {

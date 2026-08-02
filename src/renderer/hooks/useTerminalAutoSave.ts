@@ -9,7 +9,7 @@ import type {
 import { PersistenceKeys } from '../../shared/types/persistence.types'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
-import { extractScrollback } from '../utils/terminal-registry'
+import { extractScrollback, getTerminalModes } from '../utils/terminal-registry'
 
 function transcriptToScrollback(transcript?: string): string[] | undefined {
   if (!transcript) {
@@ -57,7 +57,11 @@ interface PersistedTerminalSnapshot {
 }
 
 function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnapshot {
-  const extractedScrollback = extractScrollback(terminal.ptyId ?? terminal.id)
+  // R3: modes travel alongside scrollback, keyed by the same registry id the
+  // tracker is registered under (ptyId ?? id), so they reach restoreScrollback.
+  const registryId = terminal.ptyId ?? terminal.id
+  const extractedScrollback = extractScrollback(registryId)
+  const capturedModes = getTerminalModes(registryId)
 
   return {
     persistedTerminal: {
@@ -67,6 +71,7 @@ function toPersistedTerminalSnapshot(terminal: Terminal): PersistedTerminalSnaps
       cwd: terminal.cwd,
       scrollback: mergeScrollback(extractedScrollback, terminal.transcript),
       transcript: terminal.transcript,
+      ...(capturedModes ? { modes: capturedModes } : {}),
       // ADR-004.4: persist agent identity + program/baseArgs (no seed prompt).
       ...(terminal.kind === 'agent'
         ? {

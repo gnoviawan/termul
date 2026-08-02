@@ -12,7 +12,10 @@ import {
 import { isVisibleReady } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
 import type { Terminal as TerminalRecord } from '@/types/project'
-import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import type {
+  PersistedTerminal,
+  PersistedTerminalLayout
+} from '../../shared/types/persistence.types'
 import { useAcpStore } from '../stores/acp-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useProjectStore } from '../stores/project-store'
@@ -704,7 +707,10 @@ function reconcilePersistedHistoryIntoLiveTerminals(
     return {
       ...terminal,
       pendingScrollback: terminal.pendingScrollback ?? persistedTerminal.scrollback,
-      transcript: terminal.transcript ?? persistedTerminal.transcript
+      transcript: terminal.transcript ?? persistedTerminal.transcript,
+      // R3: also carry the captured DEC modes so a pane-transition remount can
+      // replay them (the live tracker is reset on unmount→remount).
+      pendingModes: terminal.pendingModes ?? persistedTerminal.modes
     }
   })
 
@@ -825,6 +831,8 @@ async function restoreFromLayout(
       output: never[]
       pendingScrollback?: string[]
       transcript?: string
+      // R3: DEC private-mode snapshot replayed before pendingScrollback on mount.
+      pendingModes?: PersistedTerminal['modes']
       ptyId?: string
       // ADR-004.4: restored agent metadata (re-applied after store insert)
       kind?: 'shell' | 'agent'
@@ -979,6 +987,9 @@ async function restoreFromLayout(
           pendingScrollback: persistedTerminal.scrollback,
           transcript: persistedTerminal.transcript,
           ptyId: spawnData.id,
+          // R3: carry the captured DEC mode snapshot so ConnectedTerminal can
+          // replay it (via restoreScrollback) before the scrollback content.
+          ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
           // ADR-004.4: carry restored agent metadata so the tab labels as the
           // agent and re-persists correctly. Seed prompt stays dropped.
           ...(isAgentTerminal

@@ -465,6 +465,30 @@ export type {
 // ============================================================================
 
 /**
+ * Captured DEC private-mode state for terminal rehydration across refresh (R3).
+ *
+ * Mirrors Orca's `buildRehydrateSequences` mode set. Only the modes currently ON
+ * are replayed (via `buildRehydrateSequences`) before the captured scrollback
+ * content, so an alt-screen TUI (vim/tmux/less/htop) restores identically.
+ * Modes are optional everywhere — absence degrades to content-only restore
+ * (the pre-R3 behavior).
+ */
+export interface TerminalModes {
+  /** Alt-screen on (DEC 1049/1047/47). Replay emits `\x1b[?1049h` (attrs reset first). */
+  alternateScreen: boolean
+  /** Bracketed-paste on (DEC 2004). Replay emits `\x1b[?2004h`. */
+  bracketedPaste: boolean
+  /** Application-cursor keys on (DEC 1). Replay emits `\x1b[?1h`. */
+  applicationCursor: boolean
+  /** Mouse tracking mode: `x10` (1000), `drag` (1002), `any` (1003); null = off. */
+  mouseTracking?: 'x10' | 'drag' | 'any' | null
+  /** SGR mouse encoding (DEC 1006). Replay emits `\x1b[?1006h`. */
+  sgrMouseMode?: boolean
+  /** SGR pixel mouse encoding (DEC 1016). Replay emits `\x1b[?1016h`. */
+  sgrMousePixelsMode?: boolean
+}
+
+/**
  * Terminal session data for persistence
  * Subset of terminal instance with additional state for restoration
  */
@@ -474,6 +498,12 @@ export interface TerminalSession {
   cwd: string
   history: string[]
   env?: Record<string, string>
+  /**
+   * Captured DEC private-mode snapshot (R3). Replayed before `history` on
+   * restore so an alt-screen TUI screen/modes survive refresh. Optional:
+   * absence (old save or capture unavailable) degrades to content-only restore.
+   */
+  modes?: TerminalModes
 }
 
 /**

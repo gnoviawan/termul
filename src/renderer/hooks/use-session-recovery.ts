@@ -3,19 +3,25 @@ import { useEffect, useRef } from 'react'
 import { sessionApi } from '@/lib/api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { getTerminalModes } from '@/utils/terminal-registry'
 
 const SESSION_SAVE_DEBOUNCE_MS = 2000
 const SESSION_SAVE_INTERVAL_MS = 15000
 
-function toTerminalSession(
+export function toTerminalSession(
   terminal: ReturnType<typeof useTerminalStore.getState>['terminals'][number]
 ): TerminalSession {
+  // R3: best-effort capture of the tracked DEC private-mode snapshot
+  // (keyed by the same registry id as extractScrollback: ptyId ?? id).
+  // Absence (no tracker / terminal not live) degrades to content-only restore.
+  const modes = getTerminalModes(terminal.ptyId ?? terminal.id)
   return {
     id: terminal.id,
     shell: terminal.shell,
     cwd: terminal.cwd ?? '',
     history: terminal.pendingScrollback ?? terminal.transcript?.split(/\r\n|\r|\n/) ?? [],
-    env: undefined
+    env: undefined,
+    ...(modes ? { modes } : {})
   }
 }
 
