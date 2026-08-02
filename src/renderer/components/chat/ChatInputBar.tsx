@@ -12,7 +12,7 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import {
-  buildPromptWithLoadedSkill,
+  buildPromptWithLoadedSkills,
   type LoadedAgentSkill,
   useAgentSkills
 } from '@/hooks/use-agent-skills'
@@ -44,9 +44,9 @@ import {
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
-import { LoadedSkillChip } from './LoadedSkillChip'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
+import { SkillChip } from './SkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
@@ -207,7 +207,7 @@ export function ChatInputBar({
     return () => clearTimeout(handle)
   }, [value, draftKey, seedNonce, canPersistDraft])
   const [activeCommand, setActiveCommand] = useState<string | null>(null)
-  const [loadedSkill, setLoadedSkill] = useState<LoadedAgentSkill | null>(null)
+  const [loadedSkills, setLoadedSkills] = useState<LoadedAgentSkill[]>([])
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -305,7 +305,7 @@ export function ChatInputBar({
     !sending &&
     (value.trim().length > 0 ||
       activeCommand !== null ||
-      loadedSkill !== null ||
+      loadedSkills.length > 0 ||
       attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
@@ -313,16 +313,22 @@ export function ChatInputBar({
   const submit = useCallback(async () => {
     const userText = value.trim()
     const hasAttachments = attachments.length > 0
-    if ((!userText && !activeCommand && !loadedSkill && !hasAttachments) || disabled || sending)
+    if (
+      (!userText && !activeCommand && loadedSkills.length === 0 && !hasAttachments) ||
+      disabled ||
+      sending
+    )
       return
 
     setSending(true)
     try {
-      // Inject a loaded skill's instructions, wrapping the user's text. The
-      // body is read on demand so it is always current at send time.
-      const baseText = loadedSkill
-        ? await buildPromptWithLoadedSkill(loadedSkill, userText, projectRoot ?? session.cwd)
-        : userText
+      // Inject each loaded skill's instructions (body read on demand so it is
+      // always current at send time), framing them under a `# Agent Skills`
+      // header so the agent knows they are skills — never a bare `/skill-name`.
+      const baseText =
+        loadedSkills.length > 0
+          ? await buildPromptWithLoadedSkills(loadedSkills, userText, projectRoot ?? session.cwd)
+          : userText
       // Prepend the active command to the prompt text on send.
       const withCommand = activeCommand ? `/${activeCommand} ${baseText}` : baseText
       const trimmed = withCommand.trim()
@@ -342,7 +348,7 @@ export function ChatInputBar({
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
       setActiveCommand(null)
-      setLoadedSkill(null)
+      setLoadedSkills([])
       clearAttachments()
       resetMentions()
       resetHeight()
@@ -355,7 +361,7 @@ export function ChatInputBar({
     value,
     attachments,
     activeCommand,
-    loadedSkill,
+    loadedSkills,
     disabled,
     sending,
     clearAttachments,
@@ -372,7 +378,14 @@ export function ChatInputBar({
   const handleSelect = useCallback(
     (item: SlashItem) => {
       if (item.kind === 'skill') {
-        setLoadedSkill({ name: item.name, description: item.description ?? '' })
+        // Append the skill as an inline chip, deduping by name so picking the
+        // same skill twice is a no-op. Clear the `/` filter text and refocus
+        // the textarea so the user can keep typing or pick another skill.
+        setLoadedSkills((prev) =>
+          prev.some((s) => s.name === item.name)
+            ? prev
+            : [...prev, { name: item.name, description: item.description ?? '' }]
+        )
         setValue('')
         updateMentions('', 0)
         resetHeight()
@@ -592,14 +605,19 @@ export function ChatInputBar({
                 }}
               />
             )}
-            {loadedSkill && (
-              <LoadedSkillChip
-                skill={loadedSkill}
-                onRemove={() => {
-                  setLoadedSkill(null)
-                  textareaRef.current?.focus()
-                }}
-              />
+            {loadedSkills.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 px-4 pt-2">
+                {loadedSkills.map((skill) => (
+                  <SkillChip
+                    key={skill.name}
+                    name={skill.name}
+                    onRemove={() => {
+                      setLoadedSkills((prev) => prev.filter((s) => s.name !== skill.name))
+                      textareaRef.current?.focus()
+                    }}
+                  />
+                ))}
+              </div>
             )}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
@@ -634,7 +652,7 @@ export function ChatInputBar({
                 placeholder={
                   disabled
                     ? 'Session closed'
-                    : activeCommand || loadedSkill
+                    : activeCommand || loadedSkills.length > 0
                       ? 'Add a message (optional)…'
                       : 'Ask anything… (/ for commands, @ for files)'
                 }

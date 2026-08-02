@@ -20,6 +20,7 @@ import {
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
+import { SkillChip } from '@/components/chat/SkillChip'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
 import {
@@ -38,6 +39,11 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
+import {
+  buildPromptWithLoadedSkills,
+  type LoadedAgentSkill,
+  useAgentSkills
+} from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
@@ -97,6 +103,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [pendingOptions, setPendingOptions] = useState<PendingLauncherOptions>(
     emptyPendingLauncherOptions
   )
+  const [loadedSkills, setLoadedSkills] = useState<LoadedAgentSkill[]>([])
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -107,6 +114,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const activeProject = useActiveProject()
   const projectLabel = activeProject?.name ?? 'this folder'
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
+  const { skills } = useAgentSkills(projectRoot)
   const platformArch = useMemo(() => currentPlatformArch(), [])
   const runtime = useAcpRuntimeProbe()
   const { activeRegistry } = useAcpRegistryCatalog()
@@ -286,10 +294,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             // Cached or live options — pending handlers queue until session is ready.
             configOptions: optionsInteractive ? effectiveConfigOptions : [],
             modes: optionsInteractive ? effectiveModes : null,
+            skills,
             filter: slashFilter(prompt)
           })
         : [],
-    [menuOpen, commands, optionsInteractive, effectiveConfigOptions, effectiveModes, prompt]
+    [menuOpen, commands, optionsInteractive, effectiveConfigOptions, effectiveModes, skills, prompt]
   )
 
   const persistSelection = useCallback((configId: string) => {
@@ -576,6 +585,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSlashSelect = useCallback(
     (item: SlashItem) => {
+      if (item.kind === 'skill') {
+        // Append the skill as an inline chip (deduped by name), clear the `/`
+        // filter text, and refocus so the user can keep typing or pick another.
+        setLoadedSkills((prev) =>
+          prev.some((s) => s.name === item.name)
+            ? prev
+            : [...prev, { name: item.name, description: item.description ?? '' }]
+        )
+        setPrompt('')
+        updateMentions('', 0)
+        resetHeight()
+        textareaRef.current?.focus()
+        return
+      }
       if (item.kind === 'config') {
         void handleSetConfig(item.configId, item.valueId)
       } else if (item.kind === 'mode') {
@@ -594,7 +617,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [handleSetConfig, handleSetMode, updateMentions, resetHeight]
   )
 
-  const launch = useCallback(() => {
+  const launch = useCallback(async () => {
     if (!activeProjectId || !projectRoot) {
       toast.error('No active project')
       return
@@ -615,6 +638,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const projectIdSnapshot = activeProjectId
     const projectRootSnapshot = projectRoot
     const needsSave = !acpConfigs.some((config) => config.id === selectedConfig.id)
+    const loadedSkillsSnapshot = loadedSkills
+
+    // Frame skill bodies first so the optimistic preview matches the real
+    // send. On read failure, surface a toast naming the failing skill and
+    // abort the launch (no chat opens, skills stay for retry/remove).
+    let firstTurnText = promptSnapshot
+    if (loadedSkillsSnapshot.length > 0) {
+      try {
+        firstTurnText = await buildPromptWithLoadedSkills(
+          loadedSkillsSnapshot,
+          promptSnapshot,
+          projectRootSnapshot
+        )
+      } catch (err) {
+        launchInFlightRef.current = false
+        toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
+        return
+      }
+    }
 
     // Open the chat immediately; ACP spawn/session/send continue in the chat view.
     const store = useAcpStore.getState()
@@ -626,8 +668,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let seededOptimistic = false
 
     // Prefer sync first-turn content so the chat can paint like a normal send.
-    // Sync first-turn content so the chat can paint like a normal send.
-    const syncText = promptSnapshot
+    // Sync first-turn content so the chat can paint like a normal send. The
+    // framed skill text is used for both the optimistic syncBlocks and the real
+    // send so the preview matches what the agent receives.
+    const syncText = firstTurnText
     const syncTrimmed = syncText.trim()
     const syncBlocks: ContentBlock[] = []
     if (attachmentsSnapshot.length > 0) {
@@ -655,6 +699,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     useWorkspaceStore.getState().addAgentChatTab(sessionId, paneSnapshot)
     useWorkspaceStore.getState().hideAgentLauncher()
     setPendingOptions(emptyPendingLauncherOptions())
+    setLoadedSkills([])
     clearAttachments()
     resetMentions()
     resetHeight()
@@ -667,7 +712,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         persistSelection(configSnapshot.id)
 
-        const text = promptSnapshot
+        const text = firstTurnText
         const trimmed = text.trim()
         const blocks: ContentBlock[] = []
         if (attachmentsSnapshot.length > 0) {
@@ -731,7 +776,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     preparedKey,
     effectiveModels,
     effectiveModes,
-    effectiveConfigOptions
+    effectiveConfigOptions,
+    loadedSkills
   ])
 
   const handleKeyDown = useCallback(
@@ -771,7 +817,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || attachments.length > 0)
+    (prompt.trim().length > 0 || loadedSkills.length > 0 || attachments.length > 0)
 
   return (
     <div
@@ -871,6 +917,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               className="px-5 pt-4"
             />
             <div className="px-5 pb-2 pt-4">
+              {loadedSkills.length > 0 && (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  {loadedSkills.map((skill) => (
+                    <SkillChip
+                      key={skill.name}
+                      name={skill.name}
+                      onRemove={() => {
+                        setLoadedSkills((prev) => prev.filter((s) => s.name !== skill.name))
+                        textareaRef.current?.focus()
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 value={prompt}

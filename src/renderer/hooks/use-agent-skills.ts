@@ -49,20 +49,28 @@ export function useAgentSkills(projectRoot: string | undefined): {
   return { skills, loading, reload }
 }
 
-export async function buildPromptWithLoadedSkill(
-  loadedSkill: LoadedAgentSkill | null,
+export async function buildPromptWithLoadedSkills(
+  loadedSkills: LoadedAgentSkill[],
   userText: string,
   projectRoot: string | undefined
 ): Promise<string> {
   const trimmed = userText.trim()
-  if (!loadedSkill) return trimmed
+  if (loadedSkills.length === 0) return trimmed
 
-  try {
-    const skill = await skillsApi.readSkill(loadedSkill.name, projectRoot)
-    const { formatPromptWithSkill } = await import('@/lib/skills-prompt')
-    return formatPromptWithSkill(skill.body, trimmed)
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    throw new Error(`Failed to load skill '${loadedSkill.name}': ${detail}`)
+  // Read each skill's body on demand at send time so it is always current
+  // (freshness). On any read failure, throw an Error naming the failing skill
+  // so the toast is clear about which skill could not be loaded.
+  const framed: { name: string; body: string }[] = []
+  for (const loaded of loadedSkills) {
+    try {
+      const skill = await skillsApi.readSkill(loaded.name, projectRoot)
+      framed.push({ name: loaded.name, body: skill.body })
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(`Failed to load skill '${loaded.name}': ${detail}`)
+    }
   }
+
+  const { formatPromptWithSkills } = await import('@/lib/skills-prompt')
+  return formatPromptWithSkills(framed, trimmed)
 }

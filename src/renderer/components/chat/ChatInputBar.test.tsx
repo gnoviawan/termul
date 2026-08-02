@@ -11,21 +11,43 @@ function clickMenuOption(name: string | RegExp): void {
   fireEvent.pointerDown(within(dialog).getByText(name))
 }
 
-const { mockSetConfig, mockSetMode, mockSetModel, mockMcpCount, mockReadDir } = vi.hoisted(() => ({
+const {
+  mockSetConfig,
+  mockSetMode,
+  mockSetModel,
+  mockMcpCount,
+  mockReadDir,
+  mockSkills,
+  mockBuildPrompt,
+  mockToastError
+} = vi.hoisted(() => ({
   mockSetConfig: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
   // Story 1.8 review (verification-gap #8): override-able MCP server count for
   // the read-only badge. 0 by default (badge hidden); tests set it to render.
   mockMcpCount: { current: 0 },
-  mockReadDir: vi.fn()
+  mockReadDir: vi.fn(),
+  // Override-able skills list (defaults to [] — web/no-skills parity). Skill
+  // tests push entries here so useAgentSkills surfaces them in the slash menu.
+  mockSkills: {
+    current: [] as Array<{ name: string; description: string; scope: string }>
+  },
+  // buildPromptWithLoadedSkills mock — defaults to passthrough (returns user
+  // text). Send-data tests override the resolved value to assert framing.
+  mockBuildPrompt: vi.fn(async (_skills: unknown, text: string) => text),
+  mockToastError: vi.fn()
 }))
 
 vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
 
+vi.mock('sonner', () => ({
+  toast: { error: mockToastError, success: vi.fn() }
+}))
+
 vi.mock('@/hooks/use-agent-skills', () => ({
-  useAgentSkills: () => ({ skills: [] }),
-  buildPromptWithLoadedSkill: vi.fn(async (_skill, text: string) => text)
+  useAgentSkills: () => ({ skills: mockSkills.current }),
+  buildPromptWithLoadedSkills: mockBuildPrompt
 }))
 
 vi.mock('@/stores/acp-store', () => ({
@@ -76,6 +98,11 @@ vi.mock('@/lib/api', async () => {
 beforeEach(() => {
   persistenceStore.clear()
   fakePersistenceApi.readFails = false
+  // Start each test from a clean skill/prompt-framing slate (web/no-skills
+  // default). Skill tests override mockSkills.current and mockBuildPrompt.
+  mockSkills.current = []
+  mockBuildPrompt.mockReset()
+  mockBuildPrompt.mockImplementation(async (_skills: unknown, text: string) => text)
 })
 
 function option(
@@ -711,5 +738,177 @@ describe('ChatInputBar draft persistence', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('ChatInputBar skill chips', () => {
+  const SKILL_GIT = {
+    name: 'git-worktree',
+    description: 'Isolated worktree',
+    scope: 'project'
+  }
+  const SKILL_REVIEW = { name: 'review', description: 'Review the diff', scope: 'global' }
+
+  function selectSlashOption(name: string | RegExp): void {
+    const listbox = screen.getByRole('listbox')
+    fireEvent.mouseDown(within(listbox).getByText(name))
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders a skill pill inline when a skill is selected from the slash menu', async () => {
+    mockSkills.current = [SKILL_GIT]
+    renderInputBar()
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+
+    selectSlashOption('/git-worktree')
+
+    // Pill renders inline (not a full-width top attachment bar); the X button's
+    // accessible label is the stable selector for the pill.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    })
+    // The `/` filter text is cleared and the textarea refocuses.
+    expect(textarea).toHaveValue('')
+  })
+
+  it('renders two pills when two distinct skills are selected', async () => {
+    mockSkills.current = [SKILL_GIT, SKILL_REVIEW]
+    renderInputBar()
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    )
+
+    // Re-open the menu and pick a second, distinct skill.
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/review')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove review skill' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    })
+  })
+
+  it('ignores a same-named skill pick (dedupes by name)', async () => {
+    mockSkills.current = [SKILL_GIT]
+    renderInputBar()
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    )
+
+    // Pick the same skill again — should be a no-op (deduped by name).
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    expect(screen.getAllByRole('button', { name: 'Remove git-worktree skill' })).toHaveLength(1)
+  })
+
+  it('removes a skill pill when its X is clicked', async () => {
+    mockSkills.current = [SKILL_GIT]
+    renderInputBar()
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    const pill = await screen.findByRole('button', { name: 'Remove git-worktree skill' })
+    fireEvent.click(pill)
+
+    expect(
+      screen.queryByRole('button', { name: 'Remove git-worktree skill' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('sends the framed skill body followed by user text on send, then clears pills', async () => {
+    const onSend = vi.fn()
+    mockSkills.current = [SKILL_GIT]
+    const framed = '# Agent Skills\n\n## git-worktree\nCreate a worktree.\n\n---\n\nhello'
+    mockBuildPrompt.mockResolvedValue(framed)
+    renderInputBar({ onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    )
+
+    fireEvent.change(textarea, { target: { value: 'hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // The prompt carries each skill's body framed by its name (never a bare
+    // /skill-name), then the user text.
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith(framed))
+    expect(onSend.mock.calls[0]![0]).not.toContain('/git-worktree')
+    // Pills are cleared after send.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Remove git-worktree skill' })
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it('toasts and keeps pills when a skill read fails at send (no message sent)', async () => {
+    const onSend = vi.fn()
+    mockSkills.current = [SKILL_GIT]
+    mockBuildPrompt.mockRejectedValue(new Error("Failed to load skill 'git-worktree': boom"))
+    renderInputBar({ onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    )
+
+    fireEvent.change(textarea, { target: { value: 'hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // The toast names the failing skill.
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockToastError).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to load skill 'git-worktree'")
+    )
+    // No message was sent.
+    expect(onSend).not.toHaveBeenCalled()
+    // Pills remain for retry/remove.
+    expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+  })
+
+  it('shows no Skills section and no pills when no skills are available (web parity)', async () => {
+    mockSkills.current = []
+    renderInputBar()
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
   })
 })
