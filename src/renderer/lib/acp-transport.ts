@@ -66,6 +66,7 @@ export interface AcpTransport {
     request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome>
   probeRuntime(): Promise<AcpRuntimeAvailability>
+  setTurnTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
   spawnAgent(config: AgentConfig): Promise<AgentId>
   killAgent(agentId: AgentId): Promise<void>
@@ -167,6 +168,7 @@ function createTauriAcpTransport(): AcpTransport {
     installRegistryBinary: (request) =>
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
+    setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     spawnAgent: (config) => invoke<AgentId>('acp_spawn_agent', { config }),
@@ -539,6 +541,11 @@ export class WsAcpTransport implements AcpTransport {
 
   async probeRuntime(): Promise<AcpRuntimeAvailability> {
     return { npx: true, uvx: true }
+  }
+
+  async setTurnTimeout(_secs: number | null): Promise<void> {
+    // Desktop-only: the standalone server has no settings surface and
+    // configures the turn timeout via TERMUL_ACP_TURN_TIMEOUT_SECS.
   }
 
   async fetchRegistrySnapshot(_forceRefresh = false): Promise<AcpRegistrySnapshot> {

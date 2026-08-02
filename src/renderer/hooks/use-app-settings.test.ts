@@ -19,15 +19,20 @@ const {
   mockPersistenceRead,
   mockPersistenceWrite,
   mockPersistenceWriteDebounced,
-  mockUpdateOrphanDetection
+  mockUpdateOrphanDetection,
+  mockSetTurnTimeout
 } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
   mockPersistenceWriteDebounced: vi.fn(),
-  mockUpdateOrphanDetection: vi.fn()
+  mockUpdateOrphanDetection: vi.fn(),
+  mockSetTurnTimeout: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
+  acpApi: {
+    setTurnTimeout: mockSetTurnTimeout
+  },
   persistenceApi: {
     read: mockPersistenceRead,
     write: mockPersistenceWrite,
@@ -54,6 +59,7 @@ describe('use-app-settings', () => {
     mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
     mockPersistenceWriteDebounced.mockResolvedValue({ success: true, data: undefined })
     mockUpdateOrphanDetection.mockResolvedValue({ success: true, data: undefined })
+    mockSetTurnTimeout.mockResolvedValue(undefined)
   })
 
   it('hydrates sidebar and file explorer visibility from persisted app settings', async () => {
@@ -73,6 +79,20 @@ describe('use-app-settings', () => {
       expect(useSidebarStore.getState().isVisible).toBe(false)
       expect(useFileExplorerStore.getState().isVisible).toBe(true)
     })
+  })
+
+  it('pushes the ACP turn-timeout override to the backend on load', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, acpTurnTimeoutSecs: 7200 }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+    })
+    expect(mockSetTurnTimeout).toHaveBeenCalledWith(7200)
   })
 
   it('defaults terminal URL open mode when persisted settings are missing the key', async () => {

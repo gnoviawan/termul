@@ -264,3 +264,15 @@ pub async fn acp_answer_question(
 pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
     crate::acp::config::probe_registry_runtime()
 }
+
+/// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or
+/// `None` to clear it (fall back to the env var / 3h default). Pushed from the
+/// App Preferences UI so the turn timeout is editable without a restart or
+/// env var. Desktop-only: the standalone `termul-server` has no settings
+/// surface and configures via `TERMUL_ACP_TURN_TIMEOUT_SECS`. The env var
+/// remains top-precedence (operator/diagnostic override).
+#[tauri::command]
+pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
+    crate::acp::manager::set_turn_timeout_override(secs);
+    Ok(())
+}

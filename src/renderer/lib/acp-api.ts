@@ -604,6 +604,13 @@ export async function acpAuthenticate(agentId: AgentId, methodId: string): Promi
   await getAcpTransport().authenticate(agentId, methodId)
 }
 
+// Push the ACP turn (hard-cap) timeout override to the backend, in seconds,
+// or `null` to clear (fall back to the env var / default). Desktop-only: the
+// WS transport no-ops on the standalone server.
+export async function acpSetTurnTimeout(secs: number | null): Promise<void> {
+  await getAcpTransport().setTurnTimeout(secs)
+}
+
 // --- Event subscription ----------------------------------------------------
 
 /**
@@ -633,6 +640,7 @@ export const acpApi = {
   respondPermission: acpRespondPermission,
   answerQuestion: acpAnswerQuestion,
   authenticate: acpAuthenticate,
+  setTurnTimeout: acpSetTurnTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
   probeRuntime: acpProbeRuntime,
   fetchRegistrySnapshot: acpFetchRegistrySnapshot,

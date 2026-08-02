@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { persistenceApi, terminalApi } from '@/lib/api'
+import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
 import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
@@ -190,6 +190,14 @@ export function useAppSettingsLoader(): void {
         )
       } catch (error) {
         console.error('Failed to apply orphan detection settings:', error)
+      }
+
+      // Push the ACP turn-timeout override to the Rust core (desktop-only
+      // via the transport; the WS transport no-ops on the standalone server).
+      try {
+        await acpApi.setTurnTimeout(settings.acpTurnTimeoutSecs)
+      } catch (error) {
+        console.error('Failed to apply ACP turn timeout:', error)
       }
     }
     load()

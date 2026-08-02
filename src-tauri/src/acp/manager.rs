@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -168,15 +168,38 @@ pub fn turn_idle_timeout() -> Duration {
         .unwrap_or(TURN_IDLE_TIMEOUT)
 }
 
-/// Hard wall-clock cap per turn, overridable via `TERMUL_ACP_TURN_TIMEOUT_SECS`
-/// (seconds, must be > 0). Defaults to [`TURN_TIMEOUT`] (3h). The last-resort
-/// backstop so a streaming-but-non-completing agent is still bounded.
+/// In-process override for the hard wall-clock cap, set by the
+/// `acp_set_turn_timeout` Tauri command from the App Preferences UI. `None` =
+/// use the env var / default. Consulted by [`resolved_turn_timeout`] so a UI
+/// change takes effect on the next turn without a restart. Desktop-only: the
+/// standalone server has no settings surface and configures via
+/// `TERMUL_ACP_TURN_TIMEOUT_SECS` (the operator env var still wins — see the
+/// precedence in [`resolved_turn_timeout`]).
+static TURN_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(None));
+
+/// Set the in-process turn-timeout override (secs, or `None` to clear). Called
+/// by the `acp_set_turn_timeout` Tauri command (desktop renderer settings).
+pub fn set_turn_timeout_override(secs: Option<u64>) {
+    *TURN_TIMEOUT_OVERRIDE.lock() = secs;
+}
+
+/// Read the in-process turn-timeout override, if set.
+pub fn turn_timeout_override() -> Option<u64> {
+    *TURN_TIMEOUT_OVERRIDE.lock()
+}
+
+/// Hard wall-clock cap per turn. Precedence: `TERMUL_ACP_TURN_TIMEOUT_SECS`
+/// (env, operator/diagnostic) → in-process UI override → [`TURN_TIMEOUT`]
+/// (3h default). The last-resort backstop so a streaming-but-non-completing
+/// agent is still bounded.
 pub fn resolved_turn_timeout() -> Duration {
     std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
+        .or_else(|| turn_timeout_override().map(Duration::from_secs))
         .unwrap_or(TURN_TIMEOUT)
 }
 
@@ -3251,5 +3274,20 @@ mod tests {
             "got {result:?}"
         );
         assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
+    }
+
+    /// `resolved_turn_timeout` precedence: env var > UI override > default.
+    /// The override replaces the default when no env var is set.
+    #[test]
+    fn turn_timeout_override_takes_effect_when_no_env_var() {
+        // The env var is usually absent in the test runner; when it IS set
+        // (operator machine), it correctly masks the UI override — skip there.
+        if std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS").is_ok() {
+            return;
+        }
+        set_turn_timeout_override(Some(42));
+        assert_eq!(resolved_turn_timeout(), Duration::from_secs(42));
+        set_turn_timeout_override(None);
+        assert_eq!(resolved_turn_timeout(), TURN_TIMEOUT);
     }
 }
