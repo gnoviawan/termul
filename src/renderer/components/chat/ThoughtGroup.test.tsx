@@ -283,6 +283,31 @@ describe('ThoughtGroup', () => {
     expect(scrollToMock).not.toHaveBeenCalled()
   })
 
+  it('does not re-pin when collapsing back from expanded mid-stream', async () => {
+    const { container } = render(
+      <ThoughtGroup messages={[thought('t1', 'thinking…'.repeat(200), true)]} isLiveTail />
+    )
+    await waitFor(() => {
+      expect(screen.getByText(/thinking/)).toBeInTheDocument()
+    })
+    const box = scrollBox(container)
+    // Reader scrolled away from the bottom during streaming.
+    setScrollGeometry(box, { scrollHeight: 500, clientHeight: 200, scrollTop: 0 })
+    fireEvent.scroll(box)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Jump to latest thinking')).toBeInTheDocument()
+    })
+    // Expand to read earlier content, then collapse back mid-stream.
+    fireEvent.click(screen.getByText('More'))
+    fireEvent.click(screen.getByText('Less'))
+    // Collapsing must NOT silently re-pin: scroll position preserved + jump
+    // button still offered (reader never asked to resume following).
+    await waitFor(() => {
+      expect(screen.getByLabelText('Jump to latest thinking')).toBeInTheDocument()
+    })
+    expect(box.scrollTop).toBe(0)
+  })
+
   it('stops following once streaming ends (no auto-scroll on later content change)', async () => {
     const { rerender, container } = render(
       <ThoughtGroup messages={[thought('t1', 'thinking…'.repeat(200), true)]} isLiveTail />

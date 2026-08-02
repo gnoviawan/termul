@@ -59,7 +59,11 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
   const [pinned, setPinned] = useState(true)
   const [showJumpButton, setShowJumpButton] = useState(false)
   const pinnedRef = useRef(pinned)
-  pinnedRef.current = pinned
+  // Keep the ref's latest committed value without mutating it during render
+  // (React can replay/discard render work). Written in a passive effect below.
+  useEffect(() => {
+    pinnedRef.current = pinned
+  }, [pinned])
 
   const refCallback = useCallback((node: HTMLDivElement | null) => {
     setEl(node)
@@ -75,14 +79,18 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
     [el]
   )
 
-  // Reset to pinned whenever a new streaming stretch begins, so a fresh
-  // thought follows the live edge again (matches MessageScroller remount).
+  // Reset to pinned only when a genuine new streaming stretch begins
+  // (enabled false -> true), not on every `expanded` toggle. A reader who
+  // scrolled away, expanded to read earlier content, then collapsed mid-stream
+  // should NOT be silently re-pinned to the bottom.
+  const prevEnabledRef = useRef(enabled)
   useEffect(() => {
-    if (active) {
+    if (enabled && !prevEnabledRef.current) {
       setPinned(true)
       setShowJumpButton(false)
     }
-  }, [active])
+    prevEnabledRef.current = enabled
+  }, [enabled])
 
   useEffect(() => {
     if (!el) return
@@ -110,6 +118,10 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
 
     const ro = new ResizeObserver(follow)
     ro.observe(el)
+    // Observe the inner content element too. The scroll container stops growing
+    // once it hits max-h-[200px], so observing only the container would miss
+    // growth from streamed text appended after the box is full. The inner
+    // wrapper keeps growing with the text and fires the observer.
     const content = el.firstElementChild
     if (content) ro.observe(content)
 
@@ -218,7 +230,7 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
                   !expanded && 'max-h-[200px]'
                 )}
               >
-                {text}
+                <div className="min-w-0">{text}</div>
               </div>
               {showJumpButton ? (
                 <button
