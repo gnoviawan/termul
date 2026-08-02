@@ -204,7 +204,14 @@ pub fn list_agent_skills_with_home(
     scan_skills_dir(home_root, "global", &mut by_name)?;
 
     if let Some(root) = project_root.filter(|s| !s.is_empty()) {
-        let project_skills = PathBuf::from(root).join(".agents").join("skills");
+        // Reject a relative project root early: a relative path would scan the
+        // process CWD (undefined for a Tauri command) rather than the intended
+        // project. The renderer always passes an absolute `session.cwd`.
+        let root_path = PathBuf::from(root);
+        if !root_path.is_absolute() {
+            return Err(format!("project root must be absolute, got: {root}"));
+        }
+        let project_skills = root_path.join(".agents").join("skills");
         scan_skills_dir(&project_skills, "project", &mut by_name)?;
     }
 
@@ -227,7 +234,13 @@ fn resolve_skill_path_with_home(
     validate_skill_name(name)?;
 
     if let Some(root) = project_root.filter(|s| !s.is_empty()) {
-        let project_skill = PathBuf::from(root)
+        // Reject a relative project root before constructing skill paths (mirrors
+        // the check in `list_agent_skills_with_home`).
+        let root_path = PathBuf::from(root);
+        if !root_path.is_absolute() {
+            return Err(format!("project root must be absolute, got: {root}"));
+        }
+        let project_skill = root_path
             .join(".agents")
             .join("skills")
             .join(name)

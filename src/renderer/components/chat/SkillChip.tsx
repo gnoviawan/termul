@@ -16,10 +16,12 @@ interface SkillChipProps {
  * occupies exactly one line box (`inline-flex items-center align-baseline
  * leading-none h-[1.1em]`, horizontal-only `px-1.5` padding, no vertical
  * padding) — the transparent textarea text and the overlay stay caret-aligned.
- * Always read-only: in the composer Backspace removes a chip via the token
- * model (`removeSkillTokenBeforeCaret`), not an X button; in the timeline the
- * chip is non-interactive. (No `onRemove` prop — verified unused across all
- * callers: `SkillComposerOverlay` + `ChatMessage` both pass `readOnly`.)
+ *
+ * Always non-interactive by construction: there is no `onRemove` or any other
+ * interactive/removal prop. In the composer, Backspace removes a chip via the
+ * token model (`removeSkillTokenBeforeCaret`), not an X button; in the timeline
+ * the chip is a static pill. Callers (`SkillComposerOverlay`, `ChatMessage`)
+ * pass only `name` (plus an optional `className`).
  */
 export function SkillChip({ name, className }: SkillChipProps): React.JSX.Element {
   return (
