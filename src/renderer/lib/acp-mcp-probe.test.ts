@@ -67,6 +67,23 @@ describe('acp-mcp-probe', () => {
     expect(result.error).toBe('spawn failed: ...')
   })
 
+  it('normalizes a Tauri invoke rejection to a disconnected result + logs it (canonical contract)', async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('IPC transport down'))
+    const result = await probeMcpServer(stdioServer)
+    expect(result.status).toBe('disconnected')
+    expect(result.tools).toEqual([])
+    expect(result.error).toContain('IPC transport down')
+    // The boundary log carries the server name but NO env/header values.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'acp-mcp-probe.probeMcpServer',
+        message: expect.stringContaining(stdioServer.name)
+      })
+    )
+    const logged = vi.mocked(logFrontendError).mock.calls[0][0]
+    expect(logged.message).toContain('IPC transport down')
+  })
+
   it('POSTs to /mcp-servers/probe on web and unwraps the IpcBody', async () => {
     vi.mocked(isTauriContext).mockReturnValue(false)
     vi.mocked(webServerMcpProbe.post).mockResolvedValue({

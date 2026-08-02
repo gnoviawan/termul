@@ -4247,8 +4247,14 @@ describe('acp-store', () => {
     const state = useAcpStore.getState()
     expect(state.mcpProbeStatus.p5).toBe('disconnected')
     expect(state.mcpProbing.p5).toBe(false)
+    // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
+    // to a disconnected ProbeResult and logs the transport failure itself — the
+    // store's success path runs (probe "completed" with a disconnected result),
+    // so `mcpToolsLoaded` is true (no auto-re-probe on next expand — a transport
+    // failure is treated as a completed probe, consistent with the contract).
+    expect(state.mcpToolsLoaded.p5).toBe(true)
     expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'acp-store.probeMcpServer' })
+      expect.objectContaining({ source: 'acp-mcp-probe.probeMcpServer' })
     )
     const logged = vi.mocked(logFrontendError).mock.calls.at(-1)?.[0]
     expect(logged?.message).toContain('leaky')

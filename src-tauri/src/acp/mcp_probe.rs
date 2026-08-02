@@ -52,10 +52,24 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A name=value pair (env var or HTTP header) as the renderer serializes it.
 /// Mirrors `McpEnvVar` / `McpHeader` in `src/renderer/lib/acp-api.ts`.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Debug` is implemented manually to redact `value` (env values and HTTP
+/// header values frequently carry secrets). A derived `Debug` would print the
+/// raw value to any tracing/log macro that formats the struct — defense-in-
+/// depth so a future `?`/`%` log call cannot leak credentials.
+#[derive(Clone, Deserialize)]
 pub struct McpNameValuePair {
     pub name: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for McpNameValuePair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpNameValuePair")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Renderer-supplied MCP server config. Stateless payload — the renderer holds
@@ -65,7 +79,12 @@ pub struct McpNameValuePair {
 /// Kept deliberately loose (all transport-specific fields optional) so the
 /// probe does not couple to the vendored ACP `McpServer` schema — the probe
 /// owns its own deserialization and never touches the registry store.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Debug` is implemented manually to redact `env` and `headers` (whose `value`
+/// fields carry secrets — see `McpNameValuePair`). Identifying fields the
+/// boundary log already surfaces (`name`/`command`/`url`/`type`/`args`) stay
+/// visible for diagnostics.
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     #[serde(default, rename = "type")]
@@ -79,6 +98,20 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: Vec<McpNameValuePair>,
+}
+
+impl std::fmt::Debug for McpServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerConfig")
+            .field("type", &self.r#type)
+            .field("name", &self.name)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("env", &format!("<{} redacted>", self.env.len()))
+            .field("url", &self.url)
+            .field("headers", &format!("<{} redacted>", self.headers.len()))
+            .finish()
+    }
 }
 
 impl McpServerConfig {
@@ -252,16 +285,22 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     let mut cmd = Command::new(command);
     cmd.args(&server.args);
     for pair in &server.env {
-        // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
-        cmd.env(&pair.name, expand_env(&pair.value));
+      // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
+      cmd.env(&pair.name, expand_env(&pair.value));
     }
     // Windows: suppress the console window a GUI-launched probe would flash.
     // CREATE_NO_WINDOW = 0x0800_0000 (mirrors the vendored ACP patch). tokio's
     // `Command` exposes `creation_flags` natively on Windows.
     #[cfg(target_os = "windows")]
     {
-        cmd.creation_flags(0x0800_0000);
+      cmd.creation_flags(0x0800_0000);
     }
+    // Kill the child if the probe future is dropped mid-flight (notably when
+    // `tokio::time::timeout` fires above — dropping `probe_inner` drops the
+    // `TokioChildProcess` handle; without `kill_on_drop` the child is left
+    // running as an orphan). HTTP/SSE transports have no child process and are
+    // unaffected. tokio's default is to leave the child running on drop.
+    cmd.kill_on_drop(true);
 
     // Builder lets us null stderr so a chatty child does not pollute our logs.
     // stdin/stdout stay piped (the rmcp transport owns them).

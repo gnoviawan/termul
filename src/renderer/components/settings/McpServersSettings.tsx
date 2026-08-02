@@ -138,6 +138,10 @@ export function McpServersSettings(): React.JSX.Element {
   // biome-ignore lint/correctness/useExhaustiveDependencies: shape-only dep — re-probe only when the id set changes shape, not on every toggle; `probeMcpServer` is a stable store action reference.
   useEffect(() => {
     for (const server of servers) {
+      // Skip disabled servers on mount — they are not injected into sessions, so
+      // their reachability status is not actionable at idle. The manual "Test"
+      // button below still probes a disabled server on explicit request.
+      if (server.enabled === false) continue
       // Fire-and-forget; the store dedupes concurrent probes per id.
       void probeMcpServer(server.id)
     }
@@ -274,6 +278,10 @@ export function McpServersSettings(): React.JSX.Element {
                       ) : probeStatus === 'disconnected' ? (
                         <p className="text-3xs text-destructive">
                           Probe failed — check the server config or network.
+                        </p>
+                      ) : probeStatus === 'connected' ? (
+                        <p className="text-3xs text-muted-foreground">
+                          Probe completed — no tools found.
                         </p>
                       ) : probing ? (
                         <p className="text-3xs text-muted-foreground">Probing…</p>

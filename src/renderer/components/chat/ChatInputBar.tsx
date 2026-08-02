@@ -502,8 +502,7 @@ export function ChatInputBar({
       servers={mcpServers}
       onToggle={(id, enabled) => {
         void setMcpServerEnabled(id, enabled).catch(() => {
-          // Rollback + toast handled inside `setMcpServerEnabled`; the chatbox
-          // re-renders from the rolled-back store state.
+          toast.error('Could not update the MCP server. Your previous setting was restored.')
         })
       }}
       probeStatus={mcpProbeStatus}

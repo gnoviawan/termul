@@ -492,14 +492,22 @@ export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
  * supplies the full `McpServerConfig` (no registry-store coupling). Never
  * logs env/header values, tokens, or credentials. Desktop↔web parity: the
  * probe runs on the termul-server host via `POST /mcp-servers/probe` on web.
+ *
+ * Delegates to the canonical `acp-mcp-probe.ts` facade so the transport-facade
+ * (`acpApi`) and the standalone facade share ONE contract: never throws on a
+ * probe failure — returns a disconnected `ProbeResult` instead.
  */
 export async function probeMcpServer(server: McpServerConfig): Promise<ProbeResult> {
-  return getAcpTransport().probeMcpServer(server)
+  // Lazy import avoids a static cycle (acp-api ↔ acp-mcp-probe) at module load;
+  // the canonical facade owns the `isTauriContext()` branching + normalization.
+  const { probeMcpServer: canonicalProbe } = await import('@/lib/acp-mcp-probe')
+  return canonicalProbe(server)
 }
 
 /** Thin wrapper: probe + return just the tool list (auto-probe on expand). */
 export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo[]> {
-  return (await getAcpTransport().probeMcpServer(server)).tools
+  const { listMcpTools: canonicalList } = await import('@/lib/acp-mcp-probe')
+  return canonicalList(server)
 }
 
 export interface AcpRegistrySnapshot {

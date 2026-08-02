@@ -101,4 +101,23 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     // Per-tool toggle UI must NOT be present (deferred — read-only).
     expect(screen.queryByRole('switch', { name: /read_file/i })).not.toBeInTheDocument()
   })
+
+  it('shows "No tools available" for a connected server with an empty tool list', () => {
+    render(
+      <McpBadge
+        count={1}
+        servers={servers}
+        onToggle={vi.fn()}
+        probeStatus={{ s1: 'connected' }}
+        tools={{ s1: [] }}
+      />
+    )
+    openPopover()
+    // s1 is connected but has 0 tools — expand its collapsible and confirm the
+    // "No tools available" branch (NOT "Probing…" — the probe completed).
+    // Two servers render "Show tools" triggers; pick the first (s1 = "Files").
+    fireEvent.click(screen.getAllByText(/show tools/i)[0])
+    expect(screen.getByText(/no tools available/i)).toBeInTheDocument()
+    expect(screen.queryByText(/probing/i)).not.toBeInTheDocument()
+  })
 })

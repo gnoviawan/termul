@@ -44,12 +44,17 @@ function networkError(detail: string): IpcResult<never> {
 }
 
 /** POST JSON and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function postJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
+async function postJson<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal
+): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     })
     return await parseBody<T>(res)
   } catch (err) {
@@ -196,9 +201,22 @@ export const webServerMcpServers = {
  * reachable-but-disconnected server still returns `success:true` with
  * `data.status === 'disconnected'`. Only transport/deserialize failures surface
  * as `success:false` (`MCP_PROBE_INVALID_CONFIG` / `NETWORK_ERROR`).
+ *
+ * A client-side AbortController bounds the request at 12s — slightly above the
+ * backend's 10s probe deadline — so a stalled `fetch` (hung TCP, no response)
+ * resolves as `NETWORK_ERROR` instead of remaining pending forever. The signal
+ * is cleared on completion (AbortController is GC'd once the request settles).
  */
+const PROBE_TIMEOUT_MS = 12_000
+
 export const webServerMcpProbe = {
   async post(server: unknown): Promise<IpcResult<unknown>> {
-    return postJson<unknown>('/mcp-servers/probe', server)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
+    try {
+      return await postJson<unknown>('/mcp-servers/probe', server, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }

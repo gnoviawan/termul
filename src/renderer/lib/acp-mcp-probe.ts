@@ -1,6 +1,5 @@
 /**
- * On-demand MCP client probe — standalone facade (mirrors the
- * `acp-mcp-persistence.ts` runtime-branching pattern).
+ * On-demand MCP client probe — canonical renderer facade.
  *
  * Statelessly probes a configured MCP server: opens a fresh rmcp client
  * connection, calls `initialize` + `tools/list`, then closes. The probe reflects
@@ -14,10 +13,14 @@
  *   host (where stdio commands execute — matches GH-287's web-parity decision)
  *   and returns the same `IpcBody<ProbeResult>` shape.
  *
- * The probe itself never throws on a disconnected server — it returns
- * `ProbeResult { status: 'disconnected', error }`. Only transport/config
- * failures throw (which the store logs via `logFrontendError` — never with
- * env/header values, tokens, or credentials).
+ * Canonical contract (shared with `acpApi.probeMcpServer`/`listMcpTools`, which
+ * delegate here): NEVER throws on a probe failure — returns
+ * `ProbeResult { status: 'disconnected', error }` for transport/config failures
+ * AND for unreachable servers. A disconnected probe is a successful probe of
+ * an unreachable server. Only an unexpected throw (e.g. invoke IPC failure)
+ * is normalized to a disconnected result here + logged via `logFrontendError`
+ * (never with env/header values, tokens, or credentials). `listMcpTools`
+ * consumes the normalized result and returns `[]` on any failure.
  *
  * On-demand only — each call opens a brand-new connection and tears it down
  * immediately after `tools/list` returns (or fails). No persistent always-on
@@ -32,12 +35,28 @@ import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
  * Probe a configured MCP server. Stateless — the renderer supplies the full
- * `McpServerConfig` (no registry-store coupling). Never throws on a
- * disconnected server; throws only on transport/config failure.
+ * `McpServerConfig` (no registry-store coupling). Never throws — returns a
+ * disconnected `ProbeResult` on transport/config/IPC failure, and logs the
+ * failure outcome (server name + transport/code only — no env/header values).
  */
 export async function probeMcpServer(server: McpServerConfig): Promise<ProbeResult> {
   if (isTauriContext()) {
-    return invoke<ProbeResult>('acp_probe_mcp_server', { server })
+    try {
+      return await invoke<ProbeResult>('acp_probe_mcp_server', { server })
+    } catch (err) {
+      // IPC failure (command not registered, backend panic, etc.). The probe
+      // command itself returns `Ok(ProbeResult)` for unreachable servers — a
+      // throw here is a transport/IPC failure, normalized to disconnected.
+      void logFrontendError({
+        source: 'acp-mcp-probe.probeMcpServer',
+        message: `MCP probe transport failed for server '${server.name}' (${String(err)})`
+      })
+      return {
+        status: 'disconnected',
+        tools: [],
+        error: String(err)
+      }
+    }
   }
   const res = await webServerMcpProbe.post(server)
   if (!res.success) {

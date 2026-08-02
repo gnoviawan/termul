@@ -233,6 +233,8 @@ function McpServerRow({
             </ul>
           ) : probeStatus === 'disconnected' ? (
             <p className="text-3xs text-destructive">Probe failed — check the server config.</p>
+          ) : probeStatus === 'connected' ? (
+            <p className="text-3xs text-muted-foreground">No tools available.</p>
           ) : (
             <p className="text-3xs text-muted-foreground">Probing…</p>
           )}
