@@ -15,6 +15,9 @@ export interface AgentSkillSummary {
   description: string
   /** `'global'` or `'project'`. */
   scope: string
+  /** Absolute path to the skill's `SKILL.md` so the wire prompt can cite it
+   * (the agent reads the body from disk; no body is shipped over the wire). */
+  path: string
 }
 
 export interface AgentSkillContent {
@@ -22,6 +25,8 @@ export interface AgentSkillContent {
   description: string
   scope: string
   body: string
+  /** Absolute path to the skill's `SKILL.md`. */
+  path: string
 }
 
 export const skillsApi = {

@@ -200,8 +200,8 @@ export function AgentChatPanel({
   )
 
   const handleSendBlocks = useCallback(
-    (blocks: ContentBlock[]) => {
-      void sendPromptBlocks(sessionId, blocks).catch((err) => {
+    (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
+      void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
         toast.error(`Failed to send: ${String(err)}`)
       })
@@ -280,8 +280,13 @@ export function AgentChatPanel({
       return
     }
     const hasStructuredBlocks = lastUserBlocks.some((b) => b.type !== 'text')
+    // On retry, re-dispatch the last user message's blocks and pass them as the
+    // display blocks too so the timeline keeps rendering inline skill chips. The
+    // agent receives the stored blocks (token text degrades gracefully — skill
+    // names ride inside the private-use sentinels; re-framing the wire on retry
+    // is a v1 gap since the original wire is not persisted separately).
     const task = hasStructuredBlocks
-      ? sendPromptBlocks(sessionId, lastUserBlocks)
+      ? sendPromptBlocks(sessionId, lastUserBlocks, { displayBlocks: lastUserBlocks })
       : sendPrompt(sessionId, lastUserText.trim())
     void task.catch((err) => {
       if (isAgentDeadError(err)) return

@@ -40,6 +40,9 @@ export interface SlashSkillItem {
   name: string
   description: string | null
   scope: string
+  /** Absolute `SKILL.md` path, captured at pick time so the composer can record
+   * it for the wire prompt without an IPC read at send. */
+  path: string
 }
 
 export type SlashItem = SlashCommandItem | SlashConfigItem | SlashModeItem | SlashSkillItem
@@ -103,7 +106,8 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
       kind: 'skill',
       name: s.name,
       description: s.description || null,
-      scope: s.scope
+      scope: s.scope,
+      path: s.path
     }))
   if (skillItems.length > 0) {
     sections.push({ id: 'skills', heading: 'Skills', items: skillItems })

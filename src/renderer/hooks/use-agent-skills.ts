@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { type AgentSkillSummary, skillsApi } from '@/lib/skills-api'
+import { type FramedSkill, formatPromptWithSkills } from '@/lib/skills-prompt'
 
 export interface LoadedAgentSkill {
   name: string
   description: string
+  /** Absolute `SKILL.md` path captured at pick time so the wire prompt can cite
+   * it synchronously at send time — no IPC read at send, so it cannot fail. */
+  path: string
 }
 
 export function useAgentSkills(projectRoot: string | undefined): {
@@ -49,28 +53,13 @@ export function useAgentSkills(projectRoot: string | undefined): {
   return { skills, loading, reload }
 }
 
-export async function buildPromptWithLoadedSkills(
-  loadedSkills: LoadedAgentSkill[],
-  userText: string,
-  projectRoot: string | undefined
-): Promise<string> {
-  const trimmed = userText.trim()
-  if (loadedSkills.length === 0) return trimmed
-
-  // Read each skill's body on demand at send time so it is always current
-  // (freshness). On any read failure, throw an Error naming the failing skill
-  // so the toast is clear about which skill could not be loaded.
-  const framed: { name: string; body: string }[] = []
-  for (const loaded of loadedSkills) {
-    try {
-      const skill = await skillsApi.readSkill(loaded.name, projectRoot)
-      framed.push({ name: loaded.name, body: skill.body })
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err)
-      throw new Error(`Failed to load skill '${loaded.name}': ${detail}`)
-    }
-  }
-
-  const { formatPromptWithSkills } = await import('@/lib/skills-prompt')
-  return formatPromptWithSkills(framed, trimmed)
+/**
+ * Frame the selected skills (by path) and the user's text into the wire prompt.
+ * Synchronous: paths are captured at pick time, so there is no IPC read at send
+ * and it cannot fail. Tokens in the user text are replaced with `(<name>)`
+ * inline and each unique skill is cited as `<name>: <path>` under a
+ * `# Agent Skills` header (see `formatPromptWithSkills`).
+ */
+export function buildPromptWithLoadedSkills(skills: FramedSkill[], userText: string): string {
+  return formatPromptWithSkills(skills, userText)
 }

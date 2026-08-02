@@ -103,16 +103,18 @@ const {
   }
 }))
 
-const { mockSkills, mockBuildPrompt, mockToastError } = vi.hoisted(() => ({
+const { mockSkills, mockToastError } = vi.hoisted(() => ({
   // Override-able skills list (defaults to [] — web/no-skills parity). Skill
   // tests push entries here so useAgentSkills surfaces them in the slash menu.
+  // `path` is required so the launch wire prompt can cite it.
   mockSkills: {
-    current: [] as Array<{ name: string; description: string; scope: string }>
+    current: [] as Array<{
+      name: string
+      description: string
+      scope: string
+      path: string
+    }>
   },
-  // buildPromptWithLoadedSkills mock — defaults to passthrough (returns user
-  // text). Launch-injects-data tests override the resolved value to assert the
-  // framed skill body is carried into the first turn.
-  mockBuildPrompt: vi.fn(async (_skills: unknown, text: string) => text),
   mockToastError: vi.fn()
 }))
 
@@ -120,10 +122,15 @@ vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
 }))
 
-vi.mock('@/hooks/use-agent-skills', () => ({
-  useAgentSkills: () => ({ skills: mockSkills.current }),
-  buildPromptWithLoadedSkills: mockBuildPrompt
-}))
+vi.mock('@/hooks/use-agent-skills', async () => {
+  // Use the real (sync) buildPromptWithLoadedSkills so the wire framing is
+  // exercised end-to-end — no mock needed now that paths are captured at pick
+  // time (no IPC read at launch). Only useAgentSkills is overridden.
+  const actual = await vi.importActual<typeof import('@/hooks/use-agent-skills')>(
+    '@/hooks/use-agent-skills'
+  )
+  return { ...actual, useAgentSkills: () => ({ skills: mockSkills.current }) }
+})
 
 vi.mock('@tauri-apps/plugin-os', () => ({
   platform: vi.fn(() => 'windows'),
@@ -349,11 +356,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
   __resetLauncherSelectionCache()
-  // Start each test from a clean skill/prompt-framing slate (web/no-skills
-  // default). Skill tests override mockSkills.current and mockBuildPrompt.
+  // Start each test from a clean skill slate (web/no-skills default). Skill
+  // tests override mockSkills.current.
   mockSkills.current = []
-  mockBuildPrompt.mockReset()
-  mockBuildPrompt.mockImplementation(async (_skills: unknown, text: string) => text)
   acpStateRef.current = {
     agentConfigs: [],
     preparedSessions: {},
@@ -1044,19 +1049,21 @@ describe('AgentLauncher ACP new thread', () => {
   })
 })
 
-describe('AgentLauncher skill chips', () => {
+describe('AgentLauncher skill chips (inline tokens)', () => {
   const SKILL_GIT = {
     name: 'git-worktree',
     description: 'Isolated worktree',
-    scope: 'project'
+    scope: 'project',
+    path: '/home/u/.agents/skills/git-worktree/SKILL.md'
   }
+  const TOKEN = '\uE000git-worktree\uE001'
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
     fireEvent.mouseDown(within(listbox).getByText(name))
   }
 
-  it('shows a Skills section in the launcher slash menu and renders a pill on pick', async () => {
+  it('shows a Skills section in the launcher slash menu and renders an inline chip on pick', async () => {
     mockSkills.current = [SKILL_GIT]
     renderLauncher()
 
@@ -1068,19 +1075,15 @@ describe('AgentLauncher skill chips', () => {
 
     selectSlashOption('/git-worktree')
 
-    // Skill pill renders in the launcher composer; the X button's accessible
-    // label is the stable selector for the pill.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    })
-    // The `/` filter text is cleared.
-    expect(textarea).toHaveValue('')
+    // The transparent-textarea overlay renders the chip name as a visible span
+    // (after the slash menu closes, it is the stable selector for the chip).
+    await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
+    // The `/` filter text is cleared; the value carries the token + trailing space.
+    expect(textarea).toHaveValue(`${TOKEN} `)
   })
 
-  it('injects the framed skill body into the first turn on launch (optimistic + real)', async () => {
+  it('launch injects the wire (path-framed) text into the real send while the optimistic preview carries the display (token) text', async () => {
     mockSkills.current = [SKILL_GIT]
-    const framed = '# Agent Skills\n\n## git-worktree\nCreate a worktree.\n\n---\n\nhello'
-    mockBuildPrompt.mockResolvedValue(framed)
     renderLauncher()
 
     const textarea = await screen.findByLabelText('Agent prompt')
@@ -1088,79 +1091,54 @@ describe('AgentLauncher skill chips', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    )
-
-    fireEvent.change(textarea, { target: { value: 'hello' } })
+    await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
+    // Type after the chip + trailing space.
+    fireEvent.change(textarea, { target: { value: `${TOKEN} hello` } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
-    // Skill bodies are read at launch time via buildPromptWithLoadedSkills.
-    await waitFor(() => expect(mockBuildPrompt).toHaveBeenCalled())
-    expect(mockBuildPrompt).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ name: 'git-worktree' })]),
-      'hello',
-      '/work'
-    )
+    const wireText = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hello`
+    const displayText = `${TOKEN} hello`
 
-    // Optimistic syncBlocks carry the framed text so the preview matches.
+    // The optimistic syncBlocks carry the DISPLAY (token) text so the chat
+    // timeline renders inline chips.
     await waitFor(() =>
       expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
         expect.objectContaining({
-          initialUserBlocks: [{ type: 'text', text: framed }]
+          initialUserBlocks: [{ type: 'text', text: displayText }]
         })
       )
     )
-    // The chat opens (carryover): the launcher hands off a first user turn
-    // carrying the framed skill body, then clears its own skill chips.
     expect(mockHideAgentLauncher).toHaveBeenCalled()
     expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
-    // The launcher's skill chips are cleared on launch — the chat that opens
-    // starts with no skill chips (skills were injected as framed text, not
-    // carried as chips). The launcher stays mounted in this harness, so the
-    // pill's absence proves the state was cleared.
-    await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Remove git-worktree skill' })
-      ).not.toBeInTheDocument()
-    })
 
-    // The real send (finalize) also carries the framed text.
+    // The real send (finalize) carries the WIRE (path-framed) text — the agent
+    // receives paths, not tokens.
     await waitFor(() =>
       expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
         expect.objectContaining({
-          initialBlocks: [{ type: 'text', text: framed }]
+          initialBlocks: [{ type: 'text', text: wireText }]
         })
       )
     )
   })
 
-  it('toasts and aborts launch when a skill read fails at launch (pill remains)', async () => {
-    mockSkills.current = [SKILL_GIT]
-    mockBuildPrompt.mockRejectedValue(new Error("Failed to load skill 'git-worktree': boom"))
+  it('toasts and aborts launch when a selected skill has no path (web parity gap)', async () => {
+    mockSkills.current = [{ name: 'pathless', description: 'no path', scope: 'project', path: '' }]
     renderLauncher()
 
     const textarea = await screen.findByLabelText('Agent prompt')
     fireEvent.change(textarea, { target: { value: '/' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    selectSlashOption('/pathless')
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    )
-
-    fireEvent.change(textarea, { target: { value: 'hello' } })
+    await waitFor(() => expect(screen.getByText('pathless')).toBeInTheDocument())
+    fireEvent.change(textarea, { target: { value: '\uE000pathless\uE001 hello' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
-    // The toast names the failing skill.
+    // The toast names the missing path; launch is aborted.
     await waitFor(() => expect(mockToastError).toHaveBeenCalled())
-    expect(mockToastError).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to load skill 'git-worktree'")
-    )
-    // Launch aborted: no chat opened, no placeholder created.
+    expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('missing a path'))
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
     expect(mockHideAgentLauncher).not.toHaveBeenCalled()
-    // The skill pill remains for retry/remove.
-    expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
   })
 })

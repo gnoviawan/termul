@@ -29,6 +29,7 @@ import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
+import { parseSkillSegments } from '@/lib/skill-tokens'
 import { stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
@@ -49,6 +50,7 @@ import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-link
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { MessageActions } from './MessageActions'
+import { SkillChip } from './SkillChip'
 
 const FILE_PATH_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkFilePathLinks]
 
@@ -58,6 +60,31 @@ function blocksToText(blocks: ContentBlock[]): string {
     .filter((b) => b.type === 'text')
     .map((b) => b.text ?? '')
     .join('')
+}
+
+/**
+ * Render a user message's text, swapping inline skill tokens for read-only
+ * `SkillChip` pills. Plain text (no tokens) renders verbatim with
+ * `whitespace-pre-wrap` to preserve the original spacing. `MessageActions`
+ * still receives the raw token text so editing re-seeds the composer with the
+ * tokens (chips re-render inline) and copy degrades gracefully (private-use
+ * sentinels are invisible in most fonts).
+ */
+function UserMessageText({ text }: { text: string }): React.JSX.Element {
+  const segments = parseSkillSegments(text)
+  return (
+    <BubbleContent className="whitespace-pre-wrap break-words">
+      {segments.length === 0
+        ? text
+        : segments.map((seg, i) =>
+            seg.kind === 'skill' ? (
+              <SkillChip key={`skill-${i}`} name={seg.name} readOnly />
+            ) : (
+              <span key={`text-${i}`}>{seg.text}</span>
+            )
+          )}
+    </BubbleContent>
+  )
 }
 
 /** Non-text content blocks (image / resource / etc). */
@@ -489,7 +516,7 @@ function ChatMessageComponent({
                 animateEnter={animateEnter}
               >
                 <Bubble variant="tinted" align="end" className="max-w-full">
-                  <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
+                  <UserMessageText text={text} />
                 </Bubble>
               </StaggerSection>
             )}

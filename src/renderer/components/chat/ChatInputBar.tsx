@@ -11,11 +11,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import {
-  buildPromptWithLoadedSkills,
-  type LoadedAgentSkill,
-  useAgentSkills
-} from '@/hooks/use-agent-skills'
+import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -27,6 +23,11 @@ import type {
 } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import {
+  extractSkillNames,
+  insertSkillToken,
+  removeSkillTokenBeforeCaret
+} from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store'
@@ -46,7 +47,7 @@ import { iconPop } from './chat-motion'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
-import { SkillChip } from './SkillChip'
+import { SkillComposerOverlay } from './SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
@@ -81,8 +82,15 @@ interface ChatInputBarProps {
   /** Whether the agent accepts embedded `resource` blocks (drag/paste text files). */
   embedCapable?: boolean
   onSend: (text: string) => void
-  /** Send a prompt carrying structured content blocks (text + attachments). */
-  onSendBlocks: (blocks: ContentBlock[]) => void
+  /**
+   * Send a prompt carrying structured content blocks (text + attachments).
+   * The first arg is the wire text dispatched to the agent; the optional second
+   * arg is the display blocks stored in the optimistic user message so the
+   * timeline can render inline skill chips (token text) while the agent
+   * receives the path-based wire framing. When omitted, the wire blocks are
+   * also used for display.
+   */
+  onSendBlocks: (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => void
   onCancel: () => void
   /** Slash-menu data sources from the active session. */
   commands: AvailableCommand[]
@@ -207,7 +215,11 @@ export function ChatInputBar({
     return () => clearTimeout(handle)
   }, [value, draftKey, seedNonce, canPersistDraft])
   const [activeCommand, setActiveCommand] = useState<string | null>(null)
-  const [loadedSkills, setLoadedSkills] = useState<LoadedAgentSkill[]>([])
+  // name → SKILL.md path, captured when a skill is picked from the slash menu
+  // so the wire prompt can cite paths synchronously at send time (no IPC read,
+  // no failure path). The composer value carries the inline skill tokens; this
+  // ref supplies the path for each token's name when building the wire text.
+  const skillPathsRef = useRef<Record<string, string>>({})
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -303,52 +315,78 @@ export function ChatInputBar({
   const canSend =
     !disabled &&
     !sending &&
-    (value.trim().length > 0 ||
-      activeCommand !== null ||
-      loadedSkills.length > 0 ||
-      attachments.length > 0)
+    (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
   const submit = useCallback(async () => {
-    const userText = value.trim()
     const hasAttachments = attachments.length > 0
-    if (
-      (!userText && !activeCommand && loadedSkills.length === 0 && !hasAttachments) ||
-      disabled ||
-      sending
-    )
-      return
+    const hasText = value.trim().length > 0
+    if ((!hasText && !activeCommand && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
-      // Inject each loaded skill's instructions (body read on demand so it is
-      // always current at send time), framing them under a `# Agent Skills`
-      // header so the agent knows they are skills — never a bare `/skill-name`.
-      const baseText =
-        loadedSkills.length > 0
-          ? await buildPromptWithLoadedSkills(loadedSkills, userText, projectRoot ?? session.cwd)
-          : userText
-      // Prepend the active command to the prompt text on send.
-      const withCommand = activeCommand ? `/${activeCommand} ${baseText}` : baseText
-      const trimmed = withCommand.trim()
-      if (!trimmed && !hasAttachments) return
+      // Extract the inline skill tokens carried in the value and resolve each
+      // name to its captured SKILL.md path. A skill surfaced without a path
+      // (e.g. a future web skill with no parity route) blocks the send — HALT
+      // with a clear error so the user can remove the chip.
+      const skillNames = extractSkillNames(value)
+      const skills = skillNames.map((name) => ({ name, path: skillPathsRef.current[name] ?? '' }))
+      const missingPath = skills.find((s) => !s.path)
+      if (missingPath) {
+        throw new Error(`Skill '${missingPath.name}' is missing a path`)
+      }
+
+      // Wire text dispatched to the agent: skills framed by path under
+      // `# Agent Skills`, then the user text with tokens replaced by `(name)`.
+      // Sync — paths were captured at pick time, so no IPC and no failure path.
+      const wireText = buildPromptWithLoadedSkills(skills, value)
+      // Display text stored in the optimistic user message: the raw token value
+      // so the timeline overlay re-renders the chips inline.
+      const displayText = value
+      const hasSkills = skills.length > 0
+
+      // Prepend the active command to both wire and display so the timeline
+      // shows `/cmd …` and the agent receives the command-prefixed wire text.
+      const wireWithCommand = activeCommand ? `/${activeCommand} ${wireText}` : wireText
+      const displayWithCommand = activeCommand ? `/${activeCommand} ${displayText}` : displayText
+      const wireTrimmed = wireWithCommand.trim()
+      const displayTrimmed = displayWithCommand.trim()
+      if (!wireTrimmed && !hasAttachments) return
 
       if (hasAttachments) {
-        const blocks: ContentBlock[] = []
-        if (trimmed) blocks.push({ type: 'text', text: withCommand })
-        for (const a of attachments) blocks.push(attachmentToBlock(a))
-        onSendBlocks(dedupeAttachmentBlocks(blocks))
+        const wireBlocks: ContentBlock[] = []
+        if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
+        for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
+        const wire = dedupeAttachmentBlocks(wireBlocks)
+        // Only split display from wire when skills are present; otherwise
+        // display == wire and a single-arg call preserves the existing contract.
+        if (hasSkills) {
+          const displayBlocks: ContentBlock[] = []
+          if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
+          for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
+          const display = dedupeAttachmentBlocks(displayBlocks)
+          onSendBlocks(wire, display)
+        } else {
+          onSendBlocks(wire)
+        }
+      } else if (hasSkills) {
+        // Skills (tokens) present: split display (tokens) from wire (framing).
+        onSendBlocks(
+          wireTrimmed ? [{ type: 'text', text: wireWithCommand }] : [],
+          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
+        )
       } else {
-        onSend(trimmed)
+        // Plain text-only path: display == wire (no separate display blocks).
+        onSend(wireTrimmed)
       }
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
+      skillPathsRef.current = {}
       setActiveCommand(null)
-      setLoadedSkills([])
       clearAttachments()
       resetMentions()
       resetHeight()
@@ -361,35 +399,46 @@ export function ChatInputBar({
     value,
     attachments,
     activeCommand,
-    loadedSkills,
     disabled,
     sending,
     clearAttachments,
     appOwnedTempPaths,
     onSend,
     onSendBlocks,
-    projectRoot,
     resetHeight,
     resetMentions,
-    session.cwd,
     session.id
   ])
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
       if (item.kind === 'skill') {
-        // Append the skill as an inline chip, deduping by name so picking the
-        // same skill twice is a no-op. Clear the `/` filter text and refocus
-        // the textarea so the user can keep typing or pick another skill.
-        setLoadedSkills((prev) =>
-          prev.some((s) => s.name === item.name)
-            ? prev
-            : [...prev, { name: item.name, description: item.description ?? '' }]
+        // Splice an inline skill token at the caret, removing the `/`-filter
+        // text the slash menu was filtering on. The token carries the skill
+        // name; the path is recorded into `skillPathsRef` so the wire prompt
+        // can cite it synchronously at send time. A trailing space is appended
+        // so the caret lands in plain text and the next `/` trigger matches.
+        const trigger = findSlashTrigger(value)
+        const caret = textareaRef.current?.selectionStart ?? value.length
+        const insertAt = trigger ? trigger.end : caret
+        const deleteBefore = trigger ? trigger.end - trigger.start : 0
+        const { value: next, caret: nextCaret } = insertSkillToken(
+          value,
+          insertAt,
+          item.name,
+          deleteBefore
         )
-        setValue('')
-        updateMentions('', 0)
+        skillPathsRef.current[item.name] = item.path
+        setValue(next)
+        updateMentions(next, nextCaret)
         resetHeight()
-        textareaRef.current?.focus()
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (!el) return
+          clampHeight(el)
+          el.setSelectionRange(nextCaret, nextCaret)
+          el.focus()
+        })
         return
       }
       if (item.kind === 'command') {
@@ -424,11 +473,37 @@ export function ChatInputBar({
       updateMentions('', 0)
       resetHeight()
     },
-    [value, onSetConfig, onSetMode, resetHeight, updateMentions]
+    [value, onSetConfig, onSetMode, resetHeight, clampHeight, updateMentions]
   )
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Backspace over an inline skill token (caret immediately after a chip,
+      // no active selection): remove the whole token plus the splicer's
+      // trailing space. Falls through to the default one-char backspace when
+      // the caret is in plain text.
+      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        const el = e.currentTarget
+        const caret = el.selectionStart ?? 0
+        const selEnd = el.selectionEnd ?? 0
+        if (caret === selEnd) {
+          const result = removeSkillTokenBeforeCaret(value, caret)
+          if (result.removed) {
+            e.preventDefault()
+            setValue(result.value)
+            updateMentions(result.value, result.caret)
+            resetHeight()
+            requestAnimationFrame(() => {
+              const t = textareaRef.current
+              if (!t) return
+              clampHeight(t)
+              t.setSelectionRange(result.caret, result.caret)
+              t.focus()
+            })
+            return
+          }
+        }
+      }
       if (
         tryHandleSlashMenuKeyDown(e, {
           menuOpen: slashOpen,
@@ -460,10 +535,12 @@ export function ChatInputBar({
       }
     },
     [
+      value,
       slashOpen,
       sections.length,
       handleMentionKeyDown,
       updateMentions,
+      clampHeight,
       busy,
       showStop,
       onCancel,
@@ -605,22 +682,13 @@ export function ChatInputBar({
                 }}
               />
             )}
-            {loadedSkills.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 px-4 pt-2">
-                {loadedSkills.map((skill) => (
-                  <SkillChip
-                    key={skill.name}
-                    name={skill.name}
-                    onRemove={() => {
-                      setLoadedSkills((prev) => prev.filter((s) => s.name !== skill.name))
-                      textareaRef.current?.focus()
-                    }}
-                  />
-                ))}
-              </div>
-            )}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
-            <div className="px-4 pb-1.5 pt-3.5">
+            <div className="relative px-4 pb-1.5 pt-3.5">
+              {/* Transparent-textarea overlay: mirrors the value with inline
+                  SkillChip pills. The textarea text is transparent with a
+                  visible caret; this overlay renders the visible text + chips in
+                  the same metrics so the caret stays aligned. */}
+              <SkillComposerOverlay textareaRef={textareaRef} value={value} />
               <textarea
                 ref={textareaRef}
                 value={value}
@@ -652,12 +720,13 @@ export function ChatInputBar({
                 placeholder={
                   disabled
                     ? 'Session closed'
-                    : activeCommand || loadedSkills.length > 0
+                    : activeCommand
                       ? 'Add a message (optional)…'
                       : 'Ask anything… (/ for commands, @ for files)'
                 }
                 className={cn(
-                  'min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
+                  'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
+                  'text-transparent caret-foreground',
                   'placeholder:text-muted-foreground focus:outline-none',
                   'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
                 )}

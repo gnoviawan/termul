@@ -3,8 +3,11 @@ import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
+
+const T = skillToken
 
 function clickMenuOption(name: string | RegExp): void {
   const dialog = screen.getByRole('dialog')
@@ -18,7 +21,6 @@ const {
   mockMcpCount,
   mockReadDir,
   mockSkills,
-  mockBuildPrompt,
   mockToastError
 } = vi.hoisted(() => ({
   mockSetConfig: vi.fn(),
@@ -30,12 +32,15 @@ const {
   mockReadDir: vi.fn(),
   // Override-able skills list (defaults to [] — web/no-skills parity). Skill
   // tests push entries here so useAgentSkills surfaces them in the slash menu.
+  // `path` is required so the wire prompt can cite it (desktop always has one).
   mockSkills: {
-    current: [] as Array<{ name: string; description: string; scope: string }>
+    current: [] as Array<{
+      name: string
+      description: string
+      scope: string
+      path: string
+    }>
   },
-  // buildPromptWithLoadedSkills mock — defaults to passthrough (returns user
-  // text). Send-data tests override the resolved value to assert framing.
-  mockBuildPrompt: vi.fn(async (_skills: unknown, text: string) => text),
   mockToastError: vi.fn()
 }))
 
@@ -45,10 +50,16 @@ vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
 }))
 
-vi.mock('@/hooks/use-agent-skills', () => ({
-  useAgentSkills: () => ({ skills: mockSkills.current }),
-  buildPromptWithLoadedSkills: mockBuildPrompt
-}))
+vi.mock('@/hooks/use-agent-skills', async () => {
+  // Use the real (sync) buildPromptWithLoadedSkills so the wire framing is
+  // exercised end-to-end — no mock needed now that paths are captured at pick
+  // time (no IPC read at send). Only useAgentSkills is overridden for the
+  // override-able skills list.
+  const actual = await vi.importActual<typeof import('@/hooks/use-agent-skills')>(
+    '@/hooks/use-agent-skills'
+  )
+  return { ...actual, useAgentSkills: () => ({ skills: mockSkills.current }) }
+})
 
 vi.mock('@/stores/acp-store', () => ({
   useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' }),
@@ -98,11 +109,9 @@ vi.mock('@/lib/api', async () => {
 beforeEach(() => {
   persistenceStore.clear()
   fakePersistenceApi.readFails = false
-  // Start each test from a clean skill/prompt-framing slate (web/no-skills
-  // default). Skill tests override mockSkills.current and mockBuildPrompt.
+  // Start each test from a clean skill slate (web/no-skills default). Skill
+  // tests override mockSkills.current.
   mockSkills.current = []
-  mockBuildPrompt.mockReset()
-  mockBuildPrompt.mockImplementation(async (_skills: unknown, text: string) => text)
 })
 
 function option(
@@ -741,166 +750,196 @@ describe('ChatInputBar draft persistence', () => {
   })
 })
 
-describe('ChatInputBar skill chips', () => {
+describe('ChatInputBar skill chips (inline tokens)', () => {
   const SKILL_GIT = {
     name: 'git-worktree',
     description: 'Isolated worktree',
-    scope: 'project'
+    scope: 'project',
+    path: '/home/u/.agents/skills/git-worktree/SKILL.md'
   }
-  const SKILL_REVIEW = { name: 'review', description: 'Review the diff', scope: 'global' }
+  const SKILL_REVIEW = {
+    name: 'release-version',
+    description: 'Cut a release',
+    scope: 'global',
+    path: '/home/u/.agents/skills/release-version/SKILL.md'
+  }
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
     fireEvent.mouseDown(within(listbox).getByText(name))
   }
 
+  /** The transparent-textarea overlay renders the chip name as a visible span;
+   *  after the slash menu closes it is the stable selector for the inline chip. */
+  async function findChip(name: string): Promise<HTMLElement> {
+    return screen.findByText(name, { ignore: 'option' })
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('renders a skill pill inline when a skill is selected from the slash menu', async () => {
+  it('splices a skill token inline at the caret when a skill is picked mid-sentence', async () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
     const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    fireEvent.change(textarea, { target: { value: 'use this skill /' } })
+    // Move the caret to the end so the slash trigger matches the trailing `/`.
+    fireEvent.keyUp(textarea, { key: 'ArrowRight' })
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-
     selectSlashOption('/git-worktree')
 
-    // Pill renders inline (not a full-width top attachment bar); the X button's
-    // accessible label is the stable selector for the pill.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    })
-    // The `/` filter text is cleared and the textarea refocuses.
-    expect(textarea).toHaveValue('')
+    // The `/` filter text is removed and a token is spliced inline; the
+    // transparent-textarea overlay renders the chip name as a visible span.
+    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    // The textarea value now carries the token (filter text removed).
+    expect(textarea).toHaveValue(`use this skill ${T('git-worktree')} `)
   })
 
-  it('renders two pills when two distinct skills are selected', async () => {
+  it('renders two inline chips when two distinct skills are picked at their positions', async () => {
     mockSkills.current = [SKILL_GIT, SKILL_REVIEW]
     renderInputBar()
 
     const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    fireEvent.change(textarea, { target: { value: 'use this /' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    )
+    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
 
-    // Re-open the menu and pick a second, distinct skill.
-    fireEvent.change(textarea, { target: { value: '/' } })
+    // Re-open the menu after the chip + trailing space, then pick a second skill.
+    fireEvent.change(textarea, { target: { value: `${T('git-worktree')} then do /` } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/review')
+    selectSlashOption('/release-version')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove review skill' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(findChip('release-version')).toBeDefined())
+    // Both chips are present; the value carries two tokens.
+    expect(textarea).toHaveValue(`${T('git-worktree')} then do ${T('release-version')} `)
   })
 
-  it('ignores a same-named skill pick (dedupes by name)', async () => {
+  it('allows the same skill inline at multiple positions (no dedupe of tokens)', async () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
     const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    fireEvent.change(textarea, { target: { value: 'first /' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/git-worktree')
+
+    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+
+    // Pick the same skill again — the second pick splices a second token (the
+    // wire header dedupes by name, but inline positions are preserved).
+    fireEvent.change(textarea, { target: { value: `${T('git-worktree')} again /` } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+      expect(textarea).toHaveValue(`${T('git-worktree')} again ${T('git-worktree')} `)
     )
-
-    // Pick the same skill again — should be a no-op (deduped by name).
-    fireEvent.change(textarea, { target: { value: '/' } })
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
-
-    expect(screen.getAllByRole('button', { name: 'Remove git-worktree skill' })).toHaveLength(1)
   })
 
-  it('removes a skill pill when its X is clicked', async () => {
+  it('removes a whole chip token on Backspace when the caret is immediately after it', async () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
     const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    fireEvent.change(textarea, { target: { value: 'use this /' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    const pill = await screen.findByRole('button', { name: 'Remove git-worktree skill' })
-    fireEvent.click(pill)
+    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    const valueWithToken = `use this ${T('git-worktree')} `
+    expect(textarea).toHaveValue(valueWithToken)
 
-    expect(
-      screen.queryByRole('button', { name: 'Remove git-worktree skill' })
-    ).not.toBeInTheDocument()
-  })
-
-  it('sends the framed skill body followed by user text on send, then clears pills', async () => {
-    const onSend = vi.fn()
-    mockSkills.current = [SKILL_GIT]
-    const framed = '# Agent Skills\n\n## git-worktree\nCreate a worktree.\n\n---\n\nhello'
-    mockBuildPrompt.mockResolvedValue(framed)
-    renderInputBar({ onSend })
-
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
-
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    )
-
-    fireEvent.change(textarea, { target: { value: 'hello' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-
-    // The prompt carries each skill's body framed by its name (never a bare
-    // /skill-name), then the user text.
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith(framed))
-    expect(onSend.mock.calls[0]![0]).not.toContain('/git-worktree')
-    // Pills are cleared after send.
-    await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Remove git-worktree skill' })
-      ).not.toBeInTheDocument()
+    // Place the caret right after the trailing space (the splicer's position).
+    const caret = valueWithToken.length
+    fireEvent.select(textarea, {
+      target: { selectionStart: caret, selectionEnd: caret }
     })
+    fireEvent.keyDown(textarea, { key: 'Backspace' })
+
+    // The whole chip token + the trailing space are removed; the preceding text
+    // ("use this ") stays and the caret lands at the end of it.
+    await waitFor(() => expect(textarea).toHaveValue('use this '))
   })
 
-  it('toasts and keeps pills when a skill read fails at send (no message sent)', async () => {
-    const onSend = vi.fn()
+  it('falls through to the default one-char backspace when the caret is in plain text', async () => {
     mockSkills.current = [SKILL_GIT]
-    mockBuildPrompt.mockRejectedValue(new Error("Failed to load skill 'git-worktree': boom"))
-    renderInputBar({ onSend })
+    renderInputBar()
 
     const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    // Plain text, no tokens; caret at the end.
+    fireEvent.change(textarea, { target: { value: 'hello world' } })
+    const caret = 'hello world'.length
+    fireEvent.select(textarea, { target: { selectionStart: caret, selectionEnd: caret } })
+
+    fireEvent.keyDown(textarea, { key: 'Backspace' })
+    // Default backspace is NOT preventDefault'd here (the browser would delete
+    // one char); the React handler returns without mutating the value. The
+    // textarea value is unchanged by our handler — the DOM input event would
+    // do the actual deletion, which fireEvent.keyDown does not simulate.
+    expect(textarea).toHaveValue('hello world')
+  })
+
+  it('emits display (token) + wire (path-framed) blocks on send, then clears the token', async () => {
+    const onSendBlocks = vi.fn()
+    mockSkills.current = [SKILL_GIT]
+    renderInputBar({ onSendBlocks })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'use this /' } })
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
-    )
-
-    fireEvent.change(textarea, { target: { value: 'hello' } })
+    await waitFor(() => expect(findChip('git-worktree')).toBeDefined())
+    // Type after the chip + trailing space.
+    fireEvent.change(textarea, {
+      target: { value: `${T('git-worktree')} and then` }
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    // The toast names the failing skill.
+    const wireText = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) and then`
+    const displayText = `${T('git-worktree')} and then`
+    await waitFor(() =>
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: wireText }],
+        [{ type: 'text', text: displayText }]
+      )
+    )
+    // Wire never carries a bare /skill-name; it cites the path.
+    expect(onSendBlocks.mock.calls[0]![0][0]).not.toContain('/git-worktree')
+    // The token is cleared after send.
+    await waitFor(() => expect(textarea).toHaveValue(''))
+  })
+
+  it('blocks send and toasts when a selected skill has no path (web parity gap)', async () => {
+    const onSendBlocks = vi.fn()
+    const onSend = vi.fn()
+    // A skill surfaced without a path (e.g. a future web skill with no parity
+    // route) — the renderer Block If halts the send with a clear error.
+    mockSkills.current = [{ name: 'pathless', description: 'no path', scope: 'project', path: '' }]
+    renderInputBar({ onSendBlocks, onSend })
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'use this /' } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/pathless')
+
+    await waitFor(() => expect(findChip('pathless')).toBeDefined())
+    fireEvent.change(textarea, { target: { value: `${T('pathless')} hi` } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // The toast names the missing path; no message is sent.
     await waitFor(() => expect(mockToastError).toHaveBeenCalled())
-    expect(mockToastError).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to load skill 'git-worktree'")
-    )
-    // No message was sent.
+    expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('missing a path'))
     expect(onSend).not.toHaveBeenCalled()
-    // Pills remain for retry/remove.
-    expect(screen.getByRole('button', { name: 'Remove git-worktree skill' })).toBeInTheDocument()
+    expect(onSendBlocks).not.toHaveBeenCalled()
   })
 
-  it('shows no Skills section and no pills when no skills are available (web parity)', async () => {
+  it('shows no Skills section and no chips when no skills are available (web parity)', async () => {
     mockSkills.current = []
     renderInputBar()
 
@@ -909,6 +948,39 @@ describe('ChatInputBar skill chips', () => {
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
+  })
+
+  it('re-renders inline chips when the composer is seeded with token text (edit a sent message)', async () => {
+    // Editing a user message that carried skill tokens re-seeds the composer
+    // with the raw token text; the transparent-textarea overlay must re-render
+    // the chips inline (MessageActions.onEdit passes the token text verbatim).
+    mockSkills.current = [SKILL_GIT]
+    const seeded = `use this ${T('git-worktree')} then`
+    const { rerender } = renderInputBar()
+
+    rerender(
+      <TooltipProvider>
+        <ChatInputBar
+          session={session()}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={session().modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          seedText={seeded}
+          seedNonce={1}
+        />
+      </TooltipProvider>
+    )
+
+    // The textarea value carries the tokens; the overlay re-renders the chip.
+    await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
+    expect(screen.getByRole('textbox')).toHaveValue(seeded)
   })
 })

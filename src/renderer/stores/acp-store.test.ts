@@ -792,6 +792,59 @@ describe('acp-store', () => {
     expect(after[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
   })
 
+  it('sendPromptBlocks stores displayBlocks in the optimistic message while dispatching the wire blocks', async () => {
+    // The composer splits display (token text, rendered as inline chips in the
+    // timeline) from wire (path-framed text, dispatched to the agent). The
+    // optimistic user message stores the DISPLAY blocks; the agent receives the
+    // WIRE blocks. The display override must NOT alter what is dispatched.
+    seedSession('s1', 'agent-1', false)
+    const dispatched: Array<{ cmd: string; args: unknown }> = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      dispatched.push({ cmd, args })
+      return undefined
+    })
+    const wire = [{ type: 'text', text: '# Agent Skills\n\n---\n\n(git-worktree) hi' }]
+    const display = [{ type: 'text', text: '\uE000git-worktree\uE001 hi' }]
+    void useAcpStore.getState().sendPromptBlocks('s1', wire, { displayBlocks: display })
+    await Promise.resolve()
+    const msgs = useAcpStore.getState().messages['s1']
+    expect(msgs).toHaveLength(1)
+    // The optimistic user message stores the DISPLAY blocks (token text) so the
+    // timeline renders inline chips.
+    expect(msgs[0].blocks).toEqual(display)
+    // The agent is dispatched the WIRE blocks (path-framed text), not the display.
+    // The IPC transport sends `acp_send_prompt` with a `content` payload.
+    const sendCall = dispatched.find((d) => d.cmd === 'acp_send_prompt')
+    expect(sendCall).toBeDefined()
+    expect((sendCall!.args as { content: ContentBlock[] }).content).toEqual(wire)
+  })
+
+  it('sendPromptBlocks echo does not overwrite the display blocks (dedup by turn:<id>)', async () => {
+    // The server `user_prompt` echo carries the wire blocks; the optimistic
+    // message keeps the display blocks because `_onUserPrompt` dedups by
+    // `turn:<id>` (id-keyed, not block-exact).
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    const wire = [{ type: 'text', text: 'wire-framed' }]
+    const display = [{ type: 'text', text: '\uE000git-worktree\uE001 hi' }]
+    void useAcpStore.getState().sendPromptBlocks('s1', wire, { displayBlocks: display })
+    await Promise.resolve()
+    const msgs = useAcpStore.getState().messages['s1']
+    expect(msgs[0].blocks).toEqual(display)
+    const turnId = msgs[0].id.slice('turn:'.length)
+    // Server echoes the wire blocks for the same turn id — must NOT overwrite the
+    // display blocks (dedup by id keeps the optimistic display).
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId,
+      content: wire
+    })
+    const after = useAcpStore.getState().messages['s1']
+    expect(after).toHaveLength(1)
+    expect(after[0].blocks).toEqual(display)
+  })
+
   it('sendPrompt updates the persisted history title from the first user message', async () => {
     seedSession('s1', 'agent-09d39730', false)
     useAcpStore.setState({

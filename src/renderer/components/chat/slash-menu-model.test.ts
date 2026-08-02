@@ -53,8 +53,18 @@ const modes: SessionModeState = {
 }
 
 const skills: AgentSkillSummary[] = [
-  { name: 'investigate', description: 'Run an investigation', scope: 'project' },
-  { name: 'review', description: 'Review code', scope: 'global' }
+  {
+    name: 'investigate',
+    description: 'Run an investigation',
+    scope: 'project',
+    path: '/work/.agents/skills/investigate/SKILL.md'
+  },
+  {
+    name: 'review',
+    description: 'Review code',
+    scope: 'global',
+    path: '/home/u/.agents/skills/review/SKILL.md'
+  }
 ]
 
 describe('slash trigger detection', () => {
@@ -140,6 +150,22 @@ describe('buildSlashSections', () => {
     expect(sections[1].id).toBe('commands')
   })
 
+  it('threads each skill SKILL.md path onto the skill items (for the wire prompt)', () => {
+    const sections = buildSlashSections({
+      commands: [],
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    const skillItems = sections[0].items
+    expect(skillItems.every((i) => i.kind === 'skill')).toBe(true)
+    expect(skillItems.map((i) => (i.kind === 'skill' ? i.path : ''))).toEqual([
+      '/work/.agents/skills/investigate/SKILL.md',
+      '/home/u/.agents/skills/review/SKILL.md'
+    ])
+  })
+
   it('lists commands first when no skills', () => {
     const sections = buildSlashSections({ commands, configOptions: [], modes: null, filter: '' })
     expect(sections[0].id).toBe('commands')
@@ -150,8 +176,18 @@ describe('buildSlashSections', () => {
     // A skill named `compact` collides with the `compact` command — the skill
     // is dropped so the name appears once (Commands), not twice.
     const overlapping: AgentSkillSummary[] = [
-      { name: 'compact', description: 'A skill called compact', scope: 'project' },
-      { name: 'investigate', description: 'Run an investigation', scope: 'project' }
+      {
+        name: 'compact',
+        description: 'A skill called compact',
+        scope: 'project',
+        path: '/work/.agents/skills/compact/SKILL.md'
+      },
+      {
+        name: 'investigate',
+        description: 'Run an investigation',
+        scope: 'project',
+        path: '/work/.agents/skills/investigate/SKILL.md'
+      }
     ]
     const sections = buildSlashSections({
       commands,

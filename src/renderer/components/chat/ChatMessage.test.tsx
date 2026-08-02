@@ -2,8 +2,12 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { skillToken } from '@/lib/skill-tokens'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
+
+const T = skillToken
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
 const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
@@ -301,5 +305,46 @@ describe('ChatMessage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open' }))
     expect(openUrlWithSystemBrowser).toHaveBeenCalledWith('https://example.com/docs')
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  describe('user message with inline skill chips', () => {
+    function userMessage(text: string): ChatMessageType {
+      return {
+        id: 'user-1',
+        role: 'user',
+        blocks: [{ type: 'text', text }],
+        streaming: false,
+        timestamp: 0
+      }
+    }
+
+    it('renders inline skill chips for token text in a user bubble', () => {
+      const text = `use this ${T('git-worktree')} and then ${T('release-version')}`
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+
+      // Each chip name renders as a visible inline pill (read-only, no X).
+      expect(screen.getByText('git-worktree')).toBeInTheDocument()
+      expect(screen.getByText('release-version')).toBeInTheDocument()
+      // The plain text segments render too (regex tolerates the surrounding
+      // whitespace the segment carries next to the chips).
+      expect(screen.getByText(/use this/)).toBeInTheDocument()
+      expect(screen.getByText(/and then/)).toBeInTheDocument()
+      // No remove buttons — timeline chips are read-only.
+      expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
+    })
+
+    it('renders plain user text verbatim (no chip parsing) when there are no tokens', () => {
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage('just plain text')} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('just plain text')).toBeInTheDocument()
+      expect(screen.queryByText(/skill/i)).not.toBeInTheDocument()
+    })
   })
 })

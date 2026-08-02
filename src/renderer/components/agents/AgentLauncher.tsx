@@ -20,11 +20,12 @@ import {
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
-import { SkillChip } from '@/components/chat/SkillChip'
+import { SkillComposerOverlay } from '@/components/chat/SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
 import {
   buildSlashSections,
+  findSlashTrigger,
   isSlashTrigger,
   type SlashItem,
   slashFilter
@@ -39,11 +40,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
-import {
-  buildPromptWithLoadedSkills,
-  type LoadedAgentSkill,
-  useAgentSkills
-} from '@/hooks/use-agent-skills'
+import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
@@ -62,6 +59,11 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import {
+  extractSkillNames,
+  insertSkillToken,
+  removeSkillTokenBeforeCaret
+} from '@/lib/skill-tokens'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -103,7 +105,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [pendingOptions, setPendingOptions] = useState<PendingLauncherOptions>(
     emptyPendingLauncherOptions
   )
-  const [loadedSkills, setLoadedSkills] = useState<LoadedAgentSkill[]>([])
+  // name → SKILL.md path, captured when a skill is picked inline so the launch
+  // wire prompt can cite paths synchronously (no IPC read, no failure path).
+  const skillPathsRef = useRef<Record<string, string>>({})
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -277,6 +281,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     emptyLabel,
     resetMentions,
     resetHeight,
+    clampHeight,
     updateMentions
   } = useComposerTextarea({
     value: prompt,
@@ -586,17 +591,30 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const handleSlashSelect = useCallback(
     (item: SlashItem) => {
       if (item.kind === 'skill') {
-        // Append the skill as an inline chip (deduped by name), clear the `/`
-        // filter text, and refocus so the user can keep typing or pick another.
-        setLoadedSkills((prev) =>
-          prev.some((s) => s.name === item.name)
-            ? prev
-            : [...prev, { name: item.name, description: item.description ?? '' }]
+        // Splice an inline skill token at the caret (removing the `/`-filter
+        // text), record the path for the launch wire prompt, and refocus so the
+        // user can keep typing or pick another skill.
+        const trigger = findSlashTrigger(prompt)
+        const caret = textareaRef.current?.selectionStart ?? prompt.length
+        const insertAt = trigger ? trigger.end : caret
+        const deleteBefore = trigger ? trigger.end - trigger.start : 0
+        const { value: next, caret: nextCaret } = insertSkillToken(
+          prompt,
+          insertAt,
+          item.name,
+          deleteBefore
         )
-        setPrompt('')
-        updateMentions('', 0)
+        skillPathsRef.current[item.name] = item.path
+        setPrompt(next)
+        updateMentions(next, nextCaret)
         resetHeight()
-        textareaRef.current?.focus()
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (!el) return
+          clampHeight(el)
+          el.setSelectionRange(nextCaret, nextCaret)
+          el.focus()
+        })
         return
       }
       if (item.kind === 'config') {
@@ -614,7 +632,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       updateMentions('', 0)
       resetHeight()
     },
-    [handleSetConfig, handleSetMode, updateMentions, resetHeight]
+    [prompt, handleSetConfig, handleSetMode, updateMentions, resetHeight, clampHeight]
   )
 
   const launch = useCallback(async () => {
@@ -638,25 +656,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const projectIdSnapshot = activeProjectId
     const projectRootSnapshot = projectRoot
     const needsSave = !acpConfigs.some((config) => config.id === selectedConfig.id)
-    const loadedSkillsSnapshot = loadedSkills
+    const skillPathsSnapshot = skillPathsRef.current
 
-    // Frame skill bodies first so the optimistic preview matches the real
-    // send. On read failure, surface a toast naming the failing skill and
-    // abort the launch (no chat opens, skills stay for retry/remove).
-    let firstTurnText = promptSnapshot
-    if (loadedSkillsSnapshot.length > 0) {
-      try {
-        firstTurnText = await buildPromptWithLoadedSkills(
-          loadedSkillsSnapshot,
-          promptSnapshot,
-          projectRootSnapshot
-        )
-      } catch (err) {
-        launchInFlightRef.current = false
-        toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
-        return
-      }
+    // Build the wire text (skills framed by path under `# Agent Skills`, then
+    // the user text with tokens replaced by `(name)`) and the display text (the
+    // raw token value, so the chat timeline re-renders inline chips). Sync —
+    // paths were captured at pick time, so no IPC read and no failure path. A
+    // skill surfaced without a path (web parity gap) blocks the launch.
+    const skillNames = extractSkillNames(promptSnapshot)
+    const skills = skillNames.map((name) => ({ name, path: skillPathsSnapshot[name] ?? '' }))
+    const missingPath = skills.find((s) => !s.path)
+    if (missingPath) {
+      toast.error(`Skill '${missingPath.name}' is missing a path`)
+      launchInFlightRef.current = false
+      return
     }
+    const hasSkills = skills.length > 0
+    const wireText = hasSkills
+      ? buildPromptWithLoadedSkills(skills, promptSnapshot)
+      : promptSnapshot
+    const displayText = promptSnapshot
 
     // Open the chat immediately; ACP spawn/session/send continue in the chat view.
     const store = useAcpStore.getState()
@@ -667,18 +686,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let usedPlaceholder = false
     let seededOptimistic = false
 
-    // Prefer sync first-turn content so the chat can paint like a normal send.
     // Sync first-turn content so the chat can paint like a normal send. The
-    // framed skill text is used for both the optimistic syncBlocks and the real
-    // send so the preview matches what the agent receives.
-    const syncText = firstTurnText
-    const syncTrimmed = syncText.trim()
+    // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
+    // renders inline chips; the real send dispatches the WIRE text.
+    const syncTrimmed = displayText.trim()
     const syncBlocks: ContentBlock[] = []
     if (attachmentsSnapshot.length > 0) {
-      if (syncTrimmed) syncBlocks.push({ type: 'text', text: syncText })
+      if (syncTrimmed) syncBlocks.push({ type: 'text', text: displayText })
       for (const a of attachmentsSnapshot) syncBlocks.push(attachmentToBlock(a))
     } else if (syncTrimmed.length > 0) {
-      syncBlocks.push({ type: 'text', text: syncText })
+      syncBlocks.push({ type: 'text', text: displayText })
     }
 
     if (!sessionId) {
@@ -699,7 +716,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     useWorkspaceStore.getState().addAgentChatTab(sessionId, paneSnapshot)
     useWorkspaceStore.getState().hideAgentLauncher()
     setPendingOptions(emptyPendingLauncherOptions())
-    setLoadedSkills([])
+    skillPathsRef.current = {}
     clearAttachments()
     resetMentions()
     resetHeight()
@@ -712,14 +729,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         persistSelection(configSnapshot.id)
 
-        const text = firstTurnText
-        const trimmed = text.trim()
+        // Real send carries the WIRE text (path-framed skills) so the agent
+        // receives paths, not tokens.
+        const wireTrimmed = wireText.trim()
         const blocks: ContentBlock[] = []
         if (attachmentsSnapshot.length > 0) {
-          if (trimmed) blocks.push({ type: 'text', text })
+          if (wireTrimmed) blocks.push({ type: 'text', text: wireText })
           for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
-        } else if (trimmed.length > 0) {
-          blocks.push({ type: 'text', text })
+        } else if (wireTrimmed.length > 0) {
+          blocks.push({ type: 'text', text: wireText })
         }
 
         const liveStore = useAcpStore.getState()
@@ -776,12 +794,37 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     preparedKey,
     effectiveModels,
     effectiveModes,
-    effectiveConfigOptions,
-    loadedSkills
+    effectiveConfigOptions
   ])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Backspace over an inline skill token (caret immediately after a chip,
+      // no active selection): remove the whole token plus the splicer's
+      // trailing space. Falls through to the default one-char backspace when
+      // the caret is in plain text.
+      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        const el = e.currentTarget
+        const caret = el.selectionStart ?? 0
+        const selEnd = el.selectionEnd ?? 0
+        if (caret === selEnd) {
+          const result = removeSkillTokenBeforeCaret(prompt, caret)
+          if (result.removed) {
+            e.preventDefault()
+            setPrompt(result.value)
+            updateMentions(result.value, result.caret)
+            resetHeight()
+            requestAnimationFrame(() => {
+              const t = textareaRef.current
+              if (!t) return
+              clampHeight(t)
+              t.setSelectionRange(result.caret, result.caret)
+              t.focus()
+            })
+            return
+          }
+        }
+      }
       if (
         tryHandleSlashMenuKeyDown(e, {
           menuOpen,
@@ -811,13 +854,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         useWorkspaceStore.getState().hideAgentLauncher()
       }
     },
-    [launch, menuOpen, slashSections.length, handleMentionKeyDown, updateMentions, resetHeight]
+    [
+      prompt,
+      launch,
+      menuOpen,
+      slashSections.length,
+      handleMentionKeyDown,
+      updateMentions,
+      clampHeight,
+      resetHeight
+    ]
   )
 
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || loadedSkills.length > 0 || attachments.length > 0)
+    (prompt.trim().length > 0 || attachments.length > 0)
 
   return (
     <div
@@ -916,21 +968,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               onRemove={removeAttachment}
               className="px-5 pt-4"
             />
-            <div className="px-5 pb-2 pt-4">
-              {loadedSkills.length > 0 && (
-                <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                  {loadedSkills.map((skill) => (
-                    <SkillChip
-                      key={skill.name}
-                      name={skill.name}
-                      onRemove={() => {
-                        setLoadedSkills((prev) => prev.filter((s) => s.name !== skill.name))
-                        textareaRef.current?.focus()
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
+            <div className="relative px-5 pb-2 pt-4">
+              {/* Transparent-textarea overlay: mirrors the value with inline
+                  SkillChip pills. The textarea text is transparent with a
+                  visible caret; this overlay renders the visible text + chips
+                  in the same metrics so the caret stays aligned. */}
+              <SkillComposerOverlay textareaRef={textareaRef} value={prompt} />
               <textarea
                 ref={textareaRef}
                 value={prompt}
@@ -943,7 +986,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 rows={2}
                 aria-label="Agent prompt"
                 autoFocus
-                className="max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55"
+                className="relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed text-transparent caret-foreground outline-none placeholder:text-muted-foreground/55"
               />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">

@@ -26,7 +26,7 @@ const { mockMcpCount } = vi.hoisted(() => ({
 
 vi.mock('@/hooks/use-agent-skills', () => ({
   useAgentSkills: () => ({ skills: [] }),
-  buildPromptWithLoadedSkills: vi.fn(async (_skills: unknown, text: string) => text)
+  buildPromptWithLoadedSkills: vi.fn((_skills: unknown, text: string) => text)
 }))
 
 vi.mock('@/stores/acp-store', () => ({
