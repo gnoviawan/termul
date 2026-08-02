@@ -42,7 +42,7 @@ use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
@@ -90,15 +90,23 @@ const FIRST_PROMPT_WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
-/// Story 1.9 NFR7: the bounded per-turn timeout. A wedged agent that neither
-/// replies nor crashes parks `send_prompt`'s oneshot forever without this.
-/// 1 hour accommodates long-running agentic turns (some agents run tens of
-/// minutes on a single task) while still bounding the wait so a truly wedged
-/// turn fails → Error state. Distinct from 1.7's 60s permission sub-timeout
-/// (`permissions.rs:47`) — this bounds the WHOLE turn (`send_prompt` →
-/// `prompt_complete`), not the permission-rendezvous window. Overridable via
+/// Idle timeout for an agent turn: if the agent produces NO activity (no
+/// `session/update`/`tool_call` notification) for this long, the turn is
+/// considered wedged and is cancelled. 900s gives breathing room above the
+/// longest expected silent sub-tool (a ~600s shell command) so legitimate
+/// long-running tool calls don't race the idle deadline, while a truly wedged
+/// (silent) turn fails in ~15min instead of hours. Reset on every inbound
+/// notification via `DriverState::signal_idle`. Overridable via
+/// `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
+const TURN_IDLE_TIMEOUT: Duration = Duration::from_secs(900);
+/// Hard wall-clock cap for a single agent turn — the last-resort backstop so
+/// a chatty-but-non-completing agent (streaming forever) is still bounded. 3h
+/// accommodates very long agentic turns that stay active (the idle timer keeps
+/// resetting, so this only fires for an agent that never stops). On either idle
+/// or hard timeout → cancel + `CANCEL_GRACE` → `status: 'error'`. Distinct from
+/// 1.7's 60s permission sub-timeout (`permissions.rs:47`). Overridable via
 /// `TERMUL_ACP_TURN_TIMEOUT_SECS`.
-const TURN_TIMEOUT: Duration = Duration::from_secs(3600);
+const TURN_TIMEOUT: Duration = Duration::from_secs(10800);
 
 /// `session/new` timeout, overridable for diagnostics via
 /// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
@@ -148,10 +156,21 @@ fn session_reopen_timeout() -> Duration {
         .unwrap_or(SESSION_REOPEN_TIMEOUT)
 }
 
-/// Story 1.9 NFR7: per-turn timeout, overridable via
-/// `TERMUL_ACP_TURN_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
-/// [`TURN_TIMEOUT`]. Bounds a wedged agent turn so `send_prompt`'s oneshot
-/// fails with a typed timeout error → Error state (not parked forever).
+/// Per-turn idle timeout, overridable via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`
+/// (seconds, must be > 0). Defaults to [`TURN_IDLE_TIMEOUT`]. The window with
+/// no agent activity after which a turn is considered wedged.
+pub fn turn_idle_timeout() -> Duration {
+    std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs: &u64| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(TURN_IDLE_TIMEOUT)
+}
+
+/// Hard wall-clock cap per turn, overridable via `TERMUL_ACP_TURN_TIMEOUT_SECS`
+/// (seconds, must be > 0). Defaults to [`TURN_TIMEOUT`] (3h). The last-resort
+/// backstop so a streaming-but-non-completing agent is still bounded.
 pub fn resolved_turn_timeout() -> Duration {
     std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
         .ok()
@@ -159,6 +178,60 @@ pub fn resolved_turn_timeout() -> Duration {
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or(TURN_TIMEOUT)
+}
+
+/// Race an in-flight ACP prompt turn against completion, a cancel signal, an
+/// idle deadline (reset on agent activity via `idle_rx`), and a hard wall-clock
+/// cap. On idle/hard timeout, call `on_timeout_cancel` (signal cancel so the
+/// agent's in-flight `session/prompt` is cancelled too), await `CANCEL_GRACE`
+/// to wind down, then return a typed timeout error. Extracted so the deadline
+/// loop is unit-testable with mock futures. A pre-iteration deadline check
+/// bounds a continuously-ready activity arm (under `biased`) so a
+/// streaming-but-non-completing agent can't slip past the hard cap.
+async fn race_turn<P>(
+    prompt: P,
+    mut cancel_rx: oneshot::Receiver<()>,
+    idle_rx: &mut watch::Receiver<()>,
+    on_timeout_cancel: impl Fn(),
+    idle: Duration,
+    hard: Duration,
+) -> Result<StopReason, String>
+where
+    P: std::future::Future<Output = Result<StopReason, String>>,
+{
+    tokio::pin!(prompt);
+    let hard_deadline = tokio::time::Instant::now() + hard;
+    let mut idle_deadline = tokio::time::Instant::now() + idle;
+    loop {
+        let next_deadline = idle_deadline.min(hard_deadline);
+        // Pre-select check: under `biased`, a continuously-ready activity arm
+        // would win every poll and `sleep_until` would never fire — silently
+        // defeating the hard cap for a streaming-but-non-completing agent.
+        if tokio::time::Instant::now() >= next_deadline {
+            on_timeout_cancel();
+            return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                Ok(result) => result,
+                Err(_) if next_deadline == idle_deadline => {
+                    Err(format!("turn idle timeout: no agent activity for {idle:?}"))
+                }
+                Err(_) => Err(format!("turn hard timeout: exceeded {hard:?}")),
+            };
+        }
+        tokio::select! {
+            biased;
+            result = &mut prompt => return result,
+            _ = &mut cancel_rx => {
+                return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                    Ok(result) => result,
+                    Err(_) => Ok(StopReason::Cancelled),
+                };
+            }
+            _ = idle_rx.changed() => {
+                idle_deadline = tokio::time::Instant::now() + idle;
+            }
+            _ = tokio::time::sleep_until(next_deadline) => {}
+        }
+    }
 }
 
 /// Option snapshot returned by a successful `session/load` or `session/resume`.
@@ -1462,6 +1535,11 @@ async fn drive_connection(
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::SessionNotification, _cx| {
                 let session_id = notification.session_id.0.to_string();
+                // Any inbound session/update is agent activity — nudge the
+                // active turn's idle deadline so a streaming turn never hits
+                // the idle timeout. Best-effort: a no-op when no turn is
+                // active for this session.
+                notif_state.lock().signal_idle(&session_id);
                 let tool_call_id = match &notification.update {
                     agent_client_protocol::schema::SessionUpdate::ToolCall(tool_call) => {
                         Some(tool_call.tool_call_id.0.to_string())
@@ -2218,8 +2296,8 @@ async fn run_command_loop(
                 // Single-flight per session: reject a second prompt while a turn
                 // is in flight (M4). `try_begin_turn` returns a cancel signal
                 // receiver when the turn may proceed.
-                let cancel_rx = driver_state.lock().try_begin_turn(&session_id.0);
-                let Some(cancel_rx) = cancel_rx else {
+                let handles = driver_state.lock().try_begin_turn(&session_id.0);
+                let Some(handles) = handles else {
                     // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
                     let _ = reply.send(Err(format!(
                         "ACP_TURN_IN_PROGRESS: session {}",
@@ -2227,6 +2305,8 @@ async fn run_command_loop(
                     )));
                     continue;
                 };
+                let cancel_rx = handles.cancel_rx;
+                let mut idle_rx = handles.idle_rx;
 
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
@@ -2240,47 +2320,32 @@ async fn run_command_loop(
                 // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
-                    let request = PromptRequest::new(&session_id, content);
-                    let prompt = turn_cx.send_request(request).block_task();
-                    tokio::pin!(prompt);
-
-                    // Story 1.9 NFR7: race the turn against (a) completion,
-                    // (b) a cancel signal bounded by CANCEL_GRACE (M5), AND
-                    // (c) a bounded turn timeout (a wedged agent that neither
-                    // replies nor crashes must not park `send_prompt`'s
-                    // oneshot forever). On timeout, signal cancel + await the
-                    // CANCEL_GRACE race, then fail with a typed timeout error
-                    // → the `send_prompt` reply surfaces it; `acp-store` sets
-                    // `status: 'error'`.
-                    let turn_deadline = resolved_turn_timeout();
-                    let outcome: Result<StopReason, String> = tokio::select! {
-                        result = &mut prompt => {
-                            result.map(|r| r.stop_reason).map_err(|e| e.to_string())
-                        }
-                        _ = cancel_rx => {
-                            match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                                Ok(result) => {
-                                    result.map(|r| r.stop_reason).map_err(|e| e.to_string())
-                                }
-                                Err(_) => Ok(StopReason::Cancelled),
-                            }
-                        }
-                        _ = tokio::time::sleep(turn_deadline) => {
-                            // Turn timed out — signal cancel (so the agent's
-                            // in-flight session/prompt is cancelled too) + give
-                            // it CANCEL_GRACE to wind down, then fail.
-                            turn_state.lock().signal_cancel(&session_id.0);
-                            match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                                Ok(result) => {
-                                    result.map(|r| r.stop_reason).map_err(|e| e.to_string())
-                                }
-                                Err(_) => Err(format!(
-                                    "turn timeout: session {} exceeded {:?}",
-                                    session_id.0, turn_deadline
-                                )),
-                            }
-                        }
-                    };
+                    // Race the turn against completion, a cancel signal, an
+                    // idle deadline (reset by agent `session/update` activity
+                    // via `DriverState::signal_idle`), and a hard wall-clock
+                    // cap. On idle/hard timeout → signal cancel + `CANCEL_GRACE`
+                    // + a typed error (`acp-store` sets `status: 'error'`). See
+                    // [`race_turn`].
+                    let idle = turn_idle_timeout();
+                    let hard = resolved_turn_timeout();
+                    let cancel_state = turn_state.clone();
+                    let cancel_sid = session_id.0.clone();
+                    let outcome: Result<StopReason, String> = race_turn(
+                        async {
+                            turn_cx
+                                .send_request(PromptRequest::new(&session_id, content))
+                                .block_task()
+                                .await
+                                .map(|r| r.stop_reason)
+                                .map_err(|e| e.to_string())
+                        },
+                        cancel_rx,
+                        &mut idle_rx,
+                        move || cancel_state.lock().signal_cancel(&cancel_sid),
+                        idle,
+                        hard,
+                    )
+                    .await;
 
                     match &outcome {
                         Ok(stop_reason) => log::info!(
@@ -3056,5 +3121,135 @@ mod tests {
     #[test]
     fn to_auth_method_infos_empty_for_no_methods() {
         assert!(to_auth_method_infos(&[]).is_empty());
+    }
+
+    // --- race_turn (idle + hard cap + cancel) ---
+
+    /// An active turn (agent streaming activity) keeps resetting its idle
+    /// deadline and completes normally — never hits the idle timeout.
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_activity_resets_idle_and_completes() {
+        let (idle_tx, mut idle_rx) = watch::channel(());
+        let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        // Activity every 20ms (under the 50ms idle window) keeps the idle
+        // deadline pushed back; the prompt completes at 100ms.
+        let activity = tokio::spawn(async move {
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let _ = idle_tx.send(());
+            }
+        });
+        let result = race_turn(
+            async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok::<StopReason, String>(StopReason::EndTurn)
+            },
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(50),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = activity.await;
+        assert!(result.is_ok(), "got {result:?}");
+        assert_eq!(
+            on_timeout.load(Ordering::SeqCst),
+            0,
+            "no timeout should fire for an active turn"
+        );
+    }
+
+    /// A silent (wedged) turn with no activity and no completion hits the idle
+    /// timeout — and signals cancel via `on_timeout_cancel`.
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_silence_hits_idle_timeout() {
+        let (_idle_tx, mut idle_rx) = watch::channel(()); // never fires
+        let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        let result = race_turn(
+            std::future::pending::<Result<StopReason, String>>(),
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(100),
+            Duration::from_secs(10),
+        )
+        .await;
+        let err = result.unwrap_err();
+        assert!(err.contains("idle timeout"), "got {err}");
+        assert_eq!(on_timeout.load(Ordering::SeqCst), 1);
+    }
+
+    /// A turn that streams activity forever but never completes is still
+    /// bounded by the hard wall-clock cap (the pre-loop check fires despite
+    /// the continuously-ready activity arm under `biased`).
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_streaming_non_completing_hits_hard_cap() {
+        let (idle_tx, mut idle_rx) = watch::channel(());
+        let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let activity = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                let _ = idle_tx.send(());
+            }
+        });
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        let result = race_turn(
+            std::future::pending::<Result<StopReason, String>>(),
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+        )
+        .await;
+        activity.abort();
+        let _ = activity.await;
+        let err = result.unwrap_err();
+        assert!(err.contains("hard timeout"), "got {err}");
+        assert_eq!(on_timeout.load(Ordering::SeqCst), 1);
+    }
+
+    /// A user cancel wins over both timeouts: the cancel arm returns
+    /// `Cancelled` after `CANCEL_GRACE`, and `on_timeout_cancel` is not called.
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_cancel_wins_over_timeouts() {
+        let (_idle_tx, mut idle_rx) = watch::channel(()); // no activity
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        // Cancel before the idle window fires.
+        let canceller = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = cancel_tx.send(());
+        });
+        let result = race_turn(
+            std::future::pending::<Result<StopReason, String>>(),
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(100),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = canceller.await;
+        assert!(
+            matches!(result, Ok(StopReason::Cancelled)),
+            "got {result:?}"
+        );
+        assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
     }
 }

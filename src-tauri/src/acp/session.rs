@@ -19,7 +19,7 @@ use agent_client_protocol::Responder;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 /// A permission request awaiting the user's decision.
 ///
@@ -60,6 +60,13 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// In-flight idle-reset signal senders per active turn. The
+    /// `session/update`/`tool_call` notification callback fires these
+    /// (non-blocking) so the turn task's idle deadline resets on agent
+    /// activity — a wedged (silent) turn hits the idle timeout fast, an active
+    /// (streaming) turn never does. Mirrors `active_turns`' lifecycle: created
+    /// in `try_begin_turn`, dropped in `finish_turn`.
+    idle_resets: HashMap<String, watch::Sender<()>>,
     /// One-shot waiters registered by turn-scoped operations. `finish_turn`
     /// removes and resolves the full waiter list exactly once.
     turn_idle_waiters: HashMap<String, Vec<oneshot::Sender<()>>>,
@@ -68,6 +75,14 @@ pub(crate) struct DriverState {
     /// Bindings remain for the connection lifetime so delayed updates cannot be
     /// reassigned to a different active turn after their original turn ends.
     tool_call_sessions: HashMap<String, HashSet<String>>,
+}
+
+/// Signals handed to the turn task when a turn begins: the cancel receiver
+/// (user/system cancel) and the idle-reset receiver (fired on agent activity
+/// to push back the idle deadline).
+pub(crate) struct TurnHandles {
+    pub cancel_rx: oneshot::Receiver<()>,
+    pub idle_rx: watch::Receiver<()>,
 }
 
 impl DriverState {
@@ -213,16 +228,20 @@ impl DriverState {
             .insert(session_id);
     }
 
-    /// Attempt to begin a turn for a session. Returns `Some(receiver)` (a cancel
-    /// signal) when the turn may proceed, or `None` if a turn is already active
-    /// for this session (concurrent turns are rejected).
-    pub(crate) fn try_begin_turn(&mut self, session_id: &str) -> Option<oneshot::Receiver<()>> {
+    /// Attempt to begin a turn for a session. Returns `Some(TurnHandles)`
+    /// (cancel + idle-reset receivers) when the turn may proceed, or `None` if
+    /// a turn is already active for this session (concurrent turns are
+    /// rejected). Both signals are created atomically so the notification
+    /// callback can nudge the idle deadline from the moment the turn starts.
+    pub(crate) fn try_begin_turn(&mut self, session_id: &str) -> Option<TurnHandles> {
         if self.active_turns.contains_key(session_id) {
             return None;
         }
-        let (tx, rx) = oneshot::channel();
-        self.active_turns.insert(session_id.to_string(), Some(tx));
-        Some(rx)
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (idle_tx, idle_rx) = watch::channel(());
+        self.active_turns.insert(session_id.to_string(), Some(cancel_tx));
+        self.idle_resets.insert(session_id.to_string(), idle_tx);
+        Some(TurnHandles { cancel_rx, idle_rx })
     }
 
     /// Whether the session currently has an active turn, including cancel grace.
@@ -257,10 +276,22 @@ impl DriverState {
         }
     }
 
+    /// Nudge the active turn's idle deadline — the agent produced activity (a
+    /// `session/update`/`tool_call` notification arrived), so push the idle
+    /// deadline back. Non-blocking and a no-op when no turn is active for the
+    /// session. `watch` coalesces: a burst of notifications resets once, which
+    /// is all the idle clock needs ("activity happened since the last reset").
+    pub(crate) fn signal_idle(&mut self, session_id: &str) {
+        if let Some(tx) = self.idle_resets.get(session_id) {
+            let _ = tx.send(());
+        }
+    }
+
     /// Mark a session's turn finished and return any still-pending permissions
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
         self.active_turns.remove(session_id);
+        self.idle_resets.remove(session_id);
         if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
             for waiter in waiters {
                 let _ = waiter.send(());
@@ -335,6 +366,27 @@ mod tests {
             state.try_begin_turn("sess-1").is_some(),
             "a new turn must be allowed once the previous one finished"
         );
+    }
+
+    #[test]
+    fn signal_idle_nudges_the_active_turn_and_is_a_noop_otherwise() {
+        let mut state = DriverState::new();
+        let handles = state.try_begin_turn("sess-1").expect("turn starts");
+        let mut idle_rx = handles.idle_rx;
+        // No activity yet — the idle receiver has observed no change.
+        assert!(!idle_rx.has_changed().unwrap());
+        // An inbound session/update fires signal_idle — the receiver sees it.
+        state.signal_idle("sess-1");
+        assert!(idle_rx.has_changed().unwrap());
+        // mark_changed so has_changed can report a subsequent send again.
+        idle_rx.mark_changed();
+        state.signal_idle("sess-1");
+        assert!(idle_rx.has_changed().unwrap());
+        // No active turn for another session → no-op (no panic).
+        state.signal_idle("no-such-session");
+        // finish_turn drops the idle sender; signal_idle becomes a no-op after.
+        let _ = state.finish_turn("sess-1");
+        state.signal_idle("sess-1");
     }
 
     #[test]
