@@ -42,6 +42,7 @@ import { useActiveProject } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { TerminalModes, TerminalSpawnOptions } from '../../../shared/types/ipc.types'
 import {
+  buildRehydrateSequences,
   captureScrollPosition,
   registerTerminal,
   restoreScrollback,
@@ -973,12 +974,14 @@ function ConnectedTerminalComponent({
             try {
               if (transcript) {
                 if (transcriptLooksPartial) {
-                  if (!transcript.startsWith('\u001b[?1049h')) {
-                    terminal.write('\u001b[?1049h')
-                  }
+                  // R3: replay the full captured DEC mode set (alt-screen + bracketed-paste
+                  // + cursor + mouse), not just alt-screen — a partial/trimmed transcript
+                  // may miss the initial mode sequences. Idempotent with modes in the stream.
+                  terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
                   terminal.write(PARTIAL_RESTORE_NOTE)
                 } else {
+                  terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
                 }
                 terminalStoreState.consumeTranscript(result.data.id)
@@ -1121,12 +1124,12 @@ function ConnectedTerminalComponent({
             )
           } else if (transcript) {
             if (transcriptLooksPartial) {
-              if (!transcript.startsWith('\u001b[?1049h')) {
-                terminal.write('\u001b[?1049h')
-              }
+              // R3: replay the full captured DEC mode set, not just alt-screen.
+              terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
               terminal.write(PARTIAL_RESTORE_NOTE)
             } else {
+              terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
             }
             terminalStoreState.consumeTranscript(externalTerminalId)
@@ -1688,6 +1691,8 @@ function ConnectedTerminalComponent({
             registerTerminal(result.data.id, terminal)
             const transcript = useTerminalStore.getState().peekTranscript(result.data.id)
             if (transcript) {
+              // R3: replay captured modes before the (possibly trimmed) transcript.
+              terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
               useTerminalStore.getState().consumeTranscript(result.data.id)
             } else if (initialScrollbackRef.current?.length)
@@ -1706,6 +1711,8 @@ function ConnectedTerminalComponent({
         registerTerminal(externalTerminalId, terminal)
         const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId)
         if (transcript) {
+          // R3: replay captured modes before the (possibly trimmed) transcript.
+          terminal.write(buildRehydrateSequences(initialModesRef.current))
           terminal.write(transcript)
           useTerminalStore.getState().consumeTranscript(externalTerminalId)
         } else if (initialScrollbackRef.current?.length)

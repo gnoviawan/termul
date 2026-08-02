@@ -293,10 +293,15 @@ export function restoreScrollback(
   scrollback: string[],
   modes?: TerminalModes | null
 ): void {
-  if (!scrollback || scrollback.length === 0) return
-
   try {
     const modeSeqs = buildRehydrateSequences(modes)
+    // No content: still replay captured modes — a mostly-empty full-screen TUI
+    // (extractScrollback trims to undefined) is exactly where interaction modes
+    // matter. Mode replay is independent of content, so emitting first is safe.
+    if (!scrollback || scrollback.length === 0) {
+      if (modeSeqs) terminal.write(modeSeqs)
+      return
+    }
     // Join lines with newlines and write to terminal.
     // This restores the visual content without executing commands.
     const content = `${scrollback.join('\r\n')}\r\n`

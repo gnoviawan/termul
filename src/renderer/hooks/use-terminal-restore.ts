@@ -709,8 +709,11 @@ function reconcilePersistedHistoryIntoLiveTerminals(
       pendingScrollback: terminal.pendingScrollback ?? persistedTerminal.scrollback,
       transcript: terminal.transcript ?? persistedTerminal.transcript,
       // R3: also carry the captured DEC modes so a pane-transition remount can
-      // replay them (the live tracker is reset on unmount→remount).
-      pendingModes: terminal.pendingModes ?? persistedTerminal.modes
+      // replay them (the live tracker is reset on unmount→remount). Prefer the
+      // persisted snapshot when present so a stale in-memory pendingModes can't
+      // override newer persisted state (e.g. alt-screen turned off after restore).
+      pendingModes:
+        persistedTerminal.modes != null ? persistedTerminal.modes : terminal.pendingModes
     }
   })
 

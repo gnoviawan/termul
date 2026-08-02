@@ -130,6 +130,7 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
       createdAt: entry.createdAt,
       lastActivityAt: entry.lastActivityAt,
       messageCount: entry.messageCount,
+      lastSeq: entry.lastSeq,
       status: entry.status
     }))
   }

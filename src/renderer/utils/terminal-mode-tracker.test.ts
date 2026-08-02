@@ -364,7 +364,7 @@ describe('restoreScrollback — R3 mode replay before content (I/O matrix)', () 
     expect(write).toHaveBeenCalledWith('\u001b[0m\u001b[?1049h\u001b[32mgreen\u001b[0m\r\n')
   })
 
-  it('no content → no write, even with modes (empty terminal)', () => {
+  it('no content → writes ONLY modes (not content), so a content-less TUI still re-enters its modes', () => {
     const { terminal, write } = makeTerminal()
     restoreScrollback(terminal, [], {
       alternateScreen: true,
@@ -374,6 +374,10 @@ describe('restoreScrollback — R3 mode replay before content (I/O matrix)', () 
       sgrMouseMode: false,
       sgrMousePixelsMode: false
     })
-    expect(write).not.toHaveBeenCalled()
+    // Empty scrollback: no content join, but the captured modes still replay
+    // (alt-screen + bracketed-paste) so the restored TUI re-enters its modes.
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith(expect.stringContaining('\u001b[?1049h'))
+    expect(write).toHaveBeenCalledWith(expect.stringContaining('\u001b[?2004h'))
   })
 })
