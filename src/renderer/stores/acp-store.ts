@@ -3554,7 +3554,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           configOptions: [],
           lastError: null,
           createdAt: meta.createdAt,
-          replaying: null
+          // 'streaming' (not null): the session stays 'closed' until resume
+          // resolves, but gap-replay chunks arriving during the
+          // `acpApi.resumeSession` window (web subscribe-from-watermark) must
+          // APPEND to this restored transcript. `acceptsSessionTranscriptEvents`
+          // accepts because `replaying` is truthy, and `_onMessageChunk`'s
+          // 'pending' replace-block is skipped so the mirror is not erased.
+          // Tool/collection reducers share the same gate.
+          replaying: 'streaming'
         }
       },
       messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
@@ -3564,7 +3571,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // `resume_session` WS request (web). On web it auto-re-subscribes with
       // `this.lastSeq.get(sid) ?? 0`, so the hook seeds the server cursor first.
       await acpApi.resumeSession(agentId, id, cwd)
-      set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+      // Gap-replay has landed on the restored transcript; clear the resume
+      // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
+      // which would disable rAF coalescing for live chunks after resume.
+      set((s) => ({
+        sessions: {
+          ...s.sessions,
+          [id]: { ...s.sessions[id], status: 'active', replaying: null, lastError: null }
+        }
+      }))
     } catch (err) {
       // Restore the local transcript (a partial resume may have replaced it)
       // and surface the failure; the hook classifies skip vs fail and never
@@ -3588,6 +3603,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // never throws — matching `persistSession`'s contract).
     const state = get()
     for (const sessionId of Object.keys(state.sessions)) {
+      // Skip un-promoted warm-pool ephemeral sessions and already-closed
+      // sessions — matching the guards `closeSession`/`_onDisconnect` use so
+      // an ephemeral session can't gain an index entry on unload.
+      if (ephemeralSessionIds.has(sessionId)) continue
+      if (state.sessions[sessionId]?.status === 'closed') continue
       persistSession(state, sessionId as SessionId, (entries) =>
         set(() => ({ sessionIndex: entries }))
       )

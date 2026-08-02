@@ -1154,12 +1154,32 @@ async fn handle_get_session_cursor(
     // owns the transcripts; its `last_seq` reads the persisted payload's max
     // message `seq`. Standalone VPS path falls through to the file-backed
     // `SessionPersistence::last_seq` (the authoritative JSONL append log).
+    // `last_seq` returns `Ok(0)` for a genuinely unknown (brand-new) session,
+    // but `Err(_)` for a real I/O / decode failure. `unwrap_or(0)` would mask a
+    // storage failure as "new session" in the reply + logs; log the `Err` first
+    // so a corrupted payload or permission error is visible, then default to 0.
     let watermark = if let Some(store) = chat_history_store {
-        store.last_seq(&parsed.session_id).unwrap_or(0)
+        store.last_seq(&parsed.session_id).unwrap_or_else(|error| {
+            tracing::warn!(
+                session_id = %parsed.session_id,
+                error = ?error,
+                "get_session_cursor: last_seq lookup failed"
+            );
+            0
+        })
     } else {
         relay
             .persistence()
-            .map(|persistence| persistence.last_seq(&parsed.session_id).unwrap_or(0))
+            .map(|persistence| {
+                persistence.last_seq(&parsed.session_id).unwrap_or_else(|error| {
+                    tracing::warn!(
+                        session_id = %parsed.session_id,
+                        error = ?error,
+                        "get_session_cursor: last_seq lookup failed"
+                    );
+                    0
+                })
+            })
             .unwrap_or(0)
     };
     tracing::debug!(
