@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -10,8 +10,9 @@ import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
 import { CHAT_SPRING } from './chat-motion'
 
-/** Max height for the thinking content box in collapsed (scrollable) mode. */
-const THINKING_BOX_MAX_HEIGHT = 200
+/** Distance from the bottom (px) within which the reader counts as "pinned"
+ * to the live edge. Mirrors MessageScroller's BOTTOM_THRESHOLD_PX. */
+const BOTTOM_THRESHOLD_PX = 48
 
 function blocksToText(blocks: ContentBlock[]): string {
   return blocks
@@ -34,13 +35,106 @@ interface ThoughtGroupProps {
 }
 
 /**
+ * Live-edge auto-scroll for the thinking content box. Mirrors the
+ * MessageScroller pattern: track whether the reader is pinned to the bottom,
+ * and while streaming + collapsed + pinned, follow the live edge as content
+ * grows (via a ResizeObserver). When the reader scrolls away, stop following
+ * and surface a "jump to latest" affordance the caller renders.
+ *
+ * The scroll element is captured via a state-backed callback ref (not a plain
+ * ref): the box only mounts once the collapsible opens, so a plain ref would be
+ * null on the first effect run and never re-attach. The state update when the
+ * element mounts re-triggers the effect so the listener/observer attach.
+ */
+function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
+  refCallback: (el: HTMLDivElement | null) => void
+  showJumpButton: boolean
+  scrollToBottom: (behavior: ScrollBehavior) => void
+} {
+  const { enabled, expanded } = opts
+  // Follow is only meaningful in collapsed mode (expanded removes max-height,
+  // so there is no inner scroll to follow).
+  const active = enabled && !expanded
+  const [el, setEl] = useState<HTMLDivElement | null>(null)
+  const [pinned, setPinned] = useState(true)
+  const [showJumpButton, setShowJumpButton] = useState(false)
+  const pinnedRef = useRef(pinned)
+  pinnedRef.current = pinned
+
+  const refCallback = useCallback((node: HTMLDivElement | null) => {
+    setEl(node)
+  }, [])
+
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = 'smooth') => {
+      if (!el) return
+      el.scrollTo({ top: el.scrollHeight, behavior })
+      setPinned(true)
+      setShowJumpButton(false)
+    },
+    [el]
+  )
+
+  // Reset to pinned whenever a new streaming stretch begins, so a fresh
+  // thought follows the live edge again (matches MessageScroller remount).
+  useEffect(() => {
+    if (active) {
+      setPinned(true)
+      setShowJumpButton(false)
+    }
+  }, [active])
+
+  useEffect(() => {
+    if (!el) return
+
+    const update = (): void => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      const isPinned = distance <= BOTTOM_THRESHOLD_PX
+      const overflowing = el.scrollHeight - el.clientHeight > BOTTOM_THRESHOLD_PX
+      setPinned(isPinned)
+      // Only surface the jump button while actively streaming + collapsed;
+      // otherwise the box is static and a jump affordance is noise.
+      setShowJumpButton(active && overflowing && !isPinned)
+    }
+
+    const onScroll = (): void => update()
+
+    el.addEventListener('scroll', onScroll, { passive: true })
+
+    const follow = (): void => {
+      if (active && pinnedRef.current) {
+        el.scrollTop = el.scrollHeight
+      }
+      update()
+    }
+
+    const ro = new ResizeObserver(follow)
+    ro.observe(el)
+    const content = el.firstElementChild
+    if (content) ro.observe(content)
+
+    follow()
+
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+    }
+  }, [el, active])
+
+  return { refCallback, showJumpButton, scrollToBottom }
+}
+
+/**
  * Consolidated agent reasoning block — auto-opens while streaming at the live
  * tail, collapses once tools or reply follow (AI SDK Reasoning pattern).
  *
  * The thinking content is rendered inside a scrollable box with a max height.
- * When the content exceeds the box, the user can scroll within it. An
- * "Expand all" toggle removes the max-height limit so the full content is
- * visible without scrolling. Default is minimized (collapsed).
+ * When the content exceeds the box, the reader can scroll within it. While
+ * streaming, the box follows its own live edge (auto-scrolls to bottom) as long
+ * as the reader is pinned to the bottom — the same behavior as the main chat
+ * scroll. Scrolling away stops the follow and surfaces a "jump to latest"
+ * affordance. An "Expand all" toggle removes the max-height limit so the full
+ * content is visible without scrolling. Default is minimized (collapsed).
  */
 export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
@@ -51,6 +145,11 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const userOverride = useRef(false)
+
+  const { refCallback, showJumpButton, scrollToBottom } = useThinkingAutoScroll({
+    enabled: isStreaming,
+    expanded
+  })
 
   useEffect(() => {
     if (userOverride.current) return
@@ -70,6 +169,11 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   const handleExpandToggle = (e: React.MouseEvent): void => {
     e.stopPropagation()
     setExpanded((prev) => !prev)
+  }
+
+  const handleJumpToLatest = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    scrollToBottom(reduced ? 'auto' : 'smooth')
   }
 
   return (
@@ -106,13 +210,27 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open}>
           <div className="mt-1.5 flex flex-col pl-3">
-            <div
-              className={cn(
-                'overflow-y-auto whitespace-pre-wrap break-words text-xs italic text-muted-foreground',
-                !expanded && 'max-h-[200px]'
-              )}
-            >
-              {text}
+            <div className="relative">
+              <div
+                ref={refCallback}
+                className={cn(
+                  'overflow-y-auto whitespace-pre-wrap break-words text-xs italic text-muted-foreground',
+                  !expanded && 'max-h-[200px]'
+                )}
+              >
+                {text}
+              </div>
+              {showJumpButton ? (
+                <button
+                  type="button"
+                  onClick={handleJumpToLatest}
+                  className="absolute bottom-1.5 right-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                  aria-label="Jump to latest thinking"
+                >
+                  <ArrowDown size={13} />
+                  <span className="sr-only">Jump to latest</span>
+                </button>
+              ) : null}
             </div>
             <button
               type="button"
