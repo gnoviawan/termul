@@ -9,9 +9,10 @@
 //! so the manager and any future renderer bridge stay in sync.
 
 use crate::acp::config::{AgentId, SessionId};
-use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan, SessionConfigOption,
-    SessionMode, SessionModeId, SessionModelState, StopReason, ToolCall, ToolCallUpdate,
+use agent_client_protocol::schema::v1::{
+    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOptions, SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
 
@@ -24,6 +25,74 @@ use serde::Serialize;
 /// The ONLY place that still calls `AppHandle::emit` for `acp:*` events is
 /// `crate::web::TauriEventSink::emit` (the desktop's sink). See AC7.
 pub(crate) use crate::web::fan_out;
+
+/// A single selectable model advertised by an ACP agent.
+///
+/// Mirror of the pre-1.3 schema `SessionModel` wire shape (`{ modelId, name,
+/// description? }`). Models are no longer a dedicated protocol type since ACP
+/// 0.14 — they are a `SessionConfigOption` with `category = "model"` — so
+/// Termul reconstructs this legacy view from `config_options` to keep the
+/// renderer's Model Picker contract byte-compatible.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModel {
+    pub model_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Snapshot of an agent's model selector, derived from its `config_options`.
+///
+/// Wire-identical to the pre-1.3 schema `SessionModelState`
+/// (`{ currentModelId, availableModels[] }`).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelState {
+    pub current_model_id: String,
+    pub available_models: Vec<SessionModel>,
+}
+
+/// Derive the legacy `SessionModelState` view from an agent's
+/// `config_options`: find the `select`-kind option whose `category` is
+/// `Model` and map its `currentValue` + `options[]` to the old shape.
+///
+/// Returns `None` when the agent advertises no model selector (either no
+/// `config_options` or no `Model`-category `select` option).
+#[allow(clippy::module_name_repetitions)]
+pub(crate) fn models_from_config_options(
+    opts: Option<&[SessionConfigOption]>,
+) -> Option<SessionModelState> {
+    let opts = opts?;
+    let opt = opts
+        .iter()
+        .find(|o| o.category == Some(SessionConfigOptionCategory::Model))?;
+    let select = match &opt.kind {
+        SessionConfigKind::Select(s) => s,
+        _ => return None,
+    };
+    let current_model_id = select.current_value.0.as_ref().to_string();
+    let available_models = match &select.options {
+        SessionConfigSelectOptions::Ungrouped(items) => items
+            .iter()
+            .map(|o| SessionModel {
+                model_id: o.value.0.as_ref().to_string(),
+                name: o.name.clone(),
+                description: o.description.clone(),
+            })
+            .collect::<Vec<_>>(),
+        // Grouped model selectors are not expected in practice; treating them
+        // as "no model picker" is a safe degradation until one is observed.
+        _ => return None,
+    };
+    if available_models.is_empty() {
+        return None;
+    }
+    Some(SessionModelState {
+        current_model_id,
+        available_models,
+    })
+}
 
 /// Event name: an agent subprocess was spawned and `initialize` completed.
 pub const EVENT_AGENT_SPAWNED: &str = "acp:agent_spawned";
@@ -120,7 +189,7 @@ pub struct SessionCreatedEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    pub modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -417,7 +486,7 @@ mod tests {
             agent_id: AgentId("a".to_string()),
             session_id: SessionId::new("s"),
             role: ChunkRole::Agent,
-            content: ContentBlock::Text(agent_client_protocol::schema::TextContent::new("hi")),
+            content: ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new("hi")),
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["role"], "agent");
@@ -431,9 +500,9 @@ mod tests {
             agent_id: AgentId("a".to_string()),
             session_id: SessionId::new("s"),
             request_id: "req-7".to_string(),
-            tool_call: agent_client_protocol::schema::ToolCallUpdate::new(
+            tool_call: agent_client_protocol::schema::v1::ToolCallUpdate::new(
                 "tc-1",
-                agent_client_protocol::schema::ToolCallUpdateFields::new(),
+                agent_client_protocol::schema::v1::ToolCallUpdateFields::new(),
             ),
             options: vec![],
         };

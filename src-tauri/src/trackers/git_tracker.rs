@@ -1462,7 +1462,7 @@ impl GitTracker {
                 #[cfg(target_os = "windows")]
                 {
                     // On Windows, only poll every Nth tick (throttling)
-                    if tick_count % WINDOWS_POLL_MULTIPLIER != 0 {
+                    if !tick_count.is_multiple_of(WINDOWS_POLL_MULTIPLIER) {
                         log::trace!(
                             "[GitTracker] Skipping poll - throttling (tick {})",
                             tick_count

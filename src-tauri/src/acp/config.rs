@@ -37,7 +37,7 @@ impl std::fmt::Display for AgentId {
 /// Newtype wrapper for an ACP protocol session id, as a plain string for the
 /// renderer contract.
 ///
-/// The protocol-internal session id is `agent_client_protocol::schema::SessionId`
+/// The protocol-internal session id is `agent_client_protocol::schema::v1::SessionId`
 /// (an `Arc<str>`); this wrapper is the camelCase-friendly form passed across IPC.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -57,15 +57,15 @@ impl std::fmt::Display for SessionId {
     }
 }
 
-impl From<agent_client_protocol::schema::SessionId> for SessionId {
-    fn from(value: agent_client_protocol::schema::SessionId) -> Self {
+impl From<agent_client_protocol::schema::v1::SessionId> for SessionId {
+    fn from(value: agent_client_protocol::schema::v1::SessionId) -> Self {
         Self(value.0.to_string())
     }
 }
 
-impl From<&SessionId> for agent_client_protocol::schema::SessionId {
+impl From<&SessionId> for agent_client_protocol::schema::v1::SessionId {
     fn from(value: &SessionId) -> Self {
-        agent_client_protocol::schema::SessionId::new(value.0.as_str())
+        agent_client_protocol::schema::v1::SessionId::new(value.0.as_str())
     }
 }
 
@@ -156,7 +156,7 @@ pub fn probe_registry_runtime() -> AcpRuntimeProbe {
 impl AgentConfig {
     /// Convert this config into the protocol stdio server config used to spawn
     /// the subprocess via `agent_client_protocol::AcpAgent`.
-    pub(crate) fn to_mcp_server(&self) -> agent_client_protocol::schema::McpServer {
+    pub(crate) fn to_mcp_server(&self) -> agent_client_protocol::schema::v1::McpServer {
         // Merge the login-shell PATH into the agent env. A GUI-launched app
         // (Finder/Dock/Spotlight on macOS, desktop launchers on Linux) only
         // inherits a minimal PATH, so npx/uvx/node from nvm/Homebrew are not on
@@ -167,9 +167,9 @@ impl AgentConfig {
         let mut env_map = self.env.clone();
         crate::pty::env_refresh::apply_fresh_path(&mut env_map);
 
-        let env: Vec<agent_client_protocol::schema::EnvVariable> = env_map
+        let env: Vec<agent_client_protocol::schema::v1::EnvVariable> = env_map
             .iter()
-            .map(|(name, value)| agent_client_protocol::schema::EnvVariable::new(name, value))
+            .map(|(name, value)| agent_client_protocol::schema::v1::EnvVariable::new(name, value))
             .collect();
 
         // Resolve the command for direct spawning. On Windows, npm/PowerShell
@@ -204,8 +204,8 @@ impl AgentConfig {
             .and_then(|path| resolve_executable_in_path(&command, path))
             .unwrap_or(command);
 
-        agent_client_protocol::schema::McpServer::Stdio(
-            agent_client_protocol::schema::McpServerStdio::new(
+        agent_client_protocol::schema::v1::McpServer::Stdio(
+            agent_client_protocol::schema::v1::McpServerStdio::new(
                 self.name.clone(),
                 std::path::PathBuf::from(command),
             )
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn session_id_roundtrips_through_protocol_type() {
         let original = SessionId::new("sess-123");
-        let proto: agent_client_protocol::schema::SessionId = (&original).into();
+        let proto: agent_client_protocol::schema::v1::SessionId = (&original).into();
         let back: SessionId = proto.into();
         assert_eq!(original, back);
     }
@@ -292,7 +292,7 @@ mod tests {
         };
 
         match config.to_mcp_server() {
-            agent_client_protocol::schema::McpServer::Stdio(stdio) => {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 assert_eq!(stdio.name, "test-agent");
                 assert_eq!(stdio.command, std::path::PathBuf::from("/usr/bin/agent"));
                 assert_eq!(stdio.args, vec!["--acp".to_string()]);
@@ -336,7 +336,7 @@ mod tests {
         };
 
         match config.to_mcp_server() {
-            agent_client_protocol::schema::McpServer::Stdio(stdio) => {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 // Command rewritten to the directly-executable interpreter.
                 assert!(
                     stdio.command.to_string_lossy().ends_with("node.exe"),

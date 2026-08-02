@@ -2133,7 +2133,7 @@ pub async fn search_file_names_stream(
                         // Emit a mid-stream batch when we cross a batch
                         // boundary, but skip the trailing batch below if we
                         // already published this exact count.
-                        if files.len() % batch_size == 0 {
+                        if files.len().is_multiple_of(batch_size) {
                             // Mid-stream batch — final truncation state is
                             // not known yet, so the field is `None` (serde
                             // omits it from the wire). The trailing batch

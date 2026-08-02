@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption, StopReason, TextContent,
 };
 use tauri::State;

@@ -11,7 +11,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use agent_client_protocol::schema::McpServer;
+use agent_client_protocol::schema::v1::McpServer;
 
 use crate::acp::{FileProjectRegistry, VfsRoot};
 
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn switch_context_rejects_archived_and_carries_private_mcp() {
-        use agent_client_protocol::schema::{McpServer, McpServerStdio};
+        use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
 
         let reg = ProjectRegistry::new();
         reg.set(

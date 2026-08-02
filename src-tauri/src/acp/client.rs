@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse,
     SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
@@ -208,7 +208,7 @@ pub fn emit_session_update(
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let preview = match &chunk.content {
-                agent_client_protocol::schema::ContentBlock::Text(text) => {
+                agent_client_protocol::schema::v1::ContentBlock::Text(text) => {
                     let t: &str = text.text.as_ref();
                     if t.chars().count() > 40 {
                         let truncated: String = t.chars().take(40).collect();

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{TerminalExitStatus, TerminalId};
+use agent_client_protocol::schema::v1::{TerminalExitStatus, TerminalId};
 use parking_lot::Mutex;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;

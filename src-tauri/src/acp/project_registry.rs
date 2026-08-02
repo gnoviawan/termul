@@ -42,7 +42,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_client_protocol::schema::McpServer;
+use agent_client_protocol::schema::v1::McpServer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 

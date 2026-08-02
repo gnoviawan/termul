@@ -30,14 +30,15 @@ use std::sync::{Arc, LazyLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
     ContentBlock, InitializeRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
-    McpServer, ModelId, NewSessionRequest, PromptRequest, ProtocolVersion,
+    McpServer, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionModelState,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, StopReason,
+    ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
 };
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -49,7 +50,7 @@ use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
     AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
-    SessionCreatedEvent,
+    SessionCreatedEvent, SessionModelState,
 };
 use crate::acp::session::DriverState;
 use crate::acp::session_persistence::{
@@ -262,7 +263,7 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct SessionReopenOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    pub modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,9 +276,10 @@ trait IntoSessionReopenOutcome {
 
 impl IntoSessionReopenOutcome for LoadSessionResponse {
     fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
+        let models = events::models_from_config_options(self.config_options.as_deref());
         SessionReopenOutcome {
             modes: self.modes,
-            models: self.models,
+            models,
             config_options: self.config_options,
         }
     }
@@ -285,9 +287,10 @@ impl IntoSessionReopenOutcome for LoadSessionResponse {
 
 impl IntoSessionReopenOutcome for ResumeSessionResponse {
     fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
+        let models = events::models_from_config_options(self.config_options.as_deref());
         SessionReopenOutcome {
             modes: self.modes,
-            models: self.models,
+            models,
             config_options: self.config_options,
         }
     }
@@ -335,7 +338,7 @@ where
 pub struct NewSessionOutcome {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub modes: Option<agent_client_protocol::schema::SessionModeState>,
+    pub modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -353,7 +356,7 @@ pub struct SessionCreationContext {
 ///
 /// Agents send a structured question over the protocol's extension surface
 /// (the vendored protocol routes `_`-prefixed methods to
-/// [`ExtMethodRequest`](agent_client_protocol::schema::ExtRequest)); the
+/// [`ExtMethodRequest`](agent_client_protocol::schema::v1::ExtRequest)); the
 /// response is an untyped JSON value. This type implements the protocol's
 /// `JsonRpcMessage`/`JsonRpcRequest` traits directly for the single method, so
 /// the driver handler chain matches ONLY `_session/question` — unlike
@@ -1556,7 +1559,7 @@ async fn drive_connection(
         .builder()
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
-            async move |notification: agent_client_protocol::schema::SessionNotification, _cx| {
+            async move |notification: agent_client_protocol::schema::v1::SessionNotification, _cx| {
                 let session_id = notification.session_id.0.to_string();
                 // Any inbound session/update is agent activity — nudge the
                 // active turn's idle deadline so a streaming turn never hits
@@ -1564,10 +1567,10 @@ async fn drive_connection(
                 // active for this session.
                 notif_state.lock().signal_idle(&session_id);
                 let tool_call_id = match &notification.update {
-                    agent_client_protocol::schema::SessionUpdate::ToolCall(tool_call) => {
+                    agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
                         Some(tool_call.tool_call_id.0.to_string())
                     }
-                    agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update) => {
+                    agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
                         Some(update.tool_call_id.0.to_string())
                     }
                     _ => None,
@@ -1581,10 +1584,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::RequestPermissionRequest,
+            async move |request: agent_client_protocol::schema::v1::RequestPermissionRequest,
                         responder,
                         _cx| {
-                let agent_client_protocol::schema::RequestPermissionRequest {
+                let agent_client_protocol::schema::v1::RequestPermissionRequest {
                     session_id,
                     tool_call,
                     options,
@@ -1674,7 +1677,7 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::ReadTextFileRequest,
+            async move |request: agent_client_protocol::schema::v1::ReadTextFileRequest,
                         responder,
                         cx| {
                 // Resolve the session's workspace root (the sandbox boundary)
@@ -1698,7 +1701,7 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::WriteTextFileRequest,
+            async move |request: agent_client_protocol::schema::v1::WriteTextFileRequest,
                         responder,
                         cx| {
                 let root = {
@@ -1719,10 +1722,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::CreateTerminalRequest,
+            async move |request: agent_client_protocol::schema::v1::CreateTerminalRequest,
                         responder,
                         _cx| {
-                use agent_client_protocol::schema::CreateTerminalResponse;
+                use agent_client_protocol::schema::v1::CreateTerminalResponse;
                 if !allow_terminal
                     || term_create_state
                         .lock()
@@ -1761,10 +1764,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::TerminalOutputRequest,
+            async move |request: agent_client_protocol::schema::v1::TerminalOutputRequest,
                         responder,
                         _cx| {
-                use agent_client_protocol::schema::TerminalOutputResponse;
+                use agent_client_protocol::schema::v1::TerminalOutputResponse;
                 if term_output_state
                     .lock()
                     .is_ephemeral(request.session_id.0.as_ref())
@@ -1787,10 +1790,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::WaitForTerminalExitRequest,
+            async move |request: agent_client_protocol::schema::v1::WaitForTerminalExitRequest,
                         responder,
                         cx| {
-                use agent_client_protocol::schema::WaitForTerminalExitResponse;
+                use agent_client_protocol::schema::v1::WaitForTerminalExitResponse;
                 if term_wait_state
                     .lock()
                     .is_ephemeral(request.session_id.0.as_ref())
@@ -1835,10 +1838,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::KillTerminalRequest,
+            async move |request: agent_client_protocol::schema::v1::KillTerminalRequest,
                         responder,
                         _cx| {
-                use agent_client_protocol::schema::KillTerminalResponse;
+                use agent_client_protocol::schema::v1::KillTerminalResponse;
                 if term_kill_state
                     .lock()
                     .is_ephemeral(request.session_id.0.as_ref())
@@ -1859,10 +1862,10 @@ async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: agent_client_protocol::schema::ReleaseTerminalRequest,
+            async move |request: agent_client_protocol::schema::v1::ReleaseTerminalRequest,
                         responder,
                         _cx| {
-                use agent_client_protocol::schema::ReleaseTerminalResponse;
+                use agent_client_protocol::schema::v1::ReleaseTerminalResponse;
                 if term_release_state
                     .lock()
                     .is_ephemeral(request.session_id.0.as_ref())
@@ -2059,8 +2062,8 @@ async fn run_command_loop(
                             let warmup_timeout = first_prompt_warmup_timeout();
                             if warmup_timeout.as_secs() > 0 {
                                 let warmup_content =
-                                    vec![agent_client_protocol::schema::ContentBlock::Text(
-                                        agent_client_protocol::schema::TextContent::new(
+                                    vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                                        agent_client_protocol::schema::v1::TextContent::new(
                                             " ".to_string(),
                                         ),
                                     )];
@@ -2168,7 +2171,9 @@ async fn run_command_loop(
                                 agent_id: req_agent_id,
                                 session_id: session_id.clone(),
                                 modes: response.modes.clone(),
-                                models: response.models.clone(),
+                                models: events::models_from_config_options(
+                                    response.config_options.as_deref(),
+                                ),
                                 config_options: response.config_options.clone(),
                             };
                             events::fan_out(
@@ -2182,7 +2187,9 @@ async fn run_command_loop(
                                 Ok(NewSessionOutcome {
                                     session_id,
                                     modes: response.modes,
-                                    models: response.models,
+                                    models: events::models_from_config_options(
+                                        response.config_options.as_deref(),
+                                    ),
                                     config_options: response.config_options,
                                 }),
                             );
@@ -2306,7 +2313,7 @@ async fn run_command_loop(
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
-                    let mut request = agent_client_protocol::schema::ListSessionsRequest::new();
+                    let mut request = agent_client_protocol::schema::v1::ListSessionsRequest::new();
                     if let Some(cwd) = cwd {
                         request = request.cwd(std::path::PathBuf::from(cwd));
                     }
@@ -2692,10 +2699,32 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = SetSessionModelRequest::new(&session_id, ModelId::new(model_id));
-                    let result = req_cx.send_request(request).block_task().await;
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    // ACP 0.14 removed `session/set_model`; the model is now a
+                    // `select`-kind config option conventionally identified by
+                    // configId "model" (category = Model). `model_id` is the
+                    // option value id the renderer picked.
+                    let request =
+                        SetSessionConfigOptionRequest::new(&session_id, "model", model_id.as_str());
+                    match req_cx.send_request(request).block_task().await {
+                        Ok(response) => {
+                            let event = ConfigOptionsUpdateEvent {
+                                agent_id: req_agent_id,
+                                session_id,
+                                config_options: response.config_options.clone(),
+                            };
+                            events::fan_out(
+                                &req_sinks,
+                                Some(event.session_id.0.as_str()),
+                                events::EVENT_CONFIG_OPTIONS_UPDATE,
+                                &event,
+                            );
+                            send_reply(&task_slot, Ok(()));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                    }
                 });
             }
 
@@ -2712,7 +2741,7 @@ async fn run_command_loop(
                 let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     let request =
-                        SetSessionConfigOptionRequest::new(&session_id, config_id, value_id);
+                        SetSessionConfigOptionRequest::new(&session_id, config_id, value_id.as_str());
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
                             let event = ConfigOptionsUpdateEvent {
@@ -3070,7 +3099,7 @@ mod tests {
     #[tokio::test]
     async fn session_load_reopen_preserves_optional_fields_and_records_root() {
         let state = Mutex::new(DriverState::new());
-        let modes = agent_client_protocol::schema::SessionModeState::new("ask", vec![]);
+        let modes = agent_client_protocol::schema::v1::SessionModeState::new("ask", vec![]);
         let response = LoadSessionResponse::new()
             .modes(modes.clone())
             .config_options(Vec::<SessionConfigOption>::new());
@@ -3142,7 +3171,7 @@ mod tests {
     /// is preserved when present and `None` when absent.
     #[test]
     fn to_auth_method_infos_maps_full_metadata() {
-        use agent_client_protocol::schema::AuthMethodAgent;
+        use agent_client_protocol::schema::v1::AuthMethodAgent;
         let methods = vec![
             AuthMethod::Agent(
                 AuthMethodAgent::new("cursor_login", "Sign in with Cursor")

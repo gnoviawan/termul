@@ -14,7 +14,7 @@
 //! handler closures require; in practice all access happens on the one driver
 //! thread, so the lock is uncontended.
 
-use agent_client_protocol::schema::RequestPermissionResponse;
+use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use agent_client_protocol::Responder;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

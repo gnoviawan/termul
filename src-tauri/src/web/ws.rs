@@ -1365,7 +1365,7 @@ struct CreateSessionPayload {
     agent_id: crate::acp::AgentId,
     cwd: String,
     #[serde(default)]
-    mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
+    mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     #[serde(default)]
     ephemeral: bool,
 }
@@ -2215,7 +2215,7 @@ struct SendPromptPayload {
     text: Option<String>,
     /// Blocks-mode prompt (attachments + structured content).
     #[serde(default)]
-    content: Option<Vec<agent_client_protocol::schema::ContentBlock>>,
+    content: Option<Vec<agent_client_protocol::schema::v1::ContentBlock>>,
     /// Story 1.8 T3: client-generated turn id for `prompt_complete` dedup.
     /// Optional for forward-compat (older clients omit it; dedup is a no-op).
     #[serde(default)]
@@ -2242,8 +2242,8 @@ async fn handle_send_prompt(
         // leak past the `content.is_empty()` check in `AcpManager::send_prompt`
         // and poison the turn-id watermark).
         (_, Some(text)) if !text.trim().is_empty() => {
-            vec![agent_client_protocol::schema::ContentBlock::Text(
-                agent_client_protocol::schema::TextContent::new(text),
+            vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                agent_client_protocol::schema::v1::TextContent::new(text),
             )]
         }
         _ => {
