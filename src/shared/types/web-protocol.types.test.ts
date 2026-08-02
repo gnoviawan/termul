@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 24 request types including ephemeral disposal and ping', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(24)
+  it('exports exactly 25 request types including ephemeral disposal and ping', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(25)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -83,7 +83,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'ping',
       'list_persisted_sessions',
       'open_persisted_session',
-      'get_session_payload'
+      'get_session_payload',
+      'get_session_cursor'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

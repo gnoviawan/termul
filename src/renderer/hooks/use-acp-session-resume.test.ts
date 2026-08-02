@@ -53,10 +53,12 @@ vi.mock('@/lib/log-api', () => ({
 
 vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   getOrCreateProjectContinuityCorrelation: vi.fn().mockReturnValue('corr-1'),
-  recordTerminalContinuityEvent: vi.fn((event: { name: string; terminalId?: string; details?: Record<string, unknown> }) => {
-    events.push(event)
-    return { ...event, timestamp: new Date().toISOString() }
-  })
+  recordTerminalContinuityEvent: vi.fn(
+    (event: { name: string; terminalId?: string; details?: Record<string, unknown> }) => {
+      events.push(event)
+      return { ...event, timestamp: new Date().toISOString() }
+    }
+  )
 }))
 
 import { useAcpSessionResume } from './use-acp-session-resume'
@@ -135,7 +137,11 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
       expect(state.resumeLiveSession).toHaveBeenCalledWith('in-project', 'agent-1', '/repo')
     })
     expect(state.resumeLiveSession).toHaveBeenCalledTimes(1)
-    expect(state.resumeLiveSession).not.toHaveBeenCalledWith('other-project', expect.anything(), expect.anything())
+    expect(state.resumeLiveSession).not.toHaveBeenCalledWith(
+      'other-project',
+      expect.anything(),
+      expect.anything()
+    )
   })
 
   it('desktop transport (no cursor accessor) skips the seed but still resumes', async () => {
