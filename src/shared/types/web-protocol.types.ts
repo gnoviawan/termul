@@ -127,7 +127,12 @@ export const WS_REQUEST_TYPES = [
   'list_persisted_sessions',
   'open_persisted_session',
   'get_session_payload',
-  'recover_session_snapshot'
+  'recover_session_snapshot',
+  // R2: lightweight server-authoritative replay cursor (no snapshot payload).
+  // Unlike `recover_session_snapshot` (which re-registers a subscription),
+  // this only returns the durable `{ sessionId, watermark }` so a refreshed
+  // transport can seed `lastSeq` before its first subscribe.
+  'get_session_cursor'
 ] as const
 
 /** Union of all WS request `type` strings. */

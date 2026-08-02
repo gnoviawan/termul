@@ -11,6 +11,7 @@ import { useUpdateToast } from './components/UpdateAvailableToast'
 import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
+import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
@@ -84,6 +85,7 @@ function AppEffects(): null {
   useAcpListeners()
   useAcpAgents()
   useAcpHistory()
+  useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
   usePreventDefaultContextMenu()

@@ -456,6 +456,20 @@ interface AcpState {
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
   openHistorySession: (id: string) => Promise<void>
+  /** R1: Proactively reattach a still-running ACP session on refresh. Mirrors
+   * `openHistorySessionInner`'s transcript-install + resume but skips
+   * `ensureLiveAgent` (no cold-spawn): the caller passes the authoritative
+   * live `agentId` still owned by the Rust `AcpManager` across a webview/
+   * phone reload. The backend `gate_resume_session` enforces the capability
+   * (reused, not duplicated); a rejection rejects here so the hook can record
+   * `acp-resume-skipped` and leave the transcript read-only. */
+  resumeLiveSession: (id: string, agentId: AgentId, cwd: string) => Promise<void>
+  /** R4: force-flush a non-debounced snapshot of every live session's cached
+   * payload on refresh unload so the durable copy is at worst one turn behind
+   * (never truncated by a live-window trim). Reuses `persistSession`'s guards
+   * (skip mid-replay, strip `streaming:true`). Pair with `flushSessionHistory()`
+   * to drain the queued writes. */
+  flushLiveSessionSaves: () => void
   deleteHistorySession: (id: string) => Promise<void>
   /** Restart the agent for a crashed chat and replay the last user prompt.
    * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
@@ -3505,6 +3519,79 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     inFlightHistoryOpens.set(id, { generation: reopenGeneration, promise: task })
     set((s) => ({ openingHistoryIds: { ...s.openingHistoryIds, [id]: true } }))
     return task
+  },
+
+  resumeLiveSession: async (id, agentId, cwd) => {
+    // R1: install the persisted transcript, then resume against the
+    // authoritative live agent (still owned by the Rust `AcpManager` across a
+    // webview/phone reload) — WITHOUT `ensureLiveAgent`, which would cold-spawn
+    // a duplicate agent because the renderer lost its `configToLiveAgent` map
+    // on refresh. The backend `gate_resume_session` enforces the capability
+    // (reused — not duplicated); a rejection rejects here so the bootstrap hook
+    // can record `acp-resume-skipped` and keep the transcript read-only.
+    const payload = await loadSessionPayload(id)
+    if (!payload) throw new Error(`no persisted history for ${id}`)
+    const meta = payload.metadata
+    let maxRestoredSeq = 0
+    for (const m of payload.messages) {
+      if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
+    }
+    rebaseSeqCounter(maxRestoredSeq)
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [id]: {
+          id,
+          agentId,
+          cwd: meta.cwd,
+          projectId: meta.projectId,
+          status: 'closed',
+          title: meta.title,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: meta.createdAt,
+          replaying: null
+        }
+      },
+      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
+    }))
+    try {
+      // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
+      // `resume_session` WS request (web). On web it auto-re-subscribes with
+      // `this.lastSeq.get(sid) ?? 0`, so the hook seeds the server cursor first.
+      await acpApi.resumeSession(agentId, id, cwd)
+      set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+    } catch (err) {
+      // Restore the local transcript (a partial resume may have replaced it)
+      // and surface the failure; the hook classifies skip vs fail and never
+      // throws on the bootstrap path.
+      set((s) => ({
+        messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+        sessions: withSessionResumeError(s.sessions, id, err)
+      }))
+      throw err
+    }
+  },
+
+  flushLiveSessionSaves: () => {
+    // R4: snapshot every live session's cached payload (non-debounced) so a
+    // hard refresh does not lose the last `queueSessionPayloadSave` that was
+    // still coalescing. Reuses `persistSession` — its `session.replaying` /
+    // absent-message-key guards + `streaming:true` strip are preserved, so a
+    // mid-replay transcript is never truncated and the durable copy is at worst
+    // one turn behind. `WorkspaceLayout.persistBeforeUnload` then awaits
+    // `flushSessionHistory()` to drain the queued writes (best-effort,
+    // never throws — matching `persistSession`'s contract).
+    const state = get()
+    for (const sessionId of Object.keys(state.sessions)) {
+      persistSession(state, sessionId as SessionId, (entries) =>
+        set(() => ({ sessionIndex: entries }))
+      )
+    }
   },
 
   retryCrashedSession: async (sessionId) => {

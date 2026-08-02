@@ -762,6 +762,14 @@ async fn handle_request(
             )
             .await
         }
+        // R2: lightweight server-authoritative replay cursor (no snapshot).
+        // Unlike `recover_session_snapshot` (which re-registers a
+        // subscription), this only returns `{ sessionId, watermark }` so a
+        // refreshed transport seeds `lastSeq` before its first subscribe.
+        "get_session_cursor" => {
+            handle_get_session_cursor(id, &req.payload, relay, chat_history_store, history_mode)
+                .await
+        }
         // Story 1.7: `respond_permission` — route the browser's permission
         // decision through the server-side rendezvous (first-response-wins,
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
@@ -1098,6 +1106,71 @@ async fn handle_recover_session_snapshot(
             "watermark": watermark,
             "events": events,
         })),
+    )
+}
+
+/// `get_session_cursor` (R2) — returns the server-authoritative replay
+/// watermark `{ sessionId, watermark }` for a session WITHOUT subscribing
+/// (contrast `recover_session_snapshot`, which re-registers a subscription
+/// and emits the snapshot payload). A refreshed WS transport seeds its
+/// per-session `lastSeq` from this before the first `subscribeSession`, so
+/// events missed during the reload gap (seq > watermark) replay instead of
+/// running live-only (the stale-recovery path that fires only on a `STALE`
+/// error). Best-effort: an unknown session or a payload without `seq`-bearing
+/// messages resolves to `watermark: 0` (live-only subscribe), never an error.
+async fn handle_get_session_cursor(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GetSessionCursorRequest {
+        session_id: String,
+    }
+    let parsed: GetSessionCursorRequest = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed get_session_cursor payload (want sessionId): {e}"),
+            )
+        }
+    };
+    if parsed.session_id.is_empty() {
+        return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
+    }
+    // Desktop-hosted path (serve_router): the durable renderer-history store
+    // owns the transcripts; its `last_seq` reads the persisted payload's max
+    // message `seq`. Standalone VPS path falls through to the file-backed
+    // `SessionPersistence::last_seq` (the authoritative JSONL append log).
+    let watermark = if let Some(store) = chat_history_store {
+        store.last_seq(&parsed.session_id).unwrap_or(0)
+    } else {
+        relay
+            .persistence()
+            .map(|persistence| persistence.last_seq(&parsed.session_id).unwrap_or(0))
+            .unwrap_or(0)
+    };
+    tracing::debug!(
+        target: "termul::web::ws",
+        session_id = %parsed.session_id,
+        watermark,
+        "get_session_cursor"
+    );
+    WsReply::ok(
+        id,
+        Some(json!({ "sessionId": parsed.session_id, "watermark": watermark })),
     )
 }
 

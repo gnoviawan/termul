@@ -132,6 +132,16 @@ export interface AcpTransport {
     ) => Promise<void>
   ): void
   getSessionCursor?(sessionId: SessionId): number | null
+  /** R2: fetch the server-authoritative replay watermark for a session
+   * (without subscribing). Used by the refresh-resume hook to seed a fresh
+   * transport's `lastSeq` BEFORE the first `subscribeSession` so the
+   * reload-gap events replay instead of running live-only. Desktop: absent
+   * (Tauri IPC resumes via `session/load` replay — no WS cursor). */
+  fetchSessionCursor?(sessionId: SessionId): Promise<number>
+  /** R2: seed the in-memory `lastSeq` from a server watermark without
+   * subscribing (WS only). Call before `resumeSession` so its built-in
+   * re-subscribe uses the server cursor, not a dead per-instance 0. */
+  seedSessionCursor?(sessionId: SessionId, cursor: number): void
   setReconnectPriorityProvider?(provider: () => SessionId[]): void
   dispose(): void
 }
@@ -408,6 +418,24 @@ export class WsAcpTransport implements AcpTransport {
 
   getSessionCursor(sessionId: SessionId): number | null {
     return this.lastSeq.get(sessionId) ?? null
+  }
+
+  async fetchSessionCursor(sessionId: SessionId): Promise<number> {
+    // R2: proactively fetch the server watermark (NOT only on a STALE error)
+    // so a refreshed transport seeds `lastSeq` before its first subscribe.
+    await this.connect()
+    const reply = await this.request<{ sessionId: string; watermark: number }>(
+      'get_session_cursor',
+      { sessionId }
+    )
+    return reply?.watermark ?? 0
+  }
+
+  seedSessionCursor(sessionId: SessionId, cursor: number): void {
+    // Seed the in-memory watermark without subscribing so the subsequent
+    // `resumeSession`/`subscribeSession` built-in re-subscribe resumes from
+    // the server cursor (replays only the gap), not a dead per-instance 0.
+    if (cursor > 0) this.lastSeq.set(sessionId, cursor)
   }
 
   async connect(): Promise<void> {

@@ -47,6 +47,7 @@ import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
+import { useAcpStore } from '@/stores/acp-store'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -407,6 +408,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (!activeProjectId) return
       void saveTerminalLayout(activeProjectId).catch((error) => {
         console.warn('Failed to persist terminal layout before reload:', error)
+      })
+      // R4: force-flush a non-debounced snapshot of every live ACP session's
+      // cached payload on refresh unload so the durable copy is at worst one
+      // turn behind (never truncated by a live-window trim). Best-effort: a
+      // hard refresh may still abort the in-flight async drain (matching
+      // `persistSession`'s never-throw contract) — log on failure, never
+      // throw on unload.
+      try {
+        useAcpStore.getState().flushLiveSessionSaves()
+      } catch (error) {
+        console.warn('Failed to snapshot ACP sessions before reload:', error)
+      }
+      void flushSessionHistory().catch((error) => {
+        console.warn('Failed to flush ACP history before reload:', error)
       })
     }
 

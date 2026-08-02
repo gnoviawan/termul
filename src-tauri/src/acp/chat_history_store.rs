@@ -175,6 +175,20 @@ impl ChatHistoryStore {
         Ok(file.payload)
     }
 
+    /// Server-authoritative replay cursor (R2): the highest persisted event
+    /// `seq` for a session, so a refreshed transport can seed `lastSeq` from
+    /// the backend before subscribing (instead of a dead per-instance cursor).
+    /// Returns `0` for an unknown session or a payload without `seq`-bearing
+    /// messages — never an error, so callers (the WS `get_session_cursor`
+    /// handler) treat absence as a live-only subscribe.
+    pub fn last_seq(&self, session_id: &str) -> Result<u64> {
+        match self.get(session_id) {
+            Ok(payload) => Ok(max_message_seq(&payload)),
+            Err(ChatHistoryStoreError::SessionNotFound) => Ok(0),
+            Err(error) => Err(error),
+        }
+    }
+
     #[must_use]
     pub fn find_most_recent_for_project(
         &self,
@@ -321,6 +335,21 @@ fn validate_payload(
             ChatHistoryStoreError::InvalidPayload("messages is not an array".to_string())
         })?;
     Ok((metadata, messages.len() as u64))
+}
+
+/// Highest `seq` among a payload's messages (R2 replay cursor). The renderer
+/// stamps every durable message with a monotonic `seq` (`rebaseSeqCounter`),
+/// so the max is the durable watermark a refreshed transport should resume from.
+/// Returns `0` for a payload lacking `messages` or `seq`-bearing entries.
+fn max_message_seq(payload: &Value) -> u64 {
+    payload
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("seq").and_then(|seq| seq.as_u64()))
+        .max()
+        .unwrap_or(0)
 }
 
 fn load_index(path: &Path) -> Result<Option<IndexFile>> {
