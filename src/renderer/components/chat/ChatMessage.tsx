@@ -225,10 +225,16 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Word-by-word reveal so replies feel like they stream even when an agent
-// sends its text as one big chunk. `animated` uses the styles.css keyframes
-// imported in main.tsx; already-visible words get duration 0 (no re-animation).
-const STREAMDOWN_ANIMATED = { animation: 'blurIn', sep: 'word', duration: 350, stagger: 8 } as const
+// Opacity-only fade so streamed words reveal smoothly without the blur-filter
+// jank of sd-blurIn. `animated` uses the styles.css keyframes imported in
+// main.tsx; already-visible words get duration 0 (no re-animation).
+const STREAMDOWN_ANIMATED = {
+  animation: 'fadeIn',
+  sep: 'word',
+  duration: 200,
+  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  stagger: 8
+} as const
 
 /**
  * Confirm external links, then hand off to the OS browser.

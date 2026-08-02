@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
@@ -34,12 +35,14 @@ vi.mock('streamdown', async () => {
     children,
     isAnimating,
     caret,
+    animated,
     linkSafety,
     components
   }: {
     children: ReactNode
     isAnimating?: boolean
     caret?: string
+    animated?: boolean | AnimateOptions
     linkSafety?: LinkSafety
     components?: Record<string, unknown>
   }): React.JSX.Element {
@@ -49,11 +52,19 @@ vi.mock('streamdown', async () => {
     const CustomTable = components?.table as React.ElementType | undefined
     const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
+    const animatedConfig = animated === false || animated === true ? undefined : animated
+    const animatedName =
+      animated === false ? 'false' : animated === true ? 'true' : (animatedConfig?.animation ?? '')
+    const animatedDuration = animatedConfig ? String(animatedConfig.duration ?? '') : ''
+    const animatedEasing = animatedConfig?.easing ?? ''
 
     return (
       <div
         data-testid="streamdown"
         data-animating={isAnimating}
+        data-animated={animatedName}
+        data-animated-duration={animatedDuration}
+        data-animated-easing={animatedEasing}
         data-caret={caret}
         data-custom-table={Boolean(CustomTable)}
       >
@@ -130,11 +141,15 @@ vi.mock('streamdown', async () => {
   }
 })
 
+const { useReducedMotionMock } = vi.hoisted(() => ({
+  useReducedMotionMock: vi.fn(() => true)
+}))
+
 vi.mock('framer-motion', async () => {
   const actual = await vi.importActual<typeof import('framer-motion')>('framer-motion')
   return {
     ...actual,
-    useReducedMotion: () => true
+    useReducedMotion: useReducedMotionMock
   }
 })
 
@@ -152,6 +167,7 @@ describe('ChatMessage', () => {
   beforeEach(() => {
     openUrlWithSystemBrowser.mockClear()
     openFilePathFromTerminal.mockClear()
+    useReducedMotionMock.mockReturnValue(true)
   })
 
   it('shows the Streamdown caret while the live agent message is streaming', () => {
@@ -159,6 +175,17 @@ describe('ChatMessage', () => {
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'true')
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-caret', 'block')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animated', 'false')
+  })
+
+  it('passes the fadeIn animation config (duration/easing) under default motion', () => {
+    useReducedMotionMock.mockReturnValue(false)
+    render(<ChatMessage message={agentMessage(true)} isLast />)
+
+    const streamdown = screen.getByTestId('streamdown')
+    expect(streamdown).toHaveAttribute('data-animated', 'fadeIn')
+    expect(streamdown).toHaveAttribute('data-animated-duration', '200')
+    expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
   })
 
   it('renders compact markdown semantics for headings, lists, code, quotes, and tables', () => {
