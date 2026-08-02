@@ -283,7 +283,7 @@ export function ChatInputBar({
       resetMentions()
       resetHeight()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load skill')
+      toast.error(err instanceof Error ? err.message : 'Failed to send message')
     } finally {
       setSending(false)
     }

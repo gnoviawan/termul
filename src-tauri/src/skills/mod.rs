@@ -68,7 +68,7 @@ pub fn parse_skill_md(content: &str) -> Result<(HashMap<String, String>, String)
         return Ok((HashMap::new(), content.trim().to_string()));
     }
 
-    let rest = trimmed.strip_prefix("---").unwrap_or(trimmed).trim_start();
+    let rest = trimmed.strip_prefix("---").unwrap_or(trimmed);
     let end = rest
         .find("\n---")
         .ok_or_else(|| "SKILL.md frontmatter is not closed with '---'".to_string())?;
@@ -107,12 +107,29 @@ fn scan_skills_dir(
         return Ok(());
     }
 
-    for entry in fs::read_dir(dir).map_err(|e| {
-        log::warn!("failed to read skills directory {}: {e}", dir.display());
-        format!("read skills dir {}: {e}", dir.display())
-    })? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("failed to read skills directory {}: {e}", dir.display());
+            return Ok(());
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("failed to read a skills directory entry: {e}");
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(e) => {
+                log::warn!("failed to read file type for {}: {e}", entry.path().display());
+                continue;
+            }
+        };
         if !file_type.is_dir() {
             continue;
         }
@@ -123,11 +140,20 @@ fn scan_skills_dir(
             continue;
         }
 
-        let raw = fs::read_to_string(&skill_md).map_err(|e| {
-            log::warn!("failed to read {}: {e}", skill_md.display());
-            format!("read {}: {e}", skill_md.display())
-        })?;
-        let (frontmatter, _) = parse_skill_md(&raw)?;
+        let raw = match fs::read_to_string(&skill_md) {
+            Ok(raw) => raw,
+            Err(e) => {
+                log::warn!("failed to read {}: {e}", skill_md.display());
+                continue;
+            }
+        };
+        let (frontmatter, _) = match parse_skill_md(&raw) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                log::warn!("failed to parse {}: {e}", skill_md.display());
+                continue;
+            }
+        };
         let name = frontmatter
             .get("name")
             .cloned()
@@ -313,6 +339,46 @@ mod tests {
         let listed = list_agent_skills(Some(&root)).unwrap();
         assert!(listed.iter().any(|s| s.name == "valid-skill"));
         assert!(!listed.iter().any(|s| s.name == "Invalid"));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn parse_skill_md_handles_empty_frontmatter() {
+        // An empty frontmatter block must parse, not report "not closed".
+        let (fm, body) = parse_skill_md("---\n\n---\nbody").unwrap();
+        assert!(fm.is_empty());
+        assert_eq!(body.trim(), "body");
+
+        let (fm2, body2) = parse_skill_md("---\n---\n## Steps").unwrap();
+        assert!(fm2.is_empty());
+        assert_eq!(body2.trim(), "## Steps");
+    }
+
+    #[test]
+    fn list_agent_skills_skips_malformed_skill_and_keeps_valid() {
+        let temp =
+            std::env::temp_dir().join(format!("termul-skip-bad-{}", std::process::id()));
+        let skills_root = temp.join(".agents").join("skills");
+        fs::create_dir_all(skills_root.join("good-skill")).unwrap();
+        fs::write(
+            skills_root.join("good-skill").join("SKILL.md"),
+            "---\nname: good-skill\ndescription: ok\n---\n\nbody\n",
+        )
+        .unwrap();
+        fs::create_dir_all(skills_root.join("bad-skill")).unwrap();
+        // Unclosed frontmatter → parse_skill_md returns Err; listing must skip
+        // this entry and still return the valid skill.
+        fs::write(
+            skills_root.join("bad-skill").join("SKILL.md"),
+            "---\nname: bad-skill\nthis frontmatter never closes",
+        )
+        .unwrap();
+
+        let root = temp.to_string_lossy().to_string();
+        let listed = list_agent_skills(Some(&root)).unwrap();
+        assert!(listed.iter().any(|s| s.name == "good-skill"));
+        assert!(!listed.iter().any(|s| s.name == "bad-skill"));
 
         let _ = fs::remove_dir_all(temp);
     }
