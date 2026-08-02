@@ -34,6 +34,45 @@ vi.mock('@/stores/acp-store', () => ({
     selector({ mcpServers: Array.from({ length: mockMcpCount.current }) })
 }))
 
+const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
+  const persistenceStore = new Map<string, unknown>()
+  const api = {
+    readFails: false,
+    read: vi.fn(async (key: string) => {
+      // Faithful to the real persistenceApi, which never throws to callers —
+      // a storage-layer failure surfaces as a non-throwing `success:false`.
+      if (api.readFails) return { success: false, code: 'READ_ERROR', error: 'storage unavailable' }
+      return persistenceStore.has(key)
+        ? { success: true, data: persistenceStore.get(key) }
+        : { success: false, code: 'KEY_NOT_FOUND', error: `Key not found: ${key}` }
+    }),
+    write: vi.fn(async (key: string, data: unknown) => {
+      persistenceStore.set(key, data)
+      return { success: true, data: undefined }
+    }),
+    writeDebounced: vi.fn(async (key: string, data: unknown) => {
+      persistenceStore.set(key, data)
+      return { success: true, data: undefined }
+    }),
+    delete: vi.fn(async (key: string) => {
+      persistenceStore.delete(key)
+      return { success: true, data: undefined }
+    }),
+    flushPendingWrites: vi.fn(async () => ({ success: true, data: undefined }))
+  }
+  return { persistenceStore, fakePersistenceApi: api }
+})
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return { ...actual, persistenceApi: fakePersistenceApi }
+})
+
+beforeEach(() => {
+  persistenceStore.clear()
+  fakePersistenceApi.readFails = false
+})
+
 function option(
   id: string,
   name: string,
@@ -581,5 +620,91 @@ describe('ChatInputBar command chip', () => {
     await waitFor(() => {
       expect(onSend).toHaveBeenCalledWith('edited message')
     })
+  })
+})
+
+describe('ChatInputBar draft persistence', () => {
+  beforeEach(() => {
+    persistenceStore.clear()
+    fakePersistenceApi.readFails = false
+  })
+
+  it('restores an unsent draft into the composer on mount', async () => {
+    persistenceStore.set('chat-draft/p1/session-1', 'half-typed message')
+    renderInputBar()
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('half-typed message')
+    })
+  })
+
+  it('clears the draft on send', async () => {
+    persistenceStore.set('chat-draft/p1/session-1', 'send me')
+    const onSend = vi.fn()
+    renderInputBar({ onSend })
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('send me')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith('send me')
+      // The composer emptied (clear-on-send) → the persisted draft was deleted.
+      expect(persistenceStore.has('chat-draft/p1/session-1')).toBe(false)
+    })
+  })
+
+  it('does not crash when storage is empty', () => {
+    // No draft persisted → empty composer, current behavior, no throw.
+    renderInputBar()
+    expect(screen.getByRole('textbox')).toHaveValue('')
+  })
+
+  it('does not crash when storage is unavailable', async () => {
+    fakePersistenceApi.readFails = true
+    renderInputBar()
+    // read returns a non-throwing failure → degrade to empty, no crash.
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('')
+    })
+  })
+
+  it('does not persist the seeded text as a draft while editing a message', async () => {
+    vi.useFakeTimers()
+    try {
+      renderInputBar({ seedText: 'edited message', seedNonce: 1 })
+      // Advance well past the 400ms debounce — seeding must never schedule a
+      // draft write (the write effect early-returns while seedNonce is set).
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(400)
+      expect(fakePersistenceApi.writeDebounced).not.toHaveBeenCalled()
+      expect(persistenceStore.has('chat-draft/p1/session-1')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('persists typed text via writeDebounced after the 400ms debounce', async () => {
+    vi.useFakeTimers()
+    try {
+      renderInputBar()
+      // Flush the hydrate read so hydratedRef flips true before typing.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      const textarea = screen.getByRole('textbox')
+      fireEvent.change(textarea, { target: { value: 'typed draft' } })
+
+      fakePersistenceApi.writeDebounced.mockClear()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(fakePersistenceApi.writeDebounced).toHaveBeenCalledWith(
+        'chat-draft/p1/session-1',
+        'typed draft'
+      )
+      expect(persistenceStore.get('chat-draft/p1/session-1')).toBe('typed draft')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

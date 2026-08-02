@@ -19,6 +19,7 @@ import type {
   SessionConfigOption,
   SessionModeState
 } from '@/lib/acp-api'
+import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
@@ -131,6 +132,69 @@ export function ChatInputBar({
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
   const mcpCount = session.mcpServerCount ?? globalMcpCount
   const [value, setValue] = useState('')
+  // Persist the in-progress composer draft per session (project + session id)
+  // so an unsent message survives a web reload. useState stays the source of
+  // truth; the persisted copy is a recovery fallback only — hydrate on mount,
+  // debounce writes on change, and clear (delete) when the composer empties
+  // (covers both manual clear and clear-on-send). External seeding (editing a
+  // message) takes precedence over a stale draft.
+  const draftKey = `chat-draft/${session.projectId}/${session.id}`
+  // Guard against undefined/null ids collapsing the key to
+  // `chat-draft/undefined/undefined` and cross-session drafts colliding.
+  const canPersistDraft = session.projectId != null && session.id != null
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (seedNonce !== undefined) {
+      // Editing/seeding a message — don't restore a stale draft over the seed.
+      hydratedRef.current = true
+      return
+    }
+    if (!canPersistDraft) {
+      // projectId/sessionId missing — can't key a draft; treat as hydrated so
+      // the write effect's hydration gate doesn't block (it also guards).
+      hydratedRef.current = true
+      return
+    }
+    let cancelled = false
+    hydratedRef.current = false
+    void persistenceApi
+      .read<string>(draftKey)
+      .then((result) => {
+        if (cancelled) return
+        if (result.success && typeof result.data === 'string' && result.data) {
+          setValue(result.data)
+        }
+      })
+      .catch(() => {
+        // Storage unavailable/corrupt — degrade to empty (no UI crash).
+      })
+      .finally(() => {
+        if (!cancelled) hydratedRef.current = true
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [draftKey, seedNonce, canPersistDraft])
+
+  // Debounced draft write on change — only after hydration so the just-loaded
+  // draft isn't clobbered with '' before the read resolves. Empty value
+  // clears the persisted draft so a reload after send/empty stays clean.
+  // While editing/seeding a message (seedNonce set), skip persistence so the
+  // seeded text isn't leaked back as the session's draft (reload would restore
+  // the edited message into the composer).
+  useEffect(() => {
+    if (seedNonce !== undefined) return
+    if (!canPersistDraft) return
+    if (!hydratedRef.current) return
+    if (!value) {
+      void persistenceApi.delete(draftKey).catch(() => {})
+      return
+    }
+    const handle = setTimeout(() => {
+      void persistenceApi.writeDebounced(draftKey, value).catch(() => {})
+    }, 400)
+    return () => clearTimeout(handle)
+  }, [value, draftKey, seedNonce, canPersistDraft])
   const [activeCommand, setActiveCommand] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
