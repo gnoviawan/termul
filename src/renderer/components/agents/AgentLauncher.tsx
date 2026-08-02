@@ -12,6 +12,7 @@ import {
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
+import { CommandChip } from '@/components/chat/CommandChip'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
 import {
@@ -22,14 +23,8 @@ import {
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SkillComposerOverlay } from '@/components/chat/SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
-import { tryHandleSlashMenuKeyDown } from '@/components/chat/slash-menu-keyboard'
-import {
-  buildSlashSections,
-  findSlashTrigger,
-  isSlashTrigger,
-  type SlashItem,
-  slashFilter
-} from '@/components/chat/slash-menu-model'
+import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
+import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
@@ -40,7 +35,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
-import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
@@ -59,12 +54,6 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
-import {
-  extractSkillNames,
-  insertSkillToken,
-  removeSkillTokenBeforeCaret,
-  SKILL_TOKEN_START
-} from '@/lib/skill-tokens'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { cn } from '@/lib/utils'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -106,9 +95,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [pendingOptions, setPendingOptions] = useState<PendingLauncherOptions>(
     emptyPendingLauncherOptions
   )
-  // name → SKILL.md path, captured when a skill is picked inline so the launch
-  // wire prompt can cite paths synchronously (no IPC read, no failure path).
-  const skillPathsRef = useRef<Record<string, string>>({})
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -269,7 +255,79 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveConfigOptions,
     cachedOptions?.updatedAt
   ])
-  const menuOpen = isSlashTrigger(prompt)
+  // The three ACP setters below are declared before `useChatComposer` so the
+  // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
+  // a temporal-dead-zone reference (the hook captures them at call time).
+  const handleSetConfig = useCallback(
+    async (configId: string, valueId: string) => {
+      if (!preparedSessionId) {
+        setPendingOptions((prev) => ({
+          ...prev,
+          configValues: { ...prev.configValues, [configId]: valueId }
+        }))
+        return
+      }
+      try {
+        await useAcpStore.getState().setConfigOption(preparedSessionId, configId, valueId)
+      } catch (err) {
+        toast.error(`Failed to set option: ${String(err)}`)
+        throw err
+      }
+    },
+    [preparedSessionId]
+  )
+
+  const handleSetModel = useCallback(
+    async (valueId: string) => {
+      if (!preparedSessionId) {
+        if (modelSource === 'models') {
+          setPendingOptions((prev) => ({ ...prev, modelId: valueId }))
+          return
+        }
+        if (!modelOption) {
+          throw new Error('No model option is available for this session')
+        }
+        setPendingOptions((prev) => ({
+          ...prev,
+          modelId: valueId,
+          configValues: { ...prev.configValues, [modelOption.id]: valueId }
+        }))
+        return
+      }
+      if (modelSource === 'models') {
+        try {
+          await useAcpStore.getState().setModel(preparedSessionId, valueId)
+        } catch (err) {
+          toast.error(`Failed to set model: ${String(err)}`)
+          throw err
+        }
+        return
+      }
+      if (!modelOption) {
+        throw new Error('No model option is available for this session')
+      }
+      await handleSetConfig(modelOption.id, valueId)
+    },
+    [handleSetConfig, modelOption, modelSource, preparedSessionId]
+  )
+
+  const handleSetMode = useCallback(
+    async (modeId: string) => {
+      if (!preparedSessionId) {
+        setPendingOptions((prev) => ({ ...prev, modeId }))
+        return
+      }
+      try {
+        await useAcpStore.getState().setMode(preparedSessionId, modeId)
+      } catch (err) {
+        toast.error(`Failed to set agent: ${String(err)}`)
+        throw err
+      }
+    },
+    [preparedSessionId]
+  )
+
+  const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
   const {
     onInput,
     onKeyUp,
@@ -290,22 +348,40 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     textareaRef,
     mentions,
     disabled: composerDisabled,
-    slashOpen: menuOpen
+    slashOpen
   })
-  const slashSections = useMemo(
-    () =>
-      menuOpen
-        ? buildSlashSections({
-            commands,
-            // Cached or live options — pending handlers queue until session is ready.
-            configOptions: optionsInteractive ? effectiveConfigOptions : [],
-            modes: optionsInteractive ? effectiveModes : null,
-            skills,
-            filter: slashFilter(prompt)
-          })
-        : [],
-    [menuOpen, commands, optionsInteractive, effectiveConfigOptions, effectiveModes, skills, prompt]
-  )
+
+  const {
+    slashSections,
+    activeCommand,
+    setActiveCommand,
+    clearActiveCommand,
+    skillPathsRef,
+    hasSkillToken,
+    handleSelect,
+    handleKeyDown: composerHandleKeyDown,
+    buildPromptParts
+  } = useChatComposer({
+    value: prompt,
+    setValue: setPrompt,
+    textareaRef,
+    slashMenuRef: menuRef,
+    commands,
+    configOptions: optionsInteractive ? effectiveConfigOptions : [],
+    modes: optionsInteractive ? effectiveModes : null,
+    skills,
+    disabled: composerDisabled,
+    onSetConfig: handleSetConfig,
+    onSetMode: handleSetMode,
+    onSetModel: handleSetModel,
+    modelOption,
+    modelSource: modelSource ?? undefined,
+    handleMentionKeyDown,
+    updateMentions,
+    resetMentions,
+    resetHeight,
+    clampHeight
+  })
 
   const persistSelection = useCallback((configId: string) => {
     cachedConfigId = configId
@@ -458,59 +534,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [manualPath, persistSelection, saveAgentConfig, savingManualPath]
   )
 
-  const handleSetConfig = useCallback(
-    async (configId: string, valueId: string) => {
-      if (!preparedSessionId) {
-        setPendingOptions((prev) => ({
-          ...prev,
-          configValues: { ...prev.configValues, [configId]: valueId }
-        }))
-        return
-      }
-      try {
-        await useAcpStore.getState().setConfigOption(preparedSessionId, configId, valueId)
-      } catch (err) {
-        toast.error(`Failed to set option: ${String(err)}`)
-        throw err
-      }
-    },
-    [preparedSessionId]
-  )
-
-  const handleSetModel = useCallback(
-    async (valueId: string) => {
-      if (!preparedSessionId) {
-        if (modelSource === 'models') {
-          setPendingOptions((prev) => ({ ...prev, modelId: valueId }))
-          return
-        }
-        if (!modelOption) {
-          throw new Error('No model option is available for this session')
-        }
-        setPendingOptions((prev) => ({
-          ...prev,
-          modelId: valueId,
-          configValues: { ...prev.configValues, [modelOption.id]: valueId }
-        }))
-        return
-      }
-      if (modelSource === 'models') {
-        try {
-          await useAcpStore.getState().setModel(preparedSessionId, valueId)
-        } catch (err) {
-          toast.error(`Failed to set model: ${String(err)}`)
-          throw err
-        }
-        return
-      }
-      if (!modelOption) {
-        throw new Error('No model option is available for this session')
-      }
-      await handleSetConfig(modelOption.id, valueId)
-    },
-    [handleSetConfig, modelOption, modelSource, preparedSessionId]
-  )
-
   const handleRetryPrepare = useCallback(() => {
     if (!activeConfigId || !projectRoot || !preparedKey) return
     const store = useAcpStore.getState()
@@ -551,22 +574,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     void runAuthenticate(signInMethod.id)
   }, [signInMethod, runAuthenticate])
 
-  const handleSetMode = useCallback(
-    async (modeId: string) => {
-      if (!preparedSessionId) {
-        setPendingOptions((prev) => ({ ...prev, modeId }))
-        return
-      }
-      try {
-        await useAcpStore.getState().setMode(preparedSessionId, modeId)
-      } catch (err) {
-        toast.error(`Failed to set agent: ${String(err)}`)
-        throw err
-      }
-    },
-    [preparedSessionId]
-  )
-
   // If prepare finishes while the launcher is still open, flush queued selections.
   useEffect(() => {
     if (!preparedSessionId || !hasPendingLauncherOptions(pendingOptions)) return
@@ -589,53 +596,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [preparedSessionId, pendingOptions])
 
-  const handleSlashSelect = useCallback(
-    (item: SlashItem) => {
-      if (item.kind === 'skill') {
-        // Splice an inline skill token at the caret (removing the `/`-filter
-        // text), record the path for the launch wire prompt, and refocus so the
-        // user can keep typing or pick another skill.
-        const trigger = findSlashTrigger(prompt)
-        const caret = textareaRef.current?.selectionStart ?? prompt.length
-        const insertAt = trigger ? trigger.end : caret
-        const deleteBefore = trigger ? trigger.end - trigger.start : 0
-        const { value: next, caret: nextCaret } = insertSkillToken(
-          prompt,
-          insertAt,
-          item.name,
-          deleteBefore
-        )
-        skillPathsRef.current[item.name] = item.path
-        setPrompt(next)
-        updateMentions(next, nextCaret)
-        resetHeight()
-        requestAnimationFrame(() => {
-          const el = textareaRef.current
-          if (!el) return
-          clampHeight(el)
-          el.setSelectionRange(nextCaret, nextCaret)
-          el.focus()
-        })
-        return
-      }
-      if (item.kind === 'config') {
-        void handleSetConfig(item.configId, item.valueId)
-      } else if (item.kind === 'mode') {
-        void handleSetMode(item.modeId)
-      } else if (item.kind === 'command') {
-        const next = `/${item.name} `
-        setPrompt(next)
-        updateMentions(next, next.length)
-        textareaRef.current?.focus()
-        return
-      }
-      setPrompt('')
-      updateMentions('', 0)
-      resetHeight()
-    },
-    [prompt, handleSetConfig, handleSetMode, updateMentions, resetHeight, clampHeight]
-  )
-
   const launch = useCallback(async () => {
     if (!activeProjectId || !projectRoot) {
       toast.error('No active project')
@@ -645,7 +605,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     launchInFlightRef.current = true
     const pendingSnapshot = pendingOptions
-    const promptSnapshot = prompt
     const attachmentsSnapshot = [...attachments]
     const appOwnedPaths = appOwnedTempPaths()
     const modelsSnapshot = effectiveModels
@@ -657,26 +616,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const projectIdSnapshot = activeProjectId
     const projectRootSnapshot = projectRoot
     const needsSave = !acpConfigs.some((config) => config.id === selectedConfig.id)
-    const skillPathsSnapshot = skillPathsRef.current
 
     // Build the wire text (skills framed by path under `# Agent Skills`, then
     // the user text with tokens replaced by `(name)`) and the display text (the
-    // raw token value, so the chat timeline re-renders inline chips). Sync —
-    // paths were captured at pick time, so no IPC read and no failure path. A
-    // skill surfaced without a path (web parity gap) blocks the launch.
-    const skillNames = extractSkillNames(promptSnapshot)
-    const skills = skillNames.map((name) => ({ name, path: skillPathsSnapshot[name] ?? '' }))
-    const missingPath = skills.find((s) => !s.path)
-    if (missingPath) {
-      toast.error(`Skill '${missingPath.name}' is missing a path`)
+    // raw token value, so the chat timeline re-renders inline chips), with the
+    // active command prefixed to both. Shared with `ChatInputBar.submit` via
+    // `useChatComposer.buildPromptParts` so the two surfaces cannot drift. A
+    // skill surfaced without a path (web parity gap) blocks the launch —
+    // `buildPromptParts` throws and the catch toasts + releases the in-flight
+    // flag before any session is claimed/created.
+    let parts: ReturnType<typeof buildPromptParts>
+    try {
+      parts = buildPromptParts()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       launchInFlightRef.current = false
       return
     }
-    const hasSkills = skills.length > 0
-    const wireText = hasSkills
-      ? buildPromptWithLoadedSkills(skills, promptSnapshot)
-      : promptSnapshot
-    const displayText = promptSnapshot
+    const { wireWithCommand, displayWithCommand } = parts
 
     // Open the chat immediately; ACP spawn/session/send continue in the chat view.
     const store = useAcpStore.getState()
@@ -690,13 +647,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
     // renders inline chips; the real send dispatches the WIRE text.
-    const syncTrimmed = displayText.trim()
+    const syncTrimmed = displayWithCommand.trim()
     const syncBlocks: ContentBlock[] = []
     if (attachmentsSnapshot.length > 0) {
-      if (syncTrimmed) syncBlocks.push({ type: 'text', text: displayText })
+      if (syncTrimmed) syncBlocks.push({ type: 'text', text: displayWithCommand })
       for (const a of attachmentsSnapshot) syncBlocks.push(attachmentToBlock(a))
     } else if (syncTrimmed.length > 0) {
-      syncBlocks.push({ type: 'text', text: displayText })
+      syncBlocks.push({ type: 'text', text: displayWithCommand })
     }
 
     if (!sessionId) {
@@ -718,6 +675,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     useWorkspaceStore.getState().hideAgentLauncher()
     setPendingOptions(emptyPendingLauncherOptions())
     skillPathsRef.current = {}
+    setActiveCommand(null)
     clearAttachments()
     resetMentions()
     resetHeight()
@@ -730,15 +688,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         persistSelection(configSnapshot.id)
 
-        // Real send carries the WIRE text (path-framed skills) so the agent
-        // receives paths, not tokens.
-        const wireTrimmed = wireText.trim()
+        // Real send carries the WIRE text (path-framed skills, command-prefixed)
+        // so the agent receives paths, not tokens.
+        const wireTrimmed = wireWithCommand.trim()
         const blocks: ContentBlock[] = []
         if (attachmentsSnapshot.length > 0) {
-          if (wireTrimmed) blocks.push({ type: 'text', text: wireText })
+          if (wireTrimmed) blocks.push({ type: 'text', text: wireWithCommand })
           for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
         } else if (wireTrimmed.length > 0) {
-          blocks.push({ type: 'text', text: wireText })
+          blocks.push({ type: 'text', text: wireWithCommand })
         }
 
         const liveStore = useAcpStore.getState()
@@ -785,7 +743,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     saveAgentConfig,
     persistSelection,
     paneId,
-    prompt,
     attachments,
     clearAttachments,
     appOwnedTempPaths,
@@ -795,56 +752,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     preparedKey,
     effectiveModels,
     effectiveModes,
-    effectiveConfigOptions
+    effectiveConfigOptions,
+    buildPromptParts,
+    skillPathsRef,
+    setActiveCommand
   ])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Backspace over an inline skill token (caret immediately after a chip,
-      // no active selection): remove the whole token plus the splicer's
-      // trailing space. Falls through to the default one-char backspace when
-      // the caret is in plain text. Alt is excluded so macOS Option+Backspace
-      // (delete-word) doesn't slice a token and leave orphan sentinels.
-      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const el = e.currentTarget
-        const caret = el.selectionStart ?? 0
-        const selEnd = el.selectionEnd ?? 0
-        if (caret === selEnd) {
-          const result = removeSkillTokenBeforeCaret(prompt, caret)
-          if (result.removed) {
-            e.preventDefault()
-            setPrompt(result.value)
-            updateMentions(result.value, result.caret)
-            resetHeight()
-            requestAnimationFrame(() => {
-              const t = textareaRef.current
-              if (!t) return
-              clampHeight(t)
-              t.setSelectionRange(result.caret, result.caret)
-              t.focus()
-            })
-            return
-          }
-        }
-      }
-      if (
-        tryHandleSlashMenuKeyDown(e, {
-          menuOpen,
-          sectionsLength: slashSections.length,
-          menuRef,
-          onClearInput: () => {
-            setPrompt('')
-            updateMentions('', 0)
-            resetHeight()
-          }
-        })
-      ) {
-        return
-      }
-      if (handleMentionKeyDown(e)) {
-        return
-      }
-      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !menuOpen) {
+      // Shared composer dispatch (skill-token backspace, slash-menu keys,
+      // mention-menu keys) lives in `useChatComposer`. Enter→launch and
+      // Escape→hide are surface-specific (the launcher dispatches a chat
+      // launch, not a running-turn send) and run only when the shared
+      // handler did not consume the event. Both the slash and mention menus
+      // call `preventDefault` on Escape/Enter, so `e.defaultPrevented` is the
+      // single reliable gate.
+      composerHandleKeyDown(e)
+      if (e.defaultPrevented) return
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         void launch()
       }
@@ -852,30 +777,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         e.preventDefault()
         void launch()
       }
-      if (e.key === 'Escape' && !menuOpen) {
+      if (e.key === 'Escape') {
         useWorkspaceStore.getState().hideAgentLauncher()
       }
     },
-    [
-      prompt,
-      launch,
-      menuOpen,
-      slashSections.length,
-      handleMentionKeyDown,
-      updateMentions,
-      clampHeight,
-      resetHeight
-    ]
+    [composerHandleKeyDown, launch]
   )
 
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || attachments.length > 0)
-  // The transparent-textarea overlay is only needed when the value carries a
-  // skill token; otherwise keep the textarea text visible so plain typing,
-  // overlay first-paint, and any overlay failure never render invisible text.
-  const hasSkillToken = prompt.includes(SKILL_TOKEN_START)
+    (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null)
+  // `hasSkillToken` comes from `useChatComposer` (destructured above) — the
+  // transparent-textarea overlay is only needed when the value carries a skill
+  // token; otherwise the textarea text stays visible.
 
   return (
     <div
@@ -890,11 +805,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
       <div className="flex w-full max-w-4xl flex-col gap-4">
         <div className="relative">
-          {menuOpen && (
+          {slashOpen && (
             <SlashCommandMenu
               ref={menuRef}
               sections={slashSections}
-              onSelect={handleSlashSelect}
+              onSelect={handleSelect}
               inputRef={textareaRef}
             />
           )}
@@ -969,6 +884,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onRetry={handleRetryPrepare}
                 />
               )}
+            {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -1086,6 +1002,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               type="button"
               onClick={() => {
                 setPrompt(suggestion.prompt)
+                setActiveCommand(null)
                 updateMentions(suggestion.prompt, suggestion.prompt.length)
                 textareaRef.current?.focus()
               }}

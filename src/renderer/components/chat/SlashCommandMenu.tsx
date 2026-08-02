@@ -41,6 +41,10 @@ function slashItemToComposer(item: SlashItem): ComposerMenuItem {
     label,
     description: item.description,
     icon: Icon,
+    // Skill rows share the accent `Sparkles` treatment with `SkillChip`
+    // (composer overlay + timeline) so the skills icon reads consistently
+    // across the picker and the chips. Commands/config/mode stay muted.
+    iconClassName: item.kind === 'skill' ? 'text-primary' : undefined,
     selected,
     payload: item
   }

@@ -17,6 +17,9 @@ export interface ComposerMenuItem {
   label: string
   description?: string | null
   icon?: LucideIcon
+  /** Override the default muted icon color (e.g. skill rows use `text-primary`
+   * to match the accent `SkillChip`). Resolved via `cn`, so later classes win. */
+  iconClassName?: string
   selected?: boolean
   dimmed?: boolean
   /** Wrap long labels/descriptions instead of truncating (used by skill rows). */
@@ -239,7 +242,12 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     item.dimmed && 'opacity-50'
                   )}
                 >
-                  {Icon && <Icon size={13} className="shrink-0 text-muted-foreground" />}
+                  {Icon && (
+                    <Icon
+                      size={13}
+                      className={cn('shrink-0 text-muted-foreground', item.iconClassName)}
+                    />
+                  )}
                   <span
                     className={cn('font-medium', item.wrap ? 'break-words' : 'min-w-0 truncate')}
                   >

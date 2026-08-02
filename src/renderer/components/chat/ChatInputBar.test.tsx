@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { ContentBlock, SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption } from '@/lib/acp-api'
 import { skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
@@ -660,6 +660,21 @@ describe('ChatInputBar command chip', () => {
 
     await waitFor(() => {
       expect(onSend).toHaveBeenCalledWith('edited message')
+    })
+  })
+
+  it('opens the slash menu at a mid-text slash (canonical any-position trigger)', async () => {
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands })
+
+    const textarea = screen.getByRole('textbox')
+    // Type text before the slash so the trigger is mid-text, not leading.
+    // This is the canonical behavior the AgentLauncher was drifting from
+    // (it used the leading-only `isSlashTrigger`).
+    fireEvent.change(textarea, { target: { value: 'hello /' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
     })
   })
 })

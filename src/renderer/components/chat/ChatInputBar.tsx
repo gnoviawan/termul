@@ -1,17 +1,9 @@
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowUp, Paperclip, Square } from 'lucide-react'
-import {
-  type DragEvent,
-  type KeyboardEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
+import { type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -23,12 +15,6 @@ import type {
 } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
-import {
-  extractSkillNames,
-  insertSkillToken,
-  removeSkillTokenBeforeCaret,
-  SKILL_TOKEN_START
-} from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store'
@@ -50,14 +36,8 @@ import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SkillComposerOverlay } from './SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
-import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
-import {
-  buildSlashSections,
-  findSlashTrigger,
-  isSlashTriggerAny,
-  type SlashItem,
-  slashFilter
-} from './slash-menu-model'
+import { isSlashTriggerAny } from './slash-menu-model'
+import { useChatComposer } from './use-chat-composer'
 import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
 import { useComposerMentions } from './use-composer-mentions'
 import { useComposerTextarea } from './use-composer-textarea'
@@ -215,12 +195,6 @@ export function ChatInputBar({
     }, 400)
     return () => clearTimeout(handle)
   }, [value, draftKey, seedNonce, canPersistDraft])
-  const [activeCommand, setActiveCommand] = useState<string | null>(null)
-  // name → SKILL.md path, captured when a skill is picked from the slash menu
-  // so the wire prompt can cite paths synchronously at send time (no IPC read,
-  // no failure path). The composer value carries the inline skill tokens; this
-  // ref supplies the path for each token's name when building the wire text.
-  const skillPathsRef = useRef<Record<string, string>>({})
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -291,7 +265,6 @@ export function ChatInputBar({
   }, [canDropPaste])
 
   const slashOpen = isSlashTriggerAny(value) && !disabled
-  const filter = slashFilter(value)
   const {
     onInput,
     onKeyUp,
@@ -308,22 +281,40 @@ export function ChatInputBar({
     updateMentions
   } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
 
-  const sections = useMemo(
-    () =>
-      slashOpen
-        ? buildSlashSections({ commands, configOptions, modes, skills: availableSkills, filter })
-        : [],
-    [slashOpen, commands, configOptions, modes, availableSkills, filter]
-  )
+  const {
+    slashSections,
+    activeCommand,
+    setActiveCommand,
+    clearActiveCommand,
+    skillPathsRef,
+    hasSkillToken,
+    handleSelect,
+    handleKeyDown: composerHandleKeyDown,
+    buildPromptParts
+  } = useChatComposer({
+    value,
+    setValue,
+    textareaRef,
+    slashMenuRef,
+    commands,
+    configOptions,
+    modes,
+    skills: availableSkills,
+    disabled,
+    onSetConfig,
+    onSetMode,
+    onSetModel,
+    handleMentionKeyDown,
+    updateMentions,
+    resetMentions,
+    resetHeight,
+    clampHeight
+  })
 
   const canSend =
     !disabled &&
     !sending &&
     (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
-  // The transparent-textarea overlay is only needed when the value carries a
-  // skill token; otherwise keep the textarea text visible so plain typing,
-  // overlay first-paint, and any overlay failure never render invisible text.
-  const hasSkillToken = value.includes(SKILL_TOKEN_START)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
@@ -334,40 +325,11 @@ export function ChatInputBar({
 
     setSending(true)
     try {
-      // Extract the inline skill tokens carried in the value and resolve each
-      // name to its SKILL.md path. Paths come from `skillPathsRef` (captured at
-      // pick time) first, then fall back to the currently-available skills list
-      // — so editing + re-sending a chip message (where the ref is empty
-      // because paths aren't persisted with the message) still resolves paths
-      // from the live skills list. A skill surfaced without a path in either
-      // (e.g. a future web skill with no parity route) blocks the send — HALT
-      // with a clear error so the user can remove the chip.
-      const skillNames = extractSkillNames(value)
-      const skills = skillNames.map((name) => ({
-        name,
-        path:
-          skillPathsRef.current[name] ?? availableSkills.find((s) => s.name === name)?.path ?? ''
-      }))
-      const missingPath = skills.find((s) => !s.path)
-      if (missingPath) {
-        throw new Error(`Skill '${missingPath.name}' is missing a path`)
-      }
-
-      // Wire text dispatched to the agent: skills framed by path under
-      // `# Agent Skills`, then the user text with tokens replaced by `(name)`.
-      // Sync — paths were captured at pick time, so no IPC and no failure path.
-      const wireText = buildPromptWithLoadedSkills(skills, value)
-      // Display text stored in the optimistic user message: the raw token value
-      // so the timeline overlay re-renders the chips inline.
-      const displayText = value
-      const hasSkills = skills.length > 0
-
-      // Prepend the active command to both wire and display so the timeline
-      // shows `/cmd …` and the agent receives the command-prefixed wire text.
-      const wireWithCommand = activeCommand ? `/${activeCommand} ${wireText}` : wireText
-      const displayWithCommand = activeCommand ? `/${activeCommand} ${displayText}` : displayText
-      const wireTrimmed = wireWithCommand.trim()
-      const displayTrimmed = displayWithCommand.trim()
+      // Build the wire/display text parts from the current value, resolved skill
+      // paths, and active command. Throws `Skill '<name>' is missing a path`
+      // when a selected skill has no resolvable path (Block If) — caught below.
+      const { hasSkills, wireWithCommand, displayWithCommand, wireTrimmed, displayTrimmed } =
+        buildPromptParts()
       if (!wireTrimmed && !hasAttachments) return
 
       if (hasAttachments) {
@@ -415,7 +377,6 @@ export function ChatInputBar({
     value,
     attachments,
     activeCommand,
-    availableSkills,
     disabled,
     sending,
     clearAttachments,
@@ -424,123 +385,21 @@ export function ChatInputBar({
     onSendBlocks,
     resetHeight,
     resetMentions,
-    session.id
+    session.id,
+    buildPromptParts,
+    skillPathsRef,
+    setActiveCommand
   ])
-
-  const handleSelect = useCallback(
-    (item: SlashItem) => {
-      if (item.kind === 'skill') {
-        // Splice an inline skill token at the caret, removing the `/`-filter
-        // text the slash menu was filtering on. The token carries the skill
-        // name; the path is recorded into `skillPathsRef` so the wire prompt
-        // can cite it synchronously at send time. A trailing space is appended
-        // so the caret lands in plain text and the next `/` trigger matches.
-        const trigger = findSlashTrigger(value)
-        const caret = textareaRef.current?.selectionStart ?? value.length
-        const insertAt = trigger ? trigger.end : caret
-        const deleteBefore = trigger ? trigger.end - trigger.start : 0
-        const { value: next, caret: nextCaret } = insertSkillToken(
-          value,
-          insertAt,
-          item.name,
-          deleteBefore
-        )
-        skillPathsRef.current[item.name] = item.path
-        setValue(next)
-        updateMentions(next, nextCaret)
-        resetHeight()
-        requestAnimationFrame(() => {
-          const el = textareaRef.current
-          if (!el) return
-          clampHeight(el)
-          el.setSelectionRange(nextCaret, nextCaret)
-          el.focus()
-        })
-        return
-      }
-      if (item.kind === 'command') {
-        // Set the command chip instead of inserting bare text into the textarea.
-        // If the trigger was mid-text, replace the /token portion in the input.
-        const midTrigger = findSlashTrigger(value)
-        if (midTrigger && midTrigger.start > 0) {
-          // Mid-text trigger: remove the /token from the input, keep the rest
-          const before = value.slice(0, midTrigger.start).trimEnd()
-          const after = value.slice(midTrigger.end).trimStart()
-          const remaining = [before, after].filter(Boolean).join(' ')
-          setValue(remaining)
-          updateMentions(remaining, remaining.length)
-        } else {
-          // Leading or standalone trigger: clear the input
-          setValue('')
-          updateMentions('', 0)
-        }
-        setActiveCommand(item.name)
-        resetHeight()
-        textareaRef.current?.focus()
-        return
-      }
-      if (item.kind === 'config') {
-        // AgentChatPanel's setters toast then rethrow; swallow here so the
-        // already-surfaced failure doesn't become an unhandled rejection.
-        void Promise.resolve(onSetConfig(item.configId, item.valueId)).catch(() => {})
-      } else {
-        void Promise.resolve(onSetMode(item.modeId)).catch(() => {})
-      }
-      setValue('')
-      updateMentions('', 0)
-      resetHeight()
-    },
-    [value, onSetConfig, onSetMode, resetHeight, clampHeight, updateMentions]
-  )
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Backspace over an inline skill token (caret immediately after a chip,
-      // no active selection): remove the whole token plus the splicer's
-      // trailing space. Falls through to the default one-char backspace when
-      // the caret is in plain text. Alt is excluded so macOS Option+Backspace
-      // (delete-word) doesn't slice a token and leave orphan sentinels.
-      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const el = e.currentTarget
-        const caret = el.selectionStart ?? 0
-        const selEnd = el.selectionEnd ?? 0
-        if (caret === selEnd) {
-          const result = removeSkillTokenBeforeCaret(value, caret)
-          if (result.removed) {
-            e.preventDefault()
-            setValue(result.value)
-            updateMentions(result.value, result.caret)
-            resetHeight()
-            requestAnimationFrame(() => {
-              const t = textareaRef.current
-              if (!t) return
-              clampHeight(t)
-              t.setSelectionRange(result.caret, result.caret)
-              t.focus()
-            })
-            return
-          }
-        }
-      }
-      if (
-        tryHandleSlashMenuKeyDown(e, {
-          menuOpen: slashOpen,
-          sectionsLength: sections.length,
-          menuRef: slashMenuRef,
-          onClearInput: () => {
-            setValue('')
-            setActiveCommand(null)
-            updateMentions('', 0)
-            resetHeight()
-          }
-        })
-      ) {
-        return
-      }
-      if (handleMentionKeyDown(e)) {
-        return
-      }
-
+      // Shared composer dispatch (skill-token backspace, slash-menu keys,
+      // mention-menu keys) lives in `useChatComposer`. Enter→submit and
+      // Escape→cancel are surface-specific (the running chatbox cancels a busy
+      // turn on Escape and morphs send/stop) and run only when the shared
+      // handler did not consume the event.
+      composerHandleKeyDown(e)
+      if (e.defaultPrevented) return
       if (e.key === 'Escape' && busy) {
         e.preventDefault()
         onCancel()
@@ -552,19 +411,7 @@ export function ChatInputBar({
         void submit()
       }
     },
-    [
-      value,
-      slashOpen,
-      sections.length,
-      handleMentionKeyDown,
-      updateMentions,
-      clampHeight,
-      busy,
-      showStop,
-      onCancel,
-      submit,
-      resetHeight
-    ]
+    [composerHandleKeyDown, busy, showStop, onCancel, submit]
   )
 
   // Load externally-seeded text (edit a message, pick a starter prompt), then
@@ -651,7 +498,7 @@ export function ChatInputBar({
         {slashOpen && (
           <SlashCommandMenu
             ref={slashMenuRef}
-            sections={sections}
+            sections={slashSections}
             onSelect={handleSelect}
             inputRef={textareaRef}
           />
@@ -691,15 +538,7 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
-            {activeCommand && (
-              <CommandChip
-                name={activeCommand}
-                onRemove={() => {
-                  setActiveCommand(null)
-                  textareaRef.current?.focus()
-                }}
-              />
-            )}
+            {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               {/* Transparent-textarea overlay: mirrors the value with inline

@@ -1142,3 +1142,63 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
     expect(mockHideAgentLauncher).not.toHaveBeenCalled()
   })
 })
+
+describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
+  const SKILL = {
+    name: 'git-worktree',
+    description: 'Isolated worktree',
+    scope: 'project',
+    path: '/home/u/.agents/skills/git-worktree/SKILL.md'
+  }
+
+  function selectSlashOption(name: string | RegExp): void {
+    const listbox = screen.getByRole('listbox')
+    fireEvent.mouseDown(within(listbox).getByText(name))
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('opens the slash menu at a mid-text slash (parity with the running chatbox)', async () => {
+    mockSkills.current = [SKILL]
+    renderLauncher()
+
+    const textarea = await screen.findByLabelText('Agent prompt')
+    // Type text before the slash so the trigger is mid-text, not leading.
+    // Previously the launcher used `isSlashTrigger` (leading-only) and the
+    // menu never opened here; the shared hook now uses `isSlashTriggerAny`.
+    fireEvent.change(textarea, { target: { value: 'hello /' } })
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+  })
+
+  it('renders a CommandChip when a slash command is selected from the menu', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    acpStateRef.current.commands = {
+      'prepared-1': [{ name: 'compact', description: 'Compact the conversation' }]
+    }
+    renderLauncher()
+
+    const textarea = await screen.findByLabelText('Agent prompt')
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/compact')
+
+    // Previously the launcher inserted bare `/compact ` text; it now creates a
+    // CommandChip (parity with the running chatbox).
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+    )
+    // The `/compact` filter text is cleared from the input.
+    expect(textarea).toHaveValue('')
+  })
+})
