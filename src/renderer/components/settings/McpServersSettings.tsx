@@ -1,7 +1,8 @@
-import { AlertTriangle, Pencil, Plus, Server, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { AlertTriangle, ChevronDown, Pencil, Plus, RefreshCw, Server, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -120,8 +121,27 @@ export function McpServersSettings(): React.JSX.Element {
   const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
   const setMcpServerEnabled = useAcpStore((state) => state.setMcpServerEnabled)
   const deleteMcpServer = useAcpStore((state) => state.deleteMcpServer)
+  const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
+  const loadMcpTools = useAcpStore((state) => state.loadMcpTools)
+  const mcpProbeStatus = useAcpStore((state) => state.mcpProbeStatus)
+  const mcpTools = useAcpStore((state) => state.mcpTools)
+  const mcpProbing = useAcpStore((state) => state.mcpProbing)
   const [draft, setDraft] = useState<ServerDraft | null>(null)
   const [saving, setSaving] = useState(false)
+  // Tracks which server rows have their tool list expanded (Settings surface).
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
+
+  // On Settings mount, probe each configured server once (on-demand). Errors
+  // are surfaced in the dot — never crashed. Re-runs when the registry list
+  // changes shape (add/delete) but not on every toggle (toggle doesn't change
+  // reachability).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shape-only dep — re-probe only when the id set changes shape, not on every toggle; `probeMcpServer` is a stable store action reference.
+  useEffect(() => {
+    for (const server of servers) {
+      // Fire-and-forget; the store dedupes concurrent probes per id.
+      void probeMcpServer(server.id)
+    }
+  }, [servers.map((s) => s.id).join('|')])
 
   const validation = useMemo(
     () => (draft ? validateMcpServer(configFor(draft)) : { valid: false, errors: [] }),
@@ -178,63 +198,144 @@ export function McpServersSettings(): React.JSX.Element {
         </div>
       ) : (
         <div className="space-y-2">
-          {servers.map((server) => (
-            <div
-              key={server.id}
-              className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-medium">{server.name}</span>
-                  <span className="rounded bg-secondary px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground">
-                    {transportOf(server)}
-                  </span>
+          {servers.map((server) => {
+            const probeStatus = mcpProbeStatus[server.id]
+            const probing = Boolean(mcpProbing[server.id])
+            const tools = mcpTools[server.id]
+            const isOpen = Boolean(expandedTools[server.id])
+            return (
+              <div
+                key={server.id}
+                className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-start"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      role="img"
+                      className={
+                        probeStatus === 'connected'
+                          ? 'size-2 rounded-full bg-emerald-500'
+                          : probeStatus === 'disconnected'
+                            ? 'size-2 rounded-full bg-red-500'
+                            : 'size-2 rounded-full bg-muted-foreground/40'
+                      }
+                      aria-label={
+                        probeStatus === 'connected'
+                          ? `${server.name} reachable`
+                          : probeStatus === 'disconnected'
+                            ? `${server.name} unreachable`
+                            : `${server.name} not probed yet`
+                      }
+                      title={
+                        probeStatus === 'connected'
+                          ? 'Connected (Termul can reach this server)'
+                          : probeStatus === 'disconnected'
+                            ? 'Disconnected (Termul could not reach this server)'
+                            : 'Not probed yet — click "Test" to check'
+                      }
+                    />
+                    <span className="truncate text-sm font-medium">{server.name}</span>
+                    <span className="rounded bg-secondary px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground">
+                      {transportOf(server)}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {transportOf(server) === 'stdio'
+                      ? (server as Extract<StoredMcpServer, { type?: 'stdio' }>).command
+                      : (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url}
+                  </p>
+                  <Collapsible
+                    open={isOpen}
+                    onOpenChange={(next) => {
+                      setExpandedTools((prev) => ({ ...prev, [server.id]: next }))
+                      if (next) void loadMcpTools(server.id)
+                    }}
+                  >
+                    <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 text-3xs text-muted-foreground underline-offset-2 hover:underline">
+                      <ChevronDown size={12} className={isOpen ? 'rotate-180' : ''} />
+                      {tools && tools.length > 0
+                        ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
+                        : probeStatus === 'disconnected'
+                          ? 'Probe failed — retry'
+                          : 'Show tools'}
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-1">
+                      {tools && tools.length > 0 ? (
+                        <ul className="space-y-0.5">
+                          {tools.map((tool) => (
+                            <li key={tool.name} className="text-3xs text-muted-foreground">
+                              <span className="font-mono">{tool.name}</span>
+                              {tool.description ? (
+                                <span className="ml-1 truncate">— {tool.description}</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : probeStatus === 'disconnected' ? (
+                        <p className="text-3xs text-destructive">
+                          Probe failed — check the server config or network.
+                        </p>
+                      ) : probing ? (
+                        <p className="text-3xs text-muted-foreground">Probing…</p>
+                      ) : (
+                        <p className="text-3xs text-muted-foreground">
+                          Expand to probe (read-only — per-tool toggle coming soon).
+                        </p>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
-                <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
-                  {transportOf(server) === 'stdio'
-                    ? (server as Extract<StoredMcpServer, { type?: 'stdio' }>).command
-                    : (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url}
-                </p>
+                <div className="flex items-center justify-between gap-2 sm:justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={probing}
+                    onClick={() => void probeMcpServer(server.id)}
+                    aria-label={`Test ${server.name} connection`}
+                  >
+                    <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
+                    <span className="ml-1.5">Test</span>
+                  </Button>
+                  <Switch
+                    checked={server.enabled !== false}
+                    aria-label={`${server.enabled !== false ? 'Disable' : 'Enable'} ${server.name}`}
+                    onCheckedChange={(enabled) => {
+                      void setMcpServerEnabled(server.id, enabled).catch(() => {
+                        toast.error(
+                          'Could not update the MCP server. Your previous setting was restored.'
+                        )
+                      })
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => setDraft(draftFor(server))}
+                  >
+                    <Pencil size={15} />
+                    <span className="sr-only">Edit {server.name}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      void deleteMcpServer(server.id).catch(() => {
+                        toast.error(
+                          'Could not delete the MCP server. Your previous settings were restored.'
+                        )
+                      })
+                    }}
+                  >
+                    <Trash2 size={15} />
+                    <span className="sr-only">Delete {server.name}</span>
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center justify-between gap-2 sm:justify-end">
-                <Switch
-                  checked={server.enabled !== false}
-                  aria-label={`${server.enabled !== false ? 'Disable' : 'Enable'} ${server.name}`}
-                  onCheckedChange={(enabled) => {
-                    void setMcpServerEnabled(server.id, enabled).catch(() => {
-                      toast.error(
-                        'Could not update the MCP server. Your previous setting was restored.'
-                      )
-                    })
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => setDraft(draftFor(server))}
-                >
-                  <Pencil size={15} />
-                  <span className="sr-only">Edit {server.name}</span>
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    void deleteMcpServer(server.id).catch(() => {
-                      toast.error(
-                        'Could not delete the MCP server. Your previous settings were restored.'
-                      )
-                    })
-                  }}
-                >
-                  <Trash2 size={15} />
-                  <span className="sr-only">Delete {server.name}</span>
-                </Button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

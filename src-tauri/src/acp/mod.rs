@@ -15,6 +15,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod manager;
+pub mod mcp_probe;
 pub mod project_registry;
 pub mod session;
 pub mod session_persistence;

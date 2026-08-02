@@ -1388,6 +1388,7 @@ pub fn run() {
             acp::commands::acp_authenticate,
             acp::commands::acp_probe_runtime,
             acp::commands::acp_set_turn_timeout,
+            acp::commands::acp_probe_mcp_server,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Agent Skills (Zed-compatible SKILL.md packages)

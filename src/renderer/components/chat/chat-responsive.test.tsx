@@ -20,8 +20,10 @@ import { CHAT_GUTTER_X, NARROW_PANE_PX } from './chat-layout'
 import type { TimelineItem } from './chat-timeline'
 import { PlanPanel } from './PlanPanel'
 
-const { mockMcpCount } = vi.hoisted(() => ({
-  mockMcpCount: { current: 2 }
+const { mockMcpCount, mockSetMcpServerEnabled, mockLoadMcpTools } = vi.hoisted(() => ({
+  mockMcpCount: { current: 2 },
+  mockSetMcpServerEnabled: vi.fn(async () => {}),
+  mockLoadMcpTools: vi.fn(async () => {})
 }))
 
 vi.mock('@/hooks/use-agent-skills', () => ({
@@ -30,8 +32,22 @@ vi.mock('@/hooks/use-agent-skills', () => ({
 }))
 
 vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: (selector: (s: { mcpServers: unknown[] }) => unknown) =>
-    selector({ mcpServers: Array.from({ length: mockMcpCount.current }) }),
+  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+        id: `mcp-${i}`,
+        type: 'stdio',
+        name: `MCP ${i + 1}`,
+        command: 'npx',
+        enabled: true
+      })),
+      setMcpServerEnabled: mockSetMcpServerEnabled,
+      mcpProbeStatus: {} as Record<string, string>,
+      mcpTools: {} as Record<string, unknown[]>,
+      mcpToolsLoaded: {} as Record<string, boolean>,
+      mcpProbing: {} as Record<string, boolean>,
+      loadMcpTools: mockLoadMcpTools
+    }),
   useAcpMessages: () => [],
   useSessionUsage: () => null,
   useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' })
@@ -294,7 +310,9 @@ describe('Story 5.1 responsive chat layout', () => {
     ).toBeInTheDocument()
 
     expect(within(row2 as HTMLElement).getByRole('button', { name: 'High' })).toBeInTheDocument()
-    expect(within(row2 as HTMLElement).getByText(/MCP servers attached/i)).toBeInTheDocument()
+    expect(
+      within(row2 as HTMLElement).getByRole('button', { name: /MCP servers/i })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Send message/i })).toBeInTheDocument()
   })
 

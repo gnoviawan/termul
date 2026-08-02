@@ -19,6 +19,8 @@ const {
   mockSetMode,
   mockSetModel,
   mockMcpCount,
+  mockSetMcpServerEnabled,
+  mockLoadMcpTools,
   mockReadDir,
   mockSkills,
   mockToastError
@@ -29,6 +31,11 @@ const {
   // Story 1.8 review (verification-gap #8): override-able MCP server count for
   // the read-only badge. 0 by default (badge hidden); tests set it to render.
   mockMcpCount: { current: 0 },
+  // Stable mocks for the chatbox popover's per-server toggle + probe actions
+  // (introduced alongside the status/tools/chatbox-toggle work). Reused across
+  // renders so call assertions hold.
+  mockSetMcpServerEnabled: vi.fn(async () => {}),
+  mockLoadMcpTools: vi.fn(async () => {}),
   mockReadDir: vi.fn(),
   // Override-able skills list (defaults to [] — web/no-skills parity). Skill
   // tests push entries here so useAgentSkills surfaces them in the slash menu.
@@ -67,9 +74,26 @@ vi.mock('@/stores/acp-store', () => ({
   useAcpMessages: () => [],
   // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
   // MCP badge. The selector reads the hoisted `mockMcpCount.current` so a test
-  // can override the count (default 0 → badge hidden).
-  useAcpStore: (selector: (s: { mcpServers: unknown[] }) => unknown) =>
-    selector({ mcpServers: Array.from({ length: mockMcpCount.current }) })
+  // can override the count (default 0 → badge hidden). The chatbox popover work
+  // added per-server iteration + toggle/probe actions — the mock now returns
+  // real server objects (with stable ids) plus no-op probe state so the popover
+  // renders without crashing when the count is non-zero.
+  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+        id: `mcp-${i}`,
+        type: 'stdio',
+        name: `MCP ${i + 1}`,
+        command: 'npx',
+        enabled: true
+      })),
+      setMcpServerEnabled: mockSetMcpServerEnabled,
+      mcpProbeStatus: {} as Record<string, string>,
+      mcpTools: {} as Record<string, unknown[]>,
+      mcpToolsLoaded: {} as Record<string, boolean>,
+      mcpProbing: {} as Record<string, boolean>,
+      loadMcpTools: mockLoadMcpTools
+    })
 }))
 
 const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
@@ -309,9 +333,11 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
   it('renders the MCP badge with the count when MCP servers are configured', () => {
     mockMcpCount.current = 2
     renderInputBar()
-    // The badge pill shows the count + the sr-only label.
+    // The badge is now a popover trigger (per-server enable/disable + status
+    // dot) showing the count. The old sr-only "MCP servers attached" text moved
+    // into the trigger's aria-label + the popover content (opened below).
     expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.getByText(/MCP servers attached/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /MCP servers/i })).toBeInTheDocument()
   })
 
   it('prefers the switched session MCP count over the global registry', () => {

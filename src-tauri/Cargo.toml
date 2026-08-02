@@ -83,6 +83,21 @@ async-process = "2"
 # spec-adr-003-p0-rust-acp-core.md.
 agent-client-protocol = { version = "0.12", features = ["unstable_session_model", "unstable_session_usage"] }
 
+# MCP client probe (on-demand `initialize` + `tools/list`). rmcp is already in
+# the dep tree transitively via the vendored ACP (which enables `server` +
+# `transport-io`); this direct dep adds the CLIENT transport features Termul's
+# own probe needs. Resolved to 1.7.0 from `^1.2.0`. The `client-side-sse`
+# feature is rmcp's SSE stream parser (consumed by the streamable-http client);
+# rmcp 1.7.0 removed the standalone legacy SSE transport (CHANGELOG #562), so
+# `type: 'sse'` servers are probed via the modern streamable-http client (which
+# still speaks `text/event-stream`). See `src/acp/mcp_probe.rs`.
+rmcp = { version = "1.2.0", features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "client-side-sse",
+] }
+
 # Regex and parsing
 regex = "1"
 lazy_static = "1.4"

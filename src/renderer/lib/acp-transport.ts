@@ -41,7 +41,9 @@ import type {
   InstallAcpRegistryBinaryRequest,
   ListSessionsResponse,
   McpServer,
+  McpServerConfig,
   NewSessionOutcome,
+  ProbeResult,
   SessionConfigOption,
   SessionId,
   SessionReopenOutcome,
@@ -49,6 +51,7 @@ import type {
 } from '@/lib/acp-api'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /** Thrown on WS (and mapped) failures — callers may toast `.message`. */
 export class AcpTransportError extends Error {
@@ -68,6 +71,17 @@ export interface AcpTransport {
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
+  /**
+   * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
+   * agent's). Stateless: takes the renderer-supplied wire config, opens a fresh
+   * rmcp client, calls `initialize` + `tools/list`, then closes. Desktop↔web
+   * parity: on web the probe runs on the termul-server host via
+   * `POST /mcp-servers/probe`. Never logs env/header values, tokens, or
+   * credentials. The probe never throws on a disconnected server — it returns
+   * `ProbeResult { status: 'disconnected', error }`; only transport/parse
+   * failures throw `AcpTransportError`.
+   */
+  probeMcpServer(server: McpServerConfig): Promise<ProbeResult>
   spawnAgent(config: AgentConfig): Promise<AgentId>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
@@ -171,6 +185,7 @@ function createTauriAcpTransport(): AcpTransport {
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
+    probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
     spawnAgent: (config) => invoke<AgentId>('acp_spawn_agent', { config }),
     killAgent: async (agentId) => {
       await invoke('acp_kill_agent', { agentId })
@@ -541,6 +556,20 @@ export class WsAcpTransport implements AcpTransport {
 
   async probeRuntime(): Promise<AcpRuntimeAvailability> {
     return { npx: true, uvx: true }
+  }
+
+  async probeMcpServer(server: McpServerConfig): Promise<ProbeResult> {
+    // Web parity: POST /mcp-servers/probe runs the rmcp client on the
+    // termul-server host (where stdio commands execute). The route returns
+    // `IpcBody<ProbeResult>`; a `success:false` body is a transport/config
+    // failure (mapped to AcpTransportError), while `success:true` carries the
+    // probe outcome (which may itself be `status:'disconnected'` — that is a
+    // successful probe of an unreachable server, NOT a transport failure).
+    const res = await webServerMcpProbe.post(server)
+    if (!res.success) {
+      throw new AcpTransportError(res.code, res.error)
+    }
+    return res.data as ProbeResult
   }
 
   async setTurnTimeout(_secs: number | null): Promise<void> {

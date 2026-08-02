@@ -17,6 +17,7 @@
 pub mod assets;
 pub mod config;
 pub mod fs_api;
+pub mod mcp_probe_api;
 pub mod mcp_servers_api;
 pub mod permissions;
 pub mod project_registry;

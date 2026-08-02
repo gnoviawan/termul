@@ -13,13 +13,21 @@ vi.mock('sonner', () => ({ toast: { error: toastError, success: toastSuccess } }
 const saveMcpServer = vi.fn(async () => {})
 const setMcpServerEnabled = vi.fn(async () => {})
 const deleteMcpServer = vi.fn(async () => {})
+const probeMcpServer = vi.fn(async () => {})
+const loadMcpTools = vi.fn(async () => {})
 
 function seedStore(): void {
   useAcpStore.setState({
     mcpServers: [],
+    mcpProbeStatus: {},
+    mcpTools: {},
+    mcpToolsLoaded: {},
+    mcpProbing: {},
     saveMcpServer,
     setMcpServerEnabled,
-    deleteMcpServer
+    deleteMcpServer,
+    probeMcpServer,
+    loadMcpTools
   })
 }
 
@@ -100,5 +108,54 @@ describe('McpServersSettings', () => {
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not save/i))
     )
+  })
+
+  it('probes each server on mount and shows the connected status dot', async () => {
+    vi.mocked(probeMcpServer).mockResolvedValue()
+    useAcpStore.setState({
+      mcpServers: [{ id: 's1', type: 'stdio', name: 'Files', command: 'node', enabled: true }],
+      mcpProbeStatus: { s1: 'connected' },
+      mcpTools: { s1: [{ name: 'read_file' }] }
+    })
+    render(<McpServersSettings />)
+    await waitFor(() => expect(probeMcpServer).toHaveBeenCalledWith('s1'))
+    expect(screen.getByTitle('Connected (Termul can reach this server)')).toBeInTheDocument()
+  })
+
+  it('shows the disconnected dot when the probe fails', () => {
+    useAcpStore.setState({
+      mcpServers: [
+        { id: 's2', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
+      ],
+      mcpProbeStatus: { s2: 'disconnected' }
+    })
+    render(<McpServersSettings />)
+    expect(
+      screen.getByTitle('Disconnected (Termul could not reach this server)')
+    ).toBeInTheDocument()
+  })
+
+  it('renders the tool list (read-only) inside the collapsible on expand', async () => {
+    useAcpStore.setState({
+      mcpServers: [{ id: 's3', type: 'stdio', name: 'Probe', command: 'node', enabled: true }],
+      mcpTools: { s3: [{ name: 'search', description: 'search files' }] },
+      mcpToolsLoaded: { s3: true }
+    })
+    render(<McpServersSettings />)
+    // Tools are pre-seeded → the trigger shows the count ("1 tool"), not "Show tools".
+    fireEvent.click(screen.getByText(/1 tool/i))
+    expect(screen.getByText('search')).toBeInTheDocument()
+    // Per-tool toggle UI must NOT be present (deferred — read-only).
+    expect(screen.queryByRole('switch', { name: /search/i })).not.toBeInTheDocument()
+  })
+
+  it('fires the Test button to re-probe a server', async () => {
+    useAcpStore.setState({
+      mcpServers: [{ id: 's4', type: 'stdio', name: 'Probe', command: 'node', enabled: true }]
+    })
+    render(<McpServersSettings />)
+    vi.mocked(probeMcpServer).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /test probe connection/i }))
+    await waitFor(() => expect(probeMcpServer).toHaveBeenCalledWith('s4'))
   })
 })

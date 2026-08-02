@@ -187,3 +187,18 @@ export const webServerMcpServers = {
     return putJson<void>('/mcp-servers', registry)
   }
 }
+
+/**
+ * On-demand MCP client probe (web parity). `POST /mcp-servers/probe` runs the
+ * rmcp client probe on the termul-server host (where stdio commands execute).
+ * Returns the same `IpcResult<ProbeResult>` shape the desktop Tauri command
+ * yields — the renderer facade unwraps it. The probe itself never fails: a
+ * reachable-but-disconnected server still returns `success:true` with
+ * `data.status === 'disconnected'`. Only transport/deserialize failures surface
+ * as `success:false` (`MCP_PROBE_INVALID_CONFIG` / `NETWORK_ERROR`).
+ */
+export const webServerMcpProbe = {
+  async post(server: unknown): Promise<IpcResult<unknown>> {
+    return postJson<unknown>('/mcp-servers/probe', server)
+  }
+}

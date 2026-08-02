@@ -265,6 +265,19 @@ pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
     crate::acp::config::probe_registry_runtime()
 }
 
+/// On-demand MCP client probe. Takes a renderer-supplied `McpServerConfig`
+/// (stateless — no registry-store coupling), opens a fresh rmcp client
+/// connection, calls `initialize` + `tools/list`, then closes, and returns
+/// the connected/disconnected status + tool list. Never logs env/header
+/// values, tokens, or credentials. Mirrors the stateless shape of
+/// `acp_probe_runtime`.
+#[tauri::command]
+pub async fn acp_probe_mcp_server(
+    server: crate::acp::mcp_probe::McpServerConfig,
+) -> Result<crate::acp::mcp_probe::ProbeResult, String> {
+    Ok(crate::acp::mcp_probe::probe(server).await)
+}
+
 /// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or
 /// `None` to clear it (fall back to the env var / 3h default). Pushed from the
 /// App Preferences UI so the turn timeout is editable without a restart or

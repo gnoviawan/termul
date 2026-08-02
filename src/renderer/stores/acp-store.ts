@@ -52,12 +52,16 @@ import {
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
   type McpServer,
+  type McpServerConfig,
+  type McpToolInfo,
   type MessageChunkEvent,
   type ModeUpdateEvent,
   type PermissionOption,
   type PermissionRequestEvent,
   type PlanEntry,
   type PlanUpdateEvent,
+  type ProbeResult,
+  type ProbeStatus,
   type PromptCompleteEvent,
   type QuestionOption,
   type SessionClosedEvent,
@@ -297,6 +301,16 @@ interface AcpState {
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
 
+  // MCP probe state — on-demand only (no persistent always-on connections).
+  // `mcpProbeStatus` reflects Termul's own rmcp client connection, NOT the
+  // agent's; the dot answers "can Termul reach this server and list its tools?".
+  // `mcpTools` is the cached `tools/list` output; `mcpToolsLoaded` gates the
+  // auto-probe on first expand; `mcpProbing` dedupes concurrent probes.
+  mcpProbeStatus: Record<string, ProbeStatus>
+  mcpTools: Record<string, McpToolInfo[]>
+  mcpToolsLoaded: Record<string, boolean>
+  mcpProbing: Record<string, boolean>
+
   // Sessions
   sessions: Record<SessionId, AcpSession>
   activeSessionId: SessionId | null
@@ -498,6 +512,20 @@ interface AcpState {
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
+
+  // Actions — MCP probe (on-demand, read-only). State slices above.
+  /**
+   * Probe a registered MCP server by id (Termul's own rmcp client — NOT the
+   * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
+   * `mcpToolsLoaded[id]=true`. Read-only — no persistence, no rollback.
+   * Dedupes concurrent probes for the same id (`mcpProbing[id]`).
+   */
+  probeMcpServer: (id: string) => Promise<void>
+  /**
+   * Auto-probe on first expand of a server's tool list. No-op if already
+   * loaded; otherwise delegates to `probeMcpServer(id)`.
+   */
+  loadMcpTools: (id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -2437,6 +2465,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   discoveringKeys: {},
   discoveredReopenContexts: {},
   mcpServers: [],
+  mcpProbeStatus: {},
+  mcpTools: {},
+  mcpToolsLoaded: {},
+  mcpProbing: {},
   sessions: {},
   activeSessionId: null,
   sessionUsage: {},
@@ -4097,6 +4129,47 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       throw err
     }
+  },
+
+  // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
+  // concurrent probes per server id via `mcpProbing`.
+  probeMcpServer: async (id) => {
+    if (get().mcpProbing[id]) return
+    const server = get().mcpServers.find((s) => s.id === id)
+    if (!server) return
+    // Strip registry-only fields (`id`/`enabled`) — the probe takes a
+    // stateless `McpServerConfig`, not a registry entry. Mirrors the wire
+    // shape `toWireServer` builds for `session/new` injection.
+    const { id: _id, enabled: _enabled, ...config } = server
+    set((s) => ({ mcpProbing: { ...s.mcpProbing, [id]: true } }))
+    try {
+      const result: ProbeResult = await acpApi.probeMcpServer(config as McpServerConfig)
+      set((s) => ({
+        mcpProbeStatus: { ...s.mcpProbeStatus, [id]: result.status },
+        mcpTools: { ...s.mcpTools, [id]: result.tools },
+        mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: true },
+        mcpProbing: { ...s.mcpProbing, [id]: false }
+      }))
+    } catch (err) {
+      // Transport/parse failure (NOT a disconnected probe — that's a
+      // `status:'disconnected'` ProbeResult, not a throw). Surface the
+      // failure in the dot + log WITHOUT env/header values, tokens, or
+      // credentials.
+      set((s) => ({
+        mcpProbeStatus: { ...s.mcpProbeStatus, [id]: 'disconnected' },
+        mcpProbing: { ...s.mcpProbing, [id]: false }
+      }))
+      void logFrontendError({
+        source: 'acp-store.probeMcpServer',
+        message: `MCP probe failed for server '${server.name}' (${String(err)})`
+      })
+    }
+  },
+
+  loadMcpTools: async (id) => {
+    // Auto-probe on first expand — no-op if already loaded (or in flight).
+    if (get().mcpToolsLoaded[id] || get().mcpProbing[id]) return
+    await get().probeMcpServer(id)
   },
 
   sendPrompt: (sessionId, text) =>

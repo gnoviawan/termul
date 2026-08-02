@@ -20,6 +20,7 @@ use crate::acp::{AcpManager, ChatHistoryStore, FileProjectRegistry};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::fs_api;
+use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
@@ -70,6 +71,10 @@ pub fn router(
             "/mcp-servers",
             get(mcp_servers_api::get).put(mcp_servers_api::put),
         )
+        // On-demand MCP client probe (web parity): runs on the termul-server
+        // host where stdio commands execute. Mirrors the `acp_probe_mcp_server`
+        // Tauri command; returns the same `IpcBody<ProbeResult>` shape.
+        .route("/mcp-servers/probe", post(mcp_probe_api::probe))
         // Project-creation fs/git/shell routes (Story: Web/remote project
         // creation). Registered AHEAD of the static fallback so `/health` +
         // `/ws` keep priority and the SPA fallback cannot shadow them.
@@ -126,6 +131,7 @@ pub fn router_with_static(
             "/mcp-servers",
             get(mcp_servers_api::get).put(mcp_servers_api::put),
         )
+        .route("/mcp-servers/probe", post(mcp_probe_api::probe))
         .route("/fs/mkdir", post(fs_api::mkdir))
         .route("/fs/write", post(fs_api::write))
         .route("/fs/ls", get(fs_api::ls))
