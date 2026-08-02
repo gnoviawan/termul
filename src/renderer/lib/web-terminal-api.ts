@@ -22,6 +22,13 @@ const REQUEST_TIMEOUT_MS = 15_000
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
 const RECONNECT_MAX_ATTEMPTS = 10
+/** How long the page must stay hidden before a return triggers a proactive
+ * reconnect. Mobile browsers suspend JS in backgrounded tabs, so the server's
+ * keepalive tears the terminal WS down at its Pong-timeout — but the client
+ * only learns this when `onclose` is finally delivered on resume (late, or
+ * never on a half-open link). Mirrors `WsAcpTransport`: 30s sits between the
+ * server's Ping interval and its Pong-timeout. Tunable. */
+const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
 export function resolveTerminalWsUrl(
   locationLike: { protocol: string; host: string } = window.location
@@ -48,10 +55,21 @@ interface TerminalTracker {
 export class WebTerminalClient {
   private socket: WebSocket | null = null
   private connecting: Promise<void> | null = null
+  /** Reject fn for the in-flight `connect()` promise (executor pattern), so
+   * `forceReconnect` can settle it when tearing down a CONNECTING socket —
+   * otherwise an awaiting `request()` hangs until its 15s timeout (which only
+   * arms AFTER connect resolves). Mirrors WsAcpTransport's teardown approach. */
+  private connectingReject: ((error: Error) => void) | null = null
   private disposed = false
   private nextId = 0
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the page became hidden (epoch-ms), or null while visible. Drives the
+   * visibility-triggered proactive reconnect on mobile idle/background resume. */
+  private lastHiddenAt: number | null = null
+  /** Bound DOM-listener refs so `dispose()` can detach them. */
+  private visibilityHandler: (() => void) | null = null
+  private focusHandler: (() => void) | null = null
   private readonly pending = new Map<string, Pending>()
   private readonly trackers = new Map<string, TerminalTracker>()
   private readonly dataCallbacks = new Set<TerminalDataCallback>()
@@ -98,14 +116,17 @@ export class WebTerminalClient {
 
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Terminal client disposed'))
+    this.attachVisibilityListeners()
     if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
     if (this.connecting) return this.connecting
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = new this.WebSocketImpl(this.url)
       this.socket = socket
+      this.connectingReject = reject
       socket.onopen = () => {
         this.reconnectAttempt = 0
         this.connecting = null
+        this.connectingReject = null
         // Re-attach only terminals that haven't exited, using their lastSeq.
         for (const [terminalId, tracker] of this.trackers) {
           if (tracker.exited) continue
@@ -121,10 +142,12 @@ export class WebTerminalClient {
       socket.onmessage = (event) => this.handleFrame(String(event.data))
       socket.onerror = () => {
         this.connecting = null
+        this.connectingReject = null
         reject(new Error('Terminal websocket connection failed'))
       }
       socket.onclose = () => {
         this.connecting = null
+        this.connectingReject = null
         this.socket = null
         this.rejectPending()
         this.scheduleReconnect()
@@ -213,6 +236,7 @@ export class WebTerminalClient {
 
   dispose(): void {
     this.disposed = true
+    this.detachVisibilityListeners()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.rejectPending()
     this.socket?.close()
@@ -310,13 +334,13 @@ export class WebTerminalClient {
     }
   }
 
-  private rejectPending(): void {
+  private rejectPending(reason?: string): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.resolve({
         id: 'closed',
         success: false,
-        error: 'Terminal websocket disconnected',
+        error: reason ?? 'Terminal websocket disconnected',
         code: 'NETWORK_ERROR'
       })
     }
@@ -334,6 +358,115 @@ export class WebTerminalClient {
       this.reconnectTimer = null
       void this.connect().catch(() => this.scheduleReconnect())
     }, delay)
+  }
+
+  /**
+   * Attach `visibilitychange` + `focus` listeners (web only) so a return from
+   * a backgrounded mobile tab proactively reconnects instead of waiting for an
+   * `onclose` the suspended browser delivers late or never. Mirrors
+   * `WsAcpTransport`: same threshold, coalescing, and `forceReconnect`
+   * semantics. Idempotent; detached in `dispose`.
+   */
+  private attachVisibilityListeners(): void {
+    if (this.visibilityHandler || typeof document === 'undefined') return
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') {
+        this.lastHiddenAt = Date.now()
+        return
+      }
+      // visible — a backgrounded tab returning to the foreground.
+      this.maybeReconnectOnReturn()
+    }
+    const onFocus = (): void => {
+      // Fallback for platforms where `visibilitychange` is unreliable; only
+      // acts when a hide was previously recorded so normal use is a no-op.
+      this.maybeReconnectOnReturn()
+    }
+    this.visibilityHandler = onVisibility
+    this.focusHandler = onFocus
+    document.addEventListener('visibilitychange', onVisibility)
+    // `focus` is a window-level event that does NOT bubble — attach to `window`.
+    window.addEventListener('focus', onFocus)
+  }
+
+  /** Detach the visibility/focus listeners (called from `dispose`). */
+  private detachVisibilityListeners(): void {
+    if (this.visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+    if (this.focusHandler && typeof window !== 'undefined') {
+      window.removeEventListener('focus', this.focusHandler)
+      this.focusHandler = null
+    }
+  }
+
+  /**
+   * On a return-to-foreground, if the page was hidden past the staleness
+   * threshold OR the socket is not OPEN, force a reconnect so a half-open
+   * socket killed server-side during AFK is recovered. After reopen, `connect`
+   * re-attaches non-exited trackers via their stored `lastSeq`, replaying
+   * missed output. Consumes `lastHiddenAt` so a `focus` following a
+   * `visibilitychange` does not double-trigger.
+   */
+  private maybeReconnectOnReturn(): void {
+    if (this.disposed) return
+    const hiddenAt = this.lastHiddenAt
+    this.lastHiddenAt = null
+    if (hiddenAt == null) return // never recorded a hide — nothing to recover
+    const hiddenFor = Date.now() - hiddenAt
+    const socketDown = this.socket?.readyState !== this.WebSocketImpl.OPEN
+    if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS || socketDown) {
+      this.forceReconnect(
+        socketDown ? 'socket closed while page was hidden' : 'visibility return after idle'
+      )
+    }
+  }
+
+  /**
+   * Force a clean reconnect, bypassing the `connect()` fast path that trusts
+   * `readyState === OPEN`. Tears down the suspect socket (detaching its
+   * handlers so its eventual close does not double-fire `scheduleReconnect`),
+   * resets `reconnectAttempt` so AFK never strands the terminal at the backoff
+   * ceiling, clears any pending reconnect timer, then reuses `scheduleReconnect`
+   * so the existing backoff + `onopen` re-attach machinery runs unchanged.
+   */
+  private forceReconnect(reason: string): void {
+    if (this.disposed) return
+    const old = this.socket
+    // Capture the in-flight connect promise's reject BEFORE nulling so it can
+    // be settled after the socket teardown. Without this, a `request()`
+    // awaiting `connect()` (socket CONNECTING) hangs — its 15s timeout only
+    // arms AFTER connect resolves, and forceReconnect nulls `connecting`
+    // without rejecting the in-flight promise.
+    const inflightReject = this.connectingReject
+    this.socket = null
+    this.connecting = null
+    this.connectingReject = null
+    this.rejectPending(reason)
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.reconnectAttempt = 0
+    if (old) {
+      // Detach ALL handlers (incl. onopen) so a late CONNECTING→open on the
+      // torn-down socket doesn't fire `onopen` against shared `this` state
+      // (would clobber reconnectAttempt + null connecting).
+      old.onopen = null
+      old.onclose = null
+      old.onerror = null
+      old.onmessage = null
+      try {
+        old.close()
+      } catch {
+        // ignore — already closed
+      }
+    }
+    // Settle the in-flight connect promise so awaiters throw → request()
+    // catches → returns NETWORK_ERROR (mirrors WsAcpTransport).
+    inflightReject?.(new Error(reason))
+    this.scheduleReconnect()
   }
 }
 
