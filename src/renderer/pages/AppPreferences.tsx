@@ -37,6 +37,7 @@ import {
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
 import {
@@ -771,7 +772,8 @@ export default function AppPreferences(): React.JSX.Element {
                         e.target.value === 'null' ? null : parseInt(e.target.value, 10)
                       )
                     }
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+                    disabled={!isTauriContext()}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {ACP_TURN_TIMEOUT_OPTIONS.map((option) => (
                       <option
@@ -786,7 +788,7 @@ export default function AppPreferences(): React.JSX.Element {
                     Maximum wall-clock duration for a single agent turn. Active turns that stream
                     continuously run until this cap; a silent (wedged) turn errors after ~15min
                     regardless. The TERMUL_ACP_TURN_TIMEOUT_SECS env var still overrides this
-                    (operator/diagnostic).
+                    (operator/diagnostic). Desktop only — the standalone server uses the env var.
                   </p>
                 </div>
               </div>

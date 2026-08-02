@@ -273,5 +273,12 @@ export function useResetAppSettings(): () => Promise<void> {
     if (result.success) {
       syncPersistedPanelSettingsSnapshot(DEFAULT_APP_SETTINGS)
     }
+    // Clear the in-process turn-timeout override too (mirrors the load hook's
+    // push, so a reset doesn't leave a stale override in the Rust core).
+    try {
+      await acpApi.setTurnTimeout(DEFAULT_APP_SETTINGS.acpTurnTimeoutSecs)
+    } catch (error) {
+      console.error('Failed to clear ACP turn timeout on reset:', error)
+    }
   }, [resetToDefaults])
 }

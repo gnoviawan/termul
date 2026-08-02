@@ -154,17 +154,17 @@ export const REMOTE_BIND_MODE_OPTIONS: Array<{
 ]
 
 // ACP turn (hard-cap) timeout options for the App Preferences UI. `null` =
-// follow the Rust default (3h); a number is the override in seconds.
+// follow the env var / Rust default (3h); a number is the override in seconds.
 export const ACP_TURN_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Default (3 hours)' },
+  { value: null, label: 'Environment/default (3 hours)' },
   { value: 3600, label: '1 hour' },
   { value: 7200, label: '2 hours' },
   { value: 21600, label: '6 hours' },
   { value: 86400, label: '24 hours' },
-  { value: 31536000, label: 'Unlimited (1 year)' }
+  { value: 31536000, label: '1 year' }
 ]
 
 // Default application settings

@@ -205,12 +205,12 @@ pub fn resolved_turn_timeout() -> Duration {
 
 /// Race an in-flight ACP prompt turn against completion, a cancel signal, an
 /// idle deadline (reset on agent activity via `idle_rx`), and a hard wall-clock
-/// cap. On idle/hard timeout, call `on_timeout_cancel` (signal cancel so the
-/// agent's in-flight `session/prompt` is cancelled too), await `CANCEL_GRACE`
-/// to wind down, then return a typed timeout error. Extracted so the deadline
-/// loop is unit-testable with mock futures. A pre-iteration deadline check
-/// bounds a continuously-ready activity arm (under `biased`) so a
-/// streaming-but-non-completing agent can't slip past the hard cap.
+/// cap. On idle/hard timeout, invoke `on_timeout_cancel` (the caller's cancel
+/// hook — updates DriverState cancel/timeout state so the in-flight turn winds
+/// down), await `CANCEL_GRACE`, then return a typed timeout error. Extracted
+/// so the deadline loop is unit-testable with mock futures. A pre-iteration
+/// deadline check bounds a continuously-ready activity arm (under `biased`) so
+/// a streaming-but-non-completing agent can't slip past the hard cap.
 async fn race_turn<P>(
     prompt: P,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -1597,6 +1597,10 @@ async fn drive_connection(
                     ));
                     return Ok(());
                 }
+                // A permission request is agent activity — the turn is waiting
+                // on user input, not wedged. Nudge the idle deadline so a
+                // user-input wait doesn't false-fire the idle timeout.
+                perm_state.lock().signal_idle(&session_string);
                 let request_id = {
                     let mut state = perm_state.lock();
                     state.bind_tool_call(
@@ -1635,6 +1639,10 @@ async fn drive_connection(
                     }));
                     return Ok(());
                 }
+                // A structured question is agent activity — the turn is waiting
+                // on user input, not wedged. Nudge the idle deadline so a
+                // user-input wait doesn't false-fire the idle timeout.
+                question_state.lock().signal_idle(&session_string);
                 let question_id = {
                     let mut state = question_state.lock();
                     state.register_question(session_string.clone(), responder)
@@ -2352,7 +2360,8 @@ async fn run_command_loop(
                     let idle = turn_idle_timeout();
                     let hard = resolved_turn_timeout();
                     let cancel_state = turn_state.clone();
-                    let cancel_sid = session_id.0.clone();
+                    let cancel_session = session_id.clone();
+                    let cancel_cx = turn_cx.clone();
                     let outcome: Result<StopReason, String> = race_turn(
                         async {
                             turn_cx
@@ -2364,7 +2373,22 @@ async fn run_command_loop(
                         },
                         cancel_rx,
                         &mut idle_rx,
-                        move || cancel_state.lock().signal_cancel(&cancel_sid),
+                        move || {
+                            // Mirror AcpCommand::CancelPrompt: signal the
+                            // active-turn cancel (winds down the race) AND
+                            // notify the agent to abandon its in-flight
+                            // session/prompt. send_notification is non-blocking
+                            // (it queues onto the connection), so race_turn
+                            // stays sync.
+                            cancel_state.lock().signal_cancel(&cancel_session.0);
+                            if let Err(error) =
+                                cancel_cx.send_notification(CancelNotification::new(&cancel_session))
+                            {
+                                log::warn!(
+                                    "[acp] failed to cancel agent prompt on turn timeout: {error}"
+                                );
+                            }
+                        },
                         idle,
                         hard,
                     )

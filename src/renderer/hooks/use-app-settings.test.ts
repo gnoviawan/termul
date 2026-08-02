@@ -91,8 +91,8 @@ describe('use-app-settings', () => {
 
     await waitFor(() => {
       expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+      expect(mockSetTurnTimeout).toHaveBeenCalledWith(7200)
     })
-    expect(mockSetTurnTimeout).toHaveBeenCalledWith(7200)
   })
 
   it('defaults terminal URL open mode when persisted settings are missing the key', async () => {
