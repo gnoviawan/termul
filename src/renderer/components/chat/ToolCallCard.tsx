@@ -19,7 +19,7 @@ import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { MediaBlocks } from './ChatMessage'
-import { bubbleEnter, CHAT_SPRING } from './chat-motion'
+import { bubbleEnter, CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
 import { type ToolIconName, toolIconName } from './tool-call-format'
 import { describeToolCall, readableOutput } from './tool-call-summary'
@@ -210,7 +210,7 @@ function ToolCallCardComponent({
           aria-hidden="true"
           className="shrink-0 text-muted-foreground"
           animate={{ rotate: open ? 90 : 0 }}
-          transition={reduced ? { duration: 0 } : CHAT_SPRING}
+          transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
         >
           <ChevronRight size={13} />
         </motion.span>

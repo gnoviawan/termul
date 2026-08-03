@@ -20,8 +20,17 @@ describe('chat-motion', () => {
     expect(b.transition).toMatchObject({ delay: 0.08 })
   })
 
-  it('iconPop uses blur and 0.25 scale per contextual icon pattern', () => {
-    const { initial } = iconPop(false)
-    expect(initial).toMatchObject({ opacity: 0, scale: 0.25, filter: 'blur(4px)' })
+  it('iconPop uses mild scale without blur for high-frequency swaps', () => {
+    const { initial, exit } = iconPop(false)
+    expect(initial).toMatchObject({ opacity: 0, scale: 0.96 })
+    expect(initial).not.toHaveProperty('filter')
+    expect(exit).toMatchObject({ opacity: 0 })
+  })
+
+  it('iconPop snaps under reduced motion', () => {
+    const { initial, animate, transition } = iconPop(true)
+    expect(initial).toMatchObject({ opacity: 1 })
+    expect(animate).toMatchObject({ opacity: 1 })
+    expect(transition).toMatchObject({ duration: 0 })
   })
 })

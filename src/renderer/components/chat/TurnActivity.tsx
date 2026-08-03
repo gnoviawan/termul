@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { ShimmerText } from '@/components/ui/shimmer-text'
 import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
-import { CHAT_SPRING } from './chat-motion'
+import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
@@ -70,7 +70,7 @@ export function TurnActivity({
           aria-hidden="true"
           className="shrink-0"
           animate={{ rotate: open ? 90 : 0 }}
-          transition={reduced ? { duration: 0 } : CHAT_SPRING}
+          transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
         >
           <ChevronRight size={13} />
         </motion.span>

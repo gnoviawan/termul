@@ -22,11 +22,12 @@ export function ChatErrorNotice({
     <AnimatePresence initial={false}>
       {message && (
         <motion.div
-          initial={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          animate={reduced ? { opacity: 1 } : { opacity: 1, height: 'auto' }}
-          exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
-          transition={{ duration: 0.18, ease: 'easeOut' }}
-          className="overflow-hidden border-b border-destructive/30 bg-destructive/10"
+          // Opacity-only — never animate height (layout thrash on every error).
+          initial={reduced ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduced ? { duration: 0 } : { duration: 0.15, ease: 'easeOut' }}
+          className="border-b border-destructive/30 bg-destructive/10"
         >
           <div
             className={cn('mx-auto flex w-full max-w-3xl items-start gap-2 py-2', CHAT_GUTTER_X)}

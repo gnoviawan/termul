@@ -551,7 +551,7 @@ export function ChatInputBar({
           colorVariant="mono"
           theme="auto"
           borderRadius={16}
-          active={busy}
+          active={busy && !reduced}
           className="w-full"
         >
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
@@ -705,7 +705,7 @@ export function ChatInputBar({
                         aria-label="Cancel turn"
                         initial={iconMotion.initial}
                         animate={iconMotion.animate}
-                        exit={iconMotion.initial}
+                        exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
                           'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.96]',
@@ -725,7 +725,7 @@ export function ChatInputBar({
                         aria-label={busy ? 'Queue message' : 'Send message'}
                         initial={iconMotion.initial}
                         animate={iconMotion.animate}
-                        exit={iconMotion.initial}
+                        exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
                           'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',

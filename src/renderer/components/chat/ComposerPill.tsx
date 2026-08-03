@@ -71,7 +71,7 @@ function TrailingAffordance({
             className="inline-flex"
             initial={pop.initial}
             animate={pop.animate}
-            exit={pop.initial}
+            exit={pop.exit}
             transition={pop.transition}
           >
             <Spinner
@@ -85,7 +85,7 @@ function TrailingAffordance({
             className="inline-flex"
             initial={pop.initial}
             animate={pop.animate}
-            exit={pop.initial}
+            exit={pop.exit}
             transition={pop.transition}
           >
             <ChevronDown size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />

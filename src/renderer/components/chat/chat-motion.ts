@@ -22,11 +22,29 @@ export const CHAT_SPRING_SOFT: Transition = {
   mass: 0.9
 }
 
-/** Icon swap spring — no bounce per make-interfaces-feel-better. */
-const ICON_SPRING: Transition = { type: 'spring', duration: 0.3, bounce: 0 }
+/**
+ * Disclosure chevron rotate — short ease-out, not the brand spring.
+ * Expand/collapse is frequent; overshoot reads as noise.
+ */
+export const CHEVRON_TRANSITION: Transition = {
+  duration: 0.15,
+  ease: 'easeOut'
+}
 
-/** Reduced-motion fallback: a quick opacity fade, no transform. */
-const REDUCED_TRANSITION: Transition = { duration: 0.15, ease: 'easeOut' }
+/** Icon swap enter — opacity + mild scale, no blur (GPU-cheap, high-frequency safe). */
+const ICON_ENTER: Transition = {
+  duration: 0.2,
+  ease: [0.32, 0.72, 0, 1]
+}
+
+/** Icon swap exit — quieter and ~30% faster than enter. */
+const ICON_EXIT: Transition = {
+  duration: 0.12,
+  ease: 'easeIn'
+}
+
+/** Reduced-motion fallback: snap with no perceptible motion. */
+const REDUCED_TRANSITION: Transition = { duration: 0 }
 
 export type BubbleAlign = 'start' | 'end' | 'neutral'
 
@@ -36,15 +54,21 @@ export interface EnterMotion {
   transition: Transition
 }
 
+export interface IconPopMotion extends EnterMotion {
+  /** Quieter leave state for AnimatePresence exit. */
+  exit: TargetAndTransition
+  exitTransition: Transition
+}
+
 /**
  * Entrance for a chat row. Direction encodes sender: user bubbles drift in from
  * the right, assistant from the left, tool/neutral rows rise straight up. Under
- * reduced-motion every variant collapses to an opacity-only fade.
+ * reduced-motion every variant collapses to an instant appear (no fade/travel).
  */
 export function bubbleEnter(align: BubbleAlign, reduced: boolean): EnterMotion {
   if (reduced) {
     return {
-      initial: { opacity: 0 },
+      initial: { opacity: 1 },
       animate: { opacity: 1 },
       transition: REDUCED_TRANSITION
     }
@@ -87,18 +111,25 @@ export function staggerChild(
   return { ...enter, transition: { ...enter.transition, delay } }
 }
 
-/** Pop used for icon swaps (send arrow, tool-call checkmark). */
-export function iconPop(reduced: boolean): EnterMotion {
+/**
+ * Pop used for high-frequency icon swaps (send↔stop, pending chevron, plan
+ * status). Opacity + scale ≥ 0.96 only — never near-zero scale or blur.
+ */
+export function iconPop(reduced: boolean): IconPopMotion {
   if (reduced) {
     return {
-      initial: { opacity: 0 },
+      initial: { opacity: 1 },
       animate: { opacity: 1 },
-      transition: REDUCED_TRANSITION
+      exit: { opacity: 1 },
+      transition: REDUCED_TRANSITION,
+      exitTransition: REDUCED_TRANSITION
     }
   }
   return {
-    initial: { opacity: 0, scale: 0.25, filter: 'blur(4px)' },
-    animate: { opacity: 1, scale: 1, filter: 'blur(0px)' },
-    transition: ICON_SPRING
+    initial: { opacity: 0, scale: 0.96 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, transition: ICON_EXIT },
+    transition: ICON_ENTER,
+    exitTransition: ICON_EXIT
   }
 }

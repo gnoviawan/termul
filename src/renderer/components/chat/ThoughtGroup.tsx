@@ -8,7 +8,7 @@ import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
-import { CHAT_SPRING } from './chat-motion'
+import { CHEVRON_TRANSITION } from './chat-motion'
 
 /** Distance from the bottom (px) within which the reader counts as "pinned"
  * to the live edge. Mirrors MessageScroller's BOTTOM_THRESHOLD_PX. */
@@ -217,7 +217,7 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
           aria-hidden="true"
           className="shrink-0 text-muted-foreground"
           animate={{ rotate: open ? 90 : 0 }}
-          transition={reduced ? { duration: 0 } : CHAT_SPRING}
+          transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
         >
           <ChevronRight size={13} />
         </motion.span>
