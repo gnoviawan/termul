@@ -4,7 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { IconActionButton, IconActionGroup } from './icon-action-button'
 
 describe('IconActionButton', () => {
-  it('renders compact control with tooltip label as aria-label', () => {
+  it('renders compact control with expanded hit area and tooltip label as aria-label', () => {
     const onClick = vi.fn()
     render(
       <TooltipProvider>
@@ -15,8 +15,22 @@ describe('IconActionButton', () => {
     )
     const button = screen.getByRole('button', { name: 'Copy' })
     expect(button).toHaveClass('size-6')
+    expect(button.className).toContain('after:-inset-2.5')
     button.click()
     expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('uses muted text token when disabled instead of opacity', () => {
+    render(
+      <TooltipProvider>
+        <IconActionButton label="Copy" onClick={() => {}} disabled>
+          <span>icon</span>
+        </IconActionButton>
+      </TooltipProvider>
+    )
+    const button = screen.getByRole('button', { name: 'Copy' })
+    expect(button).toHaveClass('disabled:text-muted-foreground/50')
+    expect(button).not.toHaveClass('disabled:opacity-50')
   })
 })
 

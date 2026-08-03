@@ -262,7 +262,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     seedLiveSession('s1')
     transportReconnectingRef.current = true
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    // The overlay reuses AgentConnectionLamp (amber) and shows "Reconnecting…"
+    // The overlay reuses AgentConnectionLamp (warning/pulse) and shows "Reconnecting…"
     expect(screen.getByText(/Reconnecting/)).toBeInTheDocument()
     expect(screen.getByRole('status')).toBeInTheDocument()
   })

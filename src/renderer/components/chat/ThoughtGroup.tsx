@@ -194,7 +194,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
         data-press-feedback="off"
         className="flex min-h-10 w-full cursor-pointer items-center gap-1 text-left"
       >
-        <Marker variant="default" className="inline-flex min-w-0 flex-1 italic">
+        <Marker
+          variant="default"
+          className="inline-flex min-w-0 flex-1 font-medium text-muted-foreground"
+        >
           <MarkerIcon>
             <Brain />
           </MarkerIcon>
@@ -203,7 +206,7 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
             {lines > 0 ? (
               <>
                 {' · '}
-                <span className="tabular-nums">
+                <span className="tabular-nums font-normal">
                   {lines} line{lines === 1 ? '' : 's'}
                 </span>
               </>
@@ -236,7 +239,7 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
                 <button
                   type="button"
                   onClick={handleJumpToLatest}
-                  className="absolute bottom-1.5 right-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                  className="absolute bottom-1.5 right-1.5 z-10 inline-flex size-11 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
                   aria-label="Jump to latest thinking"
                 >
                   <ArrowDown size={13} />

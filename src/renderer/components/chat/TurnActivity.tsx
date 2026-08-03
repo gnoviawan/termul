@@ -63,7 +63,7 @@ export function TurnActivity({
         data-press-feedback="off"
         className={cn(
           'flex min-h-8 w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          attentionRequired && !active && 'text-red-400'
+          attentionRequired && !active && 'text-destructive'
         )}
       >
         <motion.span

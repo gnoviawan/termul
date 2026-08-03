@@ -49,16 +49,22 @@ const QueueMessageActions = memo(({ queueId, onRemove, onSendNow }: QueueMessage
   )
 
   return (
-    <QueueItemActions>
+    <QueueItemActions className="items-center gap-2">
+      <QueueItemAction
+        aria-label="Send now"
+        title="Send now"
+        onClick={handleSendNow}
+        className="opacity-100 text-foreground hover:bg-foreground/10"
+      >
+        <ArrowUp size={14} />
+      </QueueItemAction>
       <QueueItemAction
         aria-label="Remove from queue"
         title="Remove from queue"
         onClick={handleRemove}
+        className="opacity-100 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
       >
         <Trash2 size={12} />
-      </QueueItemAction>
-      <QueueItemAction aria-label="Send now" title="Send now" onClick={handleSendNow}>
-        <ArrowUp size={14} />
       </QueueItemAction>
     </QueueItemActions>
   )

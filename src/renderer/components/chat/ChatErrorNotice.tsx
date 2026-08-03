@@ -32,7 +32,7 @@ export function ChatErrorNotice({
             className={cn('mx-auto flex w-full max-w-3xl items-start gap-2 py-2', CHAT_GUTTER_X)}
           >
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-2xs text-destructive">
+            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs text-destructive">
               {message}
             </p>
             {onRetry && (

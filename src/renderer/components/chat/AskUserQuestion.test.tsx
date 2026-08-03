@@ -64,11 +64,11 @@ describe('AskUserQuestion (issue #411)', () => {
     render(<AskUserQuestion question={multi} />)
     fireEvent.click(screen.getByText('A'))
     fireEvent.click(screen.getByText('B'))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(mockAnswer).toHaveBeenCalledWith('q-1', ['a', 'b'])
   })
 
-  it('multi-select: submit is disabled until a selection exists', () => {
+  it('multi-select: confirm is disabled until a selection exists', () => {
     const multi = {
       ...question,
       options: [
@@ -77,7 +77,7 @@ describe('AskUserQuestion (issue #411)', () => {
       ]
     }
     render(<AskUserQuestion question={multi} />)
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
   })
 
   it('cancel resolves the question as cancelled', () => {

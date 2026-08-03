@@ -4,7 +4,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import { cn } from '@/lib/utils'
 
 interface McpServerSummary {
@@ -36,9 +35,16 @@ interface McpBadgeProps {
 }
 
 function statusColor(status: ProbeStatus | undefined): string {
-  if (status === 'connected') return 'bg-emerald-500'
-  if (status === 'disconnected') return 'bg-red-500'
+  if (status === 'connected') return 'bg-connection'
+  if (status === 'disconnected') return 'bg-destructive'
   return 'bg-muted-foreground/40'
+}
+
+/** Short visible status for the server row (pairs with the color dot). */
+function statusShortLabel(status: ProbeStatus | undefined): string {
+  if (status === 'connected') return 'Connected'
+  if (status === 'disconnected') return 'Disconnected'
+  return 'Not probed'
 }
 
 function statusLabel(status: ProbeStatus | undefined): string {
@@ -177,12 +183,15 @@ function McpServerRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
-            role="img"
+            aria-hidden
             className={cn('size-2 shrink-0 rounded-full', statusColor(probeStatus))}
-            aria-label={statusLabel(probeStatus)}
-            title={statusLabel(probeStatus)}
           />
-          <span className="truncate text-sm font-medium">{server.name}</span>
+          <span className="min-w-0 truncate">
+            <span className="block truncate text-sm font-medium">{server.name}</span>
+            <span className="block text-3xs text-muted-foreground" title={statusLabel(probeStatus)}>
+              {statusShortLabel(probeStatus)}
+            </span>
+          </span>
         </div>
         {onToggle && (
           <RadioGroup

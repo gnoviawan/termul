@@ -68,9 +68,7 @@ function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
 
   return (
     <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy} disabled={isAnimating}>
-      <IconSwap iconKey={copied}>
-        {copied ? <Check className="text-green-400" /> : <Copy />}
-      </IconSwap>
+      <IconSwap iconKey={copied}>{copied ? <Check className="text-success" /> : <Copy />}</IconSwap>
     </IconActionButton>
   )
 }

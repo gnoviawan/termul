@@ -11,10 +11,16 @@ interface PlanPanelProps {
   entries: PlanEntry[]
 }
 
-const PRIORITY_DOT: Record<string, string> = {
-  high: 'bg-red-400',
-  medium: 'bg-amber-400',
-  low: 'bg-muted-foreground/50'
+const PRIORITY_LABEL: Record<string, string> = {
+  high: 'High',
+  medium: 'Med',
+  low: 'Low'
+}
+
+const PRIORITY_CLASS: Record<string, string> = {
+  high: 'bg-destructive/15 text-destructive',
+  medium: 'bg-warning/15 text-warning',
+  low: 'bg-muted text-muted-foreground'
 }
 
 function getPlanDetail(entry: PlanEntry): string | undefined {
@@ -39,9 +45,9 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
   const pop = iconPop(reduced)
   const icon =
     status === 'completed' ? (
-      <CheckCircle2 size={13} className="text-green-400" />
+      <CheckCircle2 size={13} className="text-success" />
     ) : status === 'in_progress' ? (
-      <Loader2 size={13} className="animate-spin text-amber-400 motion-reduce:animate-none" />
+      <Loader2 size={13} className="animate-spin text-warning motion-reduce:animate-none" />
     ) : (
       <Circle size={13} className="text-muted-foreground/60" />
     )
@@ -65,17 +71,25 @@ function getPlanEntryIdentity(entry: PlanEntry): string {
   return typeof id === 'string' && id.trim() ? id : entry.content
 }
 
+function PriorityBadge({ priority }: { priority?: string }): React.JSX.Element {
+  const key = priority && PRIORITY_LABEL[priority] ? priority : 'low'
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded px-1 py-px text-3xs font-medium tabular-nums',
+        PRIORITY_CLASS[key]
+      )}
+    >
+      {PRIORITY_LABEL[key]}
+    </span>
+  )
+}
+
 function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
   return (
     <>
       <StatusIcon status={entry.status} />
-      <span
-        className={cn(
-          'h-1.5 w-1.5 shrink-0 rounded-full',
-          PRIORITY_DOT[entry.priority ?? 'low'] ?? 'bg-muted-foreground/50'
-        )}
-        title={`priority: ${entry.priority ?? 'low'}`}
-      />
+      <PriorityBadge priority={entry.priority} />
       <span
         className={cn(
           'min-w-0 flex-1 text-pretty break-words',

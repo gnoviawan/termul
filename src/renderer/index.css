@@ -44,6 +44,13 @@
     /* Status colors */
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
+    /* Confirmation / completed (distinct from primary blue + connection) */
+    --success: 142 60% 42%;
+    --success-foreground: 0 0% 100%;
+    /* Live connection lamp (info cyan — not the same as success green) */
+    --connection: 187 70% 45%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 10%;
 
     /* Borders - subtle dark borders */
     --border: 0 0% 20%; /* #333333 */

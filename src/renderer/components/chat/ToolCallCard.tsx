@@ -179,19 +179,19 @@ function ToolCallCardComponent({
     <>
       <Icon
         size={13}
-        className={cn('shrink-0', failed ? 'text-red-400' : 'text-muted-foreground')}
+        className={cn('shrink-0', failed ? 'text-destructive' : 'text-muted-foreground')}
       />
       <span className="min-w-0 flex-1 truncate" title={`${verb} ${primary}`.trim()}>
         {verb && <span className="text-muted-foreground">{verb} </span>}
-        <span className={cn('font-medium', failed ? 'text-red-400' : 'text-foreground')}>
+        <span className={cn('font-medium', failed ? 'text-destructive' : 'text-foreground')}>
           {primary}
         </span>
       </span>
       {diffStat ? (
         <span className="shrink-0 text-3xs tabular-nums">
-          <span className="text-green-700 dark:text-green-400">+{diffStat.added}</span>
+          <span className="text-success">+{diffStat.added}</span>
           {diffStat.removed > 0 && (
-            <span className="text-red-700 dark:text-red-400"> &minus;{diffStat.removed}</span>
+            <span className="text-destructive"> &minus;{diffStat.removed}</span>
           )}
         </span>
       ) : (
@@ -204,7 +204,7 @@ function ToolCallCardComponent({
           {formatDuration(durationMs)}
         </span>
       )}
-      {failed && <AlertCircle size={12} className="shrink-0 text-red-400" />}
+      {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
       {hasDetail && (
         <motion.span
           aria-hidden="true"

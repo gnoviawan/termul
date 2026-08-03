@@ -16,19 +16,19 @@ function renderActions(ui: React.ReactElement): ReturnType<typeof render> {
 }
 
 describe('MessageActions', () => {
-  it('is hover-hidden by default', () => {
+  it('is hover-hidden on fine pointers by default', () => {
     const { container } = renderActions(<MessageActions text="hello" align="start" />)
     const bar = container.firstElementChild
-    expect(bar).toHaveClass('opacity-0')
-    expect(bar).toHaveClass('group-hover/message:opacity-100')
-    expect(bar).not.toHaveClass('opacity-100')
+    expect(bar).toHaveClass('opacity-100')
+    expect(bar).toHaveClass('pointer-fine:opacity-0')
+    expect(bar).toHaveClass('pointer-fine:group-hover/message:opacity-100')
   })
 
   it('stays visible when pinned', () => {
     const { container } = renderActions(<MessageActions text="hello" align="start" pinned />)
     const bar = container.firstElementChild
     expect(bar).toHaveClass('opacity-100')
-    expect(bar).not.toHaveClass('opacity-0')
+    expect(bar).not.toHaveClass('pointer-fine:opacity-0')
   })
 
   it('renders copy button with accessible label', () => {
@@ -36,9 +36,11 @@ describe('MessageActions', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
   })
 
-  it('uses compact Streamdown-sized action buttons', () => {
+  it('uses compact Streamdown-sized action buttons with expanded hit area', () => {
     renderActions(<MessageActions text="hello" align="start" pinned />)
-    expect(screen.getByRole('button', { name: 'Copy' })).toHaveClass('size-6')
+    const copy = screen.getByRole('button', { name: 'Copy' })
+    expect(copy).toHaveClass('size-6')
+    expect(copy.className).toContain('after:-inset-2.5')
   })
 
   it('renders retry when provided', () => {

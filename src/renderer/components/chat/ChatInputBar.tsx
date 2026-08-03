@@ -378,7 +378,9 @@ export function ChatInputBar({
       resetMentions()
       resetHeight()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to send message')
+      // Skill path resolution throws a specific user-facing message — keep it.
+      const msg = err instanceof Error ? err.message : ''
+      toast.error(msg.includes('missing a path') ? msg : 'Could not send your message. Try again.')
     } finally {
       setSending(false)
     }
@@ -516,6 +518,14 @@ export function ChatInputBar({
   return (
     <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>
       <div className="relative mx-auto w-full max-w-3xl">
+        {disabled && (
+          <div
+            role="status"
+            className="mb-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Session closed
+          </div>
+        )}
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />
         )}
@@ -538,8 +548,8 @@ export function ChatInputBar({
         )}
         <BorderBeam
           size="md"
-          colorVariant="colorful"
-          theme="dark"
+          colorVariant="mono"
+          theme="auto"
           borderRadius={16}
           active={busy}
           className="w-full"
@@ -547,7 +557,8 @@ export function ChatInputBar({
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
             className={cn(
-              'relative rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+              'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
+              'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
               dragActive && 'border-primary/70'
             )}
             onDragEnter={handleDragEnter}
@@ -608,7 +619,7 @@ export function ChatInputBar({
                   rows={1}
                   placeholder={
                     disabled
-                      ? 'Session closed'
+                      ? 'Composer unavailable'
                       : activeCommand
                         ? 'Add a message (optional)…'
                         : 'Ask anything… (/ for commands, @ for files)'
@@ -617,7 +628,7 @@ export function ChatInputBar({
                     'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
                     hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
                     'placeholder:text-muted-foreground focus:outline-none',
-                    'disabled:cursor-not-allowed disabled:opacity-50 max-h-40'
+                    'disabled:cursor-not-allowed disabled:text-muted-foreground disabled:placeholder:text-muted-foreground/70 max-h-40'
                   )}
                 />
               </div>

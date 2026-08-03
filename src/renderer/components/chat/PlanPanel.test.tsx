@@ -41,6 +41,19 @@ describe('PlanPanel', () => {
     expect(screen.getByText('No detail')).toHaveClass('line-through')
   })
 
+  it('shows a text priority badge instead of a color-only dot', () => {
+    render(
+      <PlanPanel
+        entries={[
+          { content: 'Urgent', priority: 'high', status: 'pending' },
+          { content: 'Later', priority: 'low', status: 'pending' }
+        ]}
+      />
+    )
+    expect(screen.getByText('High')).toBeInTheDocument()
+    expect(screen.getByText('Low')).toBeInTheDocument()
+  })
+
   it('bounds long plans and updates status while the panel is live', () => {
     const { container, rerender } = render(
       <PlanPanel entries={Array.from({ length: 20 }, (_, i) => ({ content: `Task ${i}` }))} />

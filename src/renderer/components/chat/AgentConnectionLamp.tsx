@@ -11,6 +11,11 @@ export function isAgentConnected(
   return session != null && session.status !== 'closed' && agentStatus === 'connected'
 }
 
+function connectionLabel(connected: boolean, reconnecting: boolean): string {
+  if (reconnecting) return 'Reconnecting'
+  return connected ? 'Connected' : 'Disconnected'
+}
+
 interface AgentConnectionLampProps {
   connected: boolean
   className?: string
@@ -19,34 +24,44 @@ interface AgentConnectionLampProps {
    * Story 5.3 (AC3): when true, render amber + `animate-pulse` to indicate a
    * transport-level reconnect is in progress (WS drop). Distinct from
    * `connected` (green) and `!connected` (red) — this is the in-between
-   * "trying to reconnect" state. The visible state is also communicated via
-   * the surrounding banner text in `AgentChatPanel` (the lamp itself stays
-   * `aria-hidden`); the banner container carries `role="status"` +
-   * `aria-live="polite"`.
+   * "trying to reconnect" state.
    */
   reconnecting?: boolean
+  /**
+   * When true, hide from the accessibility tree (parent already announces the
+   * state in adjacent text, e.g. the reconnect overlay). Default false so
+   * standalone lamps (tab chrome) expose a text label, not color alone.
+   */
+  decorative?: boolean
 }
 
 /**
  * Real-time connection indicator: green when connected, red otherwise.
  * Story 5.3: `reconnecting` shows amber + pulse for WS reconnect-in-progress.
+ * Always pairs color with a text name (`aria-label` / `title`) unless decorative.
  */
 export function AgentConnectionLamp({
   connected,
   className,
   size = 8,
-  reconnecting = false
+  reconnecting = false,
+  decorative = false
 }: AgentConnectionLampProps): ReactNode {
+  const label = connectionLabel(connected, reconnecting)
   const colorClass = reconnecting
-    ? 'text-amber-500 animate-pulse'
+    ? 'text-warning animate-pulse'
     : connected
-      ? 'text-green-500'
-      : 'text-red-500'
+      ? 'text-connection'
+      : 'text-destructive'
   return (
-    <Circle
-      size={size}
-      aria-hidden
-      className={cn('shrink-0 fill-current', colorClass, className)}
-    />
+    <span className={cn('inline-flex shrink-0', className)} title={decorative ? undefined : label}>
+      <Circle
+        size={size}
+        aria-hidden={decorative || undefined}
+        role={decorative ? undefined : 'img'}
+        aria-label={decorative ? undefined : label}
+        className={cn('fill-current', colorClass)}
+      />
+    </span>
   )
 }

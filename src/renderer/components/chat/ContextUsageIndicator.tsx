@@ -46,7 +46,7 @@ export function ContextUsageIndicator({
           aria-label={`Context ${Math.round(percent)} percent used`}
           className={cn(
             'flex size-8 items-center justify-center text-muted-foreground transition-colors',
-            'hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+            'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             className
           )}
         >

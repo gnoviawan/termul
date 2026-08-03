@@ -71,11 +71,11 @@ export interface StatusStyle {
 export function statusStyle(status: ToolCallStatus | undefined): StatusStyle {
   switch (status) {
     case 'in_progress':
-      return { label: 'running', className: 'text-amber-400 bg-amber-400/10', spinning: true }
+      return { label: 'running', className: 'text-warning bg-warning/10', spinning: true }
     case 'completed':
-      return { label: 'done', className: 'text-green-400 bg-green-400/10', spinning: false }
+      return { label: 'done', className: 'text-success bg-success/10', spinning: false }
     case 'failed':
-      return { label: 'failed', className: 'text-red-400 bg-red-400/10', spinning: false }
+      return { label: 'failed', className: 'text-destructive bg-destructive/10', spinning: false }
     case 'pending':
     default:
       return { label: 'pending', className: 'text-muted-foreground bg-muted/40', spinning: false }
@@ -253,4 +253,14 @@ export function isAllowOption(option: PermissionOption): boolean {
 /** Pick a reject option for an Escape/dismiss action, or null if none exists. */
 export function pickRejectOption(options: PermissionOption[]): PermissionOption | null {
   return options.find(isRejectOption) ?? null
+}
+
+/**
+ * Prefer the narrowest allow (`allow_once`) as the single primary action;
+ * fall back to the first allow option when only broader allows exist.
+ */
+export function pickPrimaryAllowOption(options: PermissionOption[]): PermissionOption | null {
+  const allows = options.filter(isAllowOption)
+  if (allows.length === 0) return null
+  return allows.find((o) => o.kind === 'allow_once') ?? allows[0]
 }

@@ -21,14 +21,10 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
       <div className="flex items-center gap-2 border-b border-border/40 px-2 py-1">
         <FileDiff size={12} className="text-muted-foreground" />
         <span className="truncate font-mono text-2xs">{diff.path}</span>
-        {isNewFile && (
-          <span className="rounded bg-green-500/15 px-1 text-3xs text-green-700 dark:bg-green-400/10 dark:text-green-400">
-            new
-          </span>
-        )}
+        {isNewFile && <span className="rounded bg-success/15 px-1 text-3xs text-success">new</span>}
         <span className="ml-auto font-mono text-3xs text-muted-foreground">
-          <span className="text-green-700 dark:text-green-400">+{added}</span>{' '}
-          <span className="text-red-700 dark:text-red-400">−{removed}</span>
+          <span className="text-success">+{added}</span>{' '}
+          <span className="text-destructive">−{removed}</span>
         </span>
       </div>
       <div className="max-h-48 overflow-auto p-2 font-mono text-2xs leading-snug">
@@ -37,10 +33,8 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
             key={i}
             className={cn(
               'whitespace-pre-wrap',
-              line.type === 'added' &&
-                'bg-green-500/10 text-green-800 dark:bg-green-400/10 dark:text-green-300',
-              line.type === 'removed' &&
-                'bg-red-500/10 text-red-800 dark:bg-red-400/10 dark:text-red-300',
+              line.type === 'added' && 'bg-success/10 text-success',
+              line.type === 'removed' && 'bg-destructive/10 text-destructive',
               line.type === 'context' &&
                 (line.text === '···'
                   ? 'select-none text-muted-foreground/50'

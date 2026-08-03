@@ -42,11 +42,10 @@ function ChatRestorePreload(): React.JSX.Element {
       aria-live="polite"
       aria-label="Restoring chat"
     >
-      <div className="relative flex size-16 items-center justify-center">
-        <div className="absolute inset-0 rounded-2xl bg-sky-500/15 blur-xl" aria-hidden="true" />
+      <div className="flex size-16 items-center justify-center">
         <TermulMark
           size={52}
-          className="relative animate-pulse text-foreground drop-shadow-[0_0_18px_rgba(56,189,248,0.28)] motion-reduce:animate-none"
+          className="animate-pulse text-foreground motion-reduce:animate-none"
         />
       </div>
       <div className="space-y-1 text-center">
@@ -189,7 +188,7 @@ export function AgentChatPanel({
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error(`Failed to send queued message: ${String(err)}`)
+        toast.error('Could not send the queued message. Try again.')
       })
     },
     [sendQueuedPromptNow, sessionId]
@@ -199,7 +198,7 @@ export function AgentChatPanel({
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error(`Failed to send: ${String(err)}`)
+        toast.error('Could not send your message. Try again.')
       })
     },
     [sendPrompt, sessionId]
@@ -209,15 +208,15 @@ export function AgentChatPanel({
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error(`Failed to send: ${String(err)}`)
+        toast.error('Could not send your message. Try again.')
       })
     },
     [sendPromptBlocks, sessionId]
   )
 
   const handleCancel = useCallback(() => {
-    void cancelPrompt(sessionId).catch((err) => {
-      toast.error(`Failed to cancel: ${String(err)}`)
+    void cancelPrompt(sessionId).catch(() => {
+      toast.error('Could not cancel the turn. Try again.')
     })
   }, [cancelPrompt, sessionId])
 
@@ -226,7 +225,7 @@ export function AgentChatPanel({
       try {
         await setConfigOption(sessionId, configId, valueId)
       } catch (err) {
-        toast.error(`Failed to set option: ${String(err)}`)
+        toast.error('Could not update that setting. Try again.')
         throw err
       }
     },
@@ -238,7 +237,7 @@ export function AgentChatPanel({
       try {
         await setMode(sessionId, modeId)
       } catch (err) {
-        toast.error(`Failed to set mode: ${String(err)}`)
+        toast.error('Could not switch mode. Try again.')
         throw err
       }
     },
@@ -250,7 +249,7 @@ export function AgentChatPanel({
       try {
         await setModel(sessionId, modelId)
       } catch (err) {
-        toast.error(`Failed to set model: ${String(err)}`)
+        toast.error('Could not switch model. Try again.')
         throw err
       }
     },
@@ -281,7 +280,7 @@ export function AgentChatPanel({
     if (session?.status === 'error' || session?.status === 'closed') {
       void retryCrashedSession(sessionId).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error(`Failed to retry: ${String(err)}`)
+        toast.error('Could not retry. Try again.')
       })
       return
     }
@@ -315,7 +314,7 @@ export function AgentChatPanel({
     // Display = the original (token) blocks so the timeline keeps chips.
     void sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: lastUserBlocks }).catch((err) => {
       if (isAgentDeadError(err)) return
-      toast.error(`Failed to send: ${String(err)}`)
+      toast.error('Could not send your message. Try again.')
     })
   }, [
     lastUserBlocks,
@@ -361,7 +360,10 @@ export function AgentChatPanel({
     if (rehydrateError) {
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-          <div className="max-w-md px-6 text-center">Failed to restore chat: {rehydrateError}</div>
+          <div className="max-w-md space-y-1 px-6 text-center">
+            <div className="text-foreground">Failed to restore chat.</div>
+            <div className="break-words text-xs text-muted-foreground">{rehydrateError}</div>
+          </div>
           <Button type="button" variant="outline" size="sm" onClick={() => setRehydrateError(null)}>
             Retry
           </Button>
@@ -384,8 +386,8 @@ export function AgentChatPanel({
           sessionId,
           discoveredReopenContext.cwd,
           discoveredReopenContext.projectId
-        ).catch((err) => {
-          toast.error(`Failed to open chat: ${String(err)}`)
+        ).catch(() => {
+          toast.error('Could not open that chat. Try again.')
         })
       }
     : undefined
@@ -429,12 +431,12 @@ export function AgentChatPanel({
         !isLaunchingSession &&
         discoveredReopenContext &&
         session.lastError && (
-          <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
             <span>Failed to restore agent chat.</span>
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
+              className="rounded-md border border-destructive/40 px-2 py-0.5 text-xs font-medium hover:bg-destructive/15"
             >
               Retry
             </button>
@@ -445,16 +447,16 @@ export function AgentChatPanel({
         !isLaunchingSession &&
         hasHistoryEntry &&
         !discoveredReopenContext && (
-          <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
             <span>Chat disconnected.</span>
             <button
               type="button"
               onClick={() => {
-                void openHistorySession(sessionId).catch((err) => {
-                  toast.error(`Failed to reconnect chat: ${String(err)}`)
+                void openHistorySession(sessionId).catch(() => {
+                  toast.error('Could not reconnect. Try again.')
                 })
               }}
-              className="rounded-md border border-border/60 px-2 py-0.5 text-xs hover:bg-background/60"
+              className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium hover:bg-warning/15"
             >
               Reconnect
             </button>
@@ -473,7 +475,7 @@ export function AgentChatPanel({
           role="status"
           aria-live="polite"
         >
-          <AgentConnectionLamp connected={false} reconnecting size={8} />
+          <AgentConnectionLamp connected={false} reconnecting decorative size={8} />
           <span>Reconnecting…</span>
         </div>
       )}
@@ -492,29 +494,32 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />
-      <ChatInputBar
-        session={session}
-        busy={session.activeTurn}
-        disabled={isClosed}
-        imageCapable={imageCapable}
-        embedCapable={embedCapable}
-        onSend={handleSend}
-        onSendBlocks={handleSendBlocks}
-        onCancel={handleCancel}
-        queue={promptQueue}
-        onRemoveQueued={handleRemoveQueued}
-        onSendQueuedNow={handleSendQueuedNow}
-        commands={commands}
-        configOptions={session.configOptions}
-        modes={session.modes}
-        onSetConfig={handleSetConfig}
-        onSetMode={handleSetMode}
-        onSetModel={handleSetModel}
-        seedText={seed?.text}
-        seedNonce={seed?.nonce}
-      />
+      {pendingQuestion && !isClosed ? (
+        <AskUserQuestion question={pendingQuestion} />
+      ) : (
+        <ChatInputBar
+          session={session}
+          busy={session.activeTurn}
+          disabled={isClosed}
+          imageCapable={imageCapable}
+          embedCapable={embedCapable}
+          onSend={handleSend}
+          onSendBlocks={handleSendBlocks}
+          onCancel={handleCancel}
+          queue={promptQueue}
+          onRemoveQueued={handleRemoveQueued}
+          onSendQueuedNow={handleSendQueuedNow}
+          commands={commands}
+          configOptions={session.configOptions}
+          modes={session.modes}
+          onSetConfig={handleSetConfig}
+          onSetMode={handleSetMode}
+          onSetModel={handleSetModel}
+          seedText={seed?.text}
+          seedNonce={seed?.nonce}
+        />
+      )}
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
-      {pendingQuestion && !isClosed && <AskUserQuestion question={pendingQuestion} />}
     </div>
   )
 }

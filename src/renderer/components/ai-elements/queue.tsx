@@ -47,7 +47,10 @@ export type QueueItemActionProps = Omit<ComponentProps<typeof Button>, 'variant'
 export const QueueItemAction = ({ className, ...props }: QueueItemActionProps) => (
   <Button
     className={cn(
-      'size-auto rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted-foreground/10 hover:text-foreground group-hover:opacity-100',
+      // Visual compact; expanded hit area (~44px) without blowing row height.
+      'relative size-8 shrink-0 rounded-md p-0 text-muted-foreground',
+      "after:absolute after:-inset-1.5 after:content-['']",
+      'opacity-100 transition-colors hover:bg-muted-foreground/10 hover:text-foreground',
       className
     )}
     size="icon"

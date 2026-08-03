@@ -35,7 +35,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     expect(screen.getByRole('button', { name: /mcp servers/i })).toBeInTheDocument()
   })
 
-  it('lists each server with a status dot inside the popover', () => {
+  it('lists each server with a visible status label inside the popover', () => {
     render(
       <McpBadge
         count={2}
@@ -47,12 +47,8 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     openPopover()
     expect(screen.getByText('Files')).toBeInTheDocument()
     expect(screen.getByText('Remote')).toBeInTheDocument()
-    // Status dots expose their state via title (tooltip) — query by accessible
-    // name through the title attribute on the dot span.
-    expect(screen.getByTitle('Connected (Termul can reach this server)')).toBeInTheDocument()
-    expect(
-      screen.getByTitle('Disconnected (Termul could not reach this server)')
-    ).toBeInTheDocument()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.getByText('Disconnected')).toBeInTheDocument()
   })
 
   it('calls onToggle(id, false) when switching an enabled server to Off', () => {

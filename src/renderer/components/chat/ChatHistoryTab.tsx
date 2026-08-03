@@ -213,8 +213,8 @@ export function ChatHistoryTab({
           // background just like local mirrors.
           const opening = openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
           addAgentChatTab(entry.id)
-          void opening.catch((err) => {
-            toast.error(`Failed to open chat: ${String(err)}`)
+          void opening.catch(() => {
+            toast.error('Could not open that chat. Try again.')
           })
         } else {
           // Register the restore synchronously before focusing the tab so its
@@ -222,13 +222,13 @@ export function ChatHistoryTab({
           // in the background after the local transcript becomes usable.
           const opening = openHistorySession(entry.id)
           addAgentChatTab(entry.id)
-          void opening.catch((err) => {
-            toast.error(`Failed to reconnect chat: ${String(err)}`)
+          void opening.catch(() => {
+            toast.error('Could not reconnect. Try again.')
           })
         }
         onSessionOpened?.()
-      } catch (err) {
-        toast.error(`Failed to open chat: ${String(err)}`)
+      } catch {
+        toast.error('Could not open that chat. Try again.')
       }
     },
     [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
@@ -236,8 +236,8 @@ export function ChatHistoryTab({
 
   const handleDelete = useCallback(
     (id: string) => {
-      void deleteHistorySession(id).catch((err) => {
-        toast.error(`Failed to delete chat: ${String(err)}`)
+      void deleteHistorySession(id).catch(() => {
+        toast.error('Could not delete that chat. Try again.')
       })
     },
     [deleteHistorySession]
@@ -311,7 +311,12 @@ export function ChatHistoryTab({
                       aria-label="Delete chat"
                       title="Delete chat"
                       onClick={() => handleDelete(entry.id)}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-background/50"
+                      className={cn(
+                        'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground',
+                        "after:absolute after:-inset-1 after:content-['']",
+                        'opacity-100 transition-colors hover:bg-background/50 hover:text-foreground',
+                        'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100'
+                      )}
                     >
                       <Trash2 size={11} />
                     </button>

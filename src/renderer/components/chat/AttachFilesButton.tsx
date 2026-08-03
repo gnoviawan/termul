@@ -27,7 +27,7 @@ export function AttachFilesButton({
           aria-label="Attach files"
           className={cn(
             'flex size-8 items-center justify-center text-muted-foreground transition-colors',
-            'hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+            'hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50',
             className
           )}
         >
