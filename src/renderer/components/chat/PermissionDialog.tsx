@@ -44,7 +44,8 @@ function optionVariant(
 /**
  * Permission prompt for a single pending request. Choosing an option calls
  * `respondPermission(requestId, optionId)`; Escape/dismiss resolves with an
- * explicit reject option when one exists (otherwise leaves it open).
+ * explicit reject option when one exists, otherwise a plain cancel (no
+ * optionId) so the request is never left dangling.
  *
  * Hierarchy: one primary Allow (safest / once), other Allows secondary, then
  * a visual break before Reject options.
@@ -90,7 +91,7 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
     <Button
       key={option.optionId}
       variant={optionVariant(option, primaryAllowId)}
-      className={cn('justify-start')}
+      className={cn('min-h-11 justify-start')}
       onClick={() => choose(option.optionId)}
     >
       {option.name}
@@ -127,7 +128,7 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
             // Guarantee a dismissal path when the agent provided no reject option.
             <Button
               variant="ghost"
-              className="mt-1 justify-start"
+              className="mt-1 min-h-11 justify-start"
               onClick={() => choose(undefined)}
             >
               Cancel

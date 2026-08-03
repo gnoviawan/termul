@@ -250,9 +250,14 @@ export function isAllowOption(option: PermissionOption): boolean {
   return option.kind === 'allow_once' || option.kind === 'allow_always'
 }
 
-/** Pick a reject option for an Escape/dismiss action, or null if none exists. */
+/**
+ * Pick a reject option for an Escape/dismiss action, or null if none exists.
+ * Prefer the narrowest reject (`reject_once`) when both once/always are offered.
+ */
 export function pickRejectOption(options: PermissionOption[]): PermissionOption | null {
-  return options.find(isRejectOption) ?? null
+  const rejects = options.filter(isRejectOption)
+  if (rejects.length === 0) return null
+  return rejects.find((o) => o.kind === 'reject_once') ?? rejects[0]
 }
 
 /**
