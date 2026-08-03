@@ -1,14 +1,19 @@
 /**
  * Frontend error logging facade (issue #244).
  *
- * Routes renderer errors to the backend log file via the `log_frontend_error`
- * Tauri command so they survive a closed production DevTools console. All
- * native access stays behind this facade per the project's adapter-boundary
- * rule; components and the ErrorBoundary import from here, never `invoke`
- * directly.
+ * Routes renderer errors to the backend log file so they survive a closed
+ * production DevTools console. In the Tauri runtime this calls the
+ * `log_frontend_error` command; in web/remote mode (`!isTauriContext()`) it
+ * POSTs to the termul-server `/log/frontend-error` route (CAP-2 parity), which
+ * writes the same sanitized line via `tracing`. All native access stays behind
+ * this facade per the project's adapter-boundary rule; components and the
+ * ErrorBoundary import from here, never `invoke` directly.
  */
 
 import { invoke } from '@tauri-apps/api/core'
+
+import { isTauriContext } from './tauri-runtime'
+import { webServerLog } from './web-server-api'
 
 export interface FrontendErrorPayload {
   /** Severity routed to the backend logger. Defaults to 'error'. */
@@ -26,18 +31,31 @@ export interface FrontendErrorPayload {
 /**
  * Forward a single renderer error to the backend log file.
  *
- * Never throws: a failure to log must not cascade into another error (which
- * could re-trigger the global handlers and loop).
+ * Branches on `isTauriContext()`: the desktop path invokes the Tauri command;
+ * the web path POSTs to `/log/frontend-error` (the server reuses the same
+ * sanitization + tracing the desktop command uses). Never throws: a failure to
+ * log must not cascade into another error (which could re-trigger the global
+ * handlers and loop).
  */
 export async function logFrontendError(payload: FrontendErrorPayload): Promise<void> {
   try {
-    await invoke('log_frontend_error', {
-      level: payload.level ?? 'error',
-      message: payload.message,
-      source: payload.source ?? 'renderer',
-      stack: payload.stack ?? null,
-      componentStack: payload.componentStack ?? null
-    })
+    if (isTauriContext()) {
+      await invoke('log_frontend_error', {
+        level: payload.level ?? 'error',
+        message: payload.message,
+        source: payload.source ?? 'renderer',
+        stack: payload.stack ?? null,
+        componentStack: payload.componentStack ?? null
+      })
+    } else {
+      await webServerLog.frontendError({
+        level: payload.level ?? 'error',
+        message: payload.message,
+        source: payload.source ?? 'renderer',
+        stack: payload.stack,
+        componentStack: payload.componentStack
+      })
+    }
   } catch {
     // Swallow — logging must be best-effort and side-effect free on failure.
   }
@@ -63,7 +81,10 @@ let installed = false
 /**
  * Install global `window.onerror` and `unhandledrejection` handlers that
  * forward to the backend log. Idempotent and a no-op outside a browser/webview
- * (no `window`). Call once, only in the Tauri runtime path.
+ * (no `window`). Works in both the Tauri runtime and web/remote mode —
+ * `logFrontendError` branches on `isTauriContext()` so errors survive a closed
+ * DevTools in either surface. Call once during app bootstrap (both `TauriApp`
+ * and `App` entries).
  */
 export function installGlobalErrorForwarding(): void {
   if (installed || typeof window === 'undefined') {

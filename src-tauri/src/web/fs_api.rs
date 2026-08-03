@@ -187,7 +187,7 @@ fn should_ignore(name: &str) -> bool {
 /// local, or `Some(IpcBody::err(...))` with `code: "FORBIDDEN"` when remote.
 /// Matches the existing 200+IpcResult convention (200 with the IpcResult error)
 /// so the renderer maps it to a uniform failure body.
-fn check_local_only<T>(peer: SocketAddr) -> Option<IpcBody<T>> {
+pub(super) fn check_local_only<T>(peer: SocketAddr) -> Option<IpcBody<T>> {
     let is_loopback = peer.ip().is_loopback();
     if is_loopback {
         None
@@ -238,7 +238,7 @@ fn get_extension(name: &str) -> Option<String> {
 ///   search path to exist (it short-circuits on `!exists()`); the fs_api
 ///   routes also create new paths (`mkdir`, `write`), which need a different
 ///   shape that tolerates non-existing targets.
-fn resolve_request_path(path: &Path) -> Result<PathBuf, (String, &'static str)> {
+pub(super) fn resolve_request_path(path: &Path) -> Result<PathBuf, (String, &'static str)> {
     // 1) Reject explicit `..` traversal components. This is a fast, cheap
     //    pre-filter that catches the obvious attack without needing a real
     //    filesystem call. Any `Component::ParentDir` is rejected regardless

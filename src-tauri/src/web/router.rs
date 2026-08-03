@@ -20,8 +20,12 @@ use crate::acp::{AcpManager, ChatHistoryStore, FileProjectRegistry};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::fs_api;
+use crate::web::git_api;
+use crate::web::log_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::search_api;
+use crate::web::skills_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
@@ -87,6 +91,40 @@ pub fn router(
         .route("/fs/rename", post(fs_api::rename))
         .route("/fs/copy", post(fs_api::copy))
         .route("/git/init", post(fs_api::git_init))
+        // Git web routes (CAP-1: Web & Mobile 1:1 Parity). Each mirrors a
+        // desktop `#[tauri::command] git_*` handler; see `web/git_api.rs`.
+        // Registered AHEAD of the static fallback so the SPA mount cannot
+        // shadow them. Write routes are loopback-guarded inside the handler.
+        .route("/git/status", post(git_api::get_status))
+        .route("/git/diff", post(git_api::get_diff))
+        .route("/git/stage", post(git_api::stage))
+        .route("/git/unstage", post(git_api::unstage))
+        .route("/git/discard", post(git_api::discard))
+        .route("/git/log", post(git_api::get_log))
+        .route("/git/commit", post(git_api::commit))
+        .route("/git/push", post(git_api::push))
+        .route("/git/commit-context", post(git_api::get_commit_context))
+        .route("/git/checkout-branch", post(git_api::checkout_branch))
+        .route("/git/create-branch", post(git_api::create_branch))
+        .route("/git/stash-save", post(git_api::stash_save))
+        .route("/git/stash-list", get(git_api::stash_list))
+        .route("/git/stash-apply", post(git_api::stash_apply))
+        .route("/git/stash-pop", post(git_api::stash_pop))
+        .route("/git/stash-drop", post(git_api::stash_drop))
+        .route("/git/branch-list", get(git_api::branch_list))
+        .route("/git/branch-switch", post(git_api::branch_switch))
+        .route("/git/branch-create", post(git_api::branch_create))
+        // Search web routes (CAP-2: Web & Mobile 1:1 Parity). Each mirrors a
+        // desktop `#[tauri::command] search_*` handler; see `web/search_api.rs`.
+        .route("/search/rg-info", get(search_api::rg_info))
+        .route("/search/content", post(search_api::content))
+        .route("/search/cancel", post(search_api::cancel))
+        // Skills web routes (CAP-2): `GET /skills` + `GET /skills/:name`.
+        .route("/skills", get(skills_api::list))
+        .route("/skills/{name}", get(skills_api::read))
+        // Frontend error forwarding (CAP-2): `POST /log/frontend-error`.
+        // Loopback-only (enforced inside the handler).
+        .route("/log/frontend-error", post(log_api::frontend_error))
         .route("/shells", get(fs_api::shells));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
@@ -141,6 +179,31 @@ pub fn router_with_static(
         .route("/fs/rename", post(fs_api::rename))
         .route("/fs/copy", post(fs_api::copy))
         .route("/git/init", post(fs_api::git_init))
+        .route("/git/status", post(git_api::get_status))
+        .route("/git/diff", post(git_api::get_diff))
+        .route("/git/stage", post(git_api::stage))
+        .route("/git/unstage", post(git_api::unstage))
+        .route("/git/discard", post(git_api::discard))
+        .route("/git/log", post(git_api::get_log))
+        .route("/git/commit", post(git_api::commit))
+        .route("/git/push", post(git_api::push))
+        .route("/git/commit-context", post(git_api::get_commit_context))
+        .route("/git/checkout-branch", post(git_api::checkout_branch))
+        .route("/git/create-branch", post(git_api::create_branch))
+        .route("/git/stash-save", post(git_api::stash_save))
+        .route("/git/stash-list", get(git_api::stash_list))
+        .route("/git/stash-apply", post(git_api::stash_apply))
+        .route("/git/stash-pop", post(git_api::stash_pop))
+        .route("/git/stash-drop", post(git_api::stash_drop))
+        .route("/git/branch-list", get(git_api::branch_list))
+        .route("/git/branch-switch", post(git_api::branch_switch))
+        .route("/git/branch-create", post(git_api::branch_create))
+        .route("/search/rg-info", get(search_api::rg_info))
+        .route("/search/content", post(search_api::content))
+        .route("/search/cancel", post(search_api::cancel))
+        .route("/skills", get(skills_api::list))
+        .route("/skills/{name}", get(skills_api::read))
+        .route("/log/frontend-error", post(log_api::frontend_error))
         .route("/shells", get(fs_api::shells))
         .fallback_service(assets::static_service_from(static_dir))
         .with_state(AppState {

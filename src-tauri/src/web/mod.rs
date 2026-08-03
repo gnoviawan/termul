@@ -17,8 +17,12 @@
 pub mod assets;
 pub mod config;
 pub mod fs_api;
+pub mod git_api;
+pub mod log_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod search_api;
+pub mod skills_api;
 pub mod permissions;
 pub mod project_registry;
 pub mod projects_api;

@@ -18,6 +18,10 @@ import type {
   DetectedShells,
   DirectoryEntry,
   FileContent,
+  GitCommit,
+  GitCommitContext,
+  GitStashInfo,
+  GitStatusDetail,
   IpcResult
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
@@ -154,13 +158,133 @@ export const webServerDialog = {
   }
 }
 
-/** Git init routed to `termul-server` (`/git/init`). */
+/**
+ * Git ops routed to `termul-server` (`/git/*`). CAP-1 parity: each method
+ * mirrors a desktop `#[tauri::command] git_*` handler and returns unwrapped
+ * data, throwing on `!res.success` (matching the existing `init` template) so
+ * the renderer facade (`git-api.ts`) can branch `isTauriContext()` between
+ * `invoke(...)` and these HTTP impls without changing call-site ergonomics.
+ */
 export const webServerGit = {
   async init(cwd: string): Promise<void> {
     const res = await postJson<void>('/git/init', { cwd })
     if (!res.success) {
       throw new Error(res.error)
     }
+  },
+
+  async getStatus(cwd: string): Promise<GitStatusDetail[]> {
+    const res = await postJson<GitStatusDetail[]>('/git/status', { cwd })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async getDiff(cwd: string, path: string, staged = false): Promise<string> {
+    const res = await postJson<string>('/git/diff', { cwd, path, staged })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async stage(cwd: string, path: string): Promise<void> {
+    const res = await postJson<void>('/git/stage', { cwd, path })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async unstage(cwd: string, path: string): Promise<void> {
+    const res = await postJson<void>('/git/unstage', { cwd, path })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async discard(cwd: string, path: string): Promise<void> {
+    const res = await postJson<void>('/git/discard', { cwd, path })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async getLog(cwd: string, limit?: number): Promise<GitCommit[]> {
+    const res = await postJson<GitCommit[]>('/git/log', {
+      cwd,
+      ...(limit !== undefined ? { limit } : {})
+    })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async commit(cwd: string, summary: string, description = '', amend = false): Promise<void> {
+    const res = await postJson<void>('/git/commit', { cwd, summary, description, amend })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async push(cwd: string): Promise<void> {
+    const res = await postJson<void>('/git/push', { cwd })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async getCommitContext(cwd: string): Promise<GitCommitContext> {
+    const res = await postJson<GitCommitContext>('/git/commit-context', { cwd })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async checkoutBranch(cwd: string, branch: string, isRemote = false): Promise<void> {
+    const res = await postJson<void>('/git/checkout-branch', { cwd, branch, isRemote })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async createBranch(cwd: string, branch: string, startRef?: string): Promise<void> {
+    const res = await postJson<void>('/git/create-branch', {
+      cwd,
+      branch,
+      ...(startRef !== undefined ? { startRef } : {})
+    })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async stashSave(cwd: string, message?: string, includeUntracked?: boolean): Promise<void> {
+    const res = await postJson<void>('/git/stash-save', {
+      cwd,
+      ...(message !== undefined ? { message } : {}),
+      ...(includeUntracked !== undefined ? { includeUntracked } : {})
+    })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async stashList(cwd: string): Promise<GitStashInfo[]> {
+    const encoded = encodeURIComponent(cwd)
+    const res = await getJson<GitStashInfo[]>(`/git/stash-list?cwd=${encoded}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async stashApply(cwd: string, index: number): Promise<void> {
+    const res = await postJson<void>('/git/stash-apply', { cwd, index })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async stashPop(cwd: string, index: number): Promise<void> {
+    const res = await postJson<void>('/git/stash-pop', { cwd, index })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async stashDrop(cwd: string, index: number): Promise<void> {
+    const res = await postJson<void>('/git/stash-drop', { cwd, index })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async branchList(cwd: string): Promise<string[]> {
+    const encoded = encodeURIComponent(cwd)
+    const res = await getJson<string[]>(`/git/branch-list?cwd=${encoded}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async branchSwitch(cwd: string, name: string): Promise<void> {
+    const res = await postJson<void>('/git/branch-switch', { cwd, name })
+    if (!res.success) throw new Error(res.error)
+  },
+
+  async branchCreate(cwd: string, name: string): Promise<void> {
+    const res = await postJson<void>('/git/branch-create', { cwd, name })
+    if (!res.success) throw new Error(res.error)
   }
 }
 
@@ -190,6 +314,102 @@ export const webServerMcpServers = {
 
   async put(registry: unknown[]): Promise<IpcResult<void>> {
     return putJson<void>('/mcp-servers', registry)
+  }
+}
+
+/**
+ * Agent skills routed to `termul-server` (`/skills`). CAP-2 parity: each method
+ * mirrors a desktop `#[tauri::command]` skills handler and returns unwrapped
+ * data, throwing on `!res.success` so the renderer facade (`skills-api.ts`)
+ * can branch `isTauriContext()` between `invoke(...)` and these HTTP impls.
+ */
+import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
+
+export const webServerSkills = {
+  async list(projectRoot?: string): Promise<AgentSkillSummary[]> {
+    const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
+    const res = await getJson<AgentSkillSummary[]>(`/skills${params}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async read(name: string, projectRoot?: string): Promise<AgentSkillContent> {
+    const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
+    const res = await getJson<AgentSkillContent>(`/skills/${encodeURIComponent(name)}${params}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  }
+}
+
+/**
+ * Frontend error forwarding routed to `termul-server` (`POST /log/frontend-error`).
+ * CAP-2 parity: mirrors the desktop `log_frontend_error` Tauri command. Returns
+ * unwrapped; throws are swallowed by the caller (`log-api.ts`).
+ */
+export const webServerLog = {
+  async frontendError(payload: {
+    level?: string
+    message: string
+    source?: string
+    stack?: string
+    componentStack?: string
+  }): Promise<void> {
+    const res = await postJson<void>('/log/frontend-error', {
+      level: payload.level ?? 'error',
+      message: payload.message,
+      source: payload.source ?? 'renderer',
+      stack: payload.stack ?? null,
+      componentStack: payload.componentStack ?? null
+    })
+    if (!res.success) throw new Error(res.error)
+  }
+}
+
+/**
+ * Content search routed to `termul-server` (`/search/*`). CAP-2 parity: each
+ * method mirrors a desktop `#[tauri::command] search_*` handler and returns
+ * unwrapped data, throwing on `!res.success`.
+ */
+export const webServerSearch = {
+  async rgInfo(): Promise<{
+    sidecarBinaryName: string
+    resolvedPath: string
+    source: string
+    exists: boolean
+  }> {
+    const res = await getJson<{
+      sidecarBinaryName: string
+      resolvedPath: string
+      source: string
+      exists: boolean
+    }>('/search/rg-info')
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async content(
+    scopeRoot: string,
+    rootPath: string,
+    query: string
+  ): Promise<{
+    results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>
+    truncated: boolean
+    scannedFiles: number
+    failedFiles: number
+  }> {
+    const res = await postJson<{
+      results: Array<{ filePath: string; matches: Array<{ lineNumber: number; lineText: string }> }>
+      truncated: boolean
+      scannedFiles: number
+      failedFiles: number
+    }>('/search/content', { scopeRoot, rootPath, query })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async cancel(searchId: string): Promise<void> {
+    const res = await postJson<void>('/search/cancel', { searchId })
+    if (!res.success) throw new Error(res.error)
   }
 }
 

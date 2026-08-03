@@ -1145,21 +1145,21 @@ pub struct RollbackRequest {
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchMatch {
     pub line_number: usize,
     pub line_text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResult {
     pub file_path: String,
     pub matches: Vec<FileSearchMatch>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResponse {
     pub results: Vec<FileSearchResult>,
@@ -1273,7 +1273,7 @@ pub struct SearchFileNamesDoneEvent {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RgInfoResponse {
     pub sidecar_binary_name: String,
@@ -1287,7 +1287,7 @@ static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child
     OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
-fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+pub(crate) fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1333,7 +1333,7 @@ fn rg_sidecar_name() -> &'static str {
     "rg"
 }
 
-fn resolve_rg_path() -> (String, String) {
+pub(crate) fn resolve_rg_path() -> (String, String) {
     let from_env = std::env::var("TERMUL_RG_PATH")
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -1387,7 +1387,7 @@ fn resolve_rg_path() -> (String, String) {
     ("rg".to_string(), "path".to_string())
 }
 
-fn detect_rg_path() -> String {
+pub(crate) fn detect_rg_path() -> String {
     if let Some(cached) = RG_PATH_CACHE.get() {
         return cached.clone();
     }
@@ -1401,23 +1401,23 @@ fn detect_rg_path() -> String {
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(target_os = "windows")]
-fn configure_background_command(command: &mut Command) {
+pub(crate) fn configure_background_command(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(target_os = "windows"))]
-fn configure_background_command(_command: &mut Command) {}
+pub(crate) fn configure_background_command(_command: &mut Command) {}
 
 /// Maximum allowed search query length to prevent resource exhaustion via
 /// oversized input passed to ripgrep or the file-name walker.
-const MAX_SEARCH_QUERY_LEN: usize = 500;
+pub(crate) const MAX_SEARCH_QUERY_LEN: usize = 500;
 
-fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
+pub(crate) fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
     path_validation::validate_search_path(search_root, scope_root)
         .map(|path| path.to_string_lossy().to_string())
 }
 
-fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
+pub(crate) fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
         "-F".to_string(),
@@ -3708,13 +3708,13 @@ pub async fn git_branch_create(cwd: String, name: String) -> Result<(), String> 
 
 /// Cap on any single renderer-supplied field to keep one forwarded error from
 /// ballooning the log file.
-const MAX_FRONTEND_FIELD_LEN: usize = 4096;
+pub(crate) const MAX_FRONTEND_FIELD_LEN: usize = 4096;
 
 /// Sanitize untrusted renderer text for single-line logging: escape newlines
 /// and control characters so a crafted error message/stack cannot forge
 /// additional, authoritative-looking log lines (log injection), and truncate
 /// to a sane bound.
-fn sanitize_log_field(value: &str) -> String {
+pub(crate) fn sanitize_log_field(value: &str) -> String {
     let mut out = String::with_capacity(value.len().min(MAX_FRONTEND_FIELD_LEN));
     for ch in value.chars().take(MAX_FRONTEND_FIELD_LEN) {
         match ch {

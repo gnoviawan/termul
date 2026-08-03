@@ -9,6 +9,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriContext } from './tauri-runtime'
+import { webServerSkills } from './web-server-api'
 
 export interface AgentSkillSummary {
   name: string
@@ -31,17 +32,14 @@ export interface AgentSkillContent {
 
 export const skillsApi = {
   listSkills(projectRoot?: string): Promise<AgentSkillSummary[]> {
-    // Web/remote: no local skill filesystem to scan.
-    if (!isTauriContext()) return Promise.resolve([])
+    if (!isTauriContext()) return webServerSkills.list(projectRoot)
     return invoke<AgentSkillSummary[]>('list_agent_skills_cmd', {
       projectRoot: projectRoot || null
     })
   },
 
   readSkill(name: string, projectRoot?: string): Promise<AgentSkillContent> {
-    if (!isTauriContext()) {
-      return Promise.reject(new Error('Agent skills are unavailable on web'))
-    }
+    if (!isTauriContext()) return webServerSkills.read(name, projectRoot)
     return invoke<AgentSkillContent>('read_agent_skill_cmd', {
       name,
       projectRoot: projectRoot || null
