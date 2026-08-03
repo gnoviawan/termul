@@ -546,14 +546,7 @@ export function ChatInputBar({
             inputRef={textareaRef}
           />
         )}
-        <BorderBeam
-          size="md"
-          colorVariant="mono"
-          theme="auto"
-          borderRadius={16}
-          active={busy && !reduced}
-          className="w-full"
-        >
+        <ComposerBeamShell busy={busy} reduced={reduced}>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
             className={cn(
@@ -745,7 +738,7 @@ export function ChatInputBar({
               </div>
             </div>
           </div>
-        </BorderBeam>
+        </ComposerBeamShell>
         <div
           className={cn(
             'flex items-center px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
@@ -772,4 +765,34 @@ export function ChatInputBar({
 /** Inline keyboard-key hint used in the composer footer. */
 function KbdHint({ k }: { k: string }): React.JSX.Element {
   return <kbd className="mr-1 font-mono text-[0.6rem] font-medium text-foreground">{k}</kbd>
+}
+
+/**
+ * BorderBeam only when motion is allowed. Under prefers-reduced-motion the beam
+ * wrapper is omitted entirely (no keyframes / data-active), not merely paused.
+ */
+function ComposerBeamShell({
+  busy,
+  reduced,
+  children
+}: {
+  busy: boolean
+  reduced: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  if (reduced) {
+    return <div className="w-full">{children}</div>
+  }
+  return (
+    <BorderBeam
+      size="md"
+      colorVariant="mono"
+      theme="auto"
+      borderRadius={16}
+      active={busy}
+      className="w-full"
+    >
+      {children}
+    </BorderBeam>
+  )
 }

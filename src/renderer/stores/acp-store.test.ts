@@ -4374,6 +4374,36 @@ describe('acp-store multi-project isolation', () => {
     expect(identity).toEqual({ name: 'Claude', templateId: 'claude-acp' })
   })
 
+  it('selectAgentIdentity falls back to sessionIndex agentConfigId when live map is cold', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'acp-registry:cursor',
+      templateId: 'cursor',
+      name: 'Cursor',
+      command: 'cursor-agent',
+      args: [],
+      env: {}
+    })
+    useAcpStore.setState({
+      configToLiveAgent: {},
+      sessionIndex: [
+        {
+          id: 's-hist',
+          agentId: 'agent-hist',
+          agentConfigId: 'acp-registry:cursor',
+          title: 'History chat',
+          cwd: '/tmp',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'closed'
+        }
+      ]
+    })
+    const identity = selectAgentIdentity(useAcpStore.getState(), 'agent-hist')
+    expect(identity).toEqual({ name: 'Cursor', templateId: 'cursor' })
+  })
+
   it('agent_error with session_id sets lastError on that session', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onAgentError({

@@ -79,7 +79,8 @@ export function ChatHistoryEntryRow({
           onClick={() => onDelete(entry.id)}
           className={cn(
             'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground',
-            "after:absolute after:-inset-1 after:content-['']",
+            // 32px visual + 6px each side → 44×44 hit (match AttachFilesButton).
+            "after:absolute after:-inset-1.5 after:content-['']",
             'opacity-100 transition-colors hover:bg-background/50 hover:text-foreground',
             'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100'
           )}

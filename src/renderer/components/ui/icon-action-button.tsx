@@ -39,7 +39,8 @@ export function IconActionButton({
             "after:absolute after:-inset-2.5 after:content-['']",
             'cursor-pointer text-muted-foreground transition-colors duration-150',
             'hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50',
-            '[&_svg]:block [&_svg]:size-3.5 [&_svg]:shrink-0',
+            // Let explicit success/destructive tokens on the glyph win over muted.
+            '[&_svg]:block [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg.text-success]:text-success',
             className
           )}
         >

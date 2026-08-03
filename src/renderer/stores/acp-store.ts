@@ -5354,15 +5354,20 @@ export interface AgentIdentity {
 
 /**
  * Resolve the configured agent's display name + template (for icon) behind a
- * live session, via the configToLiveAgent mapping. Falls back to nulls when the
- * session was opened from history without a matching live config.
+ * live session, via the configToLiveAgent mapping. Falls back to the session
+ * index `agentConfigId` when the live map is cold (history reopen / empty
+ * state) so `AgentGlyph` still resolves the registry icon instead of Bot.
  */
 export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
   if (!agentId) return { name: null, templateId: null }
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === agentId
   )
-  const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+  let configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
+  if (!configId) {
+    const indexed = state.sessionIndex.find((e) => e.agentId === agentId && e.agentConfigId)
+    configId = indexed?.agentConfigId
+  }
   const config = configId ? state.agentConfigs.find((c) => c.id === configId) : undefined
   return { name: config?.name ?? null, templateId: config?.templateId ?? null }
 }
