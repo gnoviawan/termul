@@ -1326,6 +1326,16 @@ mod tests {
             return;
         }
         let repo = init_repo("branch-list");
+        // A fresh `git init` repo has no commits and therefore no branches yet
+        // (`git branch` lists only refs that exist). Create an empty initial
+        // commit so the default branch comes into existence and is listed.
+        let committed = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-m", "init"],
+        )
+        .map(|c| c.status.success())
+        .unwrap_or(false);
+        assert!(committed, "initial commit should succeed");
         let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         let uri = format!(
             "/git/branch-list?cwd={}",
@@ -1334,9 +1344,13 @@ mod tests {
         let resp = get_request(state, &uri).await;
         let body: IpcBody<Vec<String>> = body_as(resp.into_body()).await;
         assert!(body.success, "{:?}", body.error);
-        // A fresh repo still lists the default branch (main/master).
+        // After the initial commit the default branch (main/master/whatever
+        // git is configured for) exists and is listed.
         let branches = body.data.unwrap_or_default();
-        assert!(branches.iter().any(|b| b == "main" || b == "master"));
+        assert!(
+            !branches.is_empty(),
+            "expected at least one branch after the initial commit, got: {branches:?}"
+        );
     }
 
     #[tokio::test]
