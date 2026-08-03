@@ -139,8 +139,14 @@ fn extract_zip(archive_path: &Path, dest: &Path) -> Result<(), String> {
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
+            // Capture mode before consuming the entry body.
+            let unix_mode = entry.unix_mode();
             let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
             copy_bounded(&mut entry, &mut out, &mut written)?;
+            drop(out);
+            if let Some(mode) = unix_mode {
+                apply_permission_bits(&out_path, mode);
+            }
         }
     }
     Ok(())
@@ -178,8 +184,13 @@ fn extract_tar_gz(archive_path: &Path, dest: &Path) -> Result<(), String> {
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
+            let mode = entry.header().mode().ok();
             let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
             copy_bounded(&mut entry, &mut out, &mut written)?;
+            drop(out);
+            if let Some(mode) = mode {
+                apply_permission_bits(&out_path, mode);
+            }
         }
     }
     Ok(())
@@ -201,6 +212,17 @@ fn extract_archive(archive_path: &Path, dest: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+fn apply_permission_bits(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    // Drop setuid/setgid/sticky from untrusted archives; keep rwx only.
+    let mode = mode & 0o777;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn apply_permission_bits(_path: &Path, _mode: u32) {}
+
+#[cfg(unix)]
 fn mark_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(meta) = std::fs::metadata(path) {
@@ -212,6 +234,72 @@ fn mark_executable(path: &Path) {
 
 #[cfg(not(unix))]
 fn mark_executable(_path: &Path) {}
+
+/// True when `head` looks like a script or native executable that must be
+/// runnable after extract. Zip extracts often land as `0644` even when the
+/// archive carried unix modes (or omitted them entirely) — Cursor's bundled
+/// `node` / `rg` hit Permission denied without this.
+fn looks_like_spawnable(head: &[u8]) -> bool {
+    if head.len() >= 2 && head[0] == b'#' && head[1] == b'!' {
+        return true;
+    }
+    if head.len() >= 4 && head.starts_with(b"\x7fELF") {
+        return true;
+    }
+    // Mach-O (32/64, LE/BE) and fat/universal.
+    const MACHO: &[[u8; 4]] = &[
+        [0xcf, 0xfa, 0xed, 0xfe], // MH_MAGIC_64
+        [0xce, 0xfa, 0xed, 0xfe], // MH_MAGIC
+        [0xfe, 0xed, 0xfa, 0xcf], // MH_CIGAM_64
+        [0xfe, 0xed, 0xfa, 0xce], // MH_CIGAM
+        [0xca, 0xfe, 0xba, 0xbe], // FAT_MAGIC
+        [0xbe, 0xba, 0xfe, 0xca], // FAT_CIGAM
+    ];
+    if head.len() >= 4 {
+        let magic = [head[0], head[1], head[2], head[3]];
+        if MACHO.iter().any(|m| *m == magic) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Walk `root` and +x any shebang / ELF / Mach-O file. Complements archive mode
+/// restoration when the zip omitted unix permissions (common for registry
+/// packages that ship a launcher script + companion `node` binary).
+fn mark_spawnables_in_tree(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut stack: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    while let Some(path) = stack.pop() {
+        let Ok(meta) = path.symlink_metadata() else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            if let Ok(children) = std::fs::read_dir(&path) {
+                stack.extend(children.filter_map(|e| e.ok().map(|e| e.path())));
+            }
+            continue;
+        }
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        let mut head = [0u8; 4];
+        let Ok(n) = file.read(&mut head) else {
+            continue;
+        };
+        if looks_like_spawnable(&head[..n]) {
+            mark_executable(&path);
+        }
+    }
+}
 
 /// Download the archive into `tmp_dir`, extract it into `staging`, and validate
 /// that `cmd` resolves to a regular file inside `staging`. Kept separate from
@@ -262,6 +350,9 @@ async fn stage_archive(
     // Validate the cmd resolves to a regular file inside the staging dir.
     let staged_program = resolve_cmd_in_root(staging, cmd)?;
     mark_executable(&staged_program);
+    // Registry packages (e.g. Cursor) ship a launcher that execs a sibling
+    // `node` / helper binary — those must be runnable too.
+    mark_spawnables_in_tree(staging);
     Ok(())
 }
 
@@ -331,4 +422,57 @@ pub async fn acp_install_registry_binary(
     request: InstallAcpRegistryBinaryRequest,
 ) -> Result<InstallAcpRegistryBinaryOutcome, String> {
     install_registry_binary(&app, request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn looks_like_spawnable_detects_shebang_elf_macho() {
+        assert!(looks_like_spawnable(b"#!/bin/bash\n"));
+        assert!(looks_like_spawnable(b"\x7fELF\x02\x01"));
+        assert!(looks_like_spawnable(&[0xcf, 0xfa, 0xed, 0xfe, 0, 0]));
+        assert!(!looks_like_spawnable(b"{\"ok\":true}"));
+        assert!(!looks_like_spawnable(b""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mark_spawnables_makes_companion_node_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("termul-acp-exec-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let node = dir.join("node");
+        let script = dir.join("cursor-agent");
+        let text = dir.join("readme.txt");
+
+        {
+            let mut f = std::fs::File::create(&node).unwrap();
+            f.write_all(&[0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]).unwrap();
+        }
+        {
+            let mut f = std::fs::File::create(&script).unwrap();
+            f.write_all(b"#!/usr/bin/env bash\necho hi\n").unwrap();
+        }
+        std::fs::write(&text, b"hello").unwrap();
+
+        // Simulate zip extract: plain 0644 files.
+        for p in [&node, &script, &text] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        mark_spawnables_in_tree(&dir);
+
+        let node_mode = std::fs::metadata(&node).unwrap().permissions().mode() & 0o111;
+        let script_mode = std::fs::metadata(&script).unwrap().permissions().mode() & 0o111;
+        let text_mode = std::fs::metadata(&text).unwrap().permissions().mode() & 0o111;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(node_mode, 0o111);
+        assert_eq!(script_mode, 0o111);
+        assert_eq!(text_mode, 0);
+    }
 }
