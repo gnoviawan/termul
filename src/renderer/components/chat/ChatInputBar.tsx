@@ -625,7 +625,8 @@ export function ChatInputBar({
                         : 'Ask anything… (/ for commands, @ for files)'
                   }
                   className={cn(
-                    'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-sm leading-relaxed',
+                    // text-base (16px): floor for iOS Safari — sub-16px inputs zoom on focus.
+                    'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-base leading-relaxed',
                     hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
                     'placeholder:text-muted-foreground focus:outline-none',
                     'disabled:cursor-not-allowed disabled:text-muted-foreground disabled:placeholder:text-muted-foreground/70 max-h-40'
@@ -692,7 +693,7 @@ export function ChatInputBar({
               >
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
-                <div className="relative size-[34px] shrink-0 overflow-visible">
+                <div className="relative size-11 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button

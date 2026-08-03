@@ -39,9 +39,9 @@ export function ChatErrorNotice({
               <button
                 type="button"
                 onClick={onRetry}
-                className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-destructive transition-colors hover:bg-destructive/15 active:scale-[0.96]"
+                className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15 active:scale-[0.96]"
               >
-                <RotateCcw className="size-3" />
+                <RotateCcw className="size-3.5" />
                 Retry
               </button>
             )}
@@ -49,7 +49,10 @@ export function ChatErrorNotice({
               type="button"
               onClick={onDismiss}
               aria-label="Dismiss error"
-              className="flex shrink-0 items-center justify-center rounded-md p-0.5 text-destructive/80 transition-colors hover:bg-destructive/15 hover:text-destructive active:scale-[0.96]"
+              className={cn(
+                'relative flex size-11 shrink-0 items-center justify-center rounded-md text-destructive/80',
+                'transition-colors hover:bg-destructive/15 hover:text-destructive active:scale-[0.96]'
+              )}
             >
               <X className="size-3.5" />
             </button>

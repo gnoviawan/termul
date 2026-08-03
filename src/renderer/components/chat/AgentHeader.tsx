@@ -82,7 +82,7 @@ export function ConfigChip({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search models..."
             aria-label="Search models"
-            className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+            className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
           />
         )}
         <div
@@ -106,7 +106,7 @@ export function ConfigChip({
                 // useOptimisticSelect ignores the repeat when both fire on mouse.
                 onClick={() => handleSelect(v.value)}
                 className={cn(
-                  'flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent',
+                  'flex min-h-11 w-full flex-col items-start rounded px-2 py-2.5 text-left text-sm hover:bg-accent',
                   v.value === displayValue && 'bg-accent/50'
                 )}
               >
@@ -170,7 +170,7 @@ export function ModeChip({
             }}
             onClick={() => handleSelect(m.id)}
             className={cn(
-              'flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent',
+              'flex min-h-11 w-full flex-col items-start rounded px-2 py-2.5 text-left text-sm hover:bg-accent',
               m.id === displayValue && 'bg-accent/50'
             )}
           >

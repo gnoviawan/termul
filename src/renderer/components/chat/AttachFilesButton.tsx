@@ -26,7 +26,9 @@ export function AttachFilesButton({
           disabled={disabled}
           aria-label="Attach files"
           className={cn(
-            'flex size-8 items-center justify-center text-muted-foreground transition-colors',
+            'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
+            // Expand hit to ~44×44 without growing toolbar chrome.
+            "after:absolute after:-inset-1.5 after:content-['']",
             'hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50',
             className
           )}
