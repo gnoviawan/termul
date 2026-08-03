@@ -427,6 +427,7 @@ pub async fn acp_install_registry_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::io::Write;
 
     #[test]

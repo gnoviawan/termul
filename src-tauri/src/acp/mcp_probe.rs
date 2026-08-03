@@ -277,12 +277,33 @@ async fn probe_inner(server: &McpServerConfig) -> ProbeResult {
     }
 }
 
+/// Resolve a stdio command for direct spawning (Windows shim handling).
+///
+/// On Windows, npm/PowerShell CLIs install as `.cmd`/`.bat` batch shims, which
+/// `CreateProcessW` cannot launch directly (os error 193 / "spawn failed").
+/// Reuse the PTY launcher's shim-aware resolver (ADR-004.2): it rewrites e.g.
+/// `npx.cmd` to `node.exe <script>`, prepending the script ahead of the user
+/// args. A resolution failure falls back to the legacy PATH/PATHEXT lookup so
+/// any real spawn error stays observable. On non-Windows the bare command name
+/// is returned unchanged (PATH resolution is left to the spawner).
+fn resolve_stdio_command(command: &str) -> (String, Vec<String>) {
+    match crate::pty::manager::resolve_spawn_program(command) {
+        Ok(resolved) => (resolved.program, resolved.prepend_args),
+        Err(_) => (
+            crate::trackers::git_tracker::resolve_executable(command),
+            Vec::new(),
+        ),
+    }
+}
+
 async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     let command = match server.command.as_deref() {
         Some(c) if !c.trim().is_empty() => c,
         _ => return ProbeResult::disconnected("stdio command is required"),
     };
-    let mut cmd = Command::new(command);
+    let (program, prepend_args) = resolve_stdio_command(command);
+    let mut cmd = Command::new(&program);
+    cmd.args(&prepend_args);
     cmd.args(&server.args);
     for pair in &server.env {
       // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
@@ -474,6 +495,40 @@ mod tests {
         let result = probe(config).await;
         assert_eq!(result.status, ProbeStatus::Disconnected);
         assert!(result.error.unwrap().contains("command is required"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_stdio_command_rewrites_windows_cmd_shim() {
+        // Simulate an npm-installed launcher (e.g. `npx`) that exists only as a
+        // `.cmd` shim — `CreateProcessW` cannot launch batch files directly, so
+        // the resolver must rewrite it to the directly-executable interpreter
+        // with the script prepended ahead of the user args.
+        let dir = std::env::temp_dir().join("termul-test-mcp-cmd-shim");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\npx\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\npx\\bin\\npx"), b"").unwrap();
+
+        let shim_path = dir.join("npx.cmd");
+        let shim_content = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            endLocal & goto #_undefined_# 2>NUL || \"%_prog%\" \"%dp0%\\node_modules\\npx\\bin\\npx\" %*\r\n";
+        std::fs::write(&shim_path, shim_content).unwrap();
+
+        let (program, prepend_args) = resolve_stdio_command(&shim_path.to_string_lossy());
+        assert!(
+            program.ends_with("node.exe"),
+            "expected node.exe, got: {program}"
+        );
+        assert_eq!(prepend_args.len(), 1);
+        assert!(
+            prepend_args[0].contains("node_modules\\npx\\bin\\npx"),
+            "expected npx script first, got: {:?}",
+            prepend_args
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

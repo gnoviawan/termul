@@ -88,6 +88,7 @@ const EMPTY_AUTH_METHODS: AuthMethod[] = []
 const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
 const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
 const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
+const EMPTY_PROBE_ERROR: Record<string, string | undefined> = {}
 
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
@@ -118,6 +119,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const mcpCount = mcpServers.length
   const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
   const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus) ?? EMPTY_PROBE_STATUS
+  const mcpProbeError = useAcpStore((s) => s.mcpProbeError) ?? EMPTY_PROBE_ERROR
   const mcpTools = useAcpStore((s) => s.mcpTools) ?? EMPTY_MCP_TOOLS
   const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
@@ -972,6 +974,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                       })
                   }}
                   probeStatus={mcpProbeStatus}
+                  probeError={mcpProbeError}
                   tools={mcpTools}
                   onLoadTools={(id) => {
                     void loadMcpTools(id)

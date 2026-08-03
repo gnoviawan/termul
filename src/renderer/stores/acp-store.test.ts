@@ -4150,7 +4150,9 @@ describe('acp-store', () => {
       mcpProbeStatus: {},
       mcpTools: {},
       mcpToolsLoaded: {},
-      mcpProbing: {}
+      mcpProbing: {},
+      // A stale error from a previous failed probe must be cleared on success.
+      mcpProbeError: { p1: 'stale error from previous probe' }
     })
     vi.mocked(invoke).mockResolvedValueOnce({
       status: 'connected',
@@ -4168,6 +4170,7 @@ describe('acp-store', () => {
     expect(state.mcpTools.p1).toEqual([{ name: 'read_file', description: 'read a file' }])
     expect(state.mcpToolsLoaded.p1).toBe(true)
     expect(state.mcpProbing.p1).toBe(false)
+    expect(state.mcpProbeError.p1).toBeUndefined()
   })
 
   it('probeMcpServer surfaces a disconnected result without throwing', async () => {
@@ -4178,7 +4181,8 @@ describe('acp-store', () => {
       mcpProbeStatus: {},
       mcpTools: {},
       mcpToolsLoaded: {},
-      mcpProbing: {}
+      mcpProbing: {},
+      mcpProbeError: {}
     })
     vi.mocked(invoke).mockResolvedValueOnce({
       status: 'disconnected',
@@ -4190,6 +4194,8 @@ describe('acp-store', () => {
     expect(state.mcpProbeStatus.p2).toBe('disconnected')
     expect(state.mcpTools.p2).toEqual([])
     expect(state.mcpToolsLoaded.p2).toBe(true)
+    // The backend's redacted failure reason is stored for inline UI surfacing.
+    expect(state.mcpProbeError.p2).toBe('initialize failed: connection refused')
     // A disconnected probe is a ProbeResult, NOT a throw — no error log.
     expect(logFrontendError).not.toHaveBeenCalled()
   })
@@ -4200,7 +4206,8 @@ describe('acp-store', () => {
       mcpProbeStatus: {},
       mcpTools: {},
       mcpToolsLoaded: {},
-      mcpProbing: {}
+      mcpProbing: {},
+      mcpProbeError: {}
     })
     vi.mocked(invoke).mockResolvedValue({ status: 'connected', tools: [] })
     // Two concurrent calls — only one should reach the transport.
@@ -4240,13 +4247,18 @@ describe('acp-store', () => {
       mcpProbeStatus: {},
       mcpTools: {},
       mcpToolsLoaded: {},
-      mcpProbing: {}
+      mcpProbing: {},
+      mcpProbeError: {}
     })
     vi.mocked(invoke).mockRejectedValueOnce(new Error('transport down'))
     await useAcpStore.getState().probeMcpServer('p5')
     const state = useAcpStore.getState()
     expect(state.mcpProbeStatus.p5).toBe('disconnected')
     expect(state.mcpProbing.p5).toBe(false)
+    // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
+    // to a disconnected ProbeResult carrying the (value-free) error — so the
+    // store's success path stores it for inline UI surfacing.
+    expect(state.mcpProbeError.p5).toBe('Error: transport down')
     // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
     // to a disconnected ProbeResult and logs the transport failure itself — the
     // store's success path runs (probe "completed" with a disconnected result),

@@ -28,6 +28,11 @@ interface McpBadgeProps {
   onToggle?: (id: string, enabled: boolean) => void
   /** Per-server probe status (Termul's own rmcp client connection, NOT the agent's). */
   probeStatus?: Record<string, ProbeStatus>
+  /**
+   * Per-server probe error (the backend's redacted `ProbeResult.error`). Shown
+   * as the tooltip on the "Probe failed" line so the reason is diagnosable.
+   */
+  probeError?: Record<string, string | undefined>
   /** Per-server cached `tools/list` output (for the collapsible tool list). */
   tools?: Record<string, McpToolInfo[]>
   /** Auto-probe on first expand of a server's tool list. */
@@ -66,6 +71,7 @@ export function McpBadge({
   servers,
   onToggle,
   probeStatus,
+  probeError,
   tools,
   onLoadTools
 }: McpBadgeProps): React.JSX.Element | null {
@@ -94,6 +100,7 @@ export function McpBadge({
       servers={servers!}
       onToggle={onToggle}
       probeStatus={probeStatus}
+      probeError={probeError}
       tools={tools}
       onLoadTools={onLoadTools}
       className={className}
@@ -106,6 +113,7 @@ interface PopoverProps {
   servers: McpServerSummary[]
   onToggle?: (id: string, enabled: boolean) => void
   probeStatus?: Record<string, ProbeStatus>
+  probeError?: Record<string, string | undefined>
   tools?: Record<string, McpToolInfo[]>
   onLoadTools?: (id: string) => void
   className?: string
@@ -116,6 +124,7 @@ function McpPopover({
   servers,
   onToggle,
   probeStatus,
+  probeError,
   tools,
   onLoadTools,
   className
@@ -148,6 +157,7 @@ function McpPopover({
               server={server}
               onToggle={onToggle}
               probeStatus={probeStatus?.[server.id]}
+              probeError={probeError?.[server.id]}
               tools={tools?.[server.id]}
               onLoadTools={onLoadTools}
             />
@@ -165,6 +175,7 @@ interface ServerRowProps {
   server: McpServerSummary
   onToggle?: (id: string, enabled: boolean) => void
   probeStatus?: ProbeStatus
+  probeError?: string
   tools?: McpToolInfo[]
   onLoadTools?: (id: string) => void
 }
@@ -173,6 +184,7 @@ function McpServerRow({
   server,
   onToggle,
   probeStatus,
+  probeError,
   tools,
   onLoadTools
 }: ServerRowProps): React.JSX.Element {
@@ -228,7 +240,9 @@ function McpServerRow({
               ))}
             </ul>
           ) : probeStatus === 'disconnected' ? (
-            <p className="text-3xs text-destructive">Probe failed — check the server config.</p>
+            <p className="text-3xs text-destructive" title={probeError ?? 'Probe failed.'}>
+              Probe failed — check the server config.
+            </p>
           ) : probeStatus === 'connected' ? (
             <p className="text-3xs text-muted-foreground">No tools available.</p>
           ) : (

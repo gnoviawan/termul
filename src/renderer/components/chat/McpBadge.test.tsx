@@ -116,4 +116,36 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     expect(screen.getByText(/no tools available/i)).toBeInTheDocument()
     expect(screen.queryByText(/probing/i)).not.toBeInTheDocument()
   })
+
+  it('surfaces the redacted probe error as the "Probe failed" tooltip', () => {
+    render(
+      <McpBadge
+        count={1}
+        servers={servers}
+        onToggle={vi.fn()}
+        probeStatus={{ s1: 'disconnected' }}
+        probeError={{ s1: 'initialize failed: connection refused' }}
+      />
+    )
+    openPopover()
+    fireEvent.click(screen.getAllByText(/show tools/i)[0])
+    const failedLine = screen.getByText(/probe failed — check the server config/i)
+    expect(failedLine).toHaveAttribute('title', 'initialize failed: connection refused')
+  })
+
+  it('falls back to a generic tooltip when a disconnected probe has no error', () => {
+    render(
+      <McpBadge
+        count={1}
+        servers={servers}
+        onToggle={vi.fn()}
+        probeStatus={{ s2: 'disconnected' }}
+      />
+    )
+    openPopover()
+    // "Remote" (s2) is the second row — its collapsible is the second trigger.
+    fireEvent.click(screen.getAllByText(/show tools/i)[1])
+    const failedLine = screen.getByText(/probe failed — check the server config/i)
+    expect(failedLine).toHaveAttribute('title', 'Probe failed.')
+  })
 })

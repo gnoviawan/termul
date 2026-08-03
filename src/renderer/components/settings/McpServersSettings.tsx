@@ -21,6 +21,7 @@ import {
   transportOf,
   validateMcpServer
 } from '@/lib/acp-mcp-persistence'
+import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { useAcpStore } from '@/stores/acp-store'
 
 interface ServerDraft {
@@ -124,10 +125,17 @@ export function McpServersSettings(): React.JSX.Element {
   const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
   const loadMcpTools = useAcpStore((state) => state.loadMcpTools)
   const mcpProbeStatus = useAcpStore((state) => state.mcpProbeStatus)
+  const mcpProbeError = useAcpStore((state) => state.mcpProbeError)
   const mcpTools = useAcpStore((state) => state.mcpTools)
   const mcpProbing = useAcpStore((state) => state.mcpProbing)
   const [draft, setDraft] = useState<ServerDraft | null>(null)
   const [saving, setSaving] = useState(false)
+  // "Form | Import JSON" toggle inside the Add/Edit dialog. Import mode pastes
+  // a Claude Desktop `{"mcpServers": {...}}` config (or a bare single server)
+  // and saves each parsed entry with a fresh id.
+  const [importMode, setImportMode] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importErrors, setImportErrors] = useState<string[]>([])
   // Tracks which server rows have their tool list expanded (Settings surface).
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
 
@@ -163,6 +171,40 @@ export function McpServersSettings(): React.JSX.Element {
       })
       setDraft(null)
       toast.success(draft.id ? 'MCP server updated' : 'MCP server added')
+    } catch {
+      toast.error('Could not save the MCP server. Your previous settings were restored.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const closeDialog = (): void => {
+    setDraft(null)
+    setImportMode(false)
+    setImportErrors([])
+  }
+
+  const saveImport = async (): Promise<void> => {
+    setSaving(true)
+    setImportErrors([])
+    try {
+      const { servers, errors } = parseMcpJsonImport(importText)
+      // Valid servers still import when some entries are rejected (per-server
+      // errors stay visible inline so the user can fix and re-paste).
+      for (const server of servers) {
+        await saveMcpServer({ ...server, id: crypto.randomUUID(), enabled: true })
+      }
+      if (errors.length > 0) {
+        setImportErrors(errors)
+        return
+      }
+      if (servers.length === 0) {
+        setImportErrors(['No MCP servers found in the JSON.'])
+        return
+      }
+      toast.success(`Imported ${servers.length} MCP server${servers.length === 1 ? '' : 's'}`)
+      setImportText('')
+      closeDialog()
     } catch {
       toast.error('Could not save the MCP server. Your previous settings were restored.')
     } finally {
@@ -280,9 +322,16 @@ export function McpServersSettings(): React.JSX.Element {
                           ))}
                         </ul>
                       ) : probeStatus === 'disconnected' ? (
-                        <p className="text-3xs text-destructive">
-                          Probe failed — check the server config or network.
-                        </p>
+                        <div className="space-y-1">
+                          <p className="text-3xs text-destructive">
+                            Probe failed — check the server config or network.
+                          </p>
+                          {mcpProbeError[server.id] ? (
+                            <span className="block font-mono text-3xs text-destructive/80">
+                              {mcpProbeError[server.id]}
+                            </span>
+                          ) : null}
+                        </div>
                       ) : probeStatus === 'connected' ? (
                         <p className="text-3xs text-muted-foreground">
                           Probe completed — no tools found.
@@ -360,107 +409,185 @@ export function McpServersSettings(): React.JSX.Element {
         </p>
       </div>
 
-      <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
+      <Dialog
+        open={draft !== null || importMode}
+        onOpenChange={(open) => {
+          if (!open) closeDialog()
+        }}
+      >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{draft?.id ? 'Edit MCP server' : 'Add MCP server'}</DialogTitle>
+            <DialogTitle>
+              {importMode ? 'Import MCP servers' : draft?.id ? 'Edit MCP server' : 'Add MCP server'}
+            </DialogTitle>
             <DialogDescription>
-              Configure one server transport. Each argument or key/value pair uses its own line.
+              {importMode
+                ? 'Paste a Claude Desktop config or a single server object, then parse and save.'
+                : 'Configure one server transport. Each argument or key/value pair uses its own line.'}
             </DialogDescription>
           </DialogHeader>
-          {draft && (
+          <div
+            role="tablist"
+            aria-label="MCP server entry mode"
+            className="flex w-fit gap-1 rounded-lg border border-border bg-secondary/20 p-1"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!importMode}
+              onClick={() => {
+                setImportMode(false)
+                setImportErrors([])
+              }}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                !importMode
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Form
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={importMode}
+              onClick={() => {
+                setImportMode(true)
+                setImportErrors([])
+              }}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                importMode
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Import JSON
+            </button>
+          </div>
+          {importMode ? (
             <div className="space-y-4">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <label htmlFor="mcp-server-name" className="space-y-1 text-sm">
-                  <span>Name</span>
-                  <Input
-                    id="mcp-server-name"
-                    value={draft.name}
-                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                  />
-                </label>
-                <label htmlFor="mcp-server-transport" className="space-y-1 text-sm">
-                  <span>Transport</span>
-                  <select
-                    id="mcp-server-transport"
-                    value={draft.type}
-                    onChange={(event) =>
-                      setDraft({ ...draft, type: event.target.value as McpTransport })
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="stdio">stdio</option>
-                    <option value="http">HTTP</option>
-                    <option value="sse">SSE</option>
-                  </select>
-                </label>
-              </div>
-              {draft.type === 'stdio' ? (
-                <>
-                  <label htmlFor="mcp-command" className="block space-y-1 text-sm">
-                    <span>Command</span>
-                    <Input
-                      id="mcp-command"
-                      value={draft.command}
-                      onChange={(event) => setDraft({ ...draft, command: event.target.value })}
-                    />
-                  </label>
-                  <label htmlFor="mcp-arguments" className="block space-y-1 text-sm">
-                    <span>Arguments (one per line)</span>
-                    <Textarea
-                      id="mcp-arguments"
-                      value={draft.args}
-                      onChange={(event) => setDraft({ ...draft, args: event.target.value })}
-                    />
-                  </label>
-                  <label htmlFor="mcp-environment" className="block space-y-1 text-sm">
-                    <span>Environment (NAME=value, one per line)</span>
-                    <Textarea
-                      id="mcp-environment"
-                      value={draft.env}
-                      onChange={(event) => setDraft({ ...draft, env: event.target.value })}
-                    />
-                  </label>
-                </>
-              ) : (
-                <>
-                  <label htmlFor="mcp-url" className="block space-y-1 text-sm">
-                    <span>URL</span>
-                    <Input
-                      id="mcp-url"
-                      type="url"
-                      value={draft.url}
-                      onChange={(event) => setDraft({ ...draft, url: event.target.value })}
-                    />
-                  </label>
-                  <label htmlFor="mcp-headers" className="block space-y-1 text-sm">
-                    <span>Headers (NAME=value, one per line)</span>
-                    <Textarea
-                      id="mcp-headers"
-                      value={draft.headers}
-                      onChange={(event) => setDraft({ ...draft, headers: event.target.value })}
-                    />
-                  </label>
-                </>
-              )}
-              {!validation.valid && draft.name.trim().length > 0 && (
-                <p role="alert" className="text-xs text-destructive">
-                  {validation.errors.join(' ')}
-                </p>
+              <label htmlFor="mcp-import-json" className="block space-y-1 text-sm">
+                <span>MCP JSON</span>
+                <Textarea
+                  id="mcp-import-json"
+                  rows={10}
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                  placeholder='{"mcpServers": {"dokploy": {"command": "npx", "args": ["-y", "@dokploy/mcp"], "env": {"DOKPLOY_URL": "..."}}}}'
+                  className="font-mono"
+                />
+              </label>
+              {importErrors.length > 0 && (
+                <ul role="alert" className="space-y-1 text-xs text-destructive">
+                  {importErrors.map((error) => (
+                    <li key={error} className="break-words font-mono">
+                      {error}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
+          ) : (
+            draft && (
+              <div className="space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label htmlFor="mcp-server-name" className="space-y-1 text-sm">
+                    <span>Name</span>
+                    <Input
+                      id="mcp-server-name"
+                      value={draft.name}
+                      onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                    />
+                  </label>
+                  <label htmlFor="mcp-server-transport" className="space-y-1 text-sm">
+                    <span>Transport</span>
+                    <select
+                      id="mcp-server-transport"
+                      value={draft.type}
+                      onChange={(event) =>
+                        setDraft({ ...draft, type: event.target.value as McpTransport })
+                      }
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="stdio">stdio</option>
+                      <option value="http">HTTP</option>
+                      <option value="sse">SSE</option>
+                    </select>
+                  </label>
+                </div>
+                {draft.type === 'stdio' ? (
+                  <>
+                    <label htmlFor="mcp-command" className="block space-y-1 text-sm">
+                      <span>Command</span>
+                      <Input
+                        id="mcp-command"
+                        value={draft.command}
+                        onChange={(event) => setDraft({ ...draft, command: event.target.value })}
+                      />
+                    </label>
+                    <label htmlFor="mcp-arguments" className="block space-y-1 text-sm">
+                      <span>Arguments (one per line)</span>
+                      <Textarea
+                        id="mcp-arguments"
+                        value={draft.args}
+                        onChange={(event) => setDraft({ ...draft, args: event.target.value })}
+                      />
+                    </label>
+                    <label htmlFor="mcp-environment" className="block space-y-1 text-sm">
+                      <span>Environment (NAME=value, one per line)</span>
+                      <Textarea
+                        id="mcp-environment"
+                        value={draft.env}
+                        onChange={(event) => setDraft({ ...draft, env: event.target.value })}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <label htmlFor="mcp-url" className="block space-y-1 text-sm">
+                      <span>URL</span>
+                      <Input
+                        id="mcp-url"
+                        type="url"
+                        value={draft.url}
+                        onChange={(event) => setDraft({ ...draft, url: event.target.value })}
+                      />
+                    </label>
+                    <label htmlFor="mcp-headers" className="block space-y-1 text-sm">
+                      <span>Headers (NAME=value, one per line)</span>
+                      <Textarea
+                        id="mcp-headers"
+                        value={draft.headers}
+                        onChange={(event) => setDraft({ ...draft, headers: event.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+                {!validation.valid && draft.name.trim().length > 0 && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {validation.errors.join(' ')}
+                  </p>
+                )}
+              </div>
+            )
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDraft(null)}>
+            <Button type="button" variant="outline" onClick={closeDialog}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              disabled={!validation.valid || saving}
-              onClick={() => void persistDraft()}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
+            {importMode ? (
+              <Button type="button" disabled={saving} onClick={() => void saveImport()}>
+                {saving ? 'Saving…' : 'Parse & Save'}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                disabled={!validation.valid || saving}
+                onClick={() => void persistDraft()}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

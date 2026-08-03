@@ -310,6 +310,14 @@ interface AcpState {
   mcpTools: Record<string, McpToolInfo[]>
   mcpToolsLoaded: Record<string, boolean>
   mcpProbing: Record<string, boolean>
+  /**
+   * Last probe error per server (the backend's redacted `ProbeResult.error` —
+   * already stripped of env/header values, tokens, and credentials). Set on
+   * `status:'disconnected'`, cleared on `connected` and on the transport-throw
+   * path (which synthesizes a disconnected status). Surfaced inline in Settings
+   * and as the chatbox "Probe failed" tooltip so failures are diagnosable.
+   */
+  mcpProbeError: Record<string, string | undefined>
 
   // Sessions
   sessions: Record<SessionId, AcpSession>
@@ -517,7 +525,9 @@ interface AcpState {
   /**
    * Probe a registered MCP server by id (Termul's own rmcp client — NOT the
    * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
-   * `mcpToolsLoaded[id]=true`. Read-only — no persistence, no rollback.
+   * `mcpToolsLoaded[id]=true`, and `mcpProbeError[id]` with the redacted
+   * `ProbeResult.error` on a disconnected result (cleared on connected and on
+   * the transport-throw path). Read-only — no persistence, no rollback.
    * Dedupes concurrent probes for the same id (`mcpProbing[id]`).
    */
   probeMcpServer: (id: string) => Promise<void>
@@ -2469,6 +2479,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   mcpTools: {},
   mcpToolsLoaded: {},
   mcpProbing: {},
+  mcpProbeError: {},
   sessions: {},
   activeSessionId: null,
   sessionUsage: {},
@@ -4148,16 +4159,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         mcpProbeStatus: { ...s.mcpProbeStatus, [id]: result.status },
         mcpTools: { ...s.mcpTools, [id]: result.tools },
         mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: true },
-        mcpProbing: { ...s.mcpProbing, [id]: false }
+        mcpProbing: { ...s.mcpProbing, [id]: false },
+        // Disconnected → keep the backend's (redacted) reason for the UI; a
+        // successful probe clears any stale error.
+        mcpProbeError: {
+          ...s.mcpProbeError,
+          [id]: result.status === 'connected' ? undefined : result.error
+        }
       }))
     } catch (err) {
       // Transport/parse failure (NOT a disconnected probe — that's a
       // `status:'disconnected'` ProbeResult, not a throw). Surface the
       // failure in the dot + log WITHOUT env/header values, tokens, or
-      // credentials.
+      // credentials. The synthetic disconnected status has no real backend
+      // error to show, so the probe error is cleared.
       set((s) => ({
         mcpProbeStatus: { ...s.mcpProbeStatus, [id]: 'disconnected' },
-        mcpProbing: { ...s.mcpProbing, [id]: false }
+        mcpProbing: { ...s.mcpProbing, [id]: false },
+        mcpProbeError: { ...s.mcpProbeError, [id]: undefined }
       }))
       void logFrontendError({
         source: 'acp-store.probeMcpServer',

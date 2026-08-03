@@ -89,6 +89,7 @@ vi.mock('@/stores/acp-store', () => ({
       })),
       setMcpServerEnabled: mockSetMcpServerEnabled,
       mcpProbeStatus: {} as Record<string, string>,
+      mcpProbeError: {} as Record<string, string | undefined>,
       mcpTools: {} as Record<string, unknown[]>,
       mcpToolsLoaded: {} as Record<string, boolean>,
       mcpProbing: {} as Record<string, boolean>,

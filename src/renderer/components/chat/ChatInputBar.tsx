@@ -145,6 +145,7 @@ export function ChatInputBar({
   const mcpServers = useAcpStore((s) => s.mcpServers)
   const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
   const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus)
+  const mcpProbeError = useAcpStore((s) => s.mcpProbeError)
   const mcpTools = useAcpStore((s) => s.mcpTools)
   const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
   const [value, setValue] = useState('')
@@ -542,6 +543,7 @@ export function ChatInputBar({
         })
       }}
       probeStatus={mcpProbeStatus}
+      probeError={mcpProbeError}
       tools={mcpTools}
       onLoadTools={(id) => {
         void loadMcpTools(id)

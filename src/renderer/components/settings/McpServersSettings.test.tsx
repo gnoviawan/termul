@@ -20,6 +20,7 @@ function seedStore(): void {
   useAcpStore.setState({
     mcpServers: [],
     mcpProbeStatus: {},
+    mcpProbeError: {},
     mcpTools: {},
     mcpToolsLoaded: {},
     mcpProbing: {},
@@ -133,6 +134,98 @@ describe('McpServersSettings', () => {
     expect(
       screen.getByTitle('Disconnected (Termul could not reach this server)')
     ).toBeInTheDocument()
+  })
+
+  it('shows the backend probe error inline for a disconnected server', () => {
+    useAcpStore.setState({
+      mcpServers: [
+        { id: 's5', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
+      ],
+      mcpProbeStatus: { s5: 'disconnected' },
+      mcpProbeError: { s5: 'initialize failed: connection refused' }
+    })
+    render(<McpServersSettings />)
+    // The error detail lives inside the collapsed tools disclosure; expand via
+    // the disconnected-specific trigger, then assert the redacted reason.
+    fireEvent.click(screen.getByText(/probe failed — retry/i))
+    expect(
+      screen.getByText(/probe failed — check the server config or network/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText('initialize failed: connection refused')).toBeInTheDocument()
+  })
+
+  it('imports a Claude Desktop config and saves each entry with a fresh id', async () => {
+    render(<McpServersSettings />)
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /import json/i }))
+    fireEvent.change(screen.getByLabelText('MCP JSON'), {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            dokploy: {
+              command: 'npx',
+              args: ['-y', '@dokploy/mcp'],
+              env: { DOKPLOY_URL: 'https://dokploy.test' }
+            }
+          }
+        })
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /parse & save/i }))
+    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
+    expect(saveMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stdio',
+        name: 'dokploy',
+        command: 'npx',
+        args: ['-y', '@dokploy/mcp'],
+        env: [{ name: 'DOKPLOY_URL', value: 'https://dokploy.test' }],
+        enabled: true
+      })
+    )
+    // The saved id is a freshly minted one — never a registry id from the JSON.
+    expect(saveMcpServer.mock.calls[0]?.[0].id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    )
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/imported 1 mcp server/i))
+    )
+  })
+
+  it('keeps invalid JSON inline and does not save anything', async () => {
+    render(<McpServersSettings />)
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /import json/i }))
+    fireEvent.change(screen.getByLabelText('MCP JSON'), {
+      target: { value: '{ this is not json' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /parse & save/i }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/invalid json/i))
+    expect(saveMcpServer).not.toHaveBeenCalled()
+  })
+
+  it('imports the valid entries while surfacing per-server errors inline', async () => {
+    render(<McpServersSettings />)
+    fireEvent.click(screen.getByRole('button', { name: /add server/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /import json/i }))
+    fireEvent.change(screen.getByLabelText('MCP JSON'), {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            good: { command: 'node', args: ['server.js'] },
+            bad: { command: '   ' }
+          }
+        })
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /parse & save/i }))
+    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
+    expect(saveMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'good', command: 'node', args: ['server.js'] })
+    )
+    // The rejected entry's reason stays visible so the user can fix and re-paste.
+    expect(screen.getByRole('alert')).toHaveTextContent(/command is required for stdio/i)
+    expect(toastSuccess).not.toHaveBeenCalled()
   })
 
   it('renders the tool list (read-only) inside the collapsible on expand', async () => {
