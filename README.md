@@ -91,7 +91,33 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 ## 📸 Screenshots
 
-![Termul Manager Screenshot](img/termul.png)
+### Home
+
+![Home](img/01-home.jpg)
+
+### Agent Chat
+
+![Agent Chat](img/02-agent-chat.jpg)
+
+### Markdown Editor
+
+![Markdown Editor](img/03-markdown-editor.jpg)
+
+### Agent Tools
+
+![Agent Tools](img/04-agent-tools.jpg)
+
+### Code Editor
+
+![Code Editor](img/05-code-editor.jpg)
+
+### Git Panel
+
+![Git Panel](img/06-git-panel.jpg)
+
+### Git History
+
+![Git History](img/07-git-history.jpg)
 
 ## 📦 Install
 
