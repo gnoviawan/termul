@@ -77,7 +77,13 @@ async function performInitNotificationPermissions(): Promise<void> {
     }
 
     const result = await Notification.requestPermission()
-    permissionGranted = result === 'granted'
+    // Cache grants, not denials: `Notification.permission` can change via
+    // browser settings, and a stale `false` would suppress a later grant.
+    // Leaving `null` lets `sendDesktopNotification` re-check on the next send
+    // (`requestPermission` is a no-op-prompt once the user has decided).
+    if (result === 'granted') {
+      permissionGranted = true
+    }
   } catch (error) {
     // Swallow — best-effort facade; never throw to the UI on permission failure.
     console.error('[Notification] Failed to request web notification permission:', error)

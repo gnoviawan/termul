@@ -222,6 +222,26 @@ describe('tauriSessionApi (web vs desktop branch)', () => {
       expect(localStorage.getItem(`${STORE_FILE}::${SESSION_KEY}`)).toBeNull()
       expect(mockTauriStore.delete).not.toHaveBeenCalled()
     })
+
+    it('web: clear returns SESSION_STORE_ERROR when localStorage.removeItem fails', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      const data = validSessionData()
+      await tauriSessionApi.save(data)
+      const spy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+        throw new Error('SecurityError')
+      })
+
+      try {
+        const result = await tauriSessionApi.clear()
+
+        expect(result.success).toBe(false)
+        if (!result.success) {
+          expect(result.code).toBe('SESSION_STORE_ERROR')
+        }
+      } finally {
+        spy.mockRestore()
+      }
+    })
   })
 
   describe('flush (web branch: localStorage)', () => {

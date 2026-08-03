@@ -102,12 +102,17 @@ class WebSessionStore implements SessionStoreAdapter {
   async delete(key: string): Promise<boolean> {
     if (typeof localStorage === 'undefined') return false
     const composite = this.compositeKey(key)
-    const had = localStorage.getItem(composite) !== null
+    let had: boolean
     try {
-      localStorage.removeItem(composite)
+      had = localStorage.getItem(composite) !== null
     } catch {
-      // SecurityError (private mode) — degrade silently.
+      // Corrupt access / SecurityError on read — degrade silently, matching `get()`.
+      return false
     }
+    // Propagate removeItem failures so `clear()` can surface a
+    // SESSION_STORE_ERROR instead of reporting a false success (the same
+    // no-silent-write-failure contract `set()` upholds).
+    localStorage.removeItem(composite)
     return had
   }
 

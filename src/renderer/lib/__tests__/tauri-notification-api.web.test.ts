@@ -84,13 +84,31 @@ describe('tauri-notification-api (web vs desktop branch)', () => {
       expect(mockRequestPermission).not.toHaveBeenCalled()
     })
 
-    it('web: maps denied → false', async () => {
+    it('web: does not cache a denial (leaves re-checkable so a later grant via settings is picked up)', async () => {
       mockIsTauriContext.mockReturnValue(false)
       mockNotificationRequestPermission.mockResolvedValue('denied')
 
       await initNotificationPermissions()
 
+      // Denial is not cached as `false` — a later send re-checks.
       expect(mockNotificationRequestPermission).toHaveBeenCalledTimes(1)
+    })
+
+    it('web: sendDesktopNotification re-checks after a denial and picks up a later grant', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      // First init: denied.
+      mockNotificationRequestPermission.mockResolvedValue('denied')
+      await initNotificationPermissions()
+
+      // Send while denied — no notification, and permission was re-checked.
+      mockNotificationConstructor.mockClear()
+      await sendDesktopNotification('Project', 'term — DONE')
+      expect(mockNotificationConstructor).not.toHaveBeenCalled()
+
+      // User grants via browser settings → next send picks it up.
+      mockNotificationRequestPermission.mockResolvedValue('granted')
+      await sendDesktopNotification('Project', 'term — DONE')
+      expect(mockNotificationConstructor).toHaveBeenCalledTimes(1)
     })
 
     it('web: short-circuits when Notification.permission === "granted" (no prompt)', async () => {
