@@ -21,6 +21,15 @@ interface SkillChipProps {
  * the reduced `rounded-md` corner (vs the old fully-round pill) reads as a
  * compact tag without growing the line box or shifting the baseline.
  *
+ * Caret alignment: the chip is wider than the transparent token text (icon +
+ * pill padding + border + gap + `font-medium` name vs the textarea's regular
+ * weight), so `measureSkillPadding` (see `skill-chip-metrics.ts`) pads the
+ * token with invisible FIGURE-SPACE chars to match. The horizontal overhead of
+ * this component's classes — `px-2` (16) + `border` (2) + `gap-1` (4) +
+ * `Sparkles` `size=12` (12) = 34px — is captured as `SKILL_CHIP_OVERHEAD_PX` in
+ * `skill-chip-metrics.ts`. If you change the padding/border/gap/icon size
+ * here, update that constant so the caret stays aligned.
+ *
  * Always non-interactive by construction: there is no `onRemove` or any other
  * interactive/removal prop. In the composer, Backspace removes a chip via the
  * token model (`removeSkillTokenBeforeCaret`), not an X button; in the timeline

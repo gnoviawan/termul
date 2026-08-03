@@ -5,12 +5,17 @@ import {
   parseSkillSegments,
   removeSkillTokenBeforeCaret,
   replaceSkillTokensInline,
+  SKILL_PAD_CHAR,
+  SKILL_PAD_END,
+  SKILL_PAD_START,
   SKILL_TOKEN_END,
   SKILL_TOKEN_START,
   skillToken
 } from '@/lib/skill-tokens'
 
 const T = (name: string): string => skillToken(name)
+/** A token carrying a 3-char FIGURE-SPACE padding block (as `measureSkillPadding` would). */
+const Tp = (name: string, n = 3): string => skillToken(name, SKILL_PAD_CHAR.repeat(n))
 
 describe('parseSkillSegments', () => {
   it('returns no segments for an empty value', () => {
@@ -23,36 +28,57 @@ describe('parseSkillSegments', () => {
 
   it('parses a lone token into a single skill segment', () => {
     expect(parseSkillSegments(T('git-worktree'))).toEqual([
-      { kind: 'skill', name: 'git-worktree', raw: T('git-worktree') }
+      { kind: 'skill', name: 'git-worktree', raw: T('git-worktree'), padding: '' }
     ])
   })
 
   it('parses text + token + text in order', () => {
     expect(parseSkillSegments(`use this ${T('git-worktree')} then`)).toEqual([
       { kind: 'text', text: 'use this ' },
-      { kind: 'skill', name: 'git-worktree', raw: T('git-worktree') },
+      { kind: 'skill', name: 'git-worktree', raw: T('git-worktree'), padding: '' },
       { kind: 'text', text: ' then' }
     ])
   })
 
   it('parses adjacent tokens with no text between them', () => {
     expect(parseSkillSegments(`${T('a')}${T('b')}`)).toEqual([
-      { kind: 'skill', name: 'a', raw: T('a') },
-      { kind: 'skill', name: 'b', raw: T('b') }
+      { kind: 'skill', name: 'a', raw: T('a'), padding: '' },
+      { kind: 'skill', name: 'b', raw: T('b'), padding: '' }
     ])
   })
 
   it('parses a token at the start and a token at the end', () => {
     expect(parseSkillSegments(`${T('a')}mid${T('b')}`)).toEqual([
-      { kind: 'skill', name: 'a', raw: T('a') },
+      { kind: 'skill', name: 'a', raw: T('a'), padding: '' },
       { kind: 'text', text: 'mid' },
-      { kind: 'skill', name: 'b', raw: T('b') }
+      { kind: 'skill', name: 'b', raw: T('b'), padding: '' }
     ])
   })
 
   it('handles hyphenated skill names', () => {
     expect(parseSkillSegments(T('release-version'))).toEqual([
-      { kind: 'skill', name: 'release-version', raw: T('release-version') }
+      { kind: 'skill', name: 'release-version', raw: T('release-version'), padding: '' }
+    ])
+  })
+
+  it('consumes the padding block into the skill segment (not as text)', () => {
+    const token = Tp('git-worktree', 3)
+    expect(parseSkillSegments(`use ${token} now`)).toEqual([
+      { kind: 'text', text: 'use ' },
+      {
+        kind: 'skill',
+        name: 'git-worktree',
+        raw: token,
+        padding: SKILL_PAD_CHAR.repeat(3)
+      },
+      { kind: 'text', text: ' now' }
+    ])
+  })
+
+  it('parses a padded token with no surrounding text', () => {
+    const token = Tp('a', 1)
+    expect(parseSkillSegments(token)).toEqual([
+      { kind: 'skill', name: 'a', raw: token, padding: SKILL_PAD_CHAR }
     ])
   })
 
@@ -64,6 +90,19 @@ describe('parseSkillSegments', () => {
   it('treats an empty-name token as plain text', () => {
     const raw = `${SKILL_TOKEN_START}${SKILL_TOKEN_END}`
     expect(parseSkillSegments(raw)).toEqual([{ kind: 'text', text: raw }])
+  })
+
+  it('drops a malformed padding block (no closing sentinel) but keeps the token', () => {
+    const malformed = `${SKILL_TOKEN_START}git-worktree${SKILL_TOKEN_END}${SKILL_PAD_START}pad`
+    const segments = parseSkillSegments(malformed)
+    expect(segments).toHaveLength(2)
+    expect(segments[0]).toEqual({
+      kind: 'skill',
+      name: 'git-worktree',
+      raw: `${SKILL_TOKEN_START}git-worktree${SKILL_TOKEN_END}`,
+      padding: ''
+    })
+    expect(segments[1]).toEqual({ kind: 'text', text: `${SKILL_PAD_START}pad` })
   })
 })
 
@@ -100,6 +139,14 @@ describe('insertSkillToken', () => {
     expect(value).toBe(`hello${T('git-worktree')}  world`)
     expect(caret).toBe(`hello`.length + T('git-worktree').length + 1)
   })
+
+  it('splices the padding block inside the token so the caret lands after the space', () => {
+    const padding = SKILL_PAD_CHAR.repeat(3)
+    const { value, caret } = insertSkillToken('hello ', 6, 'git-worktree', 0, padding)
+    expect(value).toBe(`hello ${skillToken('git-worktree', padding)} `)
+    expect(caret).toBe(`hello `.length + skillToken('git-worktree', padding).length + 1)
+    expect(caret).toBe(value.length)
+  })
 })
 
 describe('removeSkillTokenBeforeCaret', () => {
@@ -130,6 +177,31 @@ describe('removeSkillTokenBeforeCaret', () => {
     if (!result.removed) return
     expect(result.value).toBe('')
     expect(result.caret).toBe(0)
+  })
+
+  it('removes a padded token plus its trailing space in one backspace', () => {
+    const token = Tp('git-worktree', 4)
+    const value = `use this ${token} `
+    const result = removeSkillTokenBeforeCaret(value, value.length)
+    expect(result.removed).toBe(true)
+    if (!result.removed) return
+    expect(result.value).toBe('use this ')
+    expect(result.caret).toBe('use this '.length)
+  })
+
+  it('removes a padded token with no trailing space (caret right after the pad end)', () => {
+    const token = Tp('git-worktree', 2)
+    const value = `use this ${token}`
+    const result = removeSkillTokenBeforeCaret(value, value.length)
+    expect(result.removed).toBe(true)
+    if (!result.removed) return
+    expect(result.value).toBe('use this ')
+    expect(result.caret).toBe('use this '.length)
+  })
+
+  it('returns removed:false when a stray pad-end has no matching pad-start before the caret', () => {
+    // A lone \uE003 with no \uE002 before it must not be mistaken for a token.
+    expect(removeSkillTokenBeforeCaret(`hello ${SKILL_PAD_END} `, 8).removed).toBe(false)
   })
 
   it('returns removed:false when the caret is in plain text (default one-char backspace)', () => {
@@ -173,6 +245,15 @@ describe('replaceSkillTokensInline', () => {
   it('does not touch @mentions or /slashes in the text', () => {
     expect(replaceSkillTokensInline('@user /cmd')).toBe('@user /cmd')
   })
+
+  it('strips the padding block — a padded token still maps to (name) only', () => {
+    expect(replaceSkillTokensInline(`use this ${Tp('git-worktree', 5)} now`)).toBe(
+      'use this (git-worktree) now'
+    )
+    // No figure-space chars leak into the wire text.
+    expect(replaceSkillTokensInline(Tp('a', 3))).toBe('(a)')
+    expect(replaceSkillTokensInline(Tp('a', 3)).includes(SKILL_PAD_CHAR)).toBe(false)
+  })
 })
 
 describe('extractSkillNames', () => {
@@ -193,5 +274,26 @@ describe('extractSkillNames', () => {
       'git-worktree',
       'release-version'
     ])
+  })
+
+  it('extracts names from padded tokens (padding is not part of the name)', () => {
+    expect(extractSkillNames(`${Tp('git-worktree', 4)} ${Tp('a', 1)}`)).toEqual([
+      'git-worktree',
+      'a'
+    ])
+  })
+})
+
+describe('skillToken', () => {
+  it('omits the padding block when padding is empty (backward compatible)', () => {
+    expect(skillToken('git-worktree')).toBe(`${SKILL_TOKEN_START}git-worktree${SKILL_TOKEN_END}`)
+    expect(skillToken('git-worktree', '')).toBe(skillToken('git-worktree'))
+  })
+
+  it('wraps the padding inside the sentinel block after the name token', () => {
+    const pad = SKILL_PAD_CHAR.repeat(3)
+    expect(skillToken('git-worktree', pad)).toBe(
+      `${SKILL_TOKEN_START}git-worktree${SKILL_TOKEN_END}${SKILL_PAD_START}${pad}${SKILL_PAD_END}`
+    )
   })
 })
