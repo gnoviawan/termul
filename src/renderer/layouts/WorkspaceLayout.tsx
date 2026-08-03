@@ -1804,8 +1804,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
         {/* Mobile-only full-width Git Changes sheet. GitPanel branches on
             useMobileWebShell() internally to render a single-column stacked
             layout (file list → diff + back). Only mounted in the mobile path
-            so the desktop two-column GitPanel (a workspace tab) is untouched. */}
-        <Sheet open={gitSheetOpen} onOpenChange={setGitSheetOpen}>
+            so the desktop two-column GitPanel (a workspace tab) is untouched.
+            The `open` prop is gated on `activeProject?.path` in addition to
+            `gitSheetOpen` so the sheet can never be open during the
+            empty-content race when the active project loses its path; the
+            `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
+        <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
           <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
             {activeProject?.path ? (
               <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />

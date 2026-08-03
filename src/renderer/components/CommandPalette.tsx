@@ -463,7 +463,7 @@ export function CommandPalette({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: -8 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-[100vw] overflow-hidden rounded-lg border border-border bg-card shadow-2xl sm:max-w-xl"
+            className="w-full max-w-[100vw] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:max-w-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Command
