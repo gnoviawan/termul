@@ -2,6 +2,7 @@ import type { KeyboardEvent, MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import { measureSkillPadding } from '@/lib/skill-chip-metrics'
 import {
   extractSkillNames,
   insertSkillToken,
@@ -156,11 +157,18 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         const caret = textareaRef.current?.selectionStart ?? value.length
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
+        // Measure the FIGURE-SPACE padding needed so the transparent textarea
+        // token text is as wide as the `SkillChip` pill the overlay renders over
+        // it — without this the caret lands ~6 chars behind the chip. Synchronous
+        // canvas measurement; returns '' in jsdom / when no canvas, degrading to
+        // the unpadded token.
+        const padding = measureSkillPadding(item.name, textareaRef.current)
         const { value: next, caret: nextCaret } = insertSkillToken(
           value,
           insertAt,
           item.name,
-          deleteBefore
+          deleteBefore,
+          padding
         )
         skillPathsRef.current[item.name] = item.path
         setValue(next)
