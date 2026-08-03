@@ -841,7 +841,9 @@ describe('WorkspaceLayout - Empty States', () => {
 
     it('opens the color theme picker from backend shortcut callbacks', async () => {
       let backendShortcut: ((shortcut: string) => void) | undefined
-      mockApi.keyboard.onShortcut.mockImplementationOnce((callback: (shortcut: string) => void) => {
+      // Prefer mockImplementation over Once: Strict Mode remounts / sibling
+      // subscribers can consume a one-shot mock before the layout effect runs.
+      mockApi.keyboard.onShortcut.mockImplementation((callback: (shortcut: string) => void) => {
         backendShortcut = callback
         return vi.fn()
       })
