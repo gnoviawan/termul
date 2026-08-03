@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isAgentConnected } from './AgentConnectionLamp'
+import { isAgentConnected } from './is-agent-connected'
 
 describe('isAgentConnected', () => {
   it('returns true when session is open and agent is connected', () => {

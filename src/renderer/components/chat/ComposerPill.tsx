@@ -153,5 +153,3 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
   }
 )
 ComposerPill.displayName = 'ComposerPill'
-
-export { composerPillVariants }

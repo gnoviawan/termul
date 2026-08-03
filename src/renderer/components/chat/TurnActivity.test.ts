@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatTurnDuration } from './TurnActivity'
+import { formatTurnDuration } from './format-turn-duration'
 
 describe('formatTurnDuration', () => {
   it('returns null when no duration is available', () => {

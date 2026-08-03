@@ -2,14 +2,6 @@ import { Circle } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
-import type { AgentStatus } from '@/stores/acp-store'
-
-export function isAgentConnected(
-  session: { status: string } | null | undefined,
-  agentStatus: AgentStatus | undefined
-): boolean {
-  return session != null && session.status !== 'closed' && agentStatus === 'connected'
-}
 
 function connectionLabel(connected: boolean, reconnecting: boolean): string {
   if (reconnecting) return 'Reconnecting'
