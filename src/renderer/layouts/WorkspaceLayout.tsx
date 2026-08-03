@@ -11,6 +11,7 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { FileExplorer } from '@/components/file-explorer/FileExplorer'
+import { GitPanel } from '@/components/git/GitPanel'
 import { MobileChatShell } from '@/components/mobile/MobileChatShell'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ResizeEdges } from '@/components/ResizeEdges'
@@ -25,6 +26,7 @@ import {
   SidebarToggleButton,
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import {
   useUpdateAppSetting,
@@ -200,6 +202,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
+  // Mobile-only full-width Sheet rendering GitPanel (single-column mobile branch).
+  const [gitSheetOpen, setGitSheetOpen] = useState(false)
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
   const isLoaded = useProjectsLoaded()
@@ -1003,6 +1007,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [activeProject?.path]
   )
 
+  // If the active project loses its path (switched/deleted) while the mobile
+  // Git Changes sheet is open, close it so it never lingers empty.
+  useEffect(() => {
+    if (gitSheetOpen && !activeProject?.path) {
+      setGitSheetOpen(false)
+    }
+  }, [gitSheetOpen, activeProject?.path])
+
   const handleAddGitHistoryTab = useCallback(
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
@@ -1759,6 +1771,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
         <MobileChatShell
           onNewChat={handleOpenAgentChat}
           canNewChat={Boolean(activeProject?.path)}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+          onOpenGitChanges={() => setGitSheetOpen(true)}
           onNewTerminal={() => handleAddTerminal(undefined)}
           onCloseTerminal={handleCloseTerminal}
           onRenameTerminal={renameTerminal}
@@ -1786,6 +1800,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
             </main>
           </PaneDndProvider>
         </MobileChatShell>
+
+        {/* Mobile-only full-width Git Changes sheet. GitPanel branches on
+            useMobileWebShell() internally to render a single-column stacked
+            layout (file list → diff + back). Only mounted in the mobile path
+            so the desktop two-column GitPanel (a workspace tab) is untouched. */}
+        <Sheet open={gitSheetOpen} onOpenChange={setGitSheetOpen}>
+          <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
+            {activeProject?.path ? (
+              <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+            ) : null}
+          </SheetContent>
+        </Sheet>
 
         {appModals}
       </div>

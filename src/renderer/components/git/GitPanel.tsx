@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronLeft,
   ClipboardPaste,
   Columns2,
   FileCode,
@@ -42,6 +43,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { gitApi } from '@/lib/git-api'
 import {
   type GitDiffViewMode,
@@ -650,6 +652,593 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
   const stagedSelectionCount = selectionSection === 'staged' ? selectedPaths.size : 0
   const unstagedSelectionCount = selectionSection === 'unstaged' ? selectedPaths.size : 0
+
+  const isMobileWebShell = useMobileWebShell()
+
+  // Mobile web shell (≤767px): render a stacked single-panel layout instead
+  // of the desktop two-column split. The store's `selectedFile` doubles as the
+  // mobile stack pointer — file list when null, diff view + back button when
+  // set. All handlers/selectors are reused unchanged; only the layout JSX and
+  // the outer wrapper className (`w-full` vs `w-80 border-r`) differ. The
+  // desktop return below this block is byte-identical to the pre-CAP-5 code.
+  if (isMobileWebShell) {
+    return (
+      <div className="flex h-full w-full bg-background overflow-hidden">
+        {selectedFile ? (
+          <div className="flex w-full flex-col min-w-0 bg-card/30">
+            <div className="border-b border-border bg-background p-3 flex items-center justify-between gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0"
+                aria-label="Back to file list"
+                onClick={() => setSelectedFile(null)}
+              >
+                <ChevronLeft size={16} />
+              </Button>
+              <div className="flex items-center gap-3 overflow-hidden min-w-0">
+                <FileCode size={16} className="text-primary shrink-0" />
+                <span className="text-sm font-medium truncate">{selectedFile}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <div
+                  className="flex items-center rounded-md border border-border p-0.5"
+                  role="group"
+                  aria-label="Diff view mode"
+                >
+                  <Button
+                    type="button"
+                    variant={diffViewMode === 'inline' ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Inline diff"
+                    aria-pressed={diffViewMode === 'inline'}
+                    onClick={() => {
+                      setDiffViewMode('inline')
+                      saveGitDiffViewMode('inline')
+                    }}
+                  >
+                    <AlignLeft size={14} />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={diffViewMode === 'split' ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Side-by-side diff"
+                    aria-pressed={diffViewMode === 'split'}
+                    onClick={() => {
+                      setDiffViewMode('split')
+                      saveGitDiffViewMode('split')
+                    }}
+                  >
+                    <Columns2 size={14} />
+                  </Button>
+                </div>
+                <span className="label-group text-muted-foreground">
+                  {selectedStaged ? 'Staged' : 'Working tree'}
+                </span>
+              </div>
+            </div>
+            <ScrollArea className="flex-1 font-mono text-xs">
+              {currentDiff === undefined || currentDiff === null ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  <RefreshCw className="animate-spin mr-2" size={16} />
+                  Loading diff...
+                </div>
+              ) : currentDiff.trim().length > 0 ? (
+                <GitDiffView
+                  diff={currentDiff}
+                  mode={diffViewMode}
+                  filePath={selectedFile ?? undefined}
+                />
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
+                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
+                    <FileText size={18} />
+                  </div>
+                  <h3 className="text-sm font-medium text-foreground mb-1">No diff available</h3>
+                  <p className="text-xs max-w-[260px]">
+                    This file may be ignored by Git, unchanged relative to the selected base, or
+                    unavailable for diff preview.
+                  </p>
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+        ) : (
+          <div className="flex w-full flex-col shrink-0">
+            <div className="p-3 border-b border-border flex flex-col gap-2 bg-muted/20">
+              <div className="flex items-center justify-between">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
+                    >
+                      <GitBranch size={13} className="text-muted-foreground shrink-0" />
+                      <span className="truncate">{commitContext?.branch ?? 'Detached HEAD'}</span>
+                      <ChevronDown
+                        size={12}
+                        className="text-muted-foreground opacity-50 shrink-0"
+                      />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    className="w-56 max-h-[300px] overflow-y-auto z-50"
+                  >
+                    <DropdownMenuItem
+                      onClick={() => setIsCreateBranchOpen(true)}
+                      className="flex items-center gap-2 text-xs cursor-pointer"
+                    >
+                      <Plus size={12} />
+                      Create new branch...
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {branches.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        No branches found
+                      </div>
+                    ) : (
+                      branches.map((b) => (
+                        <DropdownMenuItem
+                          key={b}
+                          onClick={() => handleSwitchBranch(b)}
+                          className={cn(
+                            'flex items-center justify-between text-xs cursor-pointer',
+                            b === commitContext?.branch && 'bg-accent font-semibold'
+                          )}
+                        >
+                          <span className="truncate">{b}</span>
+                          {b === commitContext?.branch && (
+                            <Check size={12} className="text-primary" />
+                          )}
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  title="Stash changes"
+                  onClick={() => setIsStashOpen(true)}
+                  disabled={!hasUncommittedChanges || isGenerating}
+                >
+                  <Archive size={14} />
+                </Button>
+              </div>
+
+              <div className="relative">
+                <Search
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  size={14}
+                />
+                <input
+                  type="text"
+                  placeholder="Filter changes..."
+                  className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <ScrollArea className="flex-1 w-full">
+              <div className="p-2 pr-3 space-y-4 w-full">
+                {stagedFiles.length > 0 && (
+                  <div className="space-y-1">
+                    <SectionHeader
+                      label="Staged Changes"
+                      count={stagedFiles.length}
+                      selectionCount={stagedSelectionCount}
+                    >
+                      <SectionAction
+                        icon={<Minus size={13} />}
+                        label="Unstage all changes"
+                        disabled={isMutating || isGenerating}
+                        onClick={() => runUnstage(stagedFiles.map((f) => f.path))}
+                      />
+                    </SectionHeader>
+                    {stagedFiles.map((file: GitStatusDetail) => {
+                      const inSelection =
+                        selectionSection === 'staged' && selectedPaths.has(file.path)
+                      return (
+                        <FileItem
+                          key={file.path}
+                          file={file}
+                          isActive={selectedFile === file.path && selectedStaged}
+                          isSelected={inSelection}
+                          onClick={(e) => handleFileClick(e, file.path, true, stagedFiles)}
+                        >
+                          <RowAction
+                            icon={<Minus size={13} />}
+                            label="Unstage changes"
+                            disabled={isMutating || isGenerating}
+                            onClick={() => runUnstage(targetsFor(file.path, 'staged'))}
+                          />
+                        </FileItem>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <SectionHeader
+                    label="Changes"
+                    count={unstagedFiles.length}
+                    selectionCount={unstagedSelectionCount}
+                  >
+                    {unstagedFiles.length > 0 && (
+                      <>
+                        <SectionAction
+                          icon={<RotateCcw size={13} />}
+                          label="Discard all changes"
+                          variant="danger"
+                          disabled={isMutating || isGenerating}
+                          onClick={() => requestDiscard(unstagedFiles.map((f) => f.path))}
+                        />
+                        <SectionAction
+                          icon={<Plus size={13} />}
+                          label="Stage all changes"
+                          disabled={isMutating || isGenerating}
+                          onClick={() => runStage(unstagedFiles.map((f) => f.path))}
+                        />
+                      </>
+                    )}
+                  </SectionHeader>
+                  {unstagedFiles.length === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <p className="text-xs text-muted-foreground">No changes detected</p>
+                    </div>
+                  ) : (
+                    unstagedFiles.map((file: GitStatusDetail) => {
+                      const inSelection =
+                        selectionSection === 'unstaged' && selectedPaths.has(file.path)
+                      return (
+                        <FileItem
+                          key={file.path}
+                          file={file}
+                          isActive={selectedFile === file.path && !selectedStaged}
+                          isSelected={inSelection}
+                          onClick={(e) => handleFileClick(e, file.path, false, unstagedFiles)}
+                        >
+                          <RowAction
+                            icon={<RotateCcw size={13} />}
+                            label="Discard changes"
+                            variant="danger"
+                            disabled={isMutating || isGenerating}
+                            onClick={() => requestDiscard(targetsFor(file.path, 'unstaged'))}
+                          />
+                          <RowAction
+                            icon={<Plus size={13} />}
+                            label="Stage changes"
+                            disabled={isMutating || isGenerating}
+                            onClick={() => runStage(targetsFor(file.path, 'unstaged'))}
+                          />
+                        </FileItem>
+                      )
+                    })
+                  )}
+                </div>
+
+                {stashes.length > 0 && (
+                  <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
+                    <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
+                    <div className="space-y-0.5 w-full min-w-0">
+                      {stashes.map((s) => (
+                        <div
+                          key={s.index}
+                          className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
+                        >
+                          <div className="flex flex-col min-w-0 flex-1 pr-1.5">
+                            <span className="font-semibold text-muted-foreground text-3xs">{`stash@{${s.index}}`}</span>
+                            <span
+                              className="truncate text-muted-foreground text-2xs leading-tight"
+                              title={s.message}
+                            >
+                              {s.message || 'No message'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <button
+                              type="button"
+                              title="Apply stash (keeps stash entry)"
+                              onClick={() => handleApplyStash(s.index)}
+                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            >
+                              <ClipboardPaste size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Pop stash (applies and drops)"
+                              onClick={() => handlePopStash(s.index)}
+                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            >
+                              <ArchiveRestore size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Drop stash"
+                              onClick={() => handleDropStash(s.index)}
+                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+
+            {/* Commit footer (GitHub Desktop style) */}
+            <div className="border-t border-border p-3 space-y-2 bg-background/60">
+              <input
+                type="text"
+                aria-label="Commit summary"
+                placeholder={amend ? 'Update commit message' : 'Summary (required)'}
+                className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                disabled={isCommitting || isGenerating}
+              />
+              <textarea
+                aria-label="Commit description"
+                placeholder="Description (optional)"
+                rows={3}
+                className="w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={isCommitting || isGenerating}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full h-8 text-xs gap-2"
+                onClick={() => void handleGenerateMessage()}
+                disabled={!canGenerate}
+                title={
+                  stagedCount === 0
+                    ? 'Stage files to generate a commit message'
+                    : !hasUsableAgent
+                      ? 'Configure and select an ACP agent'
+                      : 'Generate a commit message from staged changes'
+                }
+              >
+                <Sparkles size={14} className={cn(isGenerating && 'animate-pulse')} />
+                {isGenerating ? 'Generating...' : 'Generate message'}
+              </Button>
+              <label
+                className={cn(
+                  'flex items-center gap-2 text-2xs select-none',
+                  commitContext?.hasHead
+                    ? 'text-muted-foreground cursor-pointer'
+                    : 'text-muted-foreground/40 cursor-not-allowed'
+                )}
+                title={
+                  commitContext?.hasHead
+                    ? 'Amend the last commit instead of creating a new one'
+                    : 'No commit to amend yet'
+                }
+              >
+                <input
+                  type="checkbox"
+                  className="h-3 w-3 accent-primary"
+                  checked={amend}
+                  onChange={handleToggleAmend}
+                  disabled={!commitContext?.hasHead || isCommitting || isGenerating}
+                />
+                Amend last commit
+              </label>
+              <Button
+                variant="default"
+                size="sm"
+                className="w-full h-8 text-xs gap-2"
+                onClick={handleCommit}
+                disabled={!canCommit}
+                title={
+                  amend
+                    ? 'Amend the last commit'
+                    : stagedCount === 0
+                      ? 'Stage files to commit'
+                      : 'Commit staged changes'
+                }
+              >
+                <GitCommit size={14} />
+                {isCommitting
+                  ? 'Committing...'
+                  : amend
+                    ? 'Amend commit'
+                    : commitContext?.branch
+                      ? `Commit to ${commitContext.branch}`
+                      : 'Commit'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full h-8 text-xs gap-2"
+                onClick={handlePush}
+                disabled={!canPush}
+                title={
+                  !onBranch
+                    ? 'Not on a branch (detached HEAD)'
+                    : !commitContext?.hasUpstream
+                      ? 'Publish this branch to origin'
+                      : ahead > 0
+                        ? 'Push commits to the remote'
+                        : 'Nothing to push — up to date with the remote'
+                }
+              >
+                <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
+                {isPushing ? 'Pushing...' : pushLabel}
+                {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <ConfirmDialog
+          isOpen={confirmDiscardOpen}
+          variant="danger"
+          title="Discard changes"
+          message={
+            discardTargets.length > 1
+              ? `Discard changes to ${discardTargets.length} files? This cannot be undone.`
+              : discardTargets[0]
+                ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
+                : ''
+          }
+          confirmLabel="Discard"
+          isLoading={isMutating}
+          onConfirm={confirmDiscard}
+          onCancel={() => {
+            setConfirmDiscardOpen(false)
+            setDiscardTargets([])
+          }}
+        />
+
+        <ConfirmDialog
+          isOpen={confirmAmendOpen}
+          variant="danger"
+          title="Amend pushed commit"
+          message="The last commit appears to already be pushed. Amending rewrites published history and will require a force-push to update the remote. Continue?"
+          confirmLabel="Amend anyway"
+          isLoading={isCommitting}
+          onConfirm={runCommit}
+          onCancel={() => setConfirmAmendOpen(false)}
+        />
+
+        <Dialog open={isCreateBranchOpen} onOpenChange={setIsCreateBranchOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Create New Branch</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2 text-xs">
+              <div className="space-y-1">
+                <label className="text-muted-foreground">Branch name</label>
+                <input
+                  type="text"
+                  className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+                  placeholder="e.g. feature/new-login"
+                  value={branchNameInput}
+                  onChange={(e) => setBranchNameInput(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" size="sm" onClick={() => setIsCreateBranchOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleCreateBranch}
+                disabled={!branchNameInput.trim() || isMutating || isGenerating}
+              >
+                Create &amp; Switch
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isStashOpen} onOpenChange={setIsStashOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Stash Changes</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2 text-xs">
+              <div className="space-y-1">
+                <label className="text-muted-foreground">Message (optional)</label>
+                <input
+                  type="text"
+                  className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+                  placeholder="WIP on current branch..."
+                  value={stashMessage}
+                  onChange={(e) => setStashMessage(e.target.value)}
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer select-none text-2xs">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-primary"
+                  checked={stashIncludeUntracked}
+                  onChange={(e) => setStashIncludeUntracked(e.target.checked)}
+                />
+                Include untracked files
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" size="sm" onClick={() => setIsStashOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleStashSave}
+                disabled={isMutating || isGenerating}
+              >
+                Stash
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={confirmBranchSwitchOpen} onOpenChange={setConfirmBranchSwitchOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Uncommitted Changes</DialogTitle>
+            </DialogHeader>
+            <div className="py-2 text-xs text-muted-foreground space-y-2">
+              <p>
+                You have uncommitted changes on your current branch. How would you like to handle
+                them before switching to <strong>{pendingBranchName}</strong>?
+              </p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>
+                  <strong>Bring Changes:</strong> Keep your changes and carry them over to the new
+                  branch.
+                </li>
+                <li>
+                  <strong>Stash &amp; Switch:</strong> Stash your changes on this branch, switch,
+                  and try to re-apply them on the new branch.
+                </li>
+              </ul>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="ghost" size="sm" onClick={() => setConfirmBranchSwitchOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleExecuteSwitchBranch('bring')}
+                disabled={isMutating || isGenerating}
+              >
+                Bring Changes
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleExecuteSwitchBranch('stash')}
+                disabled={isMutating || isGenerating}
+              >
+                Stash &amp; Switch
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full w-full bg-background overflow-hidden">

@@ -3,10 +3,13 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
 
-const { mockNavigate, tauriRef } = vi.hoisted(() => ({
+const { mockNavigate, projectRef, tauriRef } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
-  // Mutable so individual tests can flip the shell into web/remote mode
-  // (where the project-switcher button + drawer are mounted).
+  // Mutable so individual tests can flip the active project path (the Git
+  // Changes header button is disabled when `activeProject.path` is missing)
+  // and the shell into web/remote mode (where the project-switcher button +
+  // drawer are mounted).
+  projectRef: { current: { id: 'p1', name: 'Demo', path: '/demo' } as { path?: string } },
   tauriRef: { current: true as boolean }
 }))
 
@@ -19,7 +22,7 @@ vi.mock('react-router-dom', async () => {
 })
 
 vi.mock('@/stores/project-store', () => ({
-  useActiveProject: () => ({ id: 'p1', name: 'Demo', path: '/demo' })
+  useActiveProject: () => projectRef.current
 }))
 
 vi.mock('@/stores/workspace-store', () => ({
@@ -100,6 +103,7 @@ describe('MobileChatShell', () => {
   beforeEach(() => {
     mockNavigate.mockReset()
     tauriRef.current = true
+    projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
   })
 
   it('renders slim header with title and no desktop chrome markers', () => {
@@ -230,5 +234,93 @@ describe('MobileChatShell', () => {
     // Desktop never mounts the web/remote file explorer — the right-sidebar
     // FileExplorer owns file browsing there.
     expect(screen.queryByLabelText('Browse files')).not.toBeInTheDocument()
+  })
+
+  it('hides the Command palette button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+    expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
+  })
+
+  it('mounts the Command palette trigger in web mode and invokes onOpenCommandPalette', () => {
+    tauriRef.current = false
+    const onOpenCommandPalette = vi.fn()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={onOpenCommandPalette}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    const btn = screen.getByLabelText('Command palette')
+    fireEvent.click(btn)
+    expect(onOpenCommandPalette).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the Git changes button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+    expect(screen.queryByLabelText('Git changes')).not.toBeInTheDocument()
+  })
+
+  it('mounts the Git changes trigger in web mode and invokes onOpenGitChanges', () => {
+    tauriRef.current = false
+    const onOpenGitChanges = vi.fn()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={onOpenGitChanges}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    const btn = screen.getByLabelText('Git changes')
+    expect(btn).not.toBeDisabled()
+    fireEvent.click(btn)
+    expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the Git changes button when no active project path', () => {
+    tauriRef.current = false
+    projectRef.current = { id: 'p1', name: 'Demo' }
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    expect(screen.getByLabelText('Git changes')).toBeDisabled()
+  })
+
+  it('navigates to /snapshots from the drawer', () => {
+    tauriRef.current = false
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByLabelText('Snapshots'))
+    expect(mockNavigate).toHaveBeenCalledWith('/snapshots')
+    // The drawer closes after navigating.
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
   })
 })

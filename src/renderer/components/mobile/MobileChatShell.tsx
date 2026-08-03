@@ -1,11 +1,14 @@
 import {
+  Camera,
   FolderGit2,
   FolderTree,
+  GitBranch,
   Menu,
   MessageSquarePlus,
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Settings,
   TerminalSquare,
   X
@@ -37,6 +40,10 @@ interface MobileChatShellProps {
   onNewChat: () => void
   /** Whether a new chat can be started (active project has a path). */
   canNewChat?: boolean
+  /** Opens the command palette overlay (mounted in WorkspaceLayout appModals). */
+  onOpenCommandPalette?: () => void
+  /** Opens the Git Changes sheet (mounted in WorkspaceLayout mobile branch). */
+  onOpenGitChanges?: () => void
   onNewTerminal?: () => void
   onCloseTerminal?: (terminalId: string, tabId: string) => void
   onRenameTerminal?: (terminalId: string, name: string) => void
@@ -52,6 +59,8 @@ export function MobileChatShell({
   children,
   onNewChat,
   canNewChat = false,
+  onOpenCommandPalette,
+  onOpenGitChanges,
   onNewTerminal,
   onCloseTerminal,
   onRenameTerminal,
@@ -188,6 +197,33 @@ export function MobileChatShell({
           </Button>
         )}
 
+        {!isTauriContext() && onOpenCommandPalette && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 shrink-0"
+            aria-label="Command palette"
+            onClick={onOpenCommandPalette}
+          >
+            <Search size={20} />
+          </Button>
+        )}
+
+        {!isTauriContext() && onOpenGitChanges && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 shrink-0"
+            aria-label="Git changes"
+            disabled={!activeProject?.path}
+            onClick={onOpenGitChanges}
+          >
+            <GitBranch size={20} />
+          </Button>
+        )}
+
         {activeTab?.type === 'terminal' ? (
           <>
             {onRestartTerminal && (
@@ -275,6 +311,19 @@ export function MobileChatShell({
               }}
             >
               <Settings size={16} />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0"
+              aria-label="Snapshots"
+              onClick={() => {
+                closeDrawer()
+                navigate('/snapshots')
+              }}
+            >
+              <Camera size={16} />
             </Button>
           </div>
 
