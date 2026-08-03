@@ -207,10 +207,10 @@ function McpServerRow({
           {tools && tools.length > 0 ? (
             <ul className="space-y-0.5">
               {tools.map((tool) => (
-                <li key={tool.name} className="text-3xs">
+                <li key={tool.name} className="flex min-w-0 items-baseline text-3xs">
                   <span className="font-mono font-medium text-foreground">{tool.name}</span>
                   {tool.description ? (
-                    <span className="ml-1 truncate text-muted-foreground/70">
+                    <span className="ml-1 min-w-0 flex-1 truncate text-muted-foreground/70">
                       — {tool.description}
                     </span>
                   ) : null}

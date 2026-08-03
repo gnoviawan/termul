@@ -52,6 +52,8 @@ const {
   mockNavigate,
   mockRetargetWarmPool,
   mockSetSelectedAgentConfigId,
+  mockSetMcpServerEnabled,
+  mockLoadMcpTools,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
@@ -79,6 +81,8 @@ const {
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
+  mockSetMcpServerEnabled: vi.fn(),
+  mockLoadMcpTools: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -98,7 +102,10 @@ const {
       sessions: {} as Record<string, AcpSession>,
       commands: {},
       configToLiveAgent: {} as Record<string, string>,
-      agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>
+      agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
+      mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
+      mcpProbeStatus: {} as Record<string, string>,
+      mcpTools: {} as Record<string, unknown[]>
     }
   }
 }))
@@ -221,6 +228,8 @@ vi.mock('@/stores/acp-store', () => {
     saveAgentConfig: typeof mockSaveAgentConfig
     retargetWarmPool: typeof mockRetargetWarmPool
     setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
+    setMcpServerEnabled: typeof mockSetMcpServerEnabled
+    loadMcpTools: typeof mockLoadMcpTools
   }
   const useAcpStore = (sel?: (s: MockAcpState) => unknown) =>
     sel
@@ -228,7 +237,9 @@ vi.mock('@/stores/acp-store', () => {
           ...acpStateRef.current,
           saveAgentConfig: mockSaveAgentConfig,
           retargetWarmPool: mockRetargetWarmPool,
-          setSelectedAgentConfigId: mockSetSelectedAgentConfigId
+          setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
+          setMcpServerEnabled: mockSetMcpServerEnabled,
+          loadMcpTools: mockLoadMcpTools
         })
       : getState()
   useAcpStore.getState = getState
@@ -369,9 +380,13 @@ beforeEach(() => {
     sessions: {},
     commands: {},
     configToLiveAgent: {},
-    agents: {}
+    agents: {},
+    mcpServers: [],
+    mcpProbeStatus: {},
+    mcpTools: {}
   }
   mockAuthenticateAgent.mockResolvedValue(undefined)
+  mockSetMcpServerEnabled.mockResolvedValue(undefined)
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
@@ -617,6 +632,30 @@ describe('AgentLauncher ACP new thread', () => {
     // launcher must NOT cancel the warm session (it stays ready for the next
     // chat / a project switch-back).
     expect(mockCancelPreparedChat).not.toHaveBeenCalled()
+  })
+
+  it('invalidates + re-prepares the warm session when an MCP server is toggled', async () => {
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.mcpServers = [{ id: 's1', name: 'Files', enabled: true }]
+    renderLauncher()
+
+    // Wait for the warm pool to retarget (prepares the session).
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+
+    // Open the MCP servers popover and toggle the "Files" server off.
+    fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
+    const filesSwitch = await screen.findByRole('switch', { name: /Disable Files/i })
+    fireEvent.click(filesSwitch)
+
+    // The toggle persists to the registry, then cancels + re-prepares so the
+    // next launch resolves MCP from the updated registry instead of the stale
+    // pre-warmed session.
+    await waitFor(() => expect(mockSetMcpServerEnabled).toHaveBeenCalledWith('s1', false))
+    const key = `${defaultAgent.configId}\0${'/work'}\0`
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
 
   it('restores a persisted ACP selection', async () => {
