@@ -75,6 +75,12 @@ pub(crate) struct DriverState {
     /// Bindings remain for the connection lifetime so delayed updates cannot be
     /// reassigned to a different active turn after their original turn ends.
     tool_call_sessions: HashMap<String, HashSet<String>>,
+    /// Per-session configId of the agent-advertised Model selector. ACP 0.14
+    /// replaced `session/set_model` with `session/set_config_option`, whose
+    /// `configId` is the agent-provided option id (conventionally `"model"` but
+    /// not guaranteed). Caching it per session lets `set_model` target the
+    /// agent's actual model selector id instead of hardcoding `"model"`.
+    model_config_ids: HashMap<String, String>,
 }
 
 /// Signals handed to the turn task when a turn begins: the cancel receiver
@@ -212,6 +218,20 @@ impl DriverState {
     pub(crate) fn remove_session_root(&mut self, session_id: &str) {
         self.session_roots.remove(session_id);
         self.ephemeral_sessions.remove(session_id);
+        self.model_config_ids.remove(session_id);
+    }
+
+    /// Record the agent-advertised configId of the Model selector for a session
+    /// (derived from the session's `config_options`). Updated whenever options
+    /// are loaded, resumed, or refreshed via `session/set_config_option`.
+    pub(crate) fn set_model_config_id(&mut self, session_id: String, config_id: String) {
+        self.model_config_ids.insert(session_id, config_id);
+    }
+
+    /// The cached Model-selector configId for a session, if one was advertised.
+    /// Callers fall back to the `"model"` convention when `None`.
+    pub(crate) fn model_config_id(&self, session_id: &str) -> Option<String> {
+        self.model_config_ids.get(session_id).cloned()
     }
 
     /// Return all sessions that still have a registered workspace root. Used on

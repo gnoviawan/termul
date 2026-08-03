@@ -394,7 +394,9 @@ mod tests {
         assert_eq!(expand("$FOO"), "bar");
         assert_eq!(expand("${FOO}"), "bar");
         assert_eq!(expand("prefix:$FOO:suffix"), "prefix:bar:suffix");
-        assert_eq!(expand("$FOO/$PATH"), "bar/bin");
+        // Literal `/` between `$FOO` (bar) and `$PATH` (/bin) yields a double
+        // slash — matching POSIX shell behavior (`echo "$FOO/$PATH"` → bar//bin).
+        assert_eq!(expand("$FOO/$PATH"), "bar//bin");
         assert_eq!(expand("${FOO}-${PATH}"), "bar-/bin");
         // Unset → empty string (POSIX shell behavior).
         assert_eq!(expand("$NOPE"), "");

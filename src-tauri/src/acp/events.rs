@@ -81,8 +81,19 @@ pub(crate) fn models_from_config_options(
                 description: o.description.clone(),
             })
             .collect::<Vec<_>>(),
-        // Grouped model selectors are not expected in practice; treating them
-        // as "no model picker" is a safe degradation until one is observed.
+        // Flatten grouped model selectors (e.g. models organized by provider)
+        // into the same flat `available_models` list the picker expects.
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|g| g.options.iter())
+            .map(|o| SessionModel {
+                model_id: o.value.0.as_ref().to_string(),
+                name: o.name.clone(),
+                description: o.description.clone(),
+            })
+            .collect(),
+        // Future-proof against new `SessionConfigSelectOptions` variants the
+        // schema may add (the enum is `#[non_exhaustive]`); none today.
         _ => return None,
     };
     if available_models.is_empty() {
@@ -92,6 +103,24 @@ pub(crate) fn models_from_config_options(
         current_model_id,
         available_models,
     })
+}
+
+/// Derive the agent-advertised configId of the Model selector from a session's
+/// `config_options` (the `id` of the `select`-kind option whose `category` is
+/// `Model`). Returns `None` when the agent advertises no model selector.
+///
+/// ACP 0.14 made model selection a `session/set_config_option` call, whose
+/// `configId` is the agent-provided option id (conventionally `"model"` but not
+/// guaranteed). This extracts the real id so `set_model` targets it precisely.
+#[allow(clippy::module_name_repetitions)]
+pub(crate) fn model_config_id_from_options(
+    opts: Option<&[SessionConfigOption]>,
+) -> Option<String> {
+    let opts = opts?;
+    let opt = opts
+        .iter()
+        .find(|o| o.category == Some(SessionConfigOptionCategory::Model))?;
+    Some(opt.id.0.as_ref().to_string())
 }
 
 /// Event name: an agent subprocess was spawned and `initialize` completed.
@@ -417,6 +446,7 @@ pub struct UsageUpdateEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::SessionConfigSelectOption;
 
     #[test]
     fn agent_spawned_serializes_camel_case() {
@@ -668,5 +698,66 @@ mod tests {
         };
         let value = serde_json::to_value(&event).unwrap();
         assert!(value.get("cost").is_none());
+    }
+
+    /// Build a Model-category `select` option for the derivation tests.
+    fn model_select_option(
+        id: &'static str,
+        current: &'static str,
+        opts: &'static [(&'static str, &'static str)],
+    ) -> SessionConfigOption {
+        SessionConfigOption::select(
+            id,
+            "Model",
+            current,
+            opts.iter()
+                .map(|(v, n)| SessionConfigSelectOption::new(*v, *n))
+                .collect::<Vec<SessionConfigSelectOption>>(),
+        )
+        .category(SessionConfigOptionCategory::Model)
+    }
+
+    #[test]
+    fn models_from_config_options_derives_ungrouped() {
+        let opts = vec![model_select_option(
+            "model",
+            "m1",
+            &[("m1", "Model 1"), ("m2", "Model 2")],
+        )];
+        let state = models_from_config_options(Some(&opts)).expect("model option present");
+        assert_eq!(state.current_model_id, "m1");
+        assert_eq!(state.available_models.len(), 2);
+        assert_eq!(state.available_models[0].model_id, "m1");
+        assert_eq!(state.available_models[0].name, "Model 1");
+        assert_eq!(state.available_models[1].model_id, "m2");
+    }
+
+    #[test]
+    fn models_from_config_options_returns_none_without_model_category() {
+        // A non-Model-category select option must not populate the picker.
+        let opt =
+            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
+                SessionConfigOptionCategory::Mode,
+            );
+        assert!(models_from_config_options(Some(&[opt])).is_none());
+        assert!(models_from_config_options(None).is_none());
+        assert!(models_from_config_options(Some(&[])).is_none());
+    }
+
+    #[test]
+    fn model_config_id_from_options_uses_advertised_id() {
+        // CodeRabbit finding: an agent may use a configId other than "model"
+        // for its Model selector. The helper must surface the real id.
+        let opts = vec![model_select_option("llm_model", "m1", &[("m1", "M1")])];
+        assert_eq!(
+            model_config_id_from_options(Some(&opts)),
+            Some("llm_model".to_string())
+        );
+        // Falls back to None when no Model-category option is advertised.
+        let non_model =
+            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
+                SessionConfigOptionCategory::Mode,
+            );
+        assert_eq!(model_config_id_from_options(Some(&[non_model])), None);
     }
 }

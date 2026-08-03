@@ -2167,6 +2167,14 @@ async fn run_command_loop(
                                 }
                             }
 
+                            // Cache the agent-advertised Model-selector configId so
+                            // `set_model` targets it instead of hardcoding "model".
+                            if let Some(id) = events::model_config_id_from_options(
+                                response.config_options.as_deref(),
+                            ) {
+                                req_state.lock().set_model_config_id(session_id.0.clone(), id);
+                            }
+
                             let event = SessionCreatedEvent {
                                 agent_id: req_agent_id,
                                 session_id: session_id.clone(),
@@ -2701,13 +2709,23 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_sinks = sinks.clone();
                 let req_agent_id = agent_id.clone();
+                let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     // ACP 0.14 removed `session/set_model`; the model is now a
-                    // `select`-kind config option conventionally identified by
-                    // configId "model" (category = Model). `model_id` is the
-                    // option value id the renderer picked.
-                    let request =
-                        SetSessionConfigOptionRequest::new(&session_id, "model", model_id.as_str());
+                    // `select`-kind config option (category = Model). Its configId
+                    // is the agent-provided option id (cached at session/new from
+                    // the agent's `config_options`), falling back to the `"model"`
+                    // convention when the agent didn't advertise one. `model_id` is
+                    // the option value id the renderer picked.
+                    let config_id = req_state
+                        .lock()
+                        .model_config_id(&session_id.0)
+                        .unwrap_or_else(|| "model".to_string());
+                    let request = SetSessionConfigOptionRequest::new(
+                        &session_id,
+                        config_id,
+                        model_id.as_str(),
+                    );
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
                             let event = ConfigOptionsUpdateEvent {
@@ -2739,11 +2757,19 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_sinks = sinks.clone();
                 let req_agent_id = agent_id.clone();
+                let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
                     let request =
                         SetSessionConfigOptionRequest::new(&session_id, config_id, value_id.as_str());
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
+                            // Keep the cached Model-selector configId fresh in case
+                            // the agent reorganized its config options.
+                            if let Some(id) = events::model_config_id_from_options(
+                                Some(response.config_options.as_slice()),
+                            ) {
+                                req_state.lock().set_model_config_id(session_id.0.clone(), id);
+                            }
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
