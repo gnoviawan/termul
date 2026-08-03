@@ -504,7 +504,10 @@ mod tests {
         // `.cmd` shim — `CreateProcessW` cannot launch batch files directly, so
         // the resolver must rewrite it to the directly-executable interpreter
         // with the script prepended ahead of the user args.
-        let dir = std::env::temp_dir().join("termul-test-mcp-cmd-shim");
+        // Unique per-process dir so parallel `cargo test` invocations cannot
+        // delete/overwrite each other's fixtures.
+        let dir = std::env::temp_dir()
+            .join(format!("termul-test-mcp-cmd-shim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();

@@ -4175,6 +4175,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // error to show, so the probe error is cleared.
       set((s) => ({
         mcpProbeStatus: { ...s.mcpProbeStatus, [id]: 'disconnected' },
+        // A throw means the probe never produced a result — drop any tools left
+        // over from a prior successful probe so the UI shows the disconnected
+        // state (McpBadge checks the tool list first), and mark tools as not
+        // loaded so a later expand auto-retries instead of caching the failure.
+        mcpTools: { ...s.mcpTools, [id]: [] },
+        mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: false },
         mcpProbing: { ...s.mcpProbing, [id]: false },
         mcpProbeError: { ...s.mcpProbeError, [id]: undefined }
       }))

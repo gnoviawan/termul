@@ -1,4 +1,4 @@
-import type { McpEnvVar, McpHeader, McpServerConfig } from '@/lib/acp-api'
+import type { McpEnvVar, McpServerConfig } from '@/lib/acp-api'
 import { validateMcpServer } from '@/lib/acp-mcp-persistence'
 
 export interface McpJsonImportResult {
@@ -19,14 +19,20 @@ function stringArray(value: unknown): string[] | undefined {
   return strings.length === value.length ? strings : undefined
 }
 
-/** `[{name, value}]` array, or `undefined` when `value` is not one. */
+/** `[{name, value}]` array, or `undefined` when `value` is not one. Entries are
+ * rebuilt as fresh `{name, value}` objects so any extra properties on the input
+ * (e.g. `{name, value, foo}`) are dropped — matching the "unknown fields are
+ * silently dropped" contract of the object-map branch in `normalizeEnv`. */
 function stringPairs(value: unknown): Array<{ name: string; value: string }> | undefined {
   if (!Array.isArray(value)) return undefined
-  const pairs = value.filter(
-    (entry): entry is McpEnvVar | McpHeader =>
-      isRecord(entry) && typeof entry.name === 'string' && typeof entry.value === 'string'
-  )
-  return pairs.length === value.length ? pairs : undefined
+  const pairs: Array<{ name: string; value: string }> = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.name !== 'string' || typeof entry.value !== 'string') {
+      return undefined
+    }
+    pairs.push({ name: entry.name, value: entry.value })
+  }
+  return pairs
 }
 
 /**
@@ -77,12 +83,13 @@ function buildServer(
 
   if (type === 'stdio') {
     if (raw.command !== undefined && typeof raw.command !== 'string') return null
-    const args = raw.args !== undefined ? stringArray(raw.args) : undefined
+    const args =
+      raw.args !== undefined ? stringArray(raw.args)?.map((arg) => arg.trim()) : undefined
     if (raw.args !== undefined && args === undefined) return null
     const server: Partial<McpServerConfig> = {
       type: 'stdio',
       name,
-      ...(typeof raw.command === 'string' ? { command: raw.command } : {}),
+      ...(typeof raw.command === 'string' ? { command: raw.command.trim() } : {}),
       ...(args && args.length > 0 ? { args } : {}),
       ...(env && env.length > 0 ? { env } : {})
     }
@@ -94,7 +101,7 @@ function buildServer(
   if (raw.headers !== undefined && headers === undefined) return null
   const shared = {
     name,
-    ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
+    ...(typeof raw.url === 'string' ? { url: raw.url.trim() } : {}),
     ...(headers && headers.length > 0 ? { headers } : {})
   }
   return type === 'http'

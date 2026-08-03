@@ -187,26 +187,37 @@ export function McpServersSettings(): React.JSX.Element {
   const saveImport = async (): Promise<void> => {
     setSaving(true)
     setImportErrors([])
+    let savedCount = 0
     try {
-      const { servers, errors } = parseMcpJsonImport(importText)
+      const { servers: parsedServers, errors } = parseMcpJsonImport(importText)
       // Valid servers still import when some entries are rejected (per-server
       // errors stay visible inline so the user can fix and re-paste).
-      for (const server of servers) {
+      for (const server of parsedServers) {
         await saveMcpServer({ ...server, id: crypto.randomUUID(), enabled: true })
+        savedCount += 1
       }
       if (errors.length > 0) {
         setImportErrors(errors)
         return
       }
-      if (servers.length === 0) {
+      if (parsedServers.length === 0) {
         setImportErrors(['No MCP servers found in the JSON.'])
         return
       }
-      toast.success(`Imported ${servers.length} MCP server${servers.length === 1 ? '' : 's'}`)
+      toast.success(
+        `Imported ${parsedServers.length} MCP server${parsedServers.length === 1 ? '' : 's'}`
+      )
       setImportText('')
       closeDialog()
     } catch {
-      toast.error('Could not save the MCP server. Your previous settings were restored.')
+      // A mid-loop throw leaves earlier saves persisted (fresh IDs each time).
+      // Tell the user how many landed so they do not blindly re-paste and
+      // create duplicates.
+      toast.error(
+        savedCount > 0
+          ? `Imported ${savedCount} server${savedCount === 1 ? '' : 's'} before a save failed. Review the remaining entries before re-importing.`
+          : 'Could not save the MCP server. Your previous settings were restored.'
+      )
     } finally {
       setSaving(false)
     }
@@ -373,7 +384,12 @@ export function McpServersSettings(): React.JSX.Element {
                     type="button"
                     size="icon"
                     variant="ghost"
-                    onClick={() => setDraft(draftFor(server))}
+                    onClick={() => {
+                      // Ensure a lingering import session cannot resurface
+                      // the (now-hidden) import view while editing.
+                      setImportMode(false)
+                      setDraft(draftFor(server))
+                    }}
                   >
                     <Pencil size={15} />
                     <span className="sr-only">Edit {server.name}</span>
@@ -430,6 +446,10 @@ export function McpServersSettings(): React.JSX.Element {
             role="tablist"
             aria-label="MCP server entry mode"
             className="flex w-fit gap-1 rounded-lg border border-border bg-secondary/20 p-1"
+            // The Import tab is an Add-only flow — importing while editing an
+            // existing server would persist fresh IDs instead of updating the
+            // draft, so the tab bar is hidden whenever a server is being edited.
+            hidden={Boolean(draft?.id)}
           >
             <button
               type="button"
