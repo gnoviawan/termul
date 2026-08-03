@@ -22,7 +22,12 @@ import { MediaBlocks } from './ChatMessage'
 import { bubbleEnter, CHAT_SPRING } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
 import { type ToolIconName, toolIconName } from './tool-call-format'
-import { describeToolCall, readableOutput } from './tool-call-summary'
+import {
+  describeToolCall,
+  firstString,
+  READABLE_TEXT_KEYS,
+  readableOutput
+} from './tool-call-summary'
 
 /** Common prop shape shared by lucide icons and the bundled RobotIcon. */
 type ToolIconComponent = React.ComponentType<{ size?: number | string; className?: string }>
@@ -78,7 +83,29 @@ function renderContentBlock(block: ContentBlock, key: number): React.JSX.Element
   return <MediaBlocks key={key} blocks={[block]} />
 }
 
-function renderContentItem(item: ToolCallContent, key: number): React.JSX.Element {
+/**
+ * Best-effort extraction of a readable string from an unrecognized
+ * ToolCallContent item. Tries common text keys directly, then one level of
+ * nesting (e.g. { output: { text: '...' } }). Returns null when nothing is
+ * found so the caller can render nothing instead of a bracketed type label.
+ * Shares `READABLE_TEXT_KEYS` + `firstString` with `readableOutput` to prevent
+ * drift between the structured-content and raw-output extraction paths.
+ */
+function extractItemText(item: ToolCallContent): string | null {
+  const record = item as Record<string, unknown>
+  const direct = firstString(record, READABLE_TEXT_KEYS)
+  if (direct) return direct
+  for (const k of READABLE_TEXT_KEYS) {
+    const v = record[k]
+    if (v && typeof v === 'object') {
+      const nested = firstString(v as Record<string, unknown>, READABLE_TEXT_KEYS)
+      if (nested) return nested
+    }
+  }
+  return null
+}
+
+function renderContentItem(item: ToolCallContent, key: number): React.JSX.Element | null {
   if (item.type === 'diff') {
     const d = item as { path: string; oldText?: string | null; newText: string }
     return (
@@ -90,13 +117,7 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
   }
   if (item.type === 'content') {
     const c = item as { content?: ContentBlock }
-    return c.content ? (
-      renderContentBlock(c.content, key)
-    ) : (
-      <div key={key} className="text-xs italic text-muted-foreground">
-        [content]
-      </div>
-    )
+    return c.content ? renderContentBlock(c.content, key) : null
   }
   if (item.type === 'terminal') {
     // The ACP `terminal` content variant only references a terminal by id; its
@@ -112,11 +133,18 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
       </div>
     )
   }
-  return (
-    <div key={key} className="text-xs italic text-muted-foreground">
-      [{item.type}]
-    </div>
-  )
+  // Unrecognized content type: try to surface any readable text the item
+  // carries before giving up. Never render the raw type name as a bracketed
+  // label — that leaks internal names into the chat UI.
+  const text = extractItemText(item)
+  if (text) {
+    return (
+      <div key={key} className="whitespace-pre-wrap break-words text-xs text-foreground/90">
+        {text}
+      </div>
+    )
+  }
+  return null
 }
 
 /** Human-friendly elapsed time for a settled tool call. */

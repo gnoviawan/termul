@@ -127,4 +127,56 @@ describe('ToolCallCard', () => {
     expect(document.querySelector('audio')).not.toBeInTheDocument()
     expect(screen.getByTitle('audio.mp3')).toBeInTheDocument()
   })
+
+  it('renders text from an unknown content type instead of a bracketed label', () => {
+    render(
+      <ToolCallCard
+        toolCall={toolCall('completed', [{ type: 'blocked', text: 'untracked/modified' }])}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    expect(screen.getByText('untracked/modified')).toBeInTheDocument()
+    expect(screen.queryByText('[blocked]')).not.toBeInTheDocument()
+  })
+
+  it('renders text from a nested object in an unknown content type', () => {
+    render(
+      <ToolCallCard
+        toolCall={toolCall('completed', [{ type: 'blocked', output: { text: 'result' } }])}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    expect(screen.getByText('result')).toBeInTheDocument()
+    expect(screen.queryByText('[blocked]')).not.toBeInTheDocument()
+  })
+
+  it('renders nothing for an unknown content type with no text-like fields', () => {
+    const { container } = render(
+      <ToolCallCard toolCall={toolCall('completed', [{ type: 'blocked' }])} />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    expect(screen.queryByText('[blocked]')).not.toBeInTheDocument()
+    expect(screen.queryByText('blocked')).not.toBeInTheDocument()
+    const detail = container.querySelector('[class*="border-l"]')
+    expect(detail).toBeEmptyDOMElement()
+  })
+
+  it('renders nothing for a content item with a missing content field', () => {
+    const { container } = render(
+      <ToolCallCard toolCall={toolCall('completed', [{ type: 'content' }])} />
+    )
+
+    fireEvent.click(screen.getByRole('button'))
+
+    expect(screen.queryByText('[content]')).not.toBeInTheDocument()
+    expect(screen.queryByText('content')).not.toBeInTheDocument()
+    const detail = container.querySelector('[class*="border-l"]')
+    expect(detail).toBeEmptyDOMElement()
+  })
 })

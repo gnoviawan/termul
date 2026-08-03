@@ -28,7 +28,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
-function firstString(obj: Record<string, unknown> | null, keys: string[]): string | undefined {
+export function firstString(
+  obj: Record<string, unknown> | null,
+  keys: string[]
+): string | undefined {
   if (!obj) return undefined
   for (const k of keys) {
     const v = obj[k]
@@ -62,6 +65,13 @@ const COMMAND_KEYS = ['command', 'cmd', 'script', 'commandLine']
 const QUERY_KEYS = ['query', 'pattern', 'q', 'search', 'searchTerm', 'regex']
 const URL_KEYS = ['url', 'uri', 'href', 'link']
 const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
+
+/**
+ * Keys that commonly carry readable text in a tool-call content item or raw
+ * output. Shared between `readableOutput` and `ToolCallCard`'s fallback
+ * extraction so the two paths never drift.
+ */
+export const READABLE_TEXT_KEYS = ['output', 'stdout', 'result', 'text', 'content', 'message']
 
 /**
  * Detect a subagent/Task dispatch. ACP gives no dedicated kind for these and
@@ -132,7 +142,7 @@ export function readableOutput(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   const obj = asRecord(value)
   if (!obj) return ''
-  const direct = firstString(obj, ['output', 'stdout', 'result', 'text', 'content', 'message'])
+  const direct = firstString(obj, READABLE_TEXT_KEYS)
   if (direct) return direct
   const meta = asRecord(obj.metadata)
   const metaDiff = firstString(meta, ['diff'])
