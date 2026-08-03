@@ -252,15 +252,16 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Opacity-only fade so streamed words reveal smoothly without the blur-filter
-// jank of sd-blurIn. `animated` uses the styles.css keyframes imported in
-// main.tsx; already-visible words get duration 0 (no re-animation).
+// Slow opacity fade + per-word stagger so 3-4 words are mid-fade at once
+// (a smooth transparent→solid wave) instead of all words snapping in.
+// `animated` uses the styles.css keyframes imported in main.tsx; already-
+// visible words get duration 0 (no re-animation).
 const STREAMDOWN_ANIMATED = {
   animation: 'fadeIn',
   sep: 'word',
-  duration: 200,
+  duration: 500,
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  stagger: 8
+  stagger: 150
 } as const
 
 /**

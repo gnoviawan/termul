@@ -60,6 +60,7 @@ vi.mock('streamdown', async () => {
     const animatedName =
       animated === false ? 'false' : animated === true ? 'true' : (animatedConfig?.animation ?? '')
     const animatedDuration = animatedConfig ? String(animatedConfig.duration ?? '') : ''
+    const animatedStagger = animatedConfig ? String(animatedConfig.stagger ?? '') : ''
     const animatedEasing = animatedConfig?.easing ?? ''
 
     return (
@@ -68,6 +69,7 @@ vi.mock('streamdown', async () => {
         data-animating={isAnimating}
         data-animated={animatedName}
         data-animated-duration={animatedDuration}
+        data-animated-stagger={animatedStagger}
         data-animated-easing={animatedEasing}
         data-caret={caret}
         data-custom-table={Boolean(CustomTable)}
@@ -182,13 +184,14 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animated', 'false')
   })
 
-  it('passes the fadeIn animation config (duration/easing) under default motion', () => {
+  it('passes the fadeIn animation config (duration/easing/stagger) under default motion', () => {
     useReducedMotionMock.mockReturnValue(false)
     render(<ChatMessage message={agentMessage(true)} isLast />)
 
     const streamdown = screen.getByTestId('streamdown')
     expect(streamdown).toHaveAttribute('data-animated', 'fadeIn')
-    expect(streamdown).toHaveAttribute('data-animated-duration', '200')
+    expect(streamdown).toHaveAttribute('data-animated-duration', '500')
+    expect(streamdown).toHaveAttribute('data-animated-stagger', '150')
     expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
   })
 

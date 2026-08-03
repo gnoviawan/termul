@@ -848,7 +848,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      expect(backendShortcut).toBeDefined()
+      await waitFor(() => expect(backendShortcut).toBeDefined())
       act(() => backendShortcut?.('colorThemePicker'))
       expect(await screen.findByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
     })
