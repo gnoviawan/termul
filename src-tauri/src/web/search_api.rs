@@ -272,6 +272,13 @@ pub async fn content(
 /// `crate::commands::search_processes` (the same static hashmap the desktop
 /// `search_content_cancel` command uses). No-op (returns success) when the
 /// `searchId` is not found — matching the desktop contract.
+///
+/// **Note:** the non-streaming `POST /search/content` handler does NOT register
+/// its rg child in `search_processes()` (parity with the desktop
+/// `search_content` command, which is also unregistered). So this cancel
+/// route is currently inert for one-shot content searches — it becomes
+/// functional once the deferred streaming `/search/ws` endpoint lands and
+/// registers its streaming rg children. Left wired now for protocol parity.
 pub async fn cancel(
     State(_state): State<AppState>,
     Json(req): Json<SearchContentCancelRequest>,

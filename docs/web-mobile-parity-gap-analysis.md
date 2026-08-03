@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-Termul already has a **deliberate dual-target architecture** for desktop↔web parity: two binaries sharing one crate (`termul_manager_lib`), a shared `web/` module, a shared `dist-web` bundle embedded via `rust-embed`, and renderer facades that branch on `isTauriContext()` between Tauri `invoke` and HTTP/WS implementations. The `IpcResult<T>` contract is shared across all three layers.
+Termul already has a **deliberate dual-target architecture** for desktop↔web parity: two binaries sharing one crate (`termul_manager_lib`), a shared `web/` module, a shared `dist-web` bundle embedded via `rust-embed`, and renderer facades that branch on `isTauriContext()` between Tauri `invoke` and HTTP/WS implementations. The `IpcResult<T>`/`IpcBody<T>` contract (the same `{ success, data }` | `{ success, error, code }` JSON shape) is shared across all three layers — desktop commands return `IpcResult<T>`, web routes return `IpcBody<T>`.
 
 **Parity is real and complete for the core workflow** — terminals (`/terminal/ws`), ACP agent chat (`/ws`), project listing, shell detection, project creation, basic filesystem, and MCP servers. The web client can run terminals and AI agent sessions with full fidelity.
 
@@ -242,6 +242,8 @@ Non-streaming commands (`search_get_rg_info`, `search_content`, `search_file_nam
 - `src/renderer/lib/log-api.ts` — add web-mode branch: `isTauriContext() ? invoke('log_frontend_error', ...) : fetch('/log/frontend-error', ...)` — closes the acknowledged gap at `project-context.md:150`.
 
 **Acceptance:** Search panel works on web; skills list populates on web; renderer errors survive closed DevTools on web.
+
+> _Implementation status (this PR, 2026-08-03): server-side `/search/*` routes + the `webServerSearch` helper landed, but the renderer search-facade branching + streaming `/search/ws` are deferred to a follow-up, so search is server-side-only for now (the Search panel is not yet fully wired on web). Skills list + frontend-error forwarding ARE wired end-to-end. This gap-analysis is a pre-implementation point-in-time plan (2026-08-02); implementation status lives in the code + the `_bmad-output/specs/spec-web-mobile-parity/` SPEC, not here._
 
 ---
 

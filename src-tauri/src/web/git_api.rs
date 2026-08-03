@@ -182,24 +182,27 @@ fn resolve_cwd<T>(
     peer: Option<SocketAddr>,
     is_write: bool,
 ) -> Result<std::path::PathBuf, RouteErr<T>> {
-    // 1) `..` rejection + canonicalization.
-    let resolved = match resolve_request_path(Path::new(req_cwd)) {
-        Ok(safe) => safe,
-        Err((msg, code)) => {
-            return Err((StatusCode::OK, Json(IpcBody::<T>::err(msg, code))));
-        }
-    };
-    // 2) project_root containment (web-server security boundary).
-    if let Some(err) = ensure_within_project_root::<T>(&resolved, &state.project_root) {
-        return Err((StatusCode::OK, Json(err)));
-    }
-    // 3) Loopback guard for write routes (mutation safety on a 0.0.0.0 bind).
+    // 1) Loopback guard for write routes FIRST — fail fast on non-local peers
+    //    before any filesystem work. `resolve_request_path` canonicalizes
+    //    (follows symlinks / reads FS metadata); a LAN peer must not trigger
+    //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
             if let Some(forbidden) = check_local_only::<T>(peer) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
+    }
+    // 2) `..` rejection + canonicalization.
+    let resolved = match resolve_request_path(Path::new(req_cwd)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return Err((StatusCode::OK, Json(IpcBody::<T>::err(msg, code))));
+        }
+    };
+    // 3) project_root containment (web-server security boundary).
+    if let Some(err) = ensure_within_project_root::<T>(&resolved, &state.project_root) {
+        return Err((StatusCode::OK, Json(err)));
     }
     Ok(resolved)
 }
@@ -947,7 +950,7 @@ async fn run_branch_name_write(
 
 /// `git checkout <name>` (branch-switch desktop parity).
 fn run_simple_checkout(cwd: &str, name: &str) -> Result<(), String> {
-    let args = ["checkout", name];
+    let args = ["checkout", "--", name];
     let output = GitTracker::run_git_command(cwd, &args)
         .ok_or_else(|| "Failed to run git checkout".to_string())?;
     if output.status.success() {
@@ -959,7 +962,7 @@ fn run_simple_checkout(cwd: &str, name: &str) -> Result<(), String> {
 
 /// `git checkout -b <name>` (branch-create desktop parity).
 fn run_simple_checkout_b(cwd: &str, name: &str) -> Result<(), String> {
-    let args = ["checkout", "-b", name];
+    let args = ["checkout", "-b", "--", name];
     let output = GitTracker::run_git_command(cwd, &args)
         .ok_or_else(|| "Failed to run git checkout -b".to_string())?;
     if output.status.success() {

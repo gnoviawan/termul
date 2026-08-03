@@ -27,7 +27,7 @@ The wire protocol the vendored crate speaks is **`ProtocolVersion::V1`** (`src-t
 
 The crate has shipped 77 versions, none yanked. The relevant arc since our pin:
 
-```
+```text
 0.12.1 (ours)  → 0.13.0/0.13.1 → 0.14.0 → 0.15.0/0.15.1 → 1.0.0 → 1.0.1 → 1.1.0 → 1.2.0 → 1.3.0 → 2.0.0 (latest)
 ```
 
@@ -53,7 +53,7 @@ Two Termul-relevant *unstable_* features are still feature-gated in 2.0 (`unstab
 - Re-vendor at 1.3.0, re-apply the Windows console-hiding patch to `acp_agent.rs` (the `AcpAgent` API in 1.x is still the MCP-`McpServer`-based shape, so the patch site should be familiar).
 - Pay the 0.12→1.0 schema bump (schema 0.13.2 → 1.1.0) and any 0.13–0.15 API churn — read releases pages 2–5 for the intermediate breaking notes. The 1.0.0 notes are thin, so churn here is likely small-to-moderate, but verify against the per-release pages.
 - You pick up the v1.3.0 reliability fixes (process-group kill, EOF, stderr bounding) that directly improve your Windows agent-spawn path.
-- Wire protocol stays v1 — no agent-side compatibility risk.
+- Wire protocol stays v1 — no wire-schema compatibility risk (agent-side SDK/transport/negotiation behavior still warrants compatibility testing).
 
 ### Step B — evaluate 2.0.0 as its own project (larger, schedule it deliberately)
 - Real migration, not a bump. Work through the official migration guide section by section; the `AcpAgent`→`AcpAgentConfig`, transport `Channel`/`TransportFrame`, handler/routing renames, and `attach_session` removal are the load-bearing changes.

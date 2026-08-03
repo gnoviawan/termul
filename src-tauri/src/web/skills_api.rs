@@ -52,9 +52,30 @@ pub struct SkillNamePath {
 /// `IpcBody::ok(vec![])` (degrade — never throw, so the slash menu stays
 /// usable on web).
 pub async fn list(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(q): Query<SkillsQuery>,
 ) -> impl IntoResponse {
+    // Enforce `project_root` containment (web-server security boundary): a web
+    // client must not probe skills under an arbitrary host path — only under
+    // the server's `project_root` (mirrors `/git/*` + `/search/*`). A
+    // non-existent projectRoot canonicalizes to Err and is allowed through
+    // (no project skills scanned; only global skills — harmless degrade).
+    if let Some(pr) = &q.project_root {
+        if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
+            if let Some(err) =
+                crate::web::git_api::ensure_within_project_root::<Vec<AgentSkillSummary>>(
+                    &canonical,
+                    &state.project_root,
+                )
+            {
+                tracing::warn!(
+                    "[Security] /skills rejected: projectRoot '{}' outside project_root",
+                    canonical.display()
+                );
+                return (StatusCode::OK, Json(err));
+            }
+        }
+    }
     let project_root = q.project_root;
     let result = tokio::task::spawn_blocking(move || {
         crate::skills::list_agent_skills(project_root.as_deref())
@@ -83,10 +104,26 @@ pub async fn list(
 /// `#[tauri::command] read_agent_skill_cmd` calls). Returns
 /// `IpcBody::ok(AgentSkillContent)` or `IpcBody::err(msg, "SKILL_NOT_FOUND")`.
 pub async fn read(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     axum::extract::Path(name): axum::extract::Path<String>,
     Query(q): Query<SkillsQuery>,
 ) -> impl IntoResponse {
+    // Enforce `project_root` containment (web-server security boundary) —
+    // mirrors `/skills` (list). A non-existent projectRoot is allowed through.
+    if let Some(pr) = &q.project_root {
+        if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
+            if let Some(err) = crate::web::git_api::ensure_within_project_root::<AgentSkillContent>(
+                &canonical,
+                &state.project_root,
+            ) {
+                tracing::warn!(
+                    "[Security] /skills/:name rejected: projectRoot '{}' outside project_root",
+                    canonical.display()
+                );
+                return (StatusCode::OK, Json(err));
+            }
+        }
+    }
     let project_root = q.project_root;
     let name_for_log = name.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -203,13 +240,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_skills_rejects_project_root_outside_project_root() {
+        // A projectRoot that exists but is outside the server's project_root
+        // (temp_dir's parent) must be rejected with OUTSIDE_PROJECT_ROOT.
+        let state = test_state();
+        let outside = state
+            .project_root
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let uri = format!("/skills?projectRoot={}", outside.display());
+        let resp = get_request(state, &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<Vec<AgentSkillSummary>> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "outside-project-root projectRoot must be rejected");
+        assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+    }
+
+    #[tokio::test]
     async fn read_skill_not_found_returns_error() {
         let resp = get_request(test_state(), "/skills/nonexistent-skill-12345").await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<AgentSkillContent> = body_as_json(resp.into_body()).await;
-        // A nonexistent skill should return a failure body, not throw.
-        if !body.success {
-            assert_eq!(body.code.as_deref(), Some("SKILL_NOT_FOUND"));
-        }
+        // A nonexistent skill must return a failure body (never throw).
+        assert!(!body.success, "nonexistent skill should not be found: {:?}", body.data);
+        assert_eq!(body.code.as_deref(), Some("SKILL_NOT_FOUND"));
     }
 }
