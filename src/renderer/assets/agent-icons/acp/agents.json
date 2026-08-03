@@ -308,11 +308,11 @@
   {
     "id": "dimcode",
     "name": "DimCode",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "description": "A coding agent that puts leading models at your command.",
     "distribution": {
       "npx": {
-        "package": "dimcode@0.3.1",
+        "package": "dimcode@0.3.2",
         "args": ["acp"]
       }
     }
