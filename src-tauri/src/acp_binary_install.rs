@@ -257,7 +257,7 @@ fn looks_like_spawnable(head: &[u8]) -> bool {
     ];
     if head.len() >= 4 {
         let magic = [head[0], head[1], head[2], head[3]];
-        if MACHO.iter().any(|m| *m == magic) {
+        if MACHO.contains(&magic) {
             return true;
         }
     }
