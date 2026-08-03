@@ -18,6 +18,7 @@ import { useInterfaceOverlayOpen } from '@/hooks/use-native-webview-occlusion'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { formatAcpAgentError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -797,7 +798,7 @@ export function AgentChatPanel({
   const codexSignedOut = session.lastError === CODEX_CLI_SIGNED_OUT_MESSAGE
   const activeError =
     !codexSignedOut && session.lastError && session.lastError !== dismissedError
-      ? session.lastError
+      ? formatAcpAgentError(session.lastError)
       : null
   const openCodexSignIn = (): void => {
     const workspace = useWorkspaceStore.getState()
