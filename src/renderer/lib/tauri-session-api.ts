@@ -1,7 +1,12 @@
 /**
  * Tauri Session API Adapter
  *
- * Provides session persistence functionality using Tauri's plugin-store.
+ * Provides session persistence functionality. Branches on `isTauriContext()`:
+ * - Desktop: `@tauri-apps/plugin-store` (`Store.load(STORE_FILE, ...)`).
+ * - Web/remote: a localStorage-backed adapter over flat composite keys
+ *   shaped `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),
+ *   matching the spec's I/O matrix.
+ *
  * Follows the same pattern as tauri-persistence-api.ts for consistency.
  *
  * Features:
@@ -14,6 +19,8 @@
 import type { IpcResult, SessionApi, SessionData } from '@shared/types/ipc.types'
 import { IpcErrorCodes } from '@shared/types/ipc.types'
 import { Store } from '@tauri-apps/plugin-store'
+
+import { isTauriContext } from './tauri-runtime'
 
 // ============================================================================
 // Constants
@@ -33,11 +40,87 @@ interface PersistedSession {
   data: SessionData
 }
 
+/**
+ * Adapter shape shared by the Tauri `Store` and the web localStorage-backed
+ * store. Both expose `get`/`set`/`delete`/`save` so the session methods can
+ * branch in `getStore` and stay transport-agnostic. Signatures mirror the
+ * real Tauri `Store` (`delete` returns `Promise<boolean>` — whether the key
+ * was present) so `Store` is structurally assignable to this interface.
+ */
+interface SessionStoreAdapter {
+  get<T>(key: string): Promise<T | undefined>
+  set(key: string, value: unknown): Promise<void>
+  delete(key: string): Promise<boolean>
+  save(): Promise<void>
+}
+
+/**
+ * Web-only localStorage-backed session store adapter (CAP-3). Mirrors the
+ * Tauri `Store` shape over flat composite localStorage keys shaped
+ * `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),
+ * matching the spec's I/O matrix. Each logical key is its own localStorage
+ * entry; there is no shared envelope object.
+ *
+ * `save()` is a no-op — localStorage writes are synchronous, so `set`
+ * already persists. Reads swallow `QuotaExceededError`/`SecurityError`/JSON
+ * parse failures and degrade to `undefined` (best-effort on read). Writes do
+ * NOT swallow — a `QuotaExceededError` on `set` propagates so `save` can
+ * surface a `SESSION_STORE_ERROR` (the session store is not best-effort: a
+ * silent write failure would make crash-recovery believe a session persisted
+ * that did not).
+ */
+class WebSessionStore implements SessionStoreAdapter {
+  private readonly storageKey: string
+
+  constructor(storageKey: string) {
+    this.storageKey = storageKey
+  }
+
+  private compositeKey(key: string): string {
+    return `${this.storageKey}::${key}`
+  }
+
+  async get<T>(key: string): Promise<T | undefined> {
+    if (typeof localStorage === 'undefined') return undefined
+    try {
+      const raw = localStorage.getItem(this.compositeKey(key))
+      if (raw === null) return undefined
+      return JSON.parse(raw) as T
+    } catch {
+      // Corrupt JSON / SecurityError (private mode) — degrade silently.
+      return undefined
+    }
+  }
+
+  async set(key: string, value: unknown): Promise<void> {
+    if (typeof localStorage === 'undefined') return
+    // Propagate QuotaExceededError/SecurityError so `save` reports a
+    // SESSION_STORE_ERROR instead of a false success.
+    localStorage.setItem(this.compositeKey(key), JSON.stringify(value))
+  }
+
+  async delete(key: string): Promise<boolean> {
+    if (typeof localStorage === 'undefined') return false
+    const composite = this.compositeKey(key)
+    const had = localStorage.getItem(composite) !== null
+    try {
+      localStorage.removeItem(composite)
+    } catch {
+      // SecurityError (private mode) — degrade silently.
+    }
+    return had
+  }
+
+  async save(): Promise<void> {
+    // no-op — localStorage is synchronous; `set` already persisted.
+  }
+}
+
 // ============================================================================
 // State
 // ============================================================================
 
-let storeInstance: Store | null = null
+let storeInstance: SessionStoreAdapter | null = null
 let autoSaveTimeout: ReturnType<typeof setTimeout> | null = null
 let pendingAutoSaveData: SessionData | null = null
 
@@ -45,10 +128,16 @@ let pendingAutoSaveData: SessionData | null = null
 // Store Management
 // ============================================================================
 
-async function getStore(): Promise<Store> {
-  if (!storeInstance) {
-    storeInstance = await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
-  }
+async function getStore(): Promise<SessionStoreAdapter> {
+  if (storeInstance) return storeInstance
+
+  // Ternary (rather than if/else) so TypeScript's control-flow analysis sees
+  // exactly one branch assigns `storeInstance` — the post-block type narrows
+  // to `SessionStoreAdapter` (not `| null`).
+  storeInstance = isTauriContext()
+    ? await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
+    : new WebSessionStore(STORE_FILE)
+
   return storeInstance
 }
 
@@ -262,6 +351,11 @@ async function hasSession(): Promise<IpcResult<boolean>> {
 
       // Return false if data is invalid
       if (!validateSessionData(sessionData)) {
+        return { success: true, data: false }
+      }
+
+      // A session with no terminals has nothing to restore — return false.
+      if (sessionData.terminals.length === 0) {
         return { success: true, data: false }
       }
     }

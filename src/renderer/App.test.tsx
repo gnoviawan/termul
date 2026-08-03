@@ -26,6 +26,68 @@ vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
 }))
 
+// CAP-3: resilience hooks + ErrorBoundary/WhatsNewModal wiring assertions.
+const {
+  mockUseCrashRecovery,
+  mockUseTerminalExitNotification,
+  mockUseRemoteProjects,
+  mockUseWhatsNew,
+  mockInitNotificationPermissions
+} = vi.hoisted(() => ({
+  mockUseCrashRecovery: vi.fn(() => undefined),
+  mockUseTerminalExitNotification: vi.fn(() => undefined),
+  mockUseRemoteProjects: vi.fn(() => undefined),
+  mockUseWhatsNew: vi.fn(() => ({
+    isOpen: false,
+    version: '',
+    notes: null,
+    htmlUrl: null,
+    close: vi.fn()
+  })),
+  mockInitNotificationPermissions: vi.fn(() => Promise.resolve())
+}))
+
+vi.mock('./hooks/use-crash-recovery', () => ({
+  useCrashRecovery: mockUseCrashRecovery
+}))
+
+vi.mock('./hooks/use-terminal-exit-notification', () => ({
+  useTerminalExitNotification: mockUseTerminalExitNotification
+}))
+
+vi.mock('./hooks/use-remote-projects', () => ({
+  useRemoteProjects: mockUseRemoteProjects
+}))
+
+vi.mock('./hooks/use-whats-new', () => ({
+  useWhatsNew: mockUseWhatsNew
+}))
+
+vi.mock('./lib/tauri-notification-api', () => ({
+  initNotificationPermissions: mockInitNotificationPermissions
+}))
+
+// Render-through mock so the test can assert the wrap is present without
+// intercepting the child tree. The real ErrorBoundary is a class component
+// whose componentDidCatch side effects are irrelevant to wiring assertions.
+vi.mock('@/components/ErrorBoundary', () => ({
+  ErrorBoundary: ({ children, context }: { children: React.ReactNode; context?: string }) => (
+    <div data-testid="error-boundary" data-context={context}>
+      {children}
+    </div>
+  )
+}))
+
+vi.mock('./components/WhatsNewModal', () => ({
+  WhatsNewModal: (props: { isOpen: boolean; version: string }) => (
+    <div
+      data-testid="whats-new-modal"
+      data-open={String(props.isOpen)}
+      data-version={props.version}
+    />
+  )
+}))
+
 const mockCheckForUpdates = vi.fn(async () => {})
 const mockInitializeUpdater = vi.fn(async () => {})
 const mockStopPeriodicChecks = vi.fn(() => {})
@@ -188,5 +250,75 @@ describe('App Updater Integration', () => {
     unmount()
 
     expect(mockStopPeriodicChecks).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('App CAP-3 resilience wiring (web entry)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('wraps the tree in <ErrorBoundary context="App Root">', () => {
+    render(<App />)
+
+    const boundary = document.body.querySelector('[data-testid="error-boundary"]')
+    expect(boundary).not.toBeNull()
+    expect(boundary?.getAttribute('data-context')).toBe('App Root')
+  })
+
+  it('mounts <WhatsNewModal> as a sibling of <RouterProvider>', () => {
+    render(<App />)
+
+    const modal = document.body.querySelector('[data-testid="whats-new-modal"]')
+    expect(modal).not.toBeNull()
+    expect(modal?.getAttribute('data-open')).toBe('false')
+  })
+
+  it('forwards the hook open state and version to <WhatsNewModal>', () => {
+    mockUseWhatsNew.mockReturnValue({
+      isOpen: true,
+      version: '0.4.8',
+      notes: 'Release notes',
+      htmlUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.4.8',
+      close: vi.fn()
+    })
+
+    render(<App />)
+
+    const modal = document.body.querySelector('[data-testid="whats-new-modal"]')
+    expect(modal?.getAttribute('data-open')).toBe('true')
+    expect(modal?.getAttribute('data-version')).toBe('0.4.8')
+  })
+
+  it('calls useWhatsNew in the App body', () => {
+    render(<App />)
+
+    expect(mockUseWhatsNew).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useCrashRecovery in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseCrashRecovery).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useTerminalExitNotification in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseTerminalExitNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useRemoteProjects in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseRemoteProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls initNotificationPermissions on mount (useEffect [])', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(mockInitNotificationPermissions).toHaveBeenCalledTimes(1)
+    })
   })
 })

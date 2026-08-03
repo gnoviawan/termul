@@ -36,6 +36,13 @@ vi.mock('@tauri-apps/plugin-store', () => {
   }
 })
 
+// Desktop branch: these tests exercise the Tauri code path. Without this stub,
+// `isTauriContext()` is false under Vitest and the facades take the web branch
+// (covered separately by `tauri-session-api.web.test.ts`).
+vi.mock('../tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => true)
+}))
+
 import type { SessionData } from '@shared/types/ipc.types'
 import { Store } from '@tauri-apps/plugin-store'
 import {
@@ -426,6 +433,23 @@ describe('tauriSessionApi', () => {
       }
 
       currentMockStore.get.mockResolvedValue(invalidData)
+
+      const result = await tauriSessionApi.hasSession()
+
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data).toBe(false)
+      }
+    })
+
+    it('should return false for a valid session with no terminals', async () => {
+      const sessionData = createValidSessionData()
+      const persisted = {
+        _version: 1,
+        data: { ...sessionData, terminals: [] }
+      }
+
+      currentMockStore.get.mockResolvedValue(persisted)
 
       const result = await tauriSessionApi.hasSession()
 

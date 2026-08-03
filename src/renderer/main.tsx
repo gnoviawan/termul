@@ -52,11 +52,15 @@ const root = createRoot(document.getElementById('root')!)
 // runs in parallel with React bootstrap (issue #378). Does not pull Tauri.
 preloadCommonLanguages()
 
+// Forward uncaught renderer errors + unhandled rejections to the backend log
+// file so production crashes are diagnosable (issue #244). Runs in BOTH modes:
+// - Tauri: invokes the `log_frontend_error` command (desktop log file).
+// - Web: POSTs to `/log/frontend-error` (the web branch in `logFrontendError`
+//   was added in Phase 2.3; the server reuses the same sanitization + tracing).
+// `installGlobalErrorForwarding` is idempotent and a no-op outside a browser.
+installGlobalErrorForwarding()
+
 if (isTauriContext()) {
-  // Forward uncaught renderer errors + unhandled rejections to the backend log
-  // file so production crashes are diagnosable (issue #244). Tauri-only: the
-  // browser/web path has no backend command to call.
-  installGlobalErrorForwarding()
   void import('./TauriApp')
     .then(({ default: TauriApp }) => {
       root.render(<TauriApp />)

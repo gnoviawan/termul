@@ -104,7 +104,13 @@ export default defineConfig({
   define: {
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(pkg.version),
     // Feature-gate signal for Story 1.5+ (desktop-only path exclusion).
-    'import.meta.env.TERMUL_WEB': JSON.stringify(true)
+    'import.meta.env.TERMUL_WEB': JSON.stringify(true),
+    // CAP-3: build-time app version for `getCurrentAppVersion()` web branch
+    // (tauri-release-notes.ts). Desktop reads version via Tauri `getVersion`;
+    // the web client has no Tauri runtime, so inject the package version as a
+    // string literal here. Tests run under Vitest (not this config) and read
+    // `undefined`, which the facade downgrades to `'0.0.0'`.
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version)
   },
 
   build: {

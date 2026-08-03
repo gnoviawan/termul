@@ -2,20 +2,27 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
+import { useCrashRecovery } from './hooks/use-crash-recovery'
 import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
+import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
+import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
+import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
+import { initNotificationPermissions } from './lib/tauri-notification-api'
 import AppPreferences from './pages/AppPreferences'
 import NotFound from './pages/NotFound'
 import ProjectSettings from './pages/ProjectSettings'
@@ -84,11 +91,16 @@ const queryClient = new QueryClient()
 // installed @xterm/xterm version is on the expected 6.1 line.
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 
-// Component to handle app-level effects like auto-save
+// Component to handle app-level effects like auto-save.
+// Mirrors TauriApp.tsx AppEffects mount order (lines 63-100) for the portable
+// subset. Native-only effects (usePreventDefaultContextMenu, showWindow,
+// useWindowState) are intentionally NOT ported — they would break the browser
+// (right-click dev menu, no native window). usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
   useTerminalAutoSave()
   useTerminalRestore()
+  useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
@@ -102,15 +114,27 @@ function AppEffects(): null {
   useProjectsLoader()
   useProjectsAutoSave()
   useMenuUpdaterListener()
+  useUpdateCheck()
+  useUpdateToast()
+  useVisibilityState()
+  useTerminalExitNotification()
+  useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()
-  useUpdateCheck()
-  useUpdateToast()
-  useVisibilityState()
   usePreventFileDropNavigation()
+
+  // Initialize notification permissions once at app startup so the OS (or
+  // browser) permission prompt appears early, not on first terminal exit. On
+  // web this calls the Web Notifications API (`Notification.requestPermission`);
+  // on desktop, the Tauri notification plugin. No-op in SSR/test (no
+  // `Notification` global).
+  useEffect(() => {
+    initNotificationPermissions()
+  }, [])
+
   return null
 }
 
@@ -135,20 +159,32 @@ const router = createHashRouter(
   }
 )
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider delayDuration={80} skipDelayDuration={300}>
-      <AppEffects />
-      <Toaster />
-      <Sonner />
-      {/* Web/remote mode only: in-app directory picker registered with
-          dialogApi so NewProjectModal's Browse button works without a native
-          dialog.open (Story: Web/remote project creation). Desktop never
-          mounts it. */}
-      {!isTauriContext() && <DirectoryPicker />}
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
-    </TooltipProvider>
-  </QueryClientProvider>
-)
+const App = () => {
+  const whatsNew = useWhatsNew()
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider delayDuration={80} skipDelayDuration={300}>
+        <ErrorBoundary context="App Root">
+          <AppEffects />
+          <Toaster />
+          <Sonner />
+          {/* Web/remote mode only: in-app directory picker registered with
+              dialogApi so NewProjectModal's Browse button works without a native
+              dialog.open (Story: Web/remote project creation). Desktop never
+              mounts it. */}
+          {!isTauriContext() && <DirectoryPicker />}
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          <WhatsNewModal
+            isOpen={whatsNew.isOpen}
+            version={whatsNew.version}
+            notes={whatsNew.notes}
+            htmlUrl={whatsNew.htmlUrl}
+            onClose={whatsNew.close}
+          />
+        </ErrorBoundary>
+      </TooltipProvider>
+    </QueryClientProvider>
+  )
+}
 
 export default App
