@@ -7,6 +7,35 @@ import type { AgentConfig, AuthMethod } from '@/lib/acp-api'
 const ENOENT_PATTERN =
   /enoent|no such file|program not found|command not found|spawn.*fail|failed to spawn/i
 
+/** Server/client rate-limit or HTTP/2 "slow down" (e.g. NGHTTP2_ENHANCE_YOUR_CALM). */
+const RATE_LIMIT_PATTERN =
+  /ENHANCE_YOUR_CALM|enhance[\s_-]?your[\s_-]?calm|rate[\s_-]?limit|too many requests|\b429\b/i
+
+/**
+ * Mid-turn stream / connection drops. Checked after rate-limit so
+ * `Stream closed … NGHTTP2_ENHANCE_YOUR_CALM` maps to the rate-limit copy.
+ */
+const STREAM_INTERRUPT_PATTERN =
+  /RetriableError|NGHTTP2_|destroyed|stream (?:closed|ended|destroyed|error)|broken pipe|e?pipe\b|econnreset|econnrefused|disconnected|connection (?:closed|lost|reset|refused|aborted)|connection.*timed out|agent thread (?:is no longer running|dropped)/i
+
+export const ACP_RATE_LIMIT_MESSAGE =
+  'Connection was rate-limited by the agent service. Wait a moment, then retry.'
+
+export const ACP_STREAM_INTERRUPT_MESSAGE =
+  'Agent connection was interrupted. Wait a moment, then retry.'
+
+/**
+ * Turn a raw agent turn/setup error into a user-facing message. Known
+ * rate-limit and stream/connection failures are rewritten into short
+ * actionable copy; everything else is passed through verbatim.
+ */
+export function formatAcpAgentError(raw: unknown): string {
+  const message = raw instanceof Error ? raw.message : String(raw)
+  if (RATE_LIMIT_PATTERN.test(message)) return ACP_RATE_LIMIT_MESSAGE
+  if (STREAM_INTERRUPT_PATTERN.test(message)) return ACP_STREAM_INTERRUPT_MESSAGE
+  return message
+}
+
 /**
  * Turn a raw spawn/setup error into a user-facing message. Only ENOENT-style
  * failures (a missing/unresolvable command) are rewritten into actionable
@@ -133,10 +162,9 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  *
  * Transport is checked before auth (so connection/stream wording wins when both
  * are present) and before timeout (so "connection timed out" evicts rather than
- * being treated as a benign slow setup). The category is always derived from the
- * RAW error message; only the `spawn` category rewrites `detail` into friendly
- * ENOENT guidance so the user-facing text stays actionable without losing the
- * diagnostic for other categories.
+ * The category is always derived from the RAW error message; `spawn` rewrites
+ * `detail` via {@link formatAcpSpawnError}, and `transport` / `unknown` run
+ * {@link formatAcpAgentError} so rate-limit and stream drops stay actionable.
  */
 export function classifySetupError(
   raw: unknown,
@@ -155,7 +183,11 @@ export function classifySetupError(
     }
   }
   if (TRANSPORT_PATTERN.test(message)) {
-    return { category: 'transport', label: SETUP_ERROR_LABELS.transport, detail: message }
+    return {
+      category: 'transport',
+      label: SETUP_ERROR_LABELS.transport,
+      detail: formatAcpAgentError(raw)
+    }
   }
   if (AUTH_PATTERN.test(message)) {
     return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail: message }
@@ -163,5 +195,9 @@ export function classifySetupError(
   if (TIMEOUT_PATTERN.test(message)) {
     return { category: 'timeout', label: SETUP_ERROR_LABELS.timeout, detail: message }
   }
-  return { category: 'unknown', label: SETUP_ERROR_LABELS.unknown, detail: message }
+  return {
+    category: 'unknown',
+    label: SETUP_ERROR_LABELS.unknown,
+    detail: formatAcpAgentError(raw)
+  }
 }

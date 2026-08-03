@@ -8,6 +8,7 @@ import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-s
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import { formatAcpAgentError } from '@/lib/agents/acp-spawn-errors'
 import { extractSkillNames } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -390,7 +391,9 @@ export function AgentChatPanel({
       }
     : undefined
   const activeError =
-    session.lastError && session.lastError !== dismissedError ? session.lastError : null
+    session.lastError && session.lastError !== dismissedError
+      ? formatAcpAgentError(session.lastError)
+      : null
 
   return (
     <div
