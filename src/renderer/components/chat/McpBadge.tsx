@@ -2,9 +2,8 @@ import { Plug, PlugZap } from 'lucide-react'
 import { useState } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Switch } from '@/components/ui/switch'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import { cn } from '@/lib/utils'
 
 interface McpServerSummary {
@@ -171,7 +170,6 @@ function McpServerRow({
   onLoadTools
 }: ServerRowProps): React.JSX.Element {
   const enabled = server.enabled !== false
-  const radioValue = enabled ? 'on' : 'off'
   return (
     <li className="space-y-1.5 rounded-md border border-border/50 p-2">
       <div className="flex items-center justify-between gap-2">
@@ -185,28 +183,14 @@ function McpServerRow({
           <span className="truncate text-sm font-medium">{server.name}</span>
         </div>
         {onToggle && (
-          <RadioGroup
-            value={radioValue}
-            aria-label={`${server.name} enabled state`}
-            className="flex gap-2"
-            onValueChange={(value) => {
-              if (value === radioValue) return
-              onToggle(server.id, value === 'on')
+          <Switch
+            checked={enabled}
+            aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
+            onCheckedChange={(checked) => {
+              if (checked === enabled) return
+              onToggle(server.id, checked)
             }}
-          >
-            <span className="flex items-center gap-1">
-              <RadioGroupItem value="on" id={`mcp-${server.id}-on`} />
-              <label htmlFor={`mcp-${server.id}-on`} className="text-muted-foreground">
-                On
-              </label>
-            </span>
-            <span className="flex items-center gap-1">
-              <RadioGroupItem value="off" id={`mcp-${server.id}-off`} />
-              <label htmlFor={`mcp-${server.id}-off`} className="text-muted-foreground">
-                Off
-              </label>
-            </span>
-          </RadioGroup>
+          />
         )}
       </div>
       <Collapsible
@@ -223,10 +207,12 @@ function McpServerRow({
           {tools && tools.length > 0 ? (
             <ul className="space-y-0.5">
               {tools.map((tool) => (
-                <li key={tool.name} className="text-3xs text-muted-foreground">
-                  <span className="font-mono">{tool.name}</span>
+                <li key={tool.name} className="text-3xs">
+                  <span className="font-mono font-medium text-foreground">{tool.name}</span>
                   {tool.description ? (
-                    <span className="ml-1 truncate">— {tool.description}</span>
+                    <span className="ml-1 truncate text-muted-foreground/70">
+                      — {tool.description}
+                    </span>
                   ) : null}
                 </li>
               ))}

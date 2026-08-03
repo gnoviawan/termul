@@ -267,10 +267,14 @@ export function McpServersSettings(): React.JSX.Element {
                       {tools && tools.length > 0 ? (
                         <ul className="space-y-0.5">
                           {tools.map((tool) => (
-                            <li key={tool.name} className="text-3xs text-muted-foreground">
-                              <span className="font-mono">{tool.name}</span>
+                            <li key={tool.name} className="text-3xs">
+                              <span className="font-mono font-medium text-foreground">
+                                {tool.name}
+                              </span>
                               {tool.description ? (
-                                <span className="ml-1 truncate">— {tool.description}</span>
+                                <span className="ml-1 truncate text-muted-foreground/70">
+                                  — {tool.description}
+                                </span>
                               ) : null}
                             </li>
                           ))}

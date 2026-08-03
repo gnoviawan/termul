@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { McpBadge } from './McpBadge'
 
@@ -59,10 +59,10 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     const onToggle = vi.fn()
     render(<McpBadge count={1} servers={servers} onToggle={onToggle} />)
     openPopover()
-    // "Files" (s1) is enabled → its "Off" radio switches it off. Each row's
-    // radios are scoped by their RadioGroup; click the "Off" radio input by id.
-    const offRadio = document.getElementById('mcp-s1-off') as HTMLInputElement
-    fireEvent.click(offRadio)
+    // "Files" (s1) is enabled → its Switch turns it off. Each row's Switch is
+    // labelled with the server name + Disable/Enable prefix.
+    const filesSwitch = screen.getByRole('switch', { name: /Disable Files/i }) as HTMLInputElement
+    fireEvent.click(filesSwitch)
     expect(onToggle).toHaveBeenCalledWith('s1', false)
   })
 
@@ -70,8 +70,8 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     const onToggle = vi.fn()
     render(<McpBadge count={1} servers={servers} onToggle={onToggle} />)
     openPopover()
-    const onRadio = document.getElementById('mcp-s2-on') as HTMLInputElement
-    fireEvent.click(onRadio)
+    const remoteSwitch = screen.getByRole('switch', { name: /Enable Remote/i }) as HTMLInputElement
+    fireEvent.click(remoteSwitch)
     expect(onToggle).toHaveBeenCalledWith('s2', true)
   })
 
