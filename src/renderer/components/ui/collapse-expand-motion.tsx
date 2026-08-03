@@ -5,6 +5,10 @@ import { cn } from '@/lib/utils'
 /**
  * Collapse/expand via `grid-template-rows` 0fr→1fr (not `height`), so layout
  * work stays cheaper than animating pixel height. See animations skill.
+ *
+ * Uses LazyMotion + `m` for the shell only. Do not enable `strict`: chat
+ * children (ToolCallCard / ThoughtGroup / ChatMessage) still use `motion.*`,
+ * and strict mode throws when those nest under this provider.
  */
 const collapseExpandTransition = {
   duration: 0.15,
@@ -27,7 +31,7 @@ export function CollapseExpandMotion({
   const reduced = useReducedMotion() ?? false
 
   return (
-    <LazyMotion features={domAnimation} strict>
+    <LazyMotion features={domAnimation}>
       <AnimatePresence initial={false} onExitComplete={onExitComplete}>
         {open && (
           <m.div
