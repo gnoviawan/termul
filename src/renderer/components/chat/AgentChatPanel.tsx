@@ -495,7 +495,7 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
       />
       {pendingQuestion && !isClosed ? (
-        <AskUserQuestion question={pendingQuestion} />
+        <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
       ) : (
         <ChatInputBar
           session={session}

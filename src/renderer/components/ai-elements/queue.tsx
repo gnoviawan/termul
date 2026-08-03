@@ -47,9 +47,8 @@ export type QueueItemActionProps = Omit<ComponentProps<typeof Button>, 'variant'
 export const QueueItemAction = ({ className, ...props }: QueueItemActionProps) => (
   <Button
     className={cn(
-      // Visual compact; expanded hit area (~44px) without blowing row height.
-      'relative size-8 shrink-0 rounded-md p-0 text-muted-foreground',
-      "after:absolute after:-inset-1.5 after:content-['']",
+      // 44×44 layout slot so adjacent queue actions do not share hit regions.
+      'relative size-11 shrink-0 rounded-md p-0 text-muted-foreground',
       'opacity-100 transition-colors hover:bg-muted-foreground/10 hover:text-foreground',
       className
     )}

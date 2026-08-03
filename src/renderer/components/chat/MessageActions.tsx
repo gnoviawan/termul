@@ -50,13 +50,13 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        // -ml-1 pulls the size-6 visual box so the 14px glyph lines up with prose.
+        // size-11 icon slots already provide spacing; keep a tight visual row.
         'flex items-center gap-0.5 transition-opacity duration-150 focus-within:opacity-100',
         // Touch / coarse: always visible. Fine pointer: hover-reveal unless pinned.
         pinned
           ? 'opacity-100'
           : 'opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover/message:opacity-100',
-        align === 'start' && '-ml-1',
+        align === 'start' && '-ml-2.5',
         align === 'end' && 'justify-end',
         className
       )}

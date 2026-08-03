@@ -45,11 +45,11 @@ describe('MessageActions', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
   })
 
-  it('uses compact Streamdown-sized action buttons with expanded hit area', () => {
+  it('uses 44px action slots without overlapping expanded hit targets', () => {
     renderActions(<MessageActions text="hello" align="start" pinned />)
     const copy = screen.getByRole('button', { name: 'Copy' })
-    expect(copy).toHaveClass('size-6')
-    expect(copy.className).toContain('after:-inset-2.5')
+    expect(copy).toHaveClass('size-11')
+    expect(copy.className).not.toMatch(/after:-inset/)
   })
 
   it('renders retry when provided', () => {

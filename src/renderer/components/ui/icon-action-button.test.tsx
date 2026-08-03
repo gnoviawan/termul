@@ -4,7 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { IconActionButton, IconActionGroup } from './icon-action-button'
 
 describe('IconActionButton', () => {
-  it('renders compact control with expanded hit area and tooltip label as aria-label', () => {
+  it('renders a 44px action slot with tooltip label as aria-label', () => {
     const onClick = vi.fn()
     render(
       <TooltipProvider>
@@ -14,10 +14,32 @@ describe('IconActionButton', () => {
       </TooltipProvider>
     )
     const button = screen.getByRole('button', { name: 'Copy' })
-    expect(button).toHaveClass('size-6')
-    expect(button.className).toContain('after:-inset-2.5')
+    expect(button).toHaveClass('size-11')
+    expect(button.className).not.toContain('after:-inset')
     button.click()
     expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('keeps adjacent action hit regions from overlapping', () => {
+    render(
+      <TooltipProvider>
+        <div className="flex gap-0.5">
+          <IconActionButton label="Copy" onClick={() => {}}>
+            <span>a</span>
+          </IconActionButton>
+          <IconActionButton label="Edit" onClick={() => {}}>
+            <span>b</span>
+          </IconActionButton>
+        </div>
+      </TooltipProvider>
+    )
+    const copy = screen.getByRole('button', { name: 'Copy' })
+    const edit = screen.getByRole('button', { name: 'Edit' })
+    expect(copy).toHaveClass('size-11')
+    expect(edit).toHaveClass('size-11')
+    // Layout slots are the buttons themselves — no expanded ::after hit targets.
+    expect(copy.className).not.toMatch(/after:-inset/)
+    expect(edit.className).not.toMatch(/after:-inset/)
   })
 
   it('uses muted text token when disabled instead of opacity', () => {

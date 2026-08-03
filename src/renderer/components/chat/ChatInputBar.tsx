@@ -211,6 +211,20 @@ export function ChatInputBar({
     }, 400)
     return () => clearTimeout(handle)
   }, [value, draftKey, seedNonce, canPersistDraft])
+
+  // Flush the latest draft on unmount only (AskUserQuestion replaces the
+  // composer). Keep a ref so we do not defeat the debounce on every keystroke.
+  const draftValueRef = useRef(value)
+  draftValueRef.current = value
+  useEffect(() => {
+    return () => {
+      if (seedNonce !== undefined) return
+      if (!canPersistDraft) return
+      const latest = draftValueRef.current
+      if (!latest) return
+      void persistenceApi.write(draftKey, latest).catch(() => {})
+    }
+  }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
