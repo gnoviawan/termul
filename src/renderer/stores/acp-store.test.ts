@@ -4144,6 +4144,123 @@ describe('acp-store', () => {
     })
   })
 
+  it('probeMcpServer updates status + tools + loaded flag on a connected result', async () => {
+    useAcpStore.setState({
+      mcpServers: [{ id: 'p1', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
+      mcpProbeStatus: {},
+      mcpTools: {},
+      mcpToolsLoaded: {},
+      mcpProbing: {}
+    })
+    vi.mocked(invoke).mockResolvedValueOnce({
+      status: 'connected',
+      tools: [{ name: 'read_file', description: 'read a file' }]
+    })
+    await useAcpStore.getState().probeMcpServer('p1')
+    // The store strips registry-only `id`/`enabled` before passing the wire
+    // config to the probe (stateless — no `toWireServer` default-fill, unlike
+    // `selectMcpServersForAgent` which fills `args: []`/`env: []`).
+    expect(invoke).toHaveBeenCalledWith('acp_probe_mcp_server', {
+      server: { type: 'stdio', name: 'Files', command: 'npx' }
+    })
+    const state = useAcpStore.getState()
+    expect(state.mcpProbeStatus.p1).toBe('connected')
+    expect(state.mcpTools.p1).toEqual([{ name: 'read_file', description: 'read a file' }])
+    expect(state.mcpToolsLoaded.p1).toBe(true)
+    expect(state.mcpProbing.p1).toBe(false)
+  })
+
+  it('probeMcpServer surfaces a disconnected result without throwing', async () => {
+    useAcpStore.setState({
+      mcpServers: [
+        { id: 'p2', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
+      ],
+      mcpProbeStatus: {},
+      mcpTools: {},
+      mcpToolsLoaded: {},
+      mcpProbing: {}
+    })
+    vi.mocked(invoke).mockResolvedValueOnce({
+      status: 'disconnected',
+      tools: [],
+      error: 'initialize failed: connection refused'
+    })
+    await useAcpStore.getState().probeMcpServer('p2')
+    const state = useAcpStore.getState()
+    expect(state.mcpProbeStatus.p2).toBe('disconnected')
+    expect(state.mcpTools.p2).toEqual([])
+    expect(state.mcpToolsLoaded.p2).toBe(true)
+    // A disconnected probe is a ProbeResult, NOT a throw — no error log.
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('probeMcpServer dedupes concurrent probes for the same id', async () => {
+    useAcpStore.setState({
+      mcpServers: [{ id: 'p3', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
+      mcpProbeStatus: {},
+      mcpTools: {},
+      mcpToolsLoaded: {},
+      mcpProbing: {}
+    })
+    vi.mocked(invoke).mockResolvedValue({ status: 'connected', tools: [] })
+    // Two concurrent calls — only one should reach the transport.
+    await Promise.all([
+      useAcpStore.getState().probeMcpServer('p3'),
+      useAcpStore.getState().probeMcpServer('p3')
+    ])
+    expect(
+      vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_probe_mcp_server')
+    ).toHaveLength(1)
+  })
+
+  it('loadMcpTools no-ops when tools are already loaded', async () => {
+    useAcpStore.setState({
+      mcpServers: [{ id: 'p4', type: 'stdio', name: 'Files', command: 'npx', enabled: true }],
+      mcpToolsLoaded: { p4: true },
+      mcpProbing: {}
+    })
+    vi.mocked(invoke).mockClear()
+    await useAcpStore.getState().loadMcpTools('p4')
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_probe_mcp_server', expect.anything())
+  })
+
+  it('probeMcpServer logs without env values on a transport failure', async () => {
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'p5',
+          type: 'stdio',
+          name: 'leaky',
+          command: 'npx',
+          args: [],
+          env: [{ name: 'API_KEY', value: 'super-secret-value' }],
+          enabled: true
+        }
+      ],
+      mcpProbeStatus: {},
+      mcpTools: {},
+      mcpToolsLoaded: {},
+      mcpProbing: {}
+    })
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('transport down'))
+    await useAcpStore.getState().probeMcpServer('p5')
+    const state = useAcpStore.getState()
+    expect(state.mcpProbeStatus.p5).toBe('disconnected')
+    expect(state.mcpProbing.p5).toBe(false)
+    // The canonical facade (`acp-mcp-probe.ts`) normalizes the invoke rejection
+    // to a disconnected ProbeResult and logs the transport failure itself — the
+    // store's success path runs (probe "completed" with a disconnected result),
+    // so `mcpToolsLoaded` is true (no auto-re-probe on next expand — a transport
+    // failure is treated as a completed probe, consistent with the contract).
+    expect(state.mcpToolsLoaded.p5).toBe(true)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-mcp-probe.probeMcpServer' })
+    )
+    const logged = vi.mocked(logFrontendError).mock.calls.at(-1)?.[0]
+    expect(logged?.message).toContain('leaky')
+    expect(logged?.message).not.toContain('super-secret-value')
+  })
+
   // Story 5.3 (AC3): transportReconnecting flag is additive state — verify
   // it starts false and can be flipped via setState (the store init wires the
   // WS transport listener to call setState; here we just verify the state

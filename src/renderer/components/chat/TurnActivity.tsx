@@ -23,7 +23,12 @@ interface TurnActivityProps {
 /** Whole-second duration without implying precision the available timestamps do not have. */
 function formatTurnDuration(durationMs: number | null): string | null {
   if (durationMs === null) return null
-  const seconds = Math.max(1, Math.round(durationMs / 1000))
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
   return `${seconds}s`
 }
 
@@ -37,13 +42,13 @@ export function TurnActivity({
   shouldAnimateEnter
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-  const [open, setOpen] = useState(active || attentionRequired || !hasFinalResponse)
+  const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
   const wasActive = useRef(active)
 
   useEffect(() => {
     if (active) {
       setOpen(true)
-    } else if (wasActive.current && !attentionRequired && hasFinalResponse) {
+    } else if (wasActive.current && (hasFinalResponse || attentionRequired)) {
       setOpen(false)
     }
     wasActive.current = active
