@@ -17,7 +17,8 @@ import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
-import { useAcpMessages, useAcpStore, useSessionUsage } from '@/stores/acp-store'
+import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -25,12 +26,14 @@ import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
+  extractFastModeOption,
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
+import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
@@ -124,9 +127,13 @@ export function ChatInputBar({
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(genericConfigOptions, modes)
+  const { fastMode, rest: nonFastGenericOptions } = extractFastModeOption(
+    visibleGenericConfigOptions
+  )
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
+  const { templateId: agentTemplateId } = useAgentIdentity(session.agentId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -467,6 +474,9 @@ export function ChatInputBar({
       disabled={disabled}
       searchable
       maxVisibleOptions={5}
+      leading={
+        <AgentGlyph templateId={agentTemplateId} size={13} className="text-muted-foreground" />
+      }
       onSelect={(valueId) =>
         modelSource === 'models' ? onSetModel(valueId) : onSetConfig(modelOption.id, valueId)
       }
@@ -483,16 +493,26 @@ export function ChatInputBar({
     />
   ) : null
 
-  const genericChips = hasConfigOptions
-    ? visibleGenericConfigOptions.map((option) => (
-        <ConfigChip
-          key={option.id}
-          option={option}
-          disabled={disabled}
-          onSelect={(valueId) => onSetConfig(option.id, valueId)}
-        />
-      ))
-    : null
+  const fastModeToggle = fastMode ? (
+    <FastModeToggle
+      key={fastMode.id}
+      option={fastMode}
+      disabled={disabled}
+      onSelect={(valueId) => onSetConfig(fastMode.id, valueId)}
+    />
+  ) : null
+
+  const genericChips =
+    nonFastGenericOptions.length > 0
+      ? nonFastGenericOptions.map((option) => (
+          <ConfigChip
+            key={option.id}
+            option={option}
+            disabled={disabled}
+            onSelect={(valueId) => onSetConfig(option.id, valueId)}
+          />
+        ))
+      : null
 
   const agentModeChip = (
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
@@ -659,6 +679,7 @@ export function ChatInputBar({
                           data-composer-toolbar-row="2"
                         >
                           {thoughtChip}
+                          {fastModeToggle}
                           {genericChips}
                           {mcpBadge}
                         </div>
@@ -673,6 +694,7 @@ export function ChatInputBar({
                 >
                   {modelChip}
                   {thoughtChip}
+                  {fastModeToggle}
                   {genericChips}
                   {agentModeChip}
                   {mcpBadge}
@@ -686,7 +708,7 @@ export function ChatInputBar({
               >
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
-                <div className="relative size-11 shrink-0 overflow-visible">
+                <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -701,11 +723,11 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.96]',
+                          'absolute inset-0 flex items-center justify-center rounded-md bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
                           EMBOSSED_BUTTON
                         )}
                       >
-                        <Square size={12} fill="currentColor" strokeWidth={0} />
+                        <Square size={10} fill="currentColor" strokeWidth={0} />
                       </motion.button>
                     ) : (
                       <motion.button
@@ -721,16 +743,16 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
+                          'absolute inset-0 flex items-center justify-center rounded-md transition-transform',
                           canSend
                             ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
+                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
                                 EMBOSSED_BUTTON
                               )
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
                         )}
                       >
-                        <ArrowUp size={16} strokeWidth={2.5} />
+                        <ArrowUp size={14} strokeWidth={2.5} />
                       </motion.button>
                     )}
                   </AnimatePresence>

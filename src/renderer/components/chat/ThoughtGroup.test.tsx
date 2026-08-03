@@ -140,8 +140,24 @@ describe('ThoughtGroup', () => {
     expect(contentDiv?.className).toContain('overflow-y-auto')
   })
 
-  it('shows More/Less expand toggle button', async () => {
-    render(
+  it('hides More when thought content fits the collapsed box', async () => {
+    const { container } = render(
+      <ThoughtGroup messages={[thought('t1', 'Line one\nLine two', false)]} isLiveTail={false} />
+    )
+    fireEvent.click(screen.getByText(/Thought/))
+    await waitFor(() => {
+      expect(screen.getByText(/Line one/)).toBeInTheDocument()
+    })
+    const box = scrollBox(container)
+    setScrollGeometry(box, { scrollHeight: 40, clientHeight: 200, scrollTop: 0 })
+    act(() => {
+      roCallback?.([])
+    })
+    expect(screen.queryByText('More')).not.toBeInTheDocument()
+  })
+
+  it('shows More/Less expand toggle when content overflows the collapsed box', async () => {
+    const { container } = render(
       <ThoughtGroup messages={[thought('t1', 'Some thinking text', false)]} isLiveTail={false} />
     )
     // Open the collapsible
@@ -149,18 +165,27 @@ describe('ThoughtGroup', () => {
     await waitFor(() => {
       expect(screen.getByText('Some thinking text')).toBeInTheDocument()
     })
-    // "More" button should be visible
+    const box = scrollBox(container)
+    setScrollGeometry(box, { scrollHeight: 400, clientHeight: 200, scrollTop: 0 })
+    act(() => {
+      roCallback?.([])
+    })
     expect(screen.getByText('More')).toBeInTheDocument()
   })
 
   it('toggles between More and Less on click', async () => {
-    render(
+    const { container } = render(
       <ThoughtGroup messages={[thought('t1', 'Some thinking text', false)]} isLiveTail={false} />
     )
     // Open the collapsible
     fireEvent.click(screen.getByText(/Thought/))
     await waitFor(() => {
       expect(screen.getByText('Some thinking text')).toBeInTheDocument()
+    })
+    const box = scrollBox(container)
+    setScrollGeometry(box, { scrollHeight: 400, clientHeight: 200, scrollTop: 0 })
+    act(() => {
+      roCallback?.([])
     })
     // Click "More" to expand
     const moreButton = screen.getByText('More')
@@ -181,13 +206,18 @@ describe('ThoughtGroup', () => {
   })
 
   it('resets expanded state when collapsible is closed and reopened', async () => {
-    render(
+    const { container } = render(
       <ThoughtGroup messages={[thought('t1', 'Some thinking text', false)]} isLiveTail={false} />
     )
     // Open and expand
     fireEvent.click(screen.getByText(/Thought/))
     await waitFor(() => {
       expect(screen.getByText('Some thinking text')).toBeInTheDocument()
+    })
+    const box = scrollBox(container)
+    setScrollGeometry(box, { scrollHeight: 400, clientHeight: 200, scrollTop: 0 })
+    act(() => {
+      roCallback?.([])
     })
     fireEvent.click(screen.getByText('More'))
     expect(screen.getByText('Less')).toBeInTheDocument()
@@ -197,6 +227,11 @@ describe('ThoughtGroup', () => {
     fireEvent.click(screen.getByText(/Thought/))
     await waitFor(() => {
       expect(screen.getByText('Some thinking text')).toBeInTheDocument()
+    })
+    const boxAgain = scrollBox(container)
+    setScrollGeometry(boxAgain, { scrollHeight: 400, clientHeight: 200, scrollTop: 0 })
+    act(() => {
+      roCallback?.([])
     })
     expect(screen.getByText('More')).toBeInTheDocument()
   })
@@ -271,10 +306,14 @@ describe('ThoughtGroup', () => {
     await waitFor(() => {
       expect(screen.getByText(/thinking/)).toBeInTheDocument()
     })
+    const box = scrollBox(container)
+    setScrollGeometry(box, { scrollHeight: 500, clientHeight: 200, scrollTop: 300 })
+    act(() => {
+      roCallback?.([])
+    })
     // Expand — removes max-height, follow disabled.
     fireEvent.click(screen.getByText('More'))
     expect(screen.getByText('Less')).toBeInTheDocument()
-    const box = scrollBox(container)
     setScrollGeometry(box, { scrollHeight: 500, clientHeight: 200, scrollTop: 0 })
     act(() => {
       roCallback?.([])
@@ -294,6 +333,9 @@ describe('ThoughtGroup', () => {
     // Reader scrolled away from the bottom during streaming.
     setScrollGeometry(box, { scrollHeight: 500, clientHeight: 200, scrollTop: 0 })
     fireEvent.scroll(box)
+    act(() => {
+      roCallback?.([])
+    })
     await waitFor(() => {
       expect(screen.getByLabelText('Jump to latest thinking')).toBeInTheDocument()
     })

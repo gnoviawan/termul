@@ -218,7 +218,10 @@ describe('ChatInputBar config controls', () => {
       </TooltipProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'composer-2.5' }))
+    const modelPill = screen.getByRole('button', { name: /composer-2\.5/ })
+    expect(modelPill.querySelector('svg')).toBeTruthy()
+
+    fireEvent.click(modelPill)
     clickMenuOption('sonnet-4.5')
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'sonnet')
 

@@ -61,6 +61,19 @@ function session(currentModeId = 'agent'): AcpSession {
 }
 
 describe('ConfigChip pending selection', () => {
+  it('renders an optional leading glyph before the model label', () => {
+    render(
+      <ConfigChip
+        option={option('a')}
+        disabled={false}
+        onSelect={vi.fn()}
+        leading={<span data-testid="agent-leading">icon</span>}
+      />
+    )
+    const button = screen.getByRole('button', { name: /Alpha/ })
+    expect(within(button).getByTestId('agent-leading')).toBeInTheDocument()
+  })
+
   it('shows optimistic label and spinner while onSelect is pending', async () => {
     let resolveSelect!: () => void
     const onSelect = vi.fn(
@@ -159,6 +172,14 @@ describe('ConfigChip pending selection', () => {
 })
 
 describe('ModeChip pending selection', () => {
+  it('shows a leading bot icon beside the mode label', () => {
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    const button = screen.getByRole('button', { name: /^Agent$/ })
+    expect(button.querySelector('svg')).toBeTruthy()
+  })
+
   it('shows optimistic mode label while pending', async () => {
     let resolveSelect!: () => void
     const onSelect = vi.fn(

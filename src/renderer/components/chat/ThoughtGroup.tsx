@@ -49,6 +49,8 @@ interface ThoughtGroupProps {
 function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
   refCallback: (el: HTMLDivElement | null) => void
   showJumpButton: boolean
+  /** True when collapsed content exceeds the max-height box (More is useful). */
+  overflows: boolean
   scrollToBottom: (behavior: ScrollBehavior) => void
 } {
   const { enabled, expanded } = opts
@@ -58,6 +60,7 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
   const [el, setEl] = useState<HTMLDivElement | null>(null)
   const [pinned, setPinned] = useState(true)
   const [showJumpButton, setShowJumpButton] = useState(false)
+  const [overflows, setOverflows] = useState(false)
   const pinnedRef = useRef(pinned)
   // Keep the ref's latest committed value without mutating it during render
   // (React can replay/discard render work). Written in a passive effect below.
@@ -98,8 +101,14 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
     const update = (): void => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       const isPinned = distance <= BOTTOM_THRESHOLD_PX
+      // Any clipped content (not just past the jump threshold) warrants More.
+      const contentOverflows = el.scrollHeight > el.clientHeight + 1
       const overflowing = el.scrollHeight - el.clientHeight > BOTTOM_THRESHOLD_PX
       setPinned(isPinned)
+      // Expanded removes max-height so scrollHeight ≈ clientHeight — keep the
+      // last collapsed measurement so Less stays available until the user
+      // collapses (or content shrinks while collapsed).
+      if (!expanded) setOverflows(contentOverflows)
       // Only surface the jump button while actively streaming + collapsed;
       // otherwise the box is static and a jump affordance is noise.
       setShowJumpButton(active && overflowing && !isPinned)
@@ -131,9 +140,9 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
       el.removeEventListener('scroll', onScroll)
       ro.disconnect()
     }
-  }, [el, active])
+  }, [el, active, expanded])
 
-  return { refCallback, showJumpButton, scrollToBottom }
+  return { refCallback, showJumpButton, overflows, scrollToBottom }
 }
 
 /**
@@ -145,8 +154,10 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
  * streaming, the box follows its own live edge (auto-scrolls to bottom) as long
  * as the reader is pinned to the bottom — the same behavior as the main chat
  * scroll. Scrolling away stops the follow and surfaces a "jump to latest"
- * affordance. An "Expand all" toggle removes the max-height limit so the full
- * content is visible without scrolling. Default is minimized (collapsed).
+ * affordance. An "Expand all" (More) toggle removes the max-height limit so the
+ * full content is visible without scrolling — only when the collapsed box
+ * actually clips content. Short thoughts skip the affordance entirely.
+ * Default is minimized (collapsed).
  */
 export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
@@ -158,10 +169,11 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   const [expanded, setExpanded] = useState(false)
   const userOverride = useRef(false)
 
-  const { refCallback, showJumpButton, scrollToBottom } = useThinkingAutoScroll({
+  const { refCallback, showJumpButton, overflows, scrollToBottom } = useThinkingAutoScroll({
     enabled: isStreaming,
     expanded
   })
+  const showExpandToggle = expanded || overflows
 
   useEffect(() => {
     if (userOverride.current) return
@@ -247,24 +259,26 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
                 </button>
               ) : null}
             </div>
-            <button
-              type="button"
-              onClick={handleExpandToggle}
-              className="mt-1 flex cursor-pointer items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
-              aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
-            >
-              {expanded ? (
-                <>
-                  <Minimize2 size={12} />
-                  <span>Less</span>
-                </>
-              ) : (
-                <>
-                  <Maximize2 size={12} />
-                  <span>More</span>
-                </>
-              )}
-            </button>
+            {showExpandToggle ? (
+              <button
+                type="button"
+                onClick={handleExpandToggle}
+                className="mt-1 flex cursor-pointer items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+                aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
+              >
+                {expanded ? (
+                  <>
+                    <Minimize2 size={12} />
+                    <span>Less</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 size={12} />
+                    <span>More</span>
+                  </>
+                )}
+              </button>
+            ) : null}
           </div>
         </CollapseExpandMotion>
       </CollapsibleContent>

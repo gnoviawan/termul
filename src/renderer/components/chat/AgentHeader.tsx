@@ -1,5 +1,5 @@
-import { Brain } from 'lucide-react'
-import { useState } from 'react'
+import { Bot, Brain } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -7,6 +7,17 @@ import type { AcpSession } from '@/stores/acp-store'
 import { ComposerPill } from './ComposerPill'
 import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 import { useOptimisticSelect } from './use-optimistic-select'
+
+/**
+ * Shared option-row chrome for composer config/mode popovers. On accent
+ * hover/selected, the row switches to `text-accent-foreground` so secondary
+ * copy (opacity-based) stays readable instead of washing out as muted-on-blue.
+ */
+const SELECTOR_OPTION_ROW =
+  'flex min-h-11 w-full flex-col items-start gap-0.5 rounded-md px-2 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
+const SELECTOR_OPTION_SELECTED = 'bg-accent text-accent-foreground'
+const SELECTOR_OPTION_DESCRIPTION = 'text-xs opacity-70'
+const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
 
 /**
  * Resolve the display label for a config chip. Promoted chips (e.g.
@@ -34,7 +45,8 @@ export function ConfigChip({
   onSelect,
   promoted = false,
   searchable = false,
-  maxVisibleOptions
+  maxVisibleOptions,
+  leading
 }: {
   option: SessionConfigOption
   disabled: boolean
@@ -42,6 +54,8 @@ export function ConfigChip({
   promoted?: boolean
   searchable?: boolean
   maxVisibleOptions?: number
+  /** Optional leading glyph (e.g. agent icon on the model pill). */
+  leading?: ReactNode
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -68,14 +82,13 @@ export function ConfigChip({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill disabled={disabled} chevron pending={pending}>
+          {leading}
           {promoted && <Brain size={13} className="shrink-0 text-muted-foreground" />}
           {current?.name ?? fallbackLabel}
         </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
-        <div className="label-group px-2 py-1 text-muted-foreground/70">
-          {promoted ? fallbackLabel : option.name}
-        </div>
+        <div className={SELECTOR_SECTION_LABEL}>{promoted ? fallbackLabel : option.name}</div>
         {showSearch && (
           <input
             value={query}
@@ -106,13 +119,13 @@ export function ConfigChip({
                 // useOptimisticSelect ignores the repeat when both fire on mouse.
                 onClick={() => handleSelect(v.value)}
                 className={cn(
-                  'flex min-h-11 w-full flex-col items-start rounded px-2 py-2.5 text-left text-sm hover:bg-accent',
-                  v.value === displayValue && 'bg-accent/50'
+                  SELECTOR_OPTION_ROW,
+                  v.value === displayValue && SELECTOR_OPTION_SELECTED
                 )}
               >
                 <span className="font-medium">{v.name}</span>
                 {v.description && (
-                  <span className="text-xs text-muted-foreground">{v.description}</span>
+                  <span className={SELECTOR_OPTION_DESCRIPTION}>{v.description}</span>
                 )}
               </button>
             ))
@@ -154,11 +167,12 @@ export function ModeChip({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill disabled={disabled} chevron pending={pending}>
+          <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
           {current?.name ?? label}
         </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
-        <div className="label-group px-2 py-1 text-muted-foreground/70">{label}</div>
+        <div className={SELECTOR_SECTION_LABEL}>{label}</div>
         {modes.availableModes.map((m) => (
           <button
             key={m.id}
@@ -169,15 +183,10 @@ export function ModeChip({
               handleSelect(m.id)
             }}
             onClick={() => handleSelect(m.id)}
-            className={cn(
-              'flex min-h-11 w-full flex-col items-start rounded px-2 py-2.5 text-left text-sm hover:bg-accent',
-              m.id === displayValue && 'bg-accent/50'
-            )}
+            className={cn(SELECTOR_OPTION_ROW, m.id === displayValue && SELECTOR_OPTION_SELECTED)}
           >
             <span className="font-medium">{m.name}</span>
-            {m.description && (
-              <span className="text-xs text-muted-foreground">{m.description}</span>
-            )}
+            {m.description && <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>}
           </button>
         ))}
       </PopoverContent>

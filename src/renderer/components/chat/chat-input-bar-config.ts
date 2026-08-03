@@ -90,3 +90,63 @@ export function filterDuplicateModeConfigOptions(
   if (!modes || modes.availableModes.length === 0) return options
   return options.filter((option) => option.category !== MODE_CATEGORY)
 }
+
+const ON_TOKEN = /^(on|true|enabled|1)$/i
+const OFF_TOKEN = /^(off|false|disabled|0)$/i
+
+function isOnOffToken(value: string): boolean {
+  return ON_TOKEN.test(value) || OFF_TOKEN.test(value)
+}
+
+/** True when an option is a two-value On/Off (or true/false) switch. */
+export function isBinaryOnOffOption(option: SessionConfigOption): boolean {
+  if (option.options.length !== 2) return false
+  return option.options.every((entry) => isOnOffToken(entry.value) || isOnOffToken(entry.name))
+}
+
+/**
+ * Detect the Cursor-style Fast Mode switch advertised as a generic select with
+ * On/Off values. Matched by id/name/category containing "fast".
+ */
+export function isFastModeOption(option: SessionConfigOption): boolean {
+  const haystack = `${option.id} ${option.name} ${option.category ?? ''}`.toLowerCase()
+  return haystack.includes('fast') && isBinaryOnOffOption(option)
+}
+
+function entryIsOn(entry: SessionConfigOption['options'][number]): boolean {
+  return ON_TOKEN.test(entry.value) || ON_TOKEN.test(entry.name)
+}
+
+/** Whether the option's current value is the On side of a Fast Mode switch. */
+export function isFastModeEnabled(
+  option: SessionConfigOption,
+  currentValue: string = option.currentValue
+): boolean {
+  const current = option.options.find((entry) => entry.value === currentValue)
+  if (!current) return false
+  return entryIsOn(current)
+}
+
+/** Opposite value for a Fast Mode toggle click. */
+export function oppositeFastModeValue(
+  option: SessionConfigOption,
+  currentValue: string = option.currentValue
+): string | null {
+  const other = option.options.find((entry) => entry.value !== currentValue)
+  return other?.value ?? null
+}
+
+/**
+ * Pull the first Fast Mode switch out of a generic options list so it can
+ * render as an icon toggle instead of a labeled select pill.
+ */
+export function extractFastModeOption(options: SessionConfigOption[]): {
+  fastMode: SessionConfigOption | null
+  rest: SessionConfigOption[]
+} {
+  const index = options.findIndex(isFastModeOption)
+  if (index < 0) return { fastMode: null, rest: options }
+  const fastMode = options[index] ?? null
+  const rest = options.filter((_, i) => i !== index)
+  return { fastMode, rest }
+}

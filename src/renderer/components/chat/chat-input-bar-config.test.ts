@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
-import { filterDuplicateModeConfigOptions, partitionConfigOptions } from './chat-input-bar-config'
+import {
+  extractFastModeOption,
+  filterDuplicateModeConfigOptions,
+  isFastModeEnabled,
+  isFastModeOption,
+  oppositeFastModeValue,
+  partitionConfigOptions
+} from './chat-input-bar-config'
 
 function opt(id: string, category: string | null): SessionConfigOption {
   return {
@@ -94,5 +101,51 @@ describe('filterDuplicateModeConfigOptions', () => {
     const mode = opt('mode', 'mode')
     const custom = opt('custom', 'custom')
     expect(filterDuplicateModeConfigOptions([mode, custom], modes)).toEqual([custom])
+  })
+})
+
+describe('fast mode helpers', () => {
+  function fastMode(currentValue = 'off'): SessionConfigOption {
+    return {
+      id: 'fast_mode',
+      name: 'Fast Mode',
+      category: 'other',
+      type: 'select',
+      currentValue,
+      description: null,
+      options: [
+        { value: 'on', name: 'On', description: null },
+        { value: 'off', name: 'Off', description: null }
+      ]
+    }
+  }
+
+  it('detects binary Fast Mode options and ignores unrelated selects', () => {
+    expect(isFastModeOption(fastMode())).toBe(true)
+    expect(isFastModeOption(opt('custom', 'other'))).toBe(false)
+    expect(
+      isFastModeOption({
+        ...fastMode(),
+        id: 'speed',
+        name: 'Speed'
+      })
+    ).toBe(false)
+  })
+
+  it('resolves enabled state and opposite value', () => {
+    expect(isFastModeEnabled(fastMode('off'))).toBe(false)
+    expect(isFastModeEnabled(fastMode('on'))).toBe(true)
+    expect(oppositeFastModeValue(fastMode('off'))).toBe('on')
+    expect(oppositeFastModeValue(fastMode('on'))).toBe('off')
+  })
+
+  it('extracts Fast Mode from a generic options list', () => {
+    const custom = opt('custom', 'other')
+    const fm = fastMode('off')
+    expect(extractFastModeOption([custom, fm])).toEqual({
+      fastMode: fm,
+      rest: [custom]
+    })
+    expect(extractFastModeOption([custom])).toEqual({ fastMode: null, rest: [custom] })
   })
 })

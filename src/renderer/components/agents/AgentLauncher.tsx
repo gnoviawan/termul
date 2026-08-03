@@ -16,10 +16,12 @@ import { CommandChip } from '@/components/chat/CommandChip'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
 import {
+  extractFastModeOption,
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
+import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { McpBadge } from '@/components/chat/McpBadge'
 import { SkillComposerOverlay } from '@/components/chat/SkillComposerOverlay'
@@ -244,6 +246,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const visibleGenericConfigOptions = filterDuplicateModeConfigOptions(
     genericConfigOptions,
     effectiveModes
+  )
+  const { fastMode, rest: nonFastGenericOptions } = extractFastModeOption(
+    visibleGenericConfigOptions
   )
   const modePreviewSession = useMemo((): AcpSession | null => {
     if (draftSession) return draftSession
@@ -1007,7 +1012,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
                   />
                 )}
-                {visibleGenericConfigOptions.map((option) => (
+                {fastMode && (
+                  <FastModeToggle
+                    option={fastMode}
+                    disabled={!optionsInteractive}
+                    onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
+                  />
+                )}
+                {nonFastGenericOptions.map((option) => (
                   <ConfigChip
                     key={option.id}
                     option={option}
@@ -1483,16 +1495,14 @@ function AcpModelPicker({
                     }}
                     onClick={() => handleSelectModel(value.value)}
                     className={cn(
-                      'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                      value.value === displayValue && 'bg-accent/50'
+                      'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                      value.value === displayValue && 'bg-accent text-accent-foreground'
                     )}
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{value.name}</span>
                       {value.description && (
-                        <span className="block text-xs text-muted-foreground">
-                          {value.description}
-                        </span>
+                        <span className="block text-xs opacity-70">{value.description}</span>
                       )}
                     </span>
                     {value.value === displayValue && (
