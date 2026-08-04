@@ -4109,6 +4109,56 @@ describe('acp-store', () => {
     )
   })
 
+  it('serializes overlapping registry mutations so later writes never clobber earlier ones', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    const save = vi.mocked(persistence.saveMcpServers)
+    save.mockClear()
+    // The import's disk write stalls until the test releases it.
+    let releaseImportWrite: (() => void) | undefined
+    save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseImportWrite = () => resolve()
+        })
+    )
+    useAcpStore.setState({
+      mcpServers: [{ id: 'q1', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+    })
+
+    const importPromise = useAcpStore
+      .getState()
+      .importMcpServers([
+        { id: 'q2', type: 'stdio', name: 'Imported', command: 'node', enabled: true }
+      ])
+    // A toggle issued while the import write is in flight must wait its turn —
+    // without the mutation queue it would snapshot the pre-import registry and
+    // persist that stale list after the import (dropping q2), and its rollback
+    // on failure would drop q2 too.
+    const togglePromise = useAcpStore.getState().setMcpServerEnabled('q1', false)
+
+    // Mutations run queued on the microtask queue; let the import mutation
+    // reach its stalled disk write before asserting on the mid-flight state.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(save).toHaveBeenCalledTimes(1)
+
+    releaseImportWrite?.()
+    await importPromise
+    await togglePromise
+
+    // Both writes land in mutation order; the toggle's snapshot includes q2.
+    expect(save).toHaveBeenCalledTimes(2)
+    expect((save.mock.calls[0]?.[0] ?? []).map((s) => s.id)).toEqual(['q1', 'q2'])
+    const secondWrite = save.mock.calls[1]?.[0] ?? []
+    expect(secondWrite.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(secondWrite.find((s) => s.id === 'q1')?.enabled).toBe(false)
+
+    const finalList = useAcpStore.getState().mcpServers
+    expect(finalList.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(finalList.find((s) => s.id === 'q1')?.enabled).toBe(false)
+  })
+
   it('derives enabled MCP servers from capabilities when no override is supplied', async () => {
     useAcpStore.setState({
       agents: {

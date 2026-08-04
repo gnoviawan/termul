@@ -2462,6 +2462,22 @@ function coalesceSet(sessionId: SessionId, apply: (s: AcpState) => Partial<AcpSt
   coalescedBuffer.push({ sessionId, apply })
   scheduleCoalesceFlush()
 }
+
+// MCP registry mutations (save/import/toggle/delete) are serialized through a
+// single promise queue. Without this, two overlapping mutations each snapshot
+// `mcpServers` before their async disk write; the slower one would persist a
+// stale snapshot AFTER the newer mutation (clobbering it), and its rollback on
+// failure would restore that stale snapshot — dropping the intervening change.
+// The queue guarantees each mutation reads, writes, and (on failure) rolls back
+// against the registry state as of its own turn.
+let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
+async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
+  const run = mcpRegistryQueue.then(mutation)
+  // Swallow for the chain only — the returned promise still rejects to callers.
+  mcpRegistryQueue = run.catch(() => undefined)
+  await run
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -4096,75 +4112,80 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  saveMcpServer: async (server) => {
-    const list = get().mcpServers
-    const idx = list.findIndex((item) => item.id === server.id)
-    const nextServer = { ...server, enabled: server.enabled ?? true }
-    const next =
-      idx === -1
-        ? [...list, nextServer]
-        : list.map((item) => (item.id === server.id ? nextServer : item))
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.saveMcpServer',
-        message: `Failed to persist MCP registry (${String(err)})`
-      })
-      throw err
-    }
-  },
+  saveMcpServer: (server) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const idx = list.findIndex((item) => item.id === server.id)
+      const nextServer = { ...server, enabled: server.enabled ?? true }
+      const next =
+        idx === -1
+          ? [...list, nextServer]
+          : list.map((item) => (item.id === server.id ? nextServer : item))
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.saveMcpServer',
+          message: `Failed to persist MCP registry (${String(err)})`
+        })
+        throw err
+      }
+    }),
 
   importMcpServers: async (servers) => {
     if (servers.length === 0) return
-    const list = get().mcpServers
-    const next = [...list, ...servers]
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.importMcpServers',
-        message: `Failed to persist MCP registry import (${String(err)})`
-      })
-      throw err
-    }
+    await runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = [...list, ...servers]
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.importMcpServers',
+          message: `Failed to persist MCP registry import (${String(err)})`
+        })
+        throw err
+      }
+    })
   },
 
-  setMcpServerEnabled: async (id, enabled) => {
-    const list = get().mcpServers
-    const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.setMcpServerEnabled',
-        message: `Failed to persist MCP registry toggle (${String(err)})`
-      })
-      throw err
-    }
-  },
+  setMcpServerEnabled: (id, enabled) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.setMcpServerEnabled',
+          message: `Failed to persist MCP registry toggle (${String(err)})`
+        })
+        throw err
+      }
+    }),
 
-  deleteMcpServer: async (id) => {
-    const list = get().mcpServers
-    const next = list.filter((server) => server.id !== id)
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.deleteMcpServer',
-        message: `Failed to persist MCP registry deletion (${String(err)})`
-      })
-      throw err
-    }
-  },
+  deleteMcpServer: (id) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = list.filter((server) => server.id !== id)
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.deleteMcpServer',
+          message: `Failed to persist MCP registry deletion (${String(err)})`
+        })
+        throw err
+      }
+    }),
 
   // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
   // concurrent probes per server id via `mcpProbing`.
