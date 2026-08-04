@@ -132,24 +132,28 @@ fn session_new_timeout() -> Duration {
 /// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (env, operator/diagnostic) →
 /// in-process UI override ([`set_first_prompt_warmup_timeout_override`]) →
 /// [`FIRST_PROMPT_WARMUP_TIMEOUT`]. Set to 0 (env or override) to disable the
-/// warmup entirely.
+/// warmup entirely. An INVALID env value is logged and treated like an absent
+/// one — it falls through to the UI override/default instead of masking it
+/// (same shape as the other resolvers' `.parse().ok()` fall-through).
 fn first_prompt_warmup_timeout() -> Duration {
-    let raw = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS");
-    match raw {
+    let override_or_default = || {
+        first_prompt_warmup_timeout_override()
+            .map(Duration::from_secs)
+            .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT)
+    };
+    match std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS") {
         Ok(v) => match v.parse::<u64>() {
             Ok(secs) => Duration::from_secs(secs),
             Err(_) => {
                 log::warn!(
                     "[acp] TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS={v:?} is not a valid \
-                     unsigned integer; falling back to {:?}",
+                     unsigned integer; falling back to the UI override / {:?}",
                     FIRST_PROMPT_WARMUP_TIMEOUT
                 );
-                FIRST_PROMPT_WARMUP_TIMEOUT
+                override_or_default()
             }
         },
-        _ => first_prompt_warmup_timeout_override()
-            .map(Duration::from_secs)
-            .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT),
+        Err(_) => override_or_default(),
     }
 }
 
@@ -3521,19 +3525,37 @@ mod tests {
         assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
     }
 
-    /// `first_prompt_warmup_timeout` precedence: env var > UI override >
-    /// default. Unlike the other overrides, `0` is meaningful: it disables
-    /// the warmup entirely.
+    /// `first_prompt_warmup_timeout` full precedence ladder, in ONE test so
+    /// the shared override static and env var are never touched by concurrent
+    /// tests: override wins over default; `0` disables (unlike the other
+    /// overrides); cleared → default; and an INVALID env value falls through
+    /// to the override (incl. a disabling `0`) instead of masking it. When
+    /// the env var is ALREADY set on the host (operator machine), only the
+    /// invalid-env phase runs and the original value is restored afterwards.
     #[test]
-    fn first_prompt_warmup_timeout_override_takes_effect_when_no_env_var() {
-        if std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS").is_ok() {
-            return;
+    fn first_prompt_warmup_timeout_precedence_and_invalid_env() {
+        let preexisting = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS").ok();
+        if preexisting.is_none() {
+            set_first_prompt_warmup_timeout_override(Some(7));
+            assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(7));
+            set_first_prompt_warmup_timeout_override(Some(0));
+            assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
+            set_first_prompt_warmup_timeout_override(None);
+            assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
         }
-        set_first_prompt_warmup_timeout_override(Some(7));
-        assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(7));
+
+        std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", "not-a-number");
+        set_first_prompt_warmup_timeout_override(Some(9));
+        assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(9));
         set_first_prompt_warmup_timeout_override(Some(0));
         assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
         set_first_prompt_warmup_timeout_override(None);
         assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
+
+        match preexisting {
+            Some(v) => std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", v),
+            None => std::env::remove_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS"),
+        }
+        set_first_prompt_warmup_timeout_override(None);
     }
 }

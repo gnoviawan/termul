@@ -845,10 +845,14 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                  <label
+                    htmlFor="acp-turn-idle-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
                     Turn Idle Timeout
                   </label>
                   <select
+                    id="acp-turn-idle-timeout"
                     value={
                       acpTurnIdleTimeoutSecs === null ? 'null' : String(acpTurnIdleTimeoutSecs)
                     }
@@ -876,10 +880,14 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                  <label
+                    htmlFor="acp-session-new-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
                     Session/New Timeout
                   </label>
                   <select
+                    id="acp-session-new-timeout"
                     value={
                       acpSessionNewTimeoutSecs === null ? 'null' : String(acpSessionNewTimeoutSecs)
                     }
@@ -908,10 +916,14 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                  <label
+                    htmlFor="acp-session-reopen-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
                     Session Reopen Timeout
                   </label>
                   <select
+                    id="acp-session-reopen-timeout"
                     value={
                       acpSessionReopenTimeoutSecs === null
                         ? 'null'
@@ -942,10 +954,14 @@ export default function AppPreferences(): React.JSX.Element {
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                  <label
+                    htmlFor="acp-first-prompt-warmup"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
                     First-Prompt Warmup Timeout
                   </label>
                   <select
+                    id="acp-first-prompt-warmup"
                     value={
                       acpFirstPromptWarmupSecs === null ? 'null' : String(acpFirstPromptWarmupSecs)
                     }
