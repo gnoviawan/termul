@@ -270,6 +270,21 @@ describe('durable tool-call sanitization', () => {
   it('tolerates non-array input without throwing', () => {
     expect(sanitizeToolCallsForPersistence('corrupt' as unknown as ToolCall[])).toBeUndefined()
   })
+
+  it('drops calls whose structural subset still exceeds the budget (oversized id)', () => {
+    const oversizedId = 'tc-'.concat('x'.repeat(PERSISTED_TOOL_CALL_BYTE_BUDGET + 1))
+    const clean = sanitizeToolCallsForPersistence([
+      toolCall({ toolCallId: oversizedId }),
+      toolCall({ toolCallId: 'tc-ok' })
+    ])!
+    expect(clean).toHaveLength(1)
+    expect(clean[0].toolCallId).toBe('tc-ok')
+  })
+
+  it('returns undefined when every call is dropped for exceeding the budget', () => {
+    const oversizedId = 'tc-'.concat('x'.repeat(PERSISTED_TOOL_CALL_BYTE_BUDGET + 1))
+    expect(sanitizeToolCallsForPersistence([toolCall({ toolCallId: oversizedId })])).toBeUndefined()
+  })
 })
 
 describe('payload restore helpers', () => {
@@ -293,6 +308,27 @@ describe('payload restore helpers', () => {
     expect(maxPayloadSeq({ messages: [], ...corrupt })).toBe(0)
     expect(restoredToolCalls(corrupt)).toEqual([])
     expect(restoredToolCalls({})).toEqual([])
+  })
+
+  it('restore helpers skip null and malformed entries inside the array', () => {
+    const valid = { toolCallId: 'tc-valid', seq: 4 }
+    const junk = [
+      null,
+      42,
+      'tc-string',
+      { seq: 3 },
+      { toolCallId: '' },
+      valid
+    ] as unknown as ToolCall[]
+    expect(maxPayloadSeq({ messages: [], toolCalls: junk })).toBe(4)
+    expect(restoredToolCalls({ toolCalls: junk })).toEqual([valid])
+  })
+
+  it('maxPayloadSeq ignores non-finite seqs instead of poisoning the rebase', () => {
+    const corrupt = {
+      toolCalls: [{ toolCallId: 'tc-nan', seq: Number.NaN }] as unknown as ToolCall[]
+    }
+    expect(maxPayloadSeq({ messages: [], ...corrupt })).toBe(0)
   })
 })
 

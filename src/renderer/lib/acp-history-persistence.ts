@@ -107,49 +107,93 @@ export function sanitizeToolCallsForPersistence(
 ): ToolCall[] | undefined {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return undefined
   const degraded: string[] = []
-  const sanitized = toolCalls.slice(-PERSISTED_TOOL_CALLS_LIMIT).map((toolCall) => {
+  const dropped: string[] = []
+  const sanitized: ToolCall[] = []
+  for (const toolCall of toolCalls.slice(-PERSISTED_TOOL_CALLS_LIMIT)) {
     const candidate = structuralToolCall(toolCall)
     if (toolCall.rawInput !== undefined) candidate.rawInput = toolCall.rawInput
     if (toolCall.content !== undefined) candidate.content = toolCall.content
+    let persisted: ToolCall | undefined
     try {
       const bytes = persistedTextEncoder.encode(JSON.stringify(candidate)).byteLength
-      if (bytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) return candidate
+      if (bytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) persisted = candidate
     } catch {
       // Non-serializable fields: fall through to the structural subset.
     }
-    degraded.push(toolCall.toolCallId)
-    return structuralToolCall(toolCall)
-  })
-  if (degraded.length > 0) {
+    if (!persisted) {
+      // Over budget or non-serializable: degrade to the structural subset, then
+      // re-measure it. `toolCallId` is agent-sourced and unbounded, so even the
+      // subset can exceed the cap — omit the call entirely in that case so the
+      // per-call budget actually holds.
+      const structural = structuralToolCall(toolCall)
+      const structuralBytes = persistedTextEncoder.encode(JSON.stringify(structural)).byteLength
+      if (structuralBytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) {
+        degraded.push(toolCall.toolCallId)
+        persisted = structural
+      } else {
+        dropped.push(toolCall.toolCallId)
+      }
+    }
+    if (persisted) sanitized.push(persisted)
+  }
+  if (degraded.length > 0 || dropped.length > 0) {
+    const parts: string[] = []
+    if (degraded.length > 0) {
+      parts.push(`degraded ${degraded.length}: ${degraded.slice(0, 3).join(', ')}`)
+    }
+    if (dropped.length > 0) {
+      parts.push(`dropped ${dropped.length} over-size: ${dropped.slice(0, 3).join(', ')}`)
+    }
     void logFrontendError({
       level: 'warn',
       source: 'acp.historyPersistence',
-      message: `Persisted ${degraded.length} tool call(s) in degraded structural form (over budget or non-serializable): ${degraded.slice(0, 3).join(', ')}`
+      message: `Tool-call persistence budget enforced — ${parts.join('; ')}`
     })
   }
-  return sanitized
+  return sanitized.length > 0 ? sanitized : undefined
+}
+
+/** True for a restorable tool-call record: a non-null object with a string id. */
+function isRestorableToolCall(value: unknown): value is ToolCall {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as ToolCall
+  return typeof candidate.toolCallId === 'string' && candidate.toolCallId.length > 0
+}
+
+/** Filter a raw payload array down to restorable tool-call records. */
+function normalizedToolCalls(toolCalls: unknown): ToolCall[] {
+  if (!Array.isArray(toolCalls)) return []
+  return toolCalls.filter(isRestorableToolCall)
 }
 
 /**
  * Highest `seq` across a payload's messages and tool calls (they share one
  * timeline counter). Corrupt/partial payloads degrade to the fields present —
- * a non-array `toolCalls` never throws on the reopen hot path.
+ * a non-array `toolCalls`, or one containing non-record entries (`null`,
+ * scalar, missing id), never throws on the reopen hot path.
  */
 export function maxPayloadSeq(payload: Pick<SessionPayload, 'messages' | 'toolCalls'>): number {
   let maxSeq = 0
   for (const message of payload.messages) {
-    if (typeof message.seq === 'number' && message.seq > maxSeq) maxSeq = message.seq
+    if (typeof message.seq === 'number' && Number.isFinite(message.seq) && message.seq > maxSeq) {
+      maxSeq = message.seq
+    }
   }
-  const toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : []
-  for (const toolCall of toolCalls) {
-    if (typeof toolCall.seq === 'number' && toolCall.seq > maxSeq) maxSeq = toolCall.seq
+  for (const toolCall of normalizedToolCalls(payload.toolCalls)) {
+    if (
+      typeof toolCall.seq === 'number' &&
+      Number.isFinite(toolCall.seq) &&
+      toolCall.seq > maxSeq
+    ) {
+      maxSeq = toolCall.seq
+    }
   }
   return maxSeq
 }
 
 /** Restored tool calls for a payload, tolerant of legacy/corrupt shapes. */
 export function restoredToolCalls(payload: Pick<SessionPayload, 'toolCalls'>): ToolCall[] {
-  return Array.isArray(payload.toolCalls) ? payload.toolCalls : []
+  return normalizedToolCalls(payload.toolCalls)
 }
 
 function stablePayload(payload: SessionPayload): string {
