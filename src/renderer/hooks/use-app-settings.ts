@@ -192,12 +192,33 @@ export function useAppSettingsLoader(): void {
         console.error('Failed to apply orphan detection settings:', error)
       }
 
-      // Push the ACP turn-timeout override to the Rust core (desktop-only
-      // via the transport; the WS transport no-ops on the standalone server).
+      // Push the ACP timeout overrides to the Rust core (desktop-only via the
+      // transport; the WS transport no-ops on the standalone server, which
+      // configures via the TERMUL_ACP_* env vars).
       try {
         await acpApi.setTurnTimeout(settings.acpTurnTimeoutSecs)
       } catch (error) {
         console.error('Failed to apply ACP turn timeout:', error)
+      }
+      try {
+        await acpApi.setTurnIdleTimeout(settings.acpTurnIdleTimeoutSecs)
+      } catch (error) {
+        console.error('Failed to apply ACP turn idle timeout:', error)
+      }
+      try {
+        await acpApi.setSessionNewTimeout(settings.acpSessionNewTimeoutSecs)
+      } catch (error) {
+        console.error('Failed to apply ACP session/new timeout:', error)
+      }
+      try {
+        await acpApi.setSessionReopenTimeout(settings.acpSessionReopenTimeoutSecs)
+      } catch (error) {
+        console.error('Failed to apply ACP session reopen timeout:', error)
+      }
+      try {
+        await acpApi.setFirstPromptWarmupTimeout(settings.acpFirstPromptWarmupSecs)
+      } catch (error) {
+        console.error('Failed to apply ACP first-prompt warmup timeout:', error)
       }
     }
     load()
@@ -273,12 +294,32 @@ export function useResetAppSettings(): () => Promise<void> {
     if (result.success) {
       syncPersistedPanelSettingsSnapshot(DEFAULT_APP_SETTINGS)
     }
-    // Clear the in-process turn-timeout override too (mirrors the load hook's
-    // push, so a reset doesn't leave a stale override in the Rust core).
+    // Clear the in-process ACP timeout overrides too (mirrors the load
+    // hook's push, so a reset doesn't leave stale overrides in the Rust core).
     try {
       await acpApi.setTurnTimeout(DEFAULT_APP_SETTINGS.acpTurnTimeoutSecs)
     } catch (error) {
       console.error('Failed to clear ACP turn timeout on reset:', error)
+    }
+    try {
+      await acpApi.setTurnIdleTimeout(DEFAULT_APP_SETTINGS.acpTurnIdleTimeoutSecs)
+    } catch (error) {
+      console.error('Failed to clear ACP turn idle timeout on reset:', error)
+    }
+    try {
+      await acpApi.setSessionNewTimeout(DEFAULT_APP_SETTINGS.acpSessionNewTimeoutSecs)
+    } catch (error) {
+      console.error('Failed to clear ACP session/new timeout on reset:', error)
+    }
+    try {
+      await acpApi.setSessionReopenTimeout(DEFAULT_APP_SETTINGS.acpSessionReopenTimeoutSecs)
+    } catch (error) {
+      console.error('Failed to clear ACP session reopen timeout on reset:', error)
+    }
+    try {
+      await acpApi.setFirstPromptWarmupTimeout(DEFAULT_APP_SETTINGS.acpFirstPromptWarmupSecs)
+    } catch (error) {
+      console.error('Failed to clear ACP first-prompt warmup timeout on reset:', error)
     }
   }, [resetToDefaults])
 }

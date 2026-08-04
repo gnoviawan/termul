@@ -63,3 +63,11 @@ export const useAppearanceMode = () => useAppSettingsStore((state) => state.sett
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
 export const useAcpTurnTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)
+export const useAcpTurnIdleTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpTurnIdleTimeoutSecs)
+export const useAcpSessionNewTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionNewTimeoutSecs)
+export const useAcpSessionReopenTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
+export const useAcpFirstPromptWarmup = () =>
+  useAppSettingsStore((state) => state.settings.acpFirstPromptWarmupSecs)
