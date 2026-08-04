@@ -513,37 +513,37 @@
   {
     "id": "kilo",
     "name": "Kilo",
-    "version": "7.4.17",
+    "version": "7.4.19",
     "description": "The open source coding agent",
     "distribution": {
       "npx": {
-        "package": "@kilocode/cli@7.4.17",
+        "package": "@kilocode/cli@7.4.19",
         "args": ["acp"]
       },
       "binary": {
         "darwin-aarch64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-darwin-arm64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.19/kilo-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-darwin-x64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.19/kilo-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-linux-arm64.tar.gz",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.19/kilo-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./kilo",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-linux-x64.tar.gz",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.19/kilo-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./kilo.exe",
-          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.17/kilo-windows-x64.zip",
+          "archive": "https://github.com/Kilo-Org/kilocode/releases/download/v7.4.19/kilo-windows-x64.zip",
           "args": ["acp"]
         }
       }
