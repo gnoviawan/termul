@@ -18,6 +18,7 @@ pub mod manager;
 pub mod mcp_probe;
 pub mod project_registry;
 pub mod session;
+pub mod session_payload;
 pub mod session_persistence;
 pub mod terminal;
 
@@ -36,7 +37,7 @@ pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,
-    SessionRegistration,
+    SessionPersistenceError, SessionRegistration,
 };
 
 #[cfg(test)]
