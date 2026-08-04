@@ -1,9 +1,11 @@
 /** Desktop ACP history persistence boundary. */
 
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
+import type { ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
 export const SESSION_INDEX_KEY = 'acp/sessions/index'
@@ -37,6 +39,117 @@ export interface SessionIndexEntry {
 export interface SessionPayload {
   metadata: SessionIndexEntry
   messages: ChatMessage[]
+  /**
+   * Durable tool calls mirrored alongside the transcript so history reopens
+   * and post-reload resumes restore the tool cards in the timeline. Written
+   * through `sanitizeToolCallsForPersistence` (no `rawOutput`, per-call size
+   * bound). Absent on payloads persisted before this field existed.
+   */
+  toolCalls?: ToolCall[]
+}
+
+/**
+ * Maximum serialized UTF-8 size of a single durable tool call. Calls exceeding
+ * the budget degrade to the structural subset so a giant diff or tool input
+ * cannot balloon the on-disk payload.
+ */
+export const PERSISTED_TOOL_CALL_BYTE_BUDGET = 32 * 1024
+
+/**
+ * Maximum number of tool calls persisted per session. Tool calls are never
+ * trimmed in the live window (messages have `MAX_LIVE_WINDOW_MESSAGES`), so the
+ * durable mirror keeps only the most recent calls — the same recency window a
+ * reader browses — bounding payload growth on very long sessions.
+ */
+export const PERSISTED_TOOL_CALLS_LIMIT = 500
+
+/** Agent-controlled titles are bounded so the degraded subset stays bounded. */
+const PERSISTED_TOOL_CALL_TITLE_LIMIT = 200
+
+const persistedTextEncoder = new TextEncoder()
+
+function boundedTitle(title: unknown): string | undefined {
+  if (typeof title !== 'string' || title.length === 0) return undefined
+  return title.length > PERSISTED_TOOL_CALL_TITLE_LIMIT
+    ? `${title.slice(0, PERSISTED_TOOL_CALL_TITLE_LIMIT)}…`
+    : title
+}
+
+/**
+ * Structural subset of a durable tool call: routing/status fields + timeline
+ * stamps only. Mid-flight statuses are persisted as `failed` — the turn that
+ * owned them has ended, and restoring `pending`/`in_progress` would reopen the
+ * card spinning forever.
+ */
+function structuralToolCall(toolCall: ToolCall): ToolCall {
+  const reduced: ToolCall = { toolCallId: toolCall.toolCallId }
+  const title = boundedTitle(toolCall.title)
+  if (title !== undefined) reduced.title = title
+  if (toolCall.kind !== undefined) reduced.kind = toolCall.kind
+  const status =
+    toolCall.status === 'pending' || toolCall.status === 'in_progress' ? 'failed' : toolCall.status
+  if (status !== undefined) reduced.status = status
+  if (typeof toolCall.timestamp === 'number') reduced.timestamp = toolCall.timestamp
+  if (typeof toolCall.seq === 'number') reduced.seq = toolCall.seq
+  return reduced
+}
+
+/**
+ * Mirror-ready tool calls for durable history. `rawOutput` (unbounded tool
+ * results) is never persisted, and only the known summary/render fields
+ * (`rawInput`, structured `content`) ride along — unknown agent fields are
+ * dropped at the boundary. Over-budget calls degrade to the structural subset
+ * instead of ballooning the payload; non-serializable calls degrade the same
+ * way (and the degradation is logged, never silent).
+ */
+export function sanitizeToolCallsForPersistence(
+  toolCalls: ToolCall[] | undefined
+): ToolCall[] | undefined {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return undefined
+  const degraded: string[] = []
+  const sanitized = toolCalls.slice(-PERSISTED_TOOL_CALLS_LIMIT).map((toolCall) => {
+    const candidate = structuralToolCall(toolCall)
+    if (toolCall.rawInput !== undefined) candidate.rawInput = toolCall.rawInput
+    if (toolCall.content !== undefined) candidate.content = toolCall.content
+    try {
+      const bytes = persistedTextEncoder.encode(JSON.stringify(candidate)).byteLength
+      if (bytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) return candidate
+    } catch {
+      // Non-serializable fields: fall through to the structural subset.
+    }
+    degraded.push(toolCall.toolCallId)
+    return structuralToolCall(toolCall)
+  })
+  if (degraded.length > 0) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.historyPersistence',
+      message: `Persisted ${degraded.length} tool call(s) in degraded structural form (over budget or non-serializable): ${degraded.slice(0, 3).join(', ')}`
+    })
+  }
+  return sanitized
+}
+
+/**
+ * Highest `seq` across a payload's messages and tool calls (they share one
+ * timeline counter). Corrupt/partial payloads degrade to the fields present —
+ * a non-array `toolCalls` never throws on the reopen hot path.
+ */
+export function maxPayloadSeq(payload: Pick<SessionPayload, 'messages' | 'toolCalls'>): number {
+  let maxSeq = 0
+  for (const message of payload.messages) {
+    if (typeof message.seq === 'number' && message.seq > maxSeq) maxSeq = message.seq
+  }
+  const toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : []
+  for (const toolCall of toolCalls) {
+    if (typeof toolCall.seq === 'number' && toolCall.seq > maxSeq) maxSeq = toolCall.seq
+  }
+  return maxSeq
+}
+
+/** Restored tool calls for a payload, tolerant of legacy/corrupt shapes. */
+export function restoredToolCalls(payload: Pick<SessionPayload, 'toolCalls'>): ToolCall[] {
+  return Array.isArray(payload.toolCalls) ? payload.toolCalls : []
 }
 
 function stablePayload(payload: SessionPayload): string {
@@ -322,7 +435,10 @@ export async function saveSessionPayload(id: string, payload: SessionPayload): P
       if (durablePrefix.length > 0) {
         nextPayload = {
           metadata: { ...payload.metadata },
-          messages: [...durablePrefix, ...payload.messages]
+          messages: [...durablePrefix, ...payload.messages],
+          // The live store owns the full (never-trimmed) tool-call list; only
+          // fall back to disk when the incoming payload carries none.
+          toolCalls: payload.toolCalls ?? durable.toolCalls
         }
         nextPayload.metadata.messageCount = nextPayload.messages.length
       }

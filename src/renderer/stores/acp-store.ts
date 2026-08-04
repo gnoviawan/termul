@@ -89,10 +89,13 @@ import {
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
   markSessionPayloadPinned,
+  maxPayloadSeq,
   queueSessionPayloadDelete,
   queueSessionPayloadSave,
+  restoredToolCalls,
   type SessionIndexEntry,
   type SessionPayload,
+  sanitizeToolCallsForPersistence,
   saveSessionIndex as saveSessionIndexToDisk,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
@@ -1110,6 +1113,7 @@ function persistSession(
   state: {
     sessions: Record<SessionId, AcpSession>
     messages: Record<SessionId, ChatMessage[]>
+    toolCalls: Record<SessionId, ToolCall[]>
     sessionIndex: SessionIndexEntry[]
     configToLiveAgent: Record<string, AgentId>
   },
@@ -1168,7 +1172,16 @@ function persistSession(
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
-  const payload: SessionPayload = { metadata: entry, messages }
+  // Mirror the tool calls with the transcript so a history reopen / resume
+  // restores the tool cards (otherwise only thoughts + replies survive). When
+  // the live map key is absent (transcript eviction) fall back to the cached
+  // mirror so the durable copy is never blanked by an absent-key persist.
+  const liveToolCalls = state.toolCalls[sessionId]
+  const toolCalls =
+    liveToolCalls === undefined
+      ? cachedPayload?.toolCalls
+      : sanitizeToolCallsForPersistence(liveToolCalls)
+  const payload: SessionPayload = { metadata: entry, messages, toolCalls }
   // Rust owns the durable index and updates it with the payload in the queued
   // save. saveSessionIndexToDisk remains a compatibility no-op for non-desktop
   // callers while queueSessionPayloadSave owns the serialized durable write.
@@ -1962,11 +1975,7 @@ async function openHistorySessionInner(
 
   // Rebase the process-wide seq counter so live events appended after the
   // restored transcript sort after it (nextSeq() returns > max restored seq).
-  let maxRestoredSeq = 0
-  for (const m of payload.messages) {
-    if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
-  }
-  rebaseSeqCounter(maxRestoredSeq)
+  rebaseSeqCounter(maxPayloadSeq(payload))
 
   // Preserve controls already held by a cached closed session. Persisted
   // history does not contain them, and optional reopen fields may be omitted.
@@ -1996,7 +2005,10 @@ async function openHistorySessionInner(
         replaying: null
       }
     },
-    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
+    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+    // Restore the mirrored tool calls so the timeline shows the tool cards
+    // again — without this only thoughts + replies survive a reopen.
+    toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
   }))
   onTranscriptInstalled()
 
@@ -2126,6 +2138,7 @@ async function openHistorySessionInner(
       // history (a partial replay may have replaced it).
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -3623,11 +3636,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const payload = await loadSessionPayload(id)
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
-    let maxRestoredSeq = 0
-    for (const m of payload.messages) {
-      if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
-    }
-    rebaseSeqCounter(maxRestoredSeq)
+    rebaseSeqCounter(maxPayloadSeq(payload))
     set((s) => ({
       sessions: {
         ...s.sessions,
@@ -3655,7 +3664,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           replaying: 'streaming'
         }
       },
-      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
+      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+      // Restore the mirrored tool calls alongside the transcript so the
+      // resumed session's timeline keeps its tool cards.
+      toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
     }))
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -3677,6 +3689,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // throws on the bootstrap path.
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err

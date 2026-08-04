@@ -19,6 +19,7 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
 
 vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
 vi.mock('@/lib/acp-history-api', () => ({ acpHistoryApi: mockHistoryApi }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage } from '@/stores/acp-store'
 import {
@@ -41,12 +43,17 @@ import {
   loadSessionIndex,
   loadSessionPayload,
   markSessionPayloadPinned,
+  maxPayloadSeq,
+  PERSISTED_TOOL_CALL_BYTE_BUDGET,
+  PERSISTED_TOOL_CALLS_LIMIT,
   queueSessionPayloadDelete,
   queueSessionPayloadSave,
+  restoredToolCalls,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
   type SessionIndexEntry,
   type SessionPayload,
+  sanitizeToolCallsForPersistence,
   saveSessionPayload,
   scopeSessionIndex,
   sessionPayloadKey,
@@ -158,6 +165,137 @@ describe('pure history helpers', () => {
   })
 })
 
+describe('durable tool-call sanitization', () => {
+  function toolCall(overrides: Partial<ToolCall> = {}): ToolCall {
+    return {
+      toolCallId: 'tc-1',
+      title: 'Read file',
+      kind: 'read',
+      status: 'completed',
+      timestamp: 100,
+      seq: 5,
+      rawInput: { path: '/a.ts' },
+      rawOutput: 'huge output',
+      ...overrides
+    }
+  }
+
+  it('returns undefined for absent or empty lists so the field is omitted', () => {
+    expect(sanitizeToolCallsForPersistence(undefined)).toBeUndefined()
+    expect(sanitizeToolCallsForPersistence([])).toBeUndefined()
+  })
+
+  it('strips rawOutput but keeps summary fields and timeline stamps', () => {
+    const [clean] = sanitizeToolCallsForPersistence([toolCall()])!
+    expect(clean.rawOutput).toBeUndefined()
+    expect(clean).toMatchObject({
+      toolCallId: 'tc-1',
+      title: 'Read file',
+      kind: 'read',
+      status: 'completed',
+      timestamp: 100,
+      seq: 5,
+      rawInput: { path: '/a.ts' }
+    })
+  })
+
+  it('keeps structured content and rawInput within the byte budget', () => {
+    const [clean] = sanitizeToolCallsForPersistence([
+      toolCall({
+        content: [{ type: 'text', text: 'short' }],
+        rawInput: { command: 'ls' }
+      })
+    ])!
+    expect(clean.content).toEqual([{ type: 'text', text: 'short' }])
+    expect(clean.rawInput).toEqual({ command: 'ls' })
+  })
+
+  it('degrades over-budget calls to the structural subset', () => {
+    const huge = 'x'.repeat(PERSISTED_TOOL_CALL_BYTE_BUDGET + 1)
+    const [clean] = sanitizeToolCallsForPersistence([
+      toolCall({ rawInput: { path: '/big.ts', blob: huge } })
+    ])!
+    expect(clean.rawInput).toBeUndefined()
+    expect(clean.content).toBeUndefined()
+    expect(clean).toMatchObject({ toolCallId: 'tc-1', title: 'Read file', kind: 'read', seq: 5 })
+  })
+
+  it('falls back to the structural subset for non-serializable fields', () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    const [clean] = sanitizeToolCallsForPersistence([toolCall({ rawInput: circular })])!
+    expect(clean.rawInput).toBeUndefined()
+    expect(clean).toMatchObject({ toolCallId: 'tc-1', status: 'completed', seq: 5 })
+  })
+
+  it('persists mid-flight statuses as failed so restored cards do not spin forever', () => {
+    const pending = sanitizeToolCallsForPersistence([toolCall({ status: 'pending' })])!
+    const inProgress = sanitizeToolCallsForPersistence([toolCall({ status: 'in_progress' })])!
+    expect(pending[0].status).toBe('failed')
+    expect(inProgress[0].status).toBe('failed')
+    const completed = sanitizeToolCallsForPersistence([toolCall({ status: 'completed' })])!
+    expect(completed[0].status).toBe('completed')
+  })
+
+  it('bounds agent-controlled titles so the degraded subset stays bounded', () => {
+    const hugeTitle = 't'.repeat(5000)
+    const [clean] = sanitizeToolCallsForPersistence([
+      toolCall({
+        title: hugeTitle,
+        rawInput: { blob: 'x'.repeat(PERSISTED_TOOL_CALL_BYTE_BUDGET) }
+      })
+    ])!
+    expect(clean.title!.length).toBeLessThanOrEqual(201)
+  })
+
+  it('drops unknown agent fields at the persistence boundary', () => {
+    const [clean] = sanitizeToolCallsForPersistence([
+      toolCall({ vendorBlob: 'should not survive' })
+    ])!
+    expect(clean.vendorBlob).toBeUndefined()
+    expect(clean.rawOutput).toBeUndefined()
+  })
+
+  it('keeps only the most recent calls per session (recency bound)', () => {
+    const calls = Array.from({ length: PERSISTED_TOOL_CALLS_LIMIT + 10 }, (_, index) => ({
+      toolCallId: `tc-${index}`,
+      seq: index + 1
+    }))
+    const clean = sanitizeToolCallsForPersistence(calls)!
+    expect(clean).toHaveLength(PERSISTED_TOOL_CALLS_LIMIT)
+    expect(clean[0].toolCallId).toBe('tc-10')
+    expect(clean[clean.length - 1].toolCallId).toBe(`tc-${PERSISTED_TOOL_CALLS_LIMIT + 9}`)
+  })
+
+  it('tolerates non-array input without throwing', () => {
+    expect(sanitizeToolCallsForPersistence('corrupt' as unknown as ToolCall[])).toBeUndefined()
+  })
+})
+
+describe('payload restore helpers', () => {
+  it('maxPayloadSeq folds message and tool-call seqs', () => {
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 3 }],
+        toolCalls: [{ toolCallId: 'tc', seq: 7 }]
+      })
+    ).toBe(7)
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 9 }],
+        toolCalls: [{ toolCallId: 'tc', seq: 2 }]
+      })
+    ).toBe(9)
+  })
+
+  it('restore helpers degrade corrupt toolCalls shapes instead of throwing', () => {
+    const corrupt = { toolCalls: 'not-an-array' as unknown as ToolCall[] }
+    expect(maxPayloadSeq({ messages: [], ...corrupt })).toBe(0)
+    expect(restoredToolCalls(corrupt)).toEqual([])
+    expect(restoredToolCalls({})).toEqual([])
+  })
+})
+
 describe('provider routing', () => {
   it('loads desktop index from the Rust facade, including fresh empty state', async () => {
     mockHistoryApi.list.mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
@@ -259,6 +397,48 @@ describe('bounded full-payload cache', () => {
       expect.objectContaining({ messages: [old, retained, latest] })
     )
     expect(getCachedSessionPayload('merge')?.messages).toEqual([old, retained, latest])
+  })
+
+  it('keeps live tool calls when merging a durable message prefix', async () => {
+    const old = msg('user', 'old')
+    const retained = msg('agent', 'retained')
+    const latest = msg('agent', 'latest')
+    const durableTool: ToolCall = { toolCallId: 'durable' }
+    const liveTool: ToolCall = { toolCallId: 'live' }
+    mockHistoryApi.get.mockResolvedValueOnce({
+      ...payload('merge-tools', [old, retained]),
+      toolCalls: [durableTool]
+    })
+
+    await saveSessionPayload('merge-tools', {
+      ...payload('merge-tools', [retained, latest]),
+      toolCalls: [liveTool]
+    })
+
+    expect(mockHistoryApi.save).toHaveBeenCalledWith(
+      'merge-tools',
+      expect.objectContaining({
+        messages: [old, retained, latest],
+        toolCalls: [liveTool]
+      })
+    )
+  })
+
+  it('falls back to durable tool calls when the live payload carries none', async () => {
+    const old = msg('user', 'old')
+    const retained = msg('agent', 'retained')
+    const durableTool: ToolCall = { toolCallId: 'durable' }
+    mockHistoryApi.get.mockResolvedValueOnce({
+      ...payload('fallback-tools', [old, retained]),
+      toolCalls: [durableTool]
+    })
+
+    await saveSessionPayload('fallback-tools', payload('fallback-tools', [retained]))
+
+    expect(mockHistoryApi.save).toHaveBeenCalledWith(
+      'fallback-tools',
+      expect.objectContaining({ toolCalls: [durableTool] })
+    )
   })
 })
 
