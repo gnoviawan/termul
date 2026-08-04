@@ -1017,6 +1017,197 @@ pub fn git_unstage_file(cwd: &str, path: &str) -> Result<(), String> {
     }
 }
 
+/// Validate that a single-hunk unified-diff fragment references only the
+/// expected safe relative `path` in its `--- ` / `+++ ` headers.
+///
+/// `git apply` defaults to `-p1`, which strips the first path component of
+/// whatever the patch header declares. A header like `+++ c/../../etc/passwd`
+/// therefore resolves to `../../etc/passwd` after the strip. The previous
+/// implementation only inspected headers that began with `--- a/` or
+/// `+++ b/`, so any other prefix bypassed the guard entirely. This is the
+/// security boundary for a renderer-supplied patch, so it positively
+/// requires both headers to be present and validates the `-p1`-stripped
+/// result against `expected_path`.
+///
+/// To avoid misreading a hunk *body* line as a structural header (e.g. a
+/// deletion of `-- comment` produces the diff line `--- comment`), the
+/// scan walks the body using the `@@` declared counts and only treats a
+/// `--- `/`+++ ` line as a header when it lies outside a hunk body. This
+/// also keeps the multi-file-injection defense intact: a `--- `/`+++ `
+/// line that appears after a hunk's body has been consumed is still
+/// treated as a structural header and rejected if it targets another path.
+fn validate_hunk_patch_paths(expected_path: &str, patch: &str) -> Result<(), String> {
+    if !is_safe_relative_path(expected_path) {
+        return Err(format!("Refusing hunk patch for unsafe path: {expected_path}"));
+    }
+    let mut found_from = false;
+    let mut found_to = false;
+    // Hunk body budget from the most recent `@@`. `hunk_active` is true
+    // while we are inside a hunk; `old_left`/`new_left` track how many
+    // body lines the declared counts still allow.
+    let mut hunk_active = false;
+    let mut old_left: usize = 0;
+    let mut new_left: usize = 0;
+
+    for line in patch.lines() {
+        let in_body =
+            hunk_active && (old_left > 0 || new_left > 0 || line.starts_with('\\'));
+        if in_body {
+            match line.chars().next() {
+                Some(' ') => {
+                    old_left = old_left.saturating_sub(1);
+                    new_left = new_left.saturating_sub(1);
+                }
+                Some('-') => old_left = old_left.saturating_sub(1),
+                Some('+') => new_left = new_left.saturating_sub(1),
+                Some('\\') => {}
+                _ => hunk_active = false, // malformed body line; back to structural
+            }
+            if hunk_active {
+                continue;
+            }
+        } else if hunk_active && !line.starts_with('\\') {
+            // Budget exhausted and the line is not trailing meta → the hunk
+            // has ended; re-enter structural scanning.
+            hunk_active = false;
+        }
+
+        if line.starts_with("@@") {
+            if let Some((o, n)) = parse_hunk_budget(line) {
+                old_left = o;
+                new_left = n;
+                hunk_active = true;
+            }
+            continue;
+        }
+        let is_from = line.starts_with("--- ");
+        let is_to = line.starts_with("+++ ");
+        if !(is_from || is_to) {
+            continue;
+        }
+        if is_from {
+            found_from = true;
+        } else {
+            found_to = true;
+        }
+        // Header format: `--- <path>[<tab><timestamp>]`. Take the first
+        // whitespace-delimited token as the path, then strip one leading
+        // component to mirror `git apply -p1`.
+        let raw = &line[4..];
+        let path_token = raw.split_whitespace().next().unwrap_or(raw);
+        let stripped = strip_first_path_component(path_token);
+        if stripped != expected_path {
+            return Err(format!(
+                "Hunk patch path '{stripped}' does not match expected '{expected_path}'"
+            ));
+        }
+    }
+    if !(found_from && found_to) {
+        return Err("Hunk patch is missing its --- or +++ header".to_string());
+    }
+    Ok(())
+}
+
+/// Parse `@@ -oldStart[,oldCount] +newStart[,newCount] @@` into the number
+/// of old/new body lines the hunk declares. Omitted counts default to 1
+/// (unified-diff spec).
+fn parse_hunk_budget(header: &str) -> Option<(usize, usize)> {
+    let after = header.strip_prefix("@@ ")?;
+    let core = after.split("@@").next()?.trim();
+    let mut parts = core.split_whitespace();
+    let old_part = parts.next()?;
+    let new_part = parts.next()?;
+    let count_of = |p: &str| -> Option<usize> {
+        let after_sign = p.strip_prefix('-').or_else(|| p.strip_prefix('+'))?;
+        let count = after_sign.split_once(',').map(|(_, c)| c).unwrap_or("1");
+        count.parse::<usize>().ok()
+    };
+    Some((count_of(old_part)?, count_of(new_part)?))
+}
+
+/// Strip the first path component, mirroring `git apply -p1`.
+/// `a/foo.txt` -> `foo.txt`; `foo.txt` (no separator) is returned as-is.
+fn strip_first_path_component(s: &str) -> &str {
+    match s.find('/') {
+        Some(idx) => &s[idx + 1..],
+        None => s,
+    }
+}
+
+/// Run `git apply` with a patch supplied on stdin. Used for per-hunk
+/// stage/unstage where the patch is a single-hunk fragment built by the
+/// renderer from the displayed diff. Follows the same deadline pattern as
+/// `GitTracker::spawn_and_wait` so a wedged `git apply` cannot hang the
+/// caller.
+fn run_git_apply(cwd: &str, args: &[&str], patch: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let git = resolve_git_binary();
+    let mut command = backend_command(git);
+    command.current_dir(cwd).args(args.iter());
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git apply: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        // Ignore broken pipe: git may finish reading the patch and exit
+        // before we finish writing (e.g. it rejects the patch early). The
+        // exit status below is the source of truth.
+        let _ = stdin.write_all(patch.as_bytes());
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(GIT_COMMAND_TIMEOUT_MS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("git apply wait failed: {e}"))?;
+                if output.status.success() {
+                    return Ok(());
+                }
+                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("git apply timed out after {GIT_COMMAND_TIMEOUT_MS}ms"));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("git apply wait error: {e}")),
+        }
+    }
+}
+
+/// Stage a single hunk. The renderer builds the hunk patch from the
+/// working-tree diff; applying it to the index (`git apply --cached`)
+/// stages exactly those lines without staging the rest of the file.
+/// `--recount` tolerates a line-count mismatch in the `@@` header, which
+/// the renderer's patch builder can produce when it strips surrounding
+/// context.
+pub fn git_stage_hunk(cwd: &str, path: &str, hunk_patch: &str) -> Result<(), String> {
+    validate_hunk_patch_paths(path, hunk_patch)?;
+    run_git_apply(cwd, &["apply", "--cached", "--recount", "-"], hunk_patch)
+}
+
+/// Unstage a single hunk. The renderer builds the hunk patch from the
+/// staged (index vs HEAD) diff; reverse-applying it to the index removes
+/// exactly those lines from the index without touching the working tree.
+pub fn git_unstage_hunk(cwd: &str, path: &str, hunk_patch: &str) -> Result<(), String> {
+    validate_hunk_patch_paths(path, hunk_patch)?;
+    run_git_apply(
+        cwd,
+        &["apply", "--cached", "--recount", "--reverse", "-"],
+        hunk_patch,
+    )
+}
+
 /// Delete an untracked file or directory from disk. Treats an already-missing
 /// path as success (a concurrent delete still satisfies the intent).
 fn delete_untracked_path(cwd: &str, path: &str) -> Result<(), String> {
@@ -2391,6 +2582,176 @@ mod tests {
         );
         std::fs::remove_dir_all(&repo).ok();
     }
+
+    // Per-hunk stage/unstage round-trip + path-traversal guard (#257).
+    // The two-hunk setup proves partial staging: staging hunk 1 leaves
+    // hunk 2 in the working tree (unstaged), which file-level `git add`
+    // could never express.
+
+    /// Build a one-hunk patch fragment for `path` from a body (lines without
+    /// the `--- a/` / `+++ b/` header). A trailing newline terminates the last
+    /// body line, which `git apply` requires.
+    fn hunk_patch(path: &str, header: &str, body: &str) -> String {
+        format!("--- a/{path}\n+++ b/{path}\n{header}\n{body}\n")
+    }
+
+    #[test]
+    fn it_stage_hunk_stages_only_that_hunk_leaving_others_unstaged() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("stage-hunk-partial");
+        // Two changes separated by an unchanged line produce two hunks.
+        std::fs::write(repo.join("a.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "one\nTWO\nthree\nFOUR\n").unwrap();
+
+        let cwd = repo.to_str().unwrap();
+
+        // Stage only the first hunk (one/two->TWO/three).
+        let patch_hunk1 = hunk_patch(
+            "a.txt",
+            "@@ -1,3 +1,3 @@",
+            " one\n-two\n+TWO\n three",
+        );
+        git_stage_hunk(cwd, "a.txt", &patch_hunk1).unwrap();
+
+        // Staging hunk 1 must put +TWO into the index but leave hunk 2
+        // (four -> FOUR) entirely in the working tree. Context lines such
+        // as ` TWO` can appear on both sides unchanged, so we assert on the
+        // addition/deletion markers, not bare substrings.
+        let staged = git_get_diff(cwd, "a.txt", true).unwrap();
+        let unstaged = git_get_diff(cwd, "a.txt", false).unwrap();
+        assert!(
+            staged.contains("+TWO") && staged.contains("-two"),
+            "staged diff should include hunk 1's add/remove:\n{staged}"
+        );
+        assert!(
+            !staged.contains("FOUR"),
+            "staged must not include hunk 2:\n{staged}"
+        );
+        assert!(
+            unstaged.contains("+FOUR") && unstaged.contains("-four"),
+            "unstaged diff should still include hunk 2:\n{unstaged}"
+        );
+        assert!(
+            !unstaged.contains("-two\n") && !unstaged.contains("+TWO\n"),
+            "unstaged must not re-show hunk 1 as a change:\n{unstaged}"
+        );
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_unstage_hunk_reverses_a_previously_staged_hunk() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("unstage-hunk");
+        std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "one\nTWO\n").unwrap();
+
+        let cwd = repo.to_str().unwrap();
+        let patch = hunk_patch("a.txt", "@@ -1,2 +1,2 @@", " one\n-two\n+TWO");
+
+        git_stage_hunk(cwd, "a.txt", &patch).unwrap();
+        assert!(git_get_diff(cwd, "a.txt", true).unwrap().contains("TWO"));
+
+        // Reverse-applying the same staged-side patch removes it from the index.
+        git_unstage_hunk(cwd, "a.txt", &patch).unwrap();
+        assert!(
+            git_get_diff(cwd, "a.txt", true).unwrap().trim().is_empty(),
+            "staged diff should be empty after unstaging the hunk"
+        );
+        // Working tree is untouched.
+        assert!(git_get_diff(cwd, "a.txt", false).unwrap().contains("TWO"));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_stage_hunk_rejects_patch_whose_header_targets_a_different_path() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("stage-hunk-guard");
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+
+        let cwd = repo.to_str().unwrap();
+        // Patch header lies about the path: claims secret.txt while caller
+        // asks to stage a.txt. The guard must refuse (path-traversal defense).
+        let lying_patch = "--- a/secret.txt\n+++ b/secret.txt\n@@ -1,1 +1,1 @@\n-one\n+two";
+        let err = git_stage_hunk(cwd, "a.txt", lying_patch).unwrap_err();
+        assert!(
+            err.contains("does not match"),
+            "expected path-mismatch error, got: {err}"
+        );
+        // Nothing was staged.
+        assert!(git_get_diff(cwd, "a.txt", true).unwrap().trim().is_empty());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_stage_hunk_rejects_unsafe_expected_path() {
+        // No repo needed: the guard runs before any git invocation.
+        let patch = "--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b";
+        let err = git_stage_hunk(".", "../escape.txt", patch).unwrap_err();
+        assert!(err.contains("unsafe path"), "expected unsafe-path error, got: {err}");
+    }
+
+    // CodeRabbit review feedback: `git apply -p1` strips the first path
+    // component regardless of its name, so a header using a non-standard
+    // prefix (e.g. `c/`) must be validated exactly like `a/` / `b/`. Without
+    // this, `+++ c/../../etc/passwd` would bypass the old `+++ b/`-only check.
+    #[test]
+    fn it_stage_hunk_rejects_non_standard_prefix_attempting_traversal() {
+        let patch = "--- c/foo.txt\n+++ c/../../etc/passwd\n@@ -1,1 +1,1 @@\n-a\n+b";
+        let err = git_stage_hunk(".", "foo.txt", patch).unwrap_err();
+        assert!(
+            err.contains("does not match"),
+            "expected path-mismatch error for non-standard prefix, got: {err}"
+        );
+    }
+
+    #[test]
+    fn it_stage_hunk_rejects_patch_missing_a_header() {
+        // Both `--- ` and `+++ ` are required. A headerless fragment could
+        // otherwise hide which file `git apply` targets.
+        let patch = "@@ -1,1 +1,1 @@\n-a\n+b";
+        let err = git_stage_hunk(".", "foo.txt", patch).unwrap_err();
+        assert!(err.contains("missing"), "expected missing-header error, got: {err}");
+    }
+
+    // CodeRabbit review (2nd round): a hunk body line that looks like a file
+    // header (deleting `-- comment` → diff line `--- comment`) must be
+    // consumed as body content per the @@ budget, not rejected as a header.
+    #[test]
+    fn validate_accepts_body_line_that_looks_like_a_header() {
+        let patch = "--- a/foo.sql\n+++ b/foo.sql\n@@ -1,2 +1,2 @@\n ctx\n--- comment\n+-- new";
+        assert!(
+            validate_hunk_patch_paths("foo.sql", patch).is_ok(),
+            "body line `--- comment` must be consumed as content, not treated as a header"
+        );
+    }
+
+    // The body-budget walk must still reject a second file section that
+    // appears after a hunk's declared body is consumed (multi-file injection
+    // into `git apply --cached`). This is the traversal defense the prior
+    // review round asked us not to regress.
+    #[test]
+    fn validate_rejects_second_file_section_after_hunk_body() {
+        let patch = "--- a/foo.txt\n+++ b/foo.txt\n@@ -1,1 +1,1 @@\n-a\n+b\n--- a/other.txt\n+++ b/other.txt\n@@ -1,1 +1,1 @@\n-c\n+d";
+        let err = validate_hunk_patch_paths("foo.txt", patch).unwrap_err();
+        assert!(
+            err.contains("does not match"),
+            "multi-file injection after hunk body must be rejected, got: {err}"
+        );
+    }
+
 
     #[test]
     fn it_unstage_preserves_worktree_on_staged_modified_file() {

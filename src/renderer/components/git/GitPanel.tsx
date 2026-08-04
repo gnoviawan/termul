@@ -73,6 +73,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const stageFiles = useGitStatusStore((state) => state.stageFiles)
   const unstageFiles = useGitStatusStore((state) => state.unstageFiles)
   const discardFiles = useGitStatusStore((state) => state.discardFiles)
+  const stageHunk = useGitStatusStore((state) => state.stageHunk)
+  const unstageHunk = useGitStatusStore((state) => state.unstageHunk)
   const commitContexts = useGitStatusStore((state) => state.commitContexts)
   const fetchCommitContext = useGitStatusStore((state) => state.fetchCommitContext)
   const commit = useGitStatusStore((state) => state.commit)
@@ -139,6 +141,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   // commits before the isCommitting state has re-rendered.
   const commitInFlight = React.useRef(false)
   const generationInFlight = React.useRef(false)
+  // Synchronous guard for per-hunk stage/unstage: a fast second click on
+  // another hunk would otherwise build a patch from the pre-mutation diff
+  // and apply it at a shifted offset once `--recount` relaxes the header.
+  const hunkInFlight = React.useRef(false)
   const generationToken = React.useRef(0)
   const currentCwd = React.useRef(cwd)
   const currentStatuses = React.useRef(statuses)
@@ -305,6 +311,46 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       }
     },
     [cwd, unstageFiles, clearSelection, selectedFile]
+  )
+
+  // Per-hunk stage/unstage (#257). The patch is built by GitDiffView from
+  // the displayed diff and applied to the index without touching the rest
+  // of the file. After mutation, fetchDiff re-loads the (now smaller) diff
+  // so the panel reflects the partial stage.
+  const runStageHunk = useCallback(
+    async (patch: string) => {
+      if (!selectedFile || generationInFlight.current || hunkInFlight.current) return
+      hunkInFlight.current = true
+      setIsMutating(true)
+      try {
+        await stageHunk(cwd, selectedFile, patch)
+        await fetchDiff(cwd, selectedFile, false)
+      } catch (error) {
+        toast.error(`Failed to stage hunk: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+        hunkInFlight.current = false
+      }
+    },
+    [cwd, selectedFile, stageHunk, fetchDiff]
+  )
+
+  const runUnstageHunk = useCallback(
+    async (patch: string) => {
+      if (!selectedFile || generationInFlight.current || hunkInFlight.current) return
+      hunkInFlight.current = true
+      setIsMutating(true)
+      try {
+        await unstageHunk(cwd, selectedFile, patch)
+        await fetchDiff(cwd, selectedFile, true)
+      } catch (error) {
+        toast.error(`Failed to unstage hunk: ${String(error)}`)
+      } finally {
+        setIsMutating(false)
+        hunkInFlight.current = false
+      }
+    },
+    [cwd, selectedFile, unstageHunk, fetchDiff]
   )
 
   // Discard only reverts unstaged (working-tree) changes, so it is only ever
@@ -1632,6 +1678,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   diff={currentDiff}
                   mode={diffViewMode}
                   filePath={selectedFile ?? undefined}
+                  diffSide={selectedStaged ? 'staged' : 'unstaged'}
+                  onStageHunk={runStageHunk}
+                  onUnstageHunk={runUnstageHunk}
                 />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">

@@ -3365,6 +3365,29 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
 }
 
+/// Stage a single hunk. `hunk_patch` is a unified-diff fragment
+/// (`--- a/<path>` / `+++ b/<path>` / `@@ … @@` / body) built by the
+/// renderer from the working-tree diff. See #257.
+#[tauri::command]
+pub async fn git_stage_hunk(
+    cwd: String,
+    path: String,
+    hunk_patch: String,
+) -> Result<(), String> {
+    crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+}
+
+/// Unstage a single hunk. `hunk_patch` is built from the staged diff and
+/// reverse-applied to the index. See #257.
+#[tauri::command]
+pub async fn git_unstage_hunk(
+    cwd: String,
+    path: String,
+    hunk_patch: String,
+) -> Result<(), String> {
+    crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch)
+}
+
 /// Discard changes to a single file. Untracked files are deleted; tracked
 /// changes revert to HEAD. This is destructive and irreversible.
 #[tauri::command]

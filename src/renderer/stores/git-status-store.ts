@@ -35,6 +35,8 @@ export interface GitStatusState {
   stageFiles: (cwd: string, paths: string[]) => Promise<void>
   unstageFiles: (cwd: string, paths: string[]) => Promise<void>
   discardFiles: (cwd: string, paths: string[]) => Promise<void>
+  stageHunk: (cwd: string, path: string, hunkPatch: string) => Promise<void>
+  unstageHunk: (cwd: string, path: string, hunkPatch: string) => Promise<void>
   commit: (cwd: string, summary: string, description: string, amend: boolean) => Promise<void>
   push: (cwd: string) => Promise<void>
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>
@@ -162,6 +164,29 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
         await gitApi.unstage(cwd, path)
         invalidateFileDiffs(set, cwd, path)
       }
+    } finally {
+      await get().refreshStatus(cwd)
+      await get().fetchCommitContext(cwd)
+    }
+  },
+
+  // Per-hunk stage/unstage (#257). Same refresh contract as the file-level
+  // mutations above: invalidate the cached diff for the file, then refresh
+  // status + commit context so the panel reflects the partial stage.
+  stageHunk: async (cwd, path, hunkPatch) => {
+    try {
+      await gitApi.stageHunk(cwd, path, hunkPatch)
+      invalidateFileDiffs(set, cwd, path)
+    } finally {
+      await get().refreshStatus(cwd)
+      await get().fetchCommitContext(cwd)
+    }
+  },
+
+  unstageHunk: async (cwd, path, hunkPatch) => {
+    try {
+      await gitApi.unstageHunk(cwd, path, hunkPatch)
+      invalidateFileDiffs(set, cwd, path)
     } finally {
       await get().refreshStatus(cwd)
       await get().fetchCommitContext(cwd)
