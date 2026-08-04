@@ -109,63 +109,89 @@ const TURN_IDLE_TIMEOUT: Duration = Duration::from_secs(900);
 /// `TERMUL_ACP_TURN_TIMEOUT_SECS`.
 const TURN_TIMEOUT: Duration = Duration::from_secs(10800);
 
-/// `session/new` timeout, overridable for diagnostics via
-/// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` (seconds, must be > 0). Defaults to
-/// [`SESSION_NEW_TIMEOUT`]. Useful when an agent needs longer to fetch its
-/// model list on a cold start; the default stays strict so a wedged agent
-/// still fails fast in normal use.
+/// `session/new` timeout. Precedence: `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS`
+/// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
+/// ([`set_session_new_timeout_override`]) → [`SESSION_NEW_TIMEOUT`]. Useful
+/// when an agent needs longer to fetch its model list on a cold start; the
+/// default stays strict so a wedged agent still fails fast in normal use.
 fn session_new_timeout() -> Duration {
     std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
+        .or_else(|| {
+            session_new_timeout_override()
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs)
+        })
         .unwrap_or(SESSION_NEW_TIMEOUT)
 }
 
-/// First-prompt warmup timeout, overridable via
-/// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (seconds, must be > 0). Set to 0 to
-/// disable the warmup entirely. Defaults to [`FIRST_PROMPT_WARMUP_TIMEOUT`].
+/// First-prompt warmup timeout. Precedence:
+/// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (env, operator/diagnostic) →
+/// in-process UI override ([`set_first_prompt_warmup_timeout_override`]) →
+/// [`FIRST_PROMPT_WARMUP_TIMEOUT`]. Set to 0 (env or override) to disable the
+/// warmup entirely. An INVALID env value is logged and treated like an absent
+/// one — it falls through to the UI override/default instead of masking it
+/// (same shape as the other resolvers' `.parse().ok()` fall-through).
 fn first_prompt_warmup_timeout() -> Duration {
-    let raw = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS");
-    match raw {
+    let override_or_default = || {
+        first_prompt_warmup_timeout_override()
+            .map(Duration::from_secs)
+            .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT)
+    };
+    match std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS") {
         Ok(v) => match v.parse::<u64>() {
             Ok(secs) => Duration::from_secs(secs),
             Err(_) => {
                 log::warn!(
                     "[acp] TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS={v:?} is not a valid \
-                     unsigned integer; falling back to {:?}",
+                     unsigned integer; falling back to the UI override / {:?}",
                     FIRST_PROMPT_WARMUP_TIMEOUT
                 );
-                FIRST_PROMPT_WARMUP_TIMEOUT
+                override_or_default()
             }
         },
-        _ => FIRST_PROMPT_WARMUP_TIMEOUT,
+        Err(_) => override_or_default(),
     }
 }
 
-/// `session/load` / `session/resume` timeout, overridable via
-/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (seconds, must be > 0). Defaults
-/// to [`SESSION_REOPEN_TIMEOUT`]. A load replays the full conversation before
-/// responding, so very large histories may need a longer budget.
+/// `session/load` / `session/resume` timeout. Precedence:
+/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (env, operator/diagnostic;
+/// seconds, must be > 0) → in-process UI override
+/// ([`set_session_reopen_timeout_override`]) → [`SESSION_REOPEN_TIMEOUT`]. A
+/// load replays the full conversation before responding, so very large
+/// histories may need a longer budget.
 fn session_reopen_timeout() -> Duration {
     std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
+        .or_else(|| {
+            session_reopen_timeout_override()
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs)
+        })
         .unwrap_or(SESSION_REOPEN_TIMEOUT)
 }
 
-/// Per-turn idle timeout, overridable via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`
-/// (seconds, must be > 0). Defaults to [`TURN_IDLE_TIMEOUT`]. The window with
-/// no agent activity after which a turn is considered wedged.
+/// Per-turn idle timeout. Precedence: `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`
+/// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
+/// ([`set_turn_idle_timeout_override`]) → [`TURN_IDLE_TIMEOUT`]. The window
+/// with no agent activity after which a turn is considered wedged.
 pub fn turn_idle_timeout() -> Duration {
     std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
+        .or_else(|| {
+            turn_idle_timeout_override()
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs)
+        })
         .unwrap_or(TURN_IDLE_TIMEOUT)
 }
 
@@ -188,6 +214,76 @@ pub fn set_turn_timeout_override(secs: Option<u64>) {
 /// Read the in-process turn-timeout override, if set.
 pub fn turn_timeout_override() -> Option<u64> {
     *TURN_TIMEOUT_OVERRIDE.lock()
+}
+
+/// In-process override for the per-turn idle timeout, set by the
+/// `acp_set_turn_idle_timeout` Tauri command from the App Preferences UI.
+/// `None` = use the env var / default. Same desktop-only contract and
+/// precedence shape as [`TURN_TIMEOUT_OVERRIDE`] (the operator env var still
+/// wins — see [`turn_idle_timeout`]).
+static TURN_IDLE_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(None));
+/// In-process override for the `session/new` timeout, set by the
+/// `acp_set_session_new_timeout` Tauri command. Same contract as
+/// [`TURN_TIMEOUT_OVERRIDE`] (see [`session_new_timeout`]).
+static SESSION_NEW_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(None));
+/// In-process override for the `session/load` / `session/resume` timeout, set
+/// by the `acp_set_session_reopen_timeout` Tauri command. Same contract as
+/// [`TURN_TIMEOUT_OVERRIDE`] (see [`session_reopen_timeout`]).
+static SESSION_REOPEN_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(None));
+/// In-process override for the first-prompt warmup timeout, set by the
+/// `acp_set_first_prompt_warmup_timeout` Tauri command. Unlike the other
+/// overrides, `Some(0)` is meaningful: it disables the warmup entirely (see
+/// [`first_prompt_warmup_timeout`]). Otherwise the same contract as
+/// [`TURN_TIMEOUT_OVERRIDE`].
+static FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(None));
+
+/// Set the in-process turn-idle-timeout override (secs > 0, or `None` to
+/// clear). Called by the `acp_set_turn_idle_timeout` Tauri command.
+pub fn set_turn_idle_timeout_override(secs: Option<u64>) {
+    *TURN_IDLE_TIMEOUT_OVERRIDE.lock() = secs;
+}
+
+/// Read the in-process turn-idle-timeout override, if set.
+fn turn_idle_timeout_override() -> Option<u64> {
+    *TURN_IDLE_TIMEOUT_OVERRIDE.lock()
+}
+
+/// Set the in-process `session/new` timeout override (secs > 0, or `None` to
+/// clear). Called by the `acp_set_session_new_timeout` Tauri command.
+pub fn set_session_new_timeout_override(secs: Option<u64>) {
+    *SESSION_NEW_TIMEOUT_OVERRIDE.lock() = secs;
+}
+
+/// Read the in-process `session/new` timeout override, if set.
+fn session_new_timeout_override() -> Option<u64> {
+    *SESSION_NEW_TIMEOUT_OVERRIDE.lock()
+}
+
+/// Set the in-process session-reopen timeout override (secs > 0, or `None` to
+/// clear). Called by the `acp_set_session_reopen_timeout` Tauri command.
+pub fn set_session_reopen_timeout_override(secs: Option<u64>) {
+    *SESSION_REOPEN_TIMEOUT_OVERRIDE.lock() = secs;
+}
+
+/// Read the in-process session-reopen timeout override, if set.
+fn session_reopen_timeout_override() -> Option<u64> {
+    *SESSION_REOPEN_TIMEOUT_OVERRIDE.lock()
+}
+
+/// Set the in-process first-prompt-warmup timeout override (secs, `0` to
+/// disable the warmup, or `None` to clear). Called by the
+/// `acp_set_first_prompt_warmup_timeout` Tauri command.
+pub fn set_first_prompt_warmup_timeout_override(secs: Option<u64>) {
+    *FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE.lock() = secs;
+}
+
+/// Read the in-process first-prompt-warmup timeout override, if set.
+fn first_prompt_warmup_timeout_override() -> Option<u64> {
+    *FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE.lock()
 }
 
 /// Hard wall-clock cap per turn. Precedence: `TERMUL_ACP_TURN_TIMEOUT_SECS`
@@ -3368,5 +3464,98 @@ mod tests {
         assert_eq!(resolved_turn_timeout(), Duration::from_secs(42));
         set_turn_timeout_override(None);
         assert_eq!(resolved_turn_timeout(), TURN_TIMEOUT);
+    }
+
+    /// `turn_idle_timeout` full precedence ladder, in ONE test so the shared
+    /// override static and env var are never touched by concurrent tests:
+    /// env var absent → override wins over default; cleared → default; env
+    /// var present → env beats a simultaneous UI override (the operator
+    /// precedence the settings UI documents). When the env var is ALREADY
+    /// set on the host (operator machine), only the env-wins phase runs and
+    /// its original value is restored afterwards.
+    #[test]
+    fn turn_idle_timeout_precedence_env_beats_override_beats_default() {
+        let preexisting = std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS").ok();
+        if preexisting.is_none() {
+            set_turn_idle_timeout_override(Some(42));
+            assert_eq!(turn_idle_timeout(), Duration::from_secs(42));
+            set_turn_idle_timeout_override(None);
+            assert_eq!(turn_idle_timeout(), TURN_IDLE_TIMEOUT);
+        }
+
+        std::env::set_var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS", "60");
+        set_turn_idle_timeout_override(Some(1800));
+        assert_eq!(turn_idle_timeout(), Duration::from_secs(60));
+
+        match preexisting {
+            Some(v) => std::env::set_var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS", v),
+            None => std::env::remove_var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS"),
+        }
+        set_turn_idle_timeout_override(None);
+    }
+
+    /// `session_new_timeout` precedence: env var > UI override > default.
+    /// A zero override is ignored (the IPC command rejects it; the resolver
+    /// also filters it defensively).
+    #[test]
+    fn session_new_timeout_override_takes_effect_when_no_env_var() {
+        if std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS").is_ok() {
+            return;
+        }
+        set_session_new_timeout_override(Some(42));
+        assert_eq!(session_new_timeout(), Duration::from_secs(42));
+        set_session_new_timeout_override(Some(0));
+        assert_eq!(session_new_timeout(), SESSION_NEW_TIMEOUT);
+        set_session_new_timeout_override(None);
+        assert_eq!(session_new_timeout(), SESSION_NEW_TIMEOUT);
+    }
+
+    /// `session_reopen_timeout` precedence: env var > UI override > default.
+    /// A zero override is ignored (same defensive filter as session/new).
+    #[test]
+    fn session_reopen_timeout_override_takes_effect_when_no_env_var() {
+        if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_ok() {
+            return;
+        }
+        set_session_reopen_timeout_override(Some(42));
+        assert_eq!(session_reopen_timeout(), Duration::from_secs(42));
+        set_session_reopen_timeout_override(Some(0));
+        assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
+        set_session_reopen_timeout_override(None);
+        assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
+    }
+
+    /// `first_prompt_warmup_timeout` full precedence ladder, in ONE test so
+    /// the shared override static and env var are never touched by concurrent
+    /// tests: override wins over default; `0` disables (unlike the other
+    /// overrides); cleared → default; and an INVALID env value falls through
+    /// to the override (incl. a disabling `0`) instead of masking it. When
+    /// the env var is ALREADY set on the host (operator machine), only the
+    /// invalid-env phase runs and the original value is restored afterwards.
+    #[test]
+    fn first_prompt_warmup_timeout_precedence_and_invalid_env() {
+        let preexisting = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS").ok();
+        if preexisting.is_none() {
+            set_first_prompt_warmup_timeout_override(Some(7));
+            assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(7));
+            set_first_prompt_warmup_timeout_override(Some(0));
+            assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
+            set_first_prompt_warmup_timeout_override(None);
+            assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
+        }
+
+        std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", "not-a-number");
+        set_first_prompt_warmup_timeout_override(Some(9));
+        assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(9));
+        set_first_prompt_warmup_timeout_override(Some(0));
+        assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
+        set_first_prompt_warmup_timeout_override(None);
+        assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
+
+        match preexisting {
+            Some(v) => std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", v),
+            None => std::env::remove_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS"),
+        }
+        set_first_prompt_warmup_timeout_override(None);
     }
 }

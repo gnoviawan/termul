@@ -1284,6 +1284,114 @@ describe('acp-store', () => {
     )
   })
 
+  it('prompt_complete mirrors tool calls to disk so history reopens restore them', async () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          title: 'T',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 1,
+          status: 'active'
+        }
+      ],
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'tc-1',
+            title: 'Read file',
+            kind: 'read',
+            status: 'completed',
+            timestamp: 10,
+            seq: 3,
+            rawInput: { path: '/a.ts' },
+            rawOutput: 'secret output'
+          }
+        ]
+      }
+    })
+    const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
+    ;(queueSessionPayloadSave as ReturnType<typeof vi.fn>).mockClear()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    const payload = (queueSessionPayloadSave as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]
+    expect(payload.toolCalls).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-1', kind: 'read', seq: 3 })
+    ])
+    // rawOutput must never reach disk.
+    expect(payload.toolCalls[0].rawOutput).toBeUndefined()
+  })
+
+  it('prompt_complete keeps the durable tool-call mirror when the live map key is absent', async () => {
+    // Transcript eviction / lazy backfill can leave `messages` present without
+    // the `toolCalls` key; the persist must then keep the cached mirror
+    // instead of blanking it.
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          title: 'T',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 0,
+          lastActivityAt: 0,
+          messageCount: 1,
+          status: 'active'
+        }
+      ],
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 1
+          }
+        ]
+      }
+      // No `toolCalls['s1']` key — the live map lost it.
+    })
+    setCachedSessionPayload('s1', {
+      metadata: {
+        id: 's1',
+        agentId: 'agent-1',
+        agentConfigId: 'cfg-1',
+        title: 'T',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 1,
+        status: 'active'
+      },
+      messages: [],
+      toolCalls: [{ toolCallId: 'durable', kind: 'read', seq: 2 }]
+    })
+    const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
+    ;(queueSessionPayloadSave as ReturnType<typeof vi.fn>).mockClear()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    const saved = (queueSessionPayloadSave as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]
+    expect(saved.toolCalls).toEqual([{ toolCallId: 'durable', kind: 'read', seq: 2 }])
+  })
+
   it('prompt_complete does not resurrect a chat deleted while the turn was in flight', async () => {
     // deleteHistorySession removed the index entry mid-turn; the turn-end
     // persist must not write it back.
@@ -2758,6 +2866,165 @@ describe('acp-store', () => {
     expect(invoke).not.toHaveBeenCalled()
     expect(useAcpStore.getState().messages['s-old']).toHaveLength(1)
     expect(useAcpStore.getState().sessions['s-old'].status).toBe('closed')
+    // Legacy payloads carry no toolCalls: degrade to an empty list, not a crash.
+    expect(useAcpStore.getState().toolCalls['s-old']).toEqual([])
+  })
+
+  it('openHistorySession restores persisted tool calls alongside the transcript', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-tools',
+        agentId: 'agent-x',
+        title: 'Tool chat',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do it' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-1',
+          title: 'Read file',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 10,
+          seq: 2,
+          rawInput: { path: '/a.ts' }
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('s-tools')
+    // 'local' strategy: the mirrored tool calls are restored for the timeline.
+    expect(useAcpStore.getState().toolCalls['s-tools']).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-1', kind: 'read', seq: 2 })
+    ])
+  })
+
+  it('openHistorySession degrades a corrupt toolCalls shape instead of throwing', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-corrupt',
+        agentId: 'agent-x',
+        title: 'Corrupt chat',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: 'not-an-array'
+    })
+    await expect(useAcpStore.getState().openHistorySession('s-corrupt')).resolves.toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s-corrupt']).toEqual([])
+    expect(useAcpStore.getState().messages['s-corrupt']).toHaveLength(1)
+  })
+
+  it('resumeLiveSession restores persisted tool calls with the transcript', async () => {
+    setCachedSessionPayload('s-resume', {
+      metadata: {
+        id: 's-resume',
+        agentId: 'agent-r',
+        title: 'Resume chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'active'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: [{ toolCallId: 'tc-9', kind: 'read', status: 'completed', timestamp: 5, seq: 2 }]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({})
+    await useAcpStore.getState().resumeLiveSession('s-resume', 'agent-r', '/w')
+    expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
+      agentId: 'agent-r',
+      sessionId: 's-resume',
+      cwd: '/w'
+    })
+    expect(useAcpStore.getState().toolCalls['s-resume']).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-9', seq: 2 })
+    ])
+    expect(useAcpStore.getState().sessions['s-resume'].status).toBe('active')
+    // The seq rebase must fold in tool-call seqs (the messages carried only
+    // seq 1): the next live event must sort AFTER the restored tool card, or
+    // buildTimeline would render fresh content ahead of older history.
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-r',
+      sessionId: 's-resume',
+      toolCall: { toolCallId: 'tc-live', kind: 'read', status: 'pending' }
+    })
+    _flushCoalescedForTesting()
+    const restored = useAcpStore.getState().toolCalls['s-resume']
+    const liveCall = restored.find((t) => t.toolCallId === 'tc-live')!
+    expect(liveCall.seq!).toBeGreaterThan(2)
+  })
+
+  it('resumeLiveSession keeps the restored transcript and tool calls when resume fails', async () => {
+    setCachedSessionPayload('s-resume-fail', {
+      metadata: {
+        id: 's-resume-fail',
+        agentId: 'agent-r',
+        title: 'Resume chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'active'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: [{ toolCallId: 'tc-f', kind: 'edit', status: 'completed', timestamp: 5, seq: 2 }]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('agent gone'))
+    await expect(
+      useAcpStore.getState().resumeLiveSession('s-resume-fail', 'agent-r', '/w')
+    ).rejects.toBeDefined()
+    expect(useAcpStore.getState().messages['s-resume-fail']).toHaveLength(1)
+    expect(useAcpStore.getState().toolCalls['s-resume-fail']).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-f', seq: 2 })
+    ])
   })
 
   it('openHistorySession keeps the restore preload visible for a perceptible minimum', async () => {
@@ -4069,6 +4336,94 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
     await useAcpStore.getState().deleteMcpServer('m1')
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
+  })
+
+  it('importMcpServers appends a batch in a single atomic persist', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
+    })
+    await useAcpStore.getState().importMcpServers([
+      { id: 'm2', type: 'stdio', name: 'a', command: 'node', enabled: true },
+      { id: 'm3', type: 'http', name: 'b', url: 'https://b.test/mcp', enabled: true }
+    ])
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0', 'm2', 'm3'])
+    // One disk write for the whole batch — not one per entry.
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'm2' }),
+        expect.objectContaining({ id: 'm3' })
+      ])
+    )
+  })
+
+  it('rolls back an import batch when registry persistence fails', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
+    })
+    await expect(
+      useAcpStore
+        .getState()
+        .importMcpServers([{ id: 'm4', type: 'stdio', name: 'c', command: 'node', enabled: true }])
+    ).rejects.toThrow('disk full')
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0'])
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-store.importMcpServers' })
+    )
+  })
+
+  it('serializes overlapping registry mutations so later writes never clobber earlier ones', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    const save = vi.mocked(persistence.saveMcpServers)
+    save.mockClear()
+    // The import's disk write stalls until the test releases it.
+    let releaseImportWrite: (() => void) | undefined
+    save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseImportWrite = () => resolve()
+        })
+    )
+    useAcpStore.setState({
+      mcpServers: [{ id: 'q1', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+    })
+
+    const importPromise = useAcpStore
+      .getState()
+      .importMcpServers([
+        { id: 'q2', type: 'stdio', name: 'Imported', command: 'node', enabled: true }
+      ])
+    // A toggle issued while the import write is in flight must wait its turn —
+    // without the mutation queue it would snapshot the pre-import registry and
+    // persist that stale list after the import (dropping q2), and its rollback
+    // on failure would drop q2 too.
+    const togglePromise = useAcpStore.getState().setMcpServerEnabled('q1', false)
+
+    // Mutations run queued on the microtask queue; let the import mutation
+    // reach its stalled disk write before asserting on the mid-flight state.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(save).toHaveBeenCalledTimes(1)
+
+    releaseImportWrite?.()
+    await importPromise
+    await togglePromise
+
+    // Both writes land in mutation order; the toggle's snapshot includes q2.
+    expect(save).toHaveBeenCalledTimes(2)
+    expect((save.mock.calls[0]?.[0] ?? []).map((s) => s.id)).toEqual(['q1', 'q2'])
+    const secondWrite = save.mock.calls[1]?.[0] ?? []
+    expect(secondWrite.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(secondWrite.find((s) => s.id === 'q1')?.enabled).toBe(false)
+
+    const finalList = useAcpStore.getState().mcpServers
+    expect(finalList.map((s) => s.id)).toEqual(['q1', 'q2'])
+    expect(finalList.find((s) => s.id === 'q1')?.enabled).toBe(false)
   })
 
   it('derives enabled MCP servers from capabilities when no override is supplied', async () => {

@@ -36,6 +36,7 @@ const mockRemoveTab = vi.fn()
 const mockCreateFile = vi.fn()
 const mockCreateDirectory = vi.fn()
 const mockRenameFile = vi.fn()
+const mockRefreshTree = vi.fn().mockResolvedValue(undefined)
 
 const mockExplorerState = {
   rootPath: null as string | null,
@@ -86,6 +87,7 @@ vi.mock('@/stores/file-explorer-store', () => ({
     duplicateSelected: mockDuplicateSelected,
     collapseAll: mockCollapseAll,
     refreshDirectory: mockRefreshDirectory,
+    refreshTree: mockRefreshTree,
     setRootLoadError: mockSetRootLoadError,
     setSearchQuery: mockSetSearchQuery,
     searchInRoot: mockSearchInRoot,
@@ -149,8 +151,9 @@ beforeEach(() => {
   mockCreateFile.mockResolvedValue({ success: true, data: undefined })
   mockCreateDirectory.mockResolvedValue({ success: true, data: undefined })
   mockRenameFile.mockResolvedValue({ success: true, data: undefined })
+  mockRefreshTree.mockResolvedValue(undefined)
   // Expanding a directory marks it expanded in the mocked store state so
-  // expand-chain guards (GH-539) observe the toggle's effect.
+  // expand-chain guards (GH-539/GH-540) observe the toggle's effect.
   mockToggleDirectory.mockImplementation(async (dirPath: string) => {
     mockStoreGetState.expandedDirs.add(dirPath)
   })
@@ -587,7 +590,7 @@ describe('FileExplorer', () => {
   })
 })
 
-describe('FileExplorer header toolbar (GH-539)', () => {
+describe('FileExplorer header toolbar (GH-540)', () => {
   function setExpandedDirs(expandedDirs: Set<string>): void {
     mockStoreGetState.expandedDirs = expandedDirs
   }
@@ -608,17 +611,29 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     setExpandedDirs(new Set(['/project']))
   })
 
-  it('renders header actions and disables them when no project is open', () => {
-    mockExplorerState.rootPath = null
+  it('renders all four actions with tooltips and accessible labels', () => {
+    openProjectWithRootEntries([])
 
     render(<FileExplorer />)
 
-    expect(screen.getByRole('button', { name: 'New File' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'New Folder' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Collapse All' })).toBeInTheDocument()
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeEnabled()
+      expect(button).toHaveAttribute('title', name)
+    }
   })
 
-  it('creates a file in the project root when nothing is selected', async () => {
+  it('disables every action when no project is open', () => {
+    setProjectRoot(null)
+
+    render(<FileExplorer />)
+
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    }
+  })
+
+  it('starts creation in the project root when nothing is selected', async () => {
     openProjectWithRootEntries([])
 
     render(<FileExplorer />)
@@ -647,7 +662,7 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/docs'))
   })
 
-  it('creates inside the selected directory', async () => {
+  it('targets the selected directory', async () => {
     openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
     mockExplorerState.selectedPaths = new Set(['/project/src'])
 
@@ -662,7 +677,7 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/src/main.ts'))
   })
 
-  it('creates inside the parent directory of the selected file', async () => {
+  it('targets the parent directory of the selected file', async () => {
     setProjectRoot('/project')
     mockExplorerState.directoryContents = new Map([
       ['/project', []],
@@ -694,7 +709,7 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/top.md'))
   })
 
-  it('expands unexpanded ancestor directories before creating', async () => {
+  it('auto-expands unexpanded ancestor directories of the target before creating', async () => {
     setProjectRoot('/project')
     mockExplorerState.directoryContents = new Map([
       ['/project', [{ path: '/project/src', name: 'src', type: 'directory' as const }]],
@@ -857,13 +872,52 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     expect(mockCreateFile).not.toHaveBeenCalledWith('//src/app.ts')
   })
 
+  it('aborts creation when the target directory cannot be expanded', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src'])
+    // Expansion fails (e.g. load error): the toggle never marks the dir expanded.
+    mockToggleDirectory.mockImplementationOnce(async () => {})
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src'))
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+    expect(mockCreateFile).not.toHaveBeenCalled()
+    expect(mockCreateDirectory).not.toHaveBeenCalled()
+  })
+
+  it('refresh re-reads the tree without touching inline state', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => expect(mockRefreshTree).toHaveBeenCalledTimes(1))
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+  })
+
   it('disables header actions while the root failed to load', () => {
     mockExplorerState.rootPath = '/project'
     mockExplorerState.rootLoadError = { message: 'Failed to load' }
 
     render(<FileExplorer />)
 
-    expect(screen.getByRole('button', { name: 'New File' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'New Folder' })).toBeDisabled()
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    }
+  })
+
+  it('does not start a collapse or create action when disabled without a project', () => {
+    setProjectRoot(null)
+
+    render(<FileExplorer />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse All' }))
+
+    expect(mockCollapseAll).not.toHaveBeenCalled()
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
   })
 })

@@ -1,5 +1,13 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { ChevronsDownUp, FilePlus, FolderPlus, LoaderCircle, Search, X } from 'lucide-react'
+import {
+  ChevronsDownUp,
+  FilePlus,
+  FolderPlus,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  X
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
@@ -70,6 +78,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     duplicateSelected,
     collapseAll,
     refreshDirectory,
+    refreshTree,
     setRootLoadError,
     setSearchQuery,
     searchInRoot,
@@ -101,7 +110,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const resizeCleanupRef = useRef<(() => void) | null>(null)
   const userSelectedTabRef = useRef(false)
   // Mirrors of component state so async header-create handlers can re-check
-  // the latest values after awaiting chain expansion (GH-539 / review fix).
+  // the latest values after awaiting chain expansion (GH-539 / GH-540).
   const inlineInputRef = useRef<InlineInputState | null>(null)
   inlineInputRef.current = inlineInput
   const headerCreateInFlightRef = useRef(false)
@@ -544,7 +553,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   )
 
   /**
-   * VSCode-style target resolution for header creation actions (GH-539):
+   * VSCode-style target resolution for header creation actions (GH-540):
    * selected directory > parent of selected file > project root.
    * Multi-selection or unresolvable selections fall back to the root.
    */
@@ -553,7 +562,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     if (selectedPaths.size === 1) {
       const selectedPath = Array.from(selectedPaths)[0]
       const selectedEntry = findEntryByPath(selectedPath)
-      if (selectedEntry?.type === 'directory') return selectedEntry.path
+      if (selectedEntry?.type === 'directory') return selectedEntry.path.replace(/\\/g, '/')
       if (selectedEntry?.type === 'file') {
         const normalized = selectedEntry.path.replace(/\\/g, '/')
         const lastSlash = normalized.lastIndexOf('/')
@@ -604,7 +613,27 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     [rootPath, toggleDirectory]
   )
 
-  /** Header New File / New Folder: resolve + expand the target, then start inline create. */
+  /** Best-effort scroll of a tree row (by entry path) into view. */
+  const revealTreePath = useCallback((path: string) => {
+    window.requestAnimationFrame(() => {
+      const row = containerRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+      row?.scrollIntoView({ block: 'nearest' })
+    })
+  }, [])
+
+  /** Select a newly created entry and scroll its row into view (best-effort). */
+  const revealCreatedEntry = useCallback(
+    (path: string) => {
+      selectPath(path)
+      revealTreePath(path)
+    },
+    [selectPath, revealTreePath]
+  )
+
+  /**
+   * Header New File / New Folder (GH-540): resolve + expand + reveal the
+   * target directory, then start the existing inline create flow.
+   */
   const startHeaderCreate = useCallback(
     async (type: 'file' | 'folder') => {
       // Never clobber an in-progress create/rename input, and serialize
@@ -615,6 +644,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       headerCreateInFlightRef.current = true
       try {
         const result = await expandDirectoryChain(targetDir)
+        // Re-check after the awaits: another flow may have opened an input or
+        // switched projects while the chain was expanding.
         if (result.status !== 'expanded' || inlineInputRef.current) {
           if (result.status === 'load-failed') {
             toast.error('Could not open the target directory', {
@@ -623,6 +654,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
           }
           return
         }
+        revealTreePath(result.dir)
         setContextMenu(null)
         setInlineInput({ parentPath: result.dir, type, mode: 'create' })
         setInputValue('')
@@ -630,20 +662,13 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         headerCreateInFlightRef.current = false
       }
     },
-    [getCreateTargetDir, expandDirectoryChain]
+    [getCreateTargetDir, expandDirectoryChain, revealTreePath]
   )
 
-  /** Select a newly created entry and scroll its row into view (best-effort). */
-  const revealCreatedEntry = useCallback(
-    (path: string) => {
-      selectPath(path)
-      window.requestAnimationFrame(() => {
-        const row = containerRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)
-        row?.scrollIntoView({ block: 'nearest' })
-      })
-    },
-    [selectPath]
-  )
+  /** Header Refresh (GH-540): re-read root + expanded dirs, keeping state. */
+  const handleHeaderRefresh = useCallback(() => {
+    void refreshTree()
+  }, [refreshTree])
 
   const handleRename = useCallback((entry: DirectoryEntry) => {
     setContextMenu(null)
@@ -1001,7 +1026,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             type="button"
             onClick={() => void startHeaderCreate('file')}
             disabled={!rootPath || !!rootLoadError}
-            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
             title="New File"
             aria-label="New File"
           >
@@ -1011,15 +1036,27 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             type="button"
             onClick={() => void startHeaderCreate('folder')}
             disabled={!rootPath || !!rootLoadError}
-            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
             title="New Folder"
             aria-label="New Folder"
           >
             <FolderPlus size={14} />
           </button>
           <button
+            type="button"
+            onClick={handleHeaderRefresh}
+            disabled={!rootPath || !!rootLoadError}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            <RefreshCw size={14} />
+          </button>
+          <button
+            type="button"
             onClick={collapseAll}
-            className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
+            disabled={!rootPath || !!rootLoadError}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
             title="Collapse All"
             aria-label="Collapse All"
           >

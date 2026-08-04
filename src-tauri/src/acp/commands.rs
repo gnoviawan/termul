@@ -289,3 +289,77 @@ pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
     crate::acp::manager::set_turn_timeout_override(secs);
     Ok(())
 }
+
+/// Set the in-process ACP turn *idle* timeout override, in seconds, or `None`
+/// to clear it (fall back to the env var / 15min default). Pushed from the
+/// App Preferences UI. Desktop-only parity with `acp_set_turn_timeout`: the
+/// standalone `termul-server` configures via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
+/// The env var remains top-precedence (operator/diagnostic override).
+#[tauri::command]
+pub fn acp_set_turn_idle_timeout(secs: Option<u64>) -> Result<(), String> {
+    if matches!(secs, Some(0)) {
+        return Err("turn idle timeout must be > 0 seconds".to_string());
+    }
+    crate::acp::manager::set_turn_idle_timeout_override(secs);
+    log::info!("[acp] turn idle timeout override: {secs:?}");
+    Ok(())
+}
+
+/// Set the in-process `session/new` timeout override, in seconds, or `None`
+/// to clear it (fall back to the env var / 60s default). Pushed from the App
+/// Preferences UI; same desktop-only + env-precedence contract as
+/// `acp_set_turn_timeout` (`TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` wins).
+#[tauri::command]
+pub fn acp_set_session_new_timeout(secs: Option<u64>) -> Result<(), String> {
+    if matches!(secs, Some(0)) {
+        return Err("session/new timeout must be > 0 seconds".to_string());
+    }
+    crate::acp::manager::set_session_new_timeout_override(secs);
+    log::info!("[acp] session/new timeout override: {secs:?}");
+    Ok(())
+}
+
+/// Set the in-process `session/load` / `session/resume` timeout override, in
+/// seconds, or `None` to clear it (fall back to the env var / 60s default).
+/// Pushed from the App Preferences UI; same desktop-only + env-precedence
+/// contract as `acp_set_turn_timeout`
+/// (`TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` wins).
+#[tauri::command]
+pub fn acp_set_session_reopen_timeout(secs: Option<u64>) -> Result<(), String> {
+    if matches!(secs, Some(0)) {
+        return Err("session reopen timeout must be > 0 seconds".to_string());
+    }
+    crate::acp::manager::set_session_reopen_timeout_override(secs);
+    log::info!("[acp] session reopen timeout override: {secs:?}");
+    Ok(())
+}
+
+/// Set the in-process first-prompt warmup timeout override, in seconds, or
+/// `None` to clear it (fall back to the env var / 45s default). `0` disables
+/// the warmup entirely. Pushed from the App Preferences UI; same desktop-only
+/// + env-precedence contract as `acp_set_turn_timeout`
+/// (`TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` wins).
+#[tauri::command]
+pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), String> {
+    crate::acp::manager::set_first_prompt_warmup_timeout_override(secs);
+    log::info!("[acp] first-prompt warmup timeout override: {secs:?}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zero is meaningless for the three strictly-positive timeouts and must
+    /// be rejected at the IPC boundary (the resolvers also filter it
+    /// defensively). Rejection happens BEFORE the override is stored, so
+    /// these assertions never mutate the shared override statics (warmup's
+    /// zero/DISABLE acceptance is covered at the resolver level in the
+    /// manager tests, since the warmup command forwards without validation).
+    #[test]
+    fn zero_overrides_are_rejected_for_strictly_positive_timeouts() {
+        assert!(acp_set_turn_idle_timeout(Some(0)).is_err());
+        assert!(acp_set_session_new_timeout(Some(0)).is_err());
+        assert!(acp_set_session_reopen_timeout(Some(0)).is_err());
+    }
+}

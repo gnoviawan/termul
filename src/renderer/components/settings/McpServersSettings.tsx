@@ -1,5 +1,5 @@
 import { AlertTriangle, ChevronDown, Pencil, Plus, RefreshCw, Server, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -11,115 +11,63 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import type { McpServerConfig } from '@/lib/acp-api'
-import {
-  type McpTransport,
-  type StoredMcpServer,
-  transportOf,
-  validateMcpServer
-} from '@/lib/acp-mcp-persistence'
+import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { useAcpStore } from '@/stores/acp-store'
 
-interface ServerDraft {
-  id?: string
-  type: McpTransport
-  name: string
-  command: string
-  args: string
-  env: string
-  url: string
-  headers: string
-  enabled: boolean
+type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const EMPTY_DRAFT: ServerDraft = {
-  type: 'stdio',
-  name: '',
-  command: '',
-  args: '',
-  env: '',
-  url: '',
-  headers: '',
-  enabled: true
-}
-
-function pairsToText(pairs: Array<{ name: string; value: string }> | undefined): string {
-  return pairs?.map((pair) => `${pair.name}=${pair.value}`).join('\n') ?? ''
-}
-
-function textToPairs(text: string): Array<{ name: string; value: string }> {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const separator = line.indexOf('=')
-      return separator === -1
-        ? { name: line, value: '' }
-        : { name: line.slice(0, separator).trim(), value: line.slice(separator + 1) }
-    })
-    .filter((pair) => pair.name.length > 0)
-}
-
-function draftFor(server: StoredMcpServer): ServerDraft {
-  const type = transportOf(server)
-  if (type === 'stdio') {
+/**
+ * Serialize a stored server to the single-object JSON the edit dialog accepts:
+ * `{type, name, command, args, env, enabled}` (stdio) or
+ * `{type, name, url, headers, enabled}` (http/sse). `env` is shown as a
+ * Claude-Desktop-style map (the parser normalizes map -> pairs); `headers`
+ * stays `[{name, value}]` pairs — the only shape the parser accepts. Empty
+ * `args`/`env`/`headers` are omitted.
+ */
+function serverToJson(server: StoredMcpServer): string {
+  const enabled = server.enabled !== false
+  if (transportOf(server) === 'stdio') {
     const stdio = server as Extract<StoredMcpServer, { type?: 'stdio' }>
-    return {
-      id: server.id,
-      type,
-      name: server.name,
-      command: stdio.command,
-      args: stdio.args?.join('\n') ?? '',
-      env: pairsToText(stdio.env),
-      url: '',
-      headers: '',
-      enabled: server.enabled !== false
-    }
+    const env: Record<string, string> = {}
+    for (const pair of stdio.env ?? []) env[pair.name] = pair.value
+    return JSON.stringify(
+      {
+        type: 'stdio',
+        name: server.name,
+        command: stdio.command,
+        ...(stdio.args && stdio.args.length > 0 ? { args: stdio.args } : {}),
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        enabled
+      },
+      null,
+      2
+    )
   }
   const remote = server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>
-  return {
-    id: server.id,
-    type,
-    name: server.name,
-    command: '',
-    args: '',
-    env: '',
-    url: remote.url,
-    headers: pairsToText(remote.headers),
-    enabled: server.enabled !== false
-  }
-}
-
-function configFor(draft: ServerDraft): McpServerConfig {
-  if (draft.type === 'stdio') {
-    const args = draft.args
-      .split('\n')
-      .map((arg) => arg.trim())
-      .filter(Boolean)
-    return {
-      type: 'stdio',
-      name: draft.name.trim(),
-      command: draft.command.trim(),
-      ...(args.length > 0 ? { args } : {}),
-      ...(draft.env.trim() ? { env: textToPairs(draft.env) } : {})
-    }
-  }
-  return {
-    type: draft.type,
-    name: draft.name.trim(),
-    url: draft.url.trim(),
-    ...(draft.headers.trim() ? { headers: textToPairs(draft.headers) } : {})
-  }
+  return JSON.stringify(
+    {
+      type: transportOf(server),
+      name: server.name,
+      url: remote.url,
+      ...(remote.headers && remote.headers.length > 0 ? { headers: remote.headers } : {}),
+      enabled
+    },
+    null,
+    2
+  )
 }
 
 export function McpServersSettings(): React.JSX.Element {
   const servers = useAcpStore((state) => state.mcpServers)
   const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
+  const importMcpServers = useAcpStore((state) => state.importMcpServers)
   const setMcpServerEnabled = useAcpStore((state) => state.setMcpServerEnabled)
   const deleteMcpServer = useAcpStore((state) => state.deleteMcpServer)
   const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
@@ -128,14 +76,10 @@ export function McpServersSettings(): React.JSX.Element {
   const mcpProbeError = useAcpStore((state) => state.mcpProbeError)
   const mcpTools = useAcpStore((state) => state.mcpTools)
   const mcpProbing = useAcpStore((state) => state.mcpProbing)
-  const [draft, setDraft] = useState<ServerDraft | null>(null)
+  const [dialog, setDialog] = useState<McpDialogState | null>(null)
+  const [jsonText, setJsonText] = useState('')
+  const [jsonErrors, setJsonErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  // "Form | Import JSON" toggle inside the Add/Edit dialog. Import mode pastes
-  // a Claude Desktop `{"mcpServers": {...}}` config (or a bare single server)
-  // and saves each parsed entry with a fresh id.
-  const [importMode, setImportMode] = useState(false)
-  const [importText, setImportText] = useState('')
-  const [importErrors, setImportErrors] = useState<string[]>([])
   // Tracks which server rows have their tool list expanded (Settings surface).
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
 
@@ -155,69 +99,109 @@ export function McpServersSettings(): React.JSX.Element {
     }
   }, [servers.map((s) => s.id).join('|')])
 
-  const validation = useMemo(
-    () => (draft ? validateMcpServer(configFor(draft)) : { valid: false, errors: [] }),
-    [draft]
-  )
+  const closeDialog = (): void => {
+    setDialog(null)
+    setJsonText('')
+    setJsonErrors([])
+  }
 
-  const persistDraft = async (): Promise<void> => {
-    if (!draft || !validation.valid) return
-    setSaving(true)
+  const openAdd = (): void => {
+    setDialog({ mode: 'add' })
+    setJsonText('')
+    setJsonErrors([])
+  }
+
+  const openEdit = (server: StoredMcpServer): void => {
+    setDialog({ mode: 'edit', server })
+    setJsonText(serverToJson(server))
+    setJsonErrors([])
+  }
+
+  // Add mode: accepts a Claude Desktop `{"mcpServers": {...}}` wrapper or a
+  // bare single-server object. The input is validated as a whole BEFORE any
+  // persistence, and the accepted batch is committed through a single atomic
+  // store write — so fixing a rejected entry and re-saving can never duplicate
+  // previously saved entries, and a multi-server import triggers one registry
+  // update (one on-mount probe pass) instead of one per server.
+  const saveAdd = async (): Promise<void> => {
+    const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
+    if (errors.length > 0) {
+      // All-or-nothing: nothing is persisted until every entry parses, so a
+      // corrected re-save starts from the same registry state.
+      setJsonErrors(errors)
+      return
+    }
+    if (parsedServers.length === 0) {
+      setJsonErrors(['No MCP servers found in the JSON.'])
+      return
+    }
+    const batch = parsedServers.map((parsed) => ({
+      ...parsed,
+      id: crypto.randomUUID(),
+      enabled: true
+    }))
     try {
-      await saveMcpServer({
-        ...configFor(draft),
-        id: draft.id ?? crypto.randomUUID(),
-        enabled: draft.enabled
-      })
-      setDraft(null)
-      toast.success(draft.id ? 'MCP server updated' : 'MCP server added')
+      await importMcpServers(batch)
+      toast.success(`Added ${batch.length} MCP server${batch.length === 1 ? '' : 's'}`)
+      closeDialog()
     } catch {
-      toast.error('Could not save the MCP server. Your previous settings were restored.')
-    } finally {
-      setSaving(false)
+      // importMcpServers rolls back the whole batch on failure — nothing was
+      // persisted, so the dialog stays open for a safe retry.
+      toast.error('Could not save the MCP servers. Your previous settings were restored.')
     }
   }
 
-  const closeDialog = (): void => {
-    setDraft(null)
-    setImportMode(false)
-    setImportErrors([])
-  }
-
-  const saveImport = async (): Promise<void> => {
-    setSaving(true)
-    setImportErrors([])
-    let savedCount = 0
+  // Edit mode: updates the same registry entry (same id). The wrapper is
+  // rejected — it would parse to N servers with fresh-name semantics, which
+  // is ambiguous for a single-entry update.
+  const saveEdit = async (target: StoredMcpServer): Promise<void> => {
+    // `enabled` is not part of `McpServerConfig`, so `parseMcpJsonImport`
+    // drops it like any unknown field — read an explicit boolean here first.
+    let explicitEnabled: boolean | undefined
     try {
-      const { servers: parsedServers, errors } = parseMcpJsonImport(importText)
-      // Valid servers still import when some entries are rejected (per-server
-      // errors stay visible inline so the user can fix and re-paste).
-      for (const server of parsedServers) {
-        await saveMcpServer({ ...server, id: crypto.randomUUID(), enabled: true })
-        savedCount += 1
+      const raw: unknown = JSON.parse(jsonText)
+      if (isRecord(raw)) {
+        if (raw.mcpServers !== undefined) {
+          setJsonErrors(['Edit expects a single server object — remove the "mcpServers" wrapper.'])
+          return
+        }
+        if (typeof raw.enabled === 'boolean') explicitEnabled = raw.enabled
       }
-      if (errors.length > 0) {
-        setImportErrors(errors)
-        return
-      }
-      if (parsedServers.length === 0) {
-        setImportErrors(['No MCP servers found in the JSON.'])
-        return
-      }
-      toast.success(
-        `Imported ${parsedServers.length} MCP server${parsedServers.length === 1 ? '' : 's'}`
-      )
-      setImportText('')
+    } catch {
+      // Invalid JSON — parseMcpJsonImport below reports the exact syntax error.
+    }
+    const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
+    if (errors.length > 0) {
+      setJsonErrors(errors)
+      return
+    }
+    const parsed = parsedServers[0]
+    if (!parsed || parsedServers.length !== 1) {
+      setJsonErrors(['Edit expects exactly one server object.'])
+      return
+    }
+    try {
+      await saveMcpServer({
+        ...parsed,
+        id: target.id,
+        enabled: explicitEnabled ?? target.enabled ?? true
+      })
+      toast.success('MCP server updated')
       closeDialog()
     } catch {
-      // A mid-loop throw leaves earlier saves persisted (fresh IDs each time).
-      // Tell the user how many landed so they do not blindly re-paste and
-      // create duplicates.
-      toast.error(
-        savedCount > 0
-          ? `Imported ${savedCount} server${savedCount === 1 ? '' : 's'} before a save failed. Review the remaining entries before re-importing.`
-          : 'Could not save the MCP server. Your previous settings were restored.'
-      )
+      // The store already rolled back the in-memory list; keep the dialog
+      // open so the edit is not lost.
+      toast.error('Could not save the MCP server. Your previous settings were restored.')
+    }
+  }
+
+  const saveJson = async (): Promise<void> => {
+    if (!dialog || jsonText.trim().length === 0) return
+    setSaving(true)
+    setJsonErrors([])
+    try {
+      if (dialog.mode === 'add') await saveAdd()
+      else await saveEdit(dialog.server)
     } finally {
       setSaving(false)
     }
@@ -232,7 +216,7 @@ export function McpServersSettings(): React.JSX.Element {
             Enabled servers are offered automatically when a new agent session starts.
           </p>
         </div>
-        <Button type="button" size="sm" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+        <Button type="button" size="sm" onClick={openAdd}>
           <Plus size={14} className="mr-1.5" /> Add server
         </Button>
       </div>
@@ -254,120 +238,77 @@ export function McpServersSettings(): React.JSX.Element {
           <p className="mt-1 text-xs text-muted-foreground">Add a stdio, HTTP, or SSE server.</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="divide-y divide-border rounded-lg border border-border">
           {servers.map((server) => {
             const probeStatus = mcpProbeStatus[server.id]
             const probing = Boolean(mcpProbing[server.id])
             const tools = mcpTools[server.id]
             const isOpen = Boolean(expandedTools[server.id])
+            const detail =
+              transportOf(server) === 'stdio'
+                ? (server as Extract<StoredMcpServer, { type?: 'stdio' }>).command
+                : (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
             return (
-              <div
+              <Collapsible
                 key={server.id}
-                className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-start"
+                open={isOpen}
+                onOpenChange={(next) => {
+                  setExpandedTools((prev) => ({ ...prev, [server.id]: next }))
+                  if (next) void loadMcpTools(server.id)
+                }}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      role="img"
-                      className={
-                        probeStatus === 'connected'
-                          ? 'size-2 rounded-full bg-emerald-500'
-                          : probeStatus === 'disconnected'
-                            ? 'size-2 rounded-full bg-red-500'
-                            : 'size-2 rounded-full bg-muted-foreground/40'
-                      }
-                      aria-label={
-                        probeStatus === 'connected'
-                          ? `${server.name} reachable`
-                          : probeStatus === 'disconnected'
-                            ? `${server.name} unreachable`
-                            : `${server.name} not probed yet`
-                      }
-                      title={
-                        probeStatus === 'connected'
-                          ? 'Connected (Termul can reach this server)'
-                          : probeStatus === 'disconnected'
-                            ? 'Disconnected (Termul could not reach this server)'
-                            : 'Not probed yet — click "Test" to check'
-                      }
-                    />
-                    <span className="truncate text-sm font-medium">{server.name}</span>
-                    <span className="rounded bg-secondary px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground">
-                      {transportOf(server)}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
-                    {transportOf(server) === 'stdio'
-                      ? (server as Extract<StoredMcpServer, { type?: 'stdio' }>).command
-                      : (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url}
-                  </p>
-                  <Collapsible
-                    open={isOpen}
-                    onOpenChange={(next) => {
-                      setExpandedTools((prev) => ({ ...prev, [server.id]: next }))
-                      if (next) void loadMcpTools(server.id)
-                    }}
-                  >
-                    <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 text-3xs text-muted-foreground underline-offset-2 hover:underline">
-                      <ChevronDown size={12} className={isOpen ? 'rotate-180' : ''} />
-                      {tools && tools.length > 0
-                        ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
+                {/* Compact one-line row: status dot, name, transport,
+                    command/URL, tools trigger, and every row action. Tool
+                    and probe details stay opt-in behind the disclosure. */}
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <span
+                    role="img"
+                    className={
+                      probeStatus === 'connected'
+                        ? 'size-2 shrink-0 rounded-full bg-emerald-500'
                         : probeStatus === 'disconnected'
-                          ? 'Probe failed — retry'
-                          : 'Show tools'}
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="pt-1">
-                      {tools && tools.length > 0 ? (
-                        <ul className="space-y-0.5">
-                          {tools.map((tool) => (
-                            <li key={tool.name} className="flex min-w-0 items-baseline text-3xs">
-                              <span className="font-mono font-medium text-foreground">
-                                {tool.name}
-                              </span>
-                              {tool.description ? (
-                                <span className="ml-1 min-w-0 flex-1 truncate text-muted-foreground/70">
-                                  — {tool.description}
-                                </span>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : probeStatus === 'disconnected' ? (
-                        <div className="space-y-1">
-                          <p className="text-3xs text-destructive">
-                            Probe failed — check the server config or network.
-                          </p>
-                          {mcpProbeError[server.id] ? (
-                            <span className="block font-mono text-3xs text-destructive/80">
-                              {mcpProbeError[server.id]}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : probeStatus === 'connected' ? (
-                        <p className="text-3xs text-muted-foreground">
-                          Probe completed — no tools found.
-                        </p>
-                      ) : probing ? (
-                        <p className="text-3xs text-muted-foreground">Probing…</p>
-                      ) : (
-                        <p className="text-3xs text-muted-foreground">
-                          Expand to probe (read-only — per-tool toggle coming soon).
-                        </p>
-                      )}
-                    </CollapsibleContent>
-                  </Collapsible>
-                </div>
-                <div className="flex items-center justify-between gap-2 sm:justify-end">
+                          ? 'size-2 shrink-0 rounded-full bg-red-500'
+                          : 'size-2 shrink-0 rounded-full bg-muted-foreground/40'
+                    }
+                    aria-label={
+                      probeStatus === 'connected'
+                        ? `${server.name} reachable`
+                        : probeStatus === 'disconnected'
+                          ? `${server.name} unreachable`
+                          : `${server.name} not probed yet`
+                    }
+                    title={
+                      probeStatus === 'connected'
+                        ? 'Connected (Termul can reach this server)'
+                        : probeStatus === 'disconnected'
+                          ? 'Disconnected (Termul could not reach this server)'
+                          : 'Not probed yet — click "Test" to check'
+                    }
+                  />
+                  <span className="min-w-0 shrink truncate text-sm font-medium">{server.name}</span>
+                  <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-3xs font-medium uppercase text-muted-foreground">
+                    {transportOf(server)}
+                  </span>
+                  <span className="hidden min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground sm:block">
+                    {detail}
+                  </span>
+                  <CollapsibleTrigger className="inline-flex shrink-0 items-center gap-1 text-3xs text-muted-foreground underline-offset-2 hover:underline">
+                    <ChevronDown size={12} className={isOpen ? 'rotate-180' : ''} />
+                    {tools && tools.length > 0
+                      ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
+                      : probeStatus === 'disconnected'
+                        ? 'Probe failed — retry'
+                        : 'Show tools'}
+                  </CollapsibleTrigger>
                   <Button
                     type="button"
-                    size="sm"
+                    size="icon"
                     variant="ghost"
                     disabled={probing}
                     onClick={() => void probeMcpServer(server.id)}
                     aria-label={`Test ${server.name} connection`}
                   >
                     <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
-                    <span className="ml-1.5">Test</span>
                   </Button>
                   <Switch
                     checked={server.enabled !== false}
@@ -384,12 +325,7 @@ export function McpServersSettings(): React.JSX.Element {
                     type="button"
                     size="icon"
                     variant="ghost"
-                    onClick={() => {
-                      // Ensure a lingering import session cannot resurface
-                      // the (now-hidden) import view while editing.
-                      setImportMode(false)
-                      setDraft(draftFor(server))
-                    }}
+                    onClick={() => openEdit(server)}
                   >
                     <Pencil size={15} />
                     <span className="sr-only">Edit {server.name}</span>
@@ -410,7 +346,44 @@ export function McpServersSettings(): React.JSX.Element {
                     <span className="sr-only">Delete {server.name}</span>
                   </Button>
                 </div>
-              </div>
+                <CollapsibleContent className="px-3 pb-2">
+                  {tools && tools.length > 0 ? (
+                    <ul className="space-y-0.5">
+                      {tools.map((tool) => (
+                        <li key={tool.name} className="flex min-w-0 items-baseline text-3xs">
+                          <span className="font-mono font-medium text-foreground">{tool.name}</span>
+                          {tool.description ? (
+                            <span className="ml-1 min-w-0 flex-1 truncate text-muted-foreground/70">
+                              — {tool.description}
+                            </span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : probeStatus === 'disconnected' ? (
+                    <div className="space-y-1">
+                      <p className="text-3xs text-destructive">
+                        Probe failed — check the server config or network.
+                      </p>
+                      {mcpProbeError[server.id] ? (
+                        <span className="block font-mono text-3xs text-destructive/80">
+                          {mcpProbeError[server.id]}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : probeStatus === 'connected' ? (
+                    <p className="text-3xs text-muted-foreground">
+                      Probe completed — no tools found.
+                    </p>
+                  ) : probing ? (
+                    <p className="text-3xs text-muted-foreground">Probing…</p>
+                  ) : (
+                    <p className="text-3xs text-muted-foreground">
+                      Expand to probe (read-only — per-tool toggle coming soon).
+                    </p>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
             )
           })}
         </div>
@@ -426,188 +399,58 @@ export function McpServersSettings(): React.JSX.Element {
       </div>
 
       <Dialog
-        open={draft !== null || importMode}
+        open={dialog !== null}
         onOpenChange={(open) => {
-          if (!open) closeDialog()
+          // Block dismissal while a save is in flight — otherwise the in-flight
+          // completion handler would close a newly opened editor, and a failed
+          // save's JSON would be lost.
+          if (!open && !saving) closeDialog()
         }}
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {importMode ? 'Import MCP servers' : draft?.id ? 'Edit MCP server' : 'Add MCP server'}
+              {dialog?.mode === 'edit' ? 'Edit MCP server' : 'Add MCP servers'}
             </DialogTitle>
             <DialogDescription>
-              {importMode
-                ? 'Paste a Claude Desktop config or a single server object, then parse and save.'
-                : 'Configure one server transport. Each argument or key/value pair uses its own line.'}
+              {dialog?.mode === 'edit'
+                ? 'Edit this server as JSON. Unknown fields are dropped on save.'
+                : 'Paste a Claude Desktop "mcpServers" config or a single server object.'}
             </DialogDescription>
           </DialogHeader>
-          <div
-            role="tablist"
-            aria-label="MCP server entry mode"
-            className="flex w-fit gap-1 rounded-lg border border-border bg-secondary/20 p-1"
-            // The Import tab is an Add-only flow — importing while editing an
-            // existing server would persist fresh IDs instead of updating the
-            // draft, so the tab bar is hidden whenever a server is being edited.
-            hidden={Boolean(draft?.id)}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!importMode}
-              onClick={() => {
-                setImportMode(false)
-                setImportErrors([])
-              }}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                !importMode
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Form
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={importMode}
-              onClick={() => {
-                setImportMode(true)
-                setImportErrors([])
-              }}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                importMode
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Import JSON
-            </button>
+          <div className="space-y-4">
+            <label htmlFor="mcp-json" className="block space-y-1 text-sm">
+              <span>MCP JSON</span>
+              <Textarea
+                id="mcp-json"
+                rows={12}
+                value={jsonText}
+                onChange={(event) => setJsonText(event.target.value)}
+                placeholder='{"mcpServers": {"dokploy": {"command": "npx", "args": ["-y", "@dokploy/mcp"], "env": {"DOKPLOY_URL": "..."}}}}'
+                className="font-mono"
+              />
+            </label>
+            {jsonErrors.length > 0 && (
+              <ul role="alert" className="space-y-1 text-xs text-destructive">
+                {jsonErrors.map((error) => (
+                  <li key={error} className="break-words font-mono">
+                    {error}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          {importMode ? (
-            <div className="space-y-4">
-              <label htmlFor="mcp-import-json" className="block space-y-1 text-sm">
-                <span>MCP JSON</span>
-                <Textarea
-                  id="mcp-import-json"
-                  rows={10}
-                  value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
-                  placeholder='{"mcpServers": {"dokploy": {"command": "npx", "args": ["-y", "@dokploy/mcp"], "env": {"DOKPLOY_URL": "..."}}}}'
-                  className="font-mono"
-                />
-              </label>
-              {importErrors.length > 0 && (
-                <ul role="alert" className="space-y-1 text-xs text-destructive">
-                  {importErrors.map((error) => (
-                    <li key={error} className="break-words font-mono">
-                      {error}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ) : (
-            draft && (
-              <div className="space-y-4">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label htmlFor="mcp-server-name" className="space-y-1 text-sm">
-                    <span>Name</span>
-                    <Input
-                      id="mcp-server-name"
-                      value={draft.name}
-                      onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                    />
-                  </label>
-                  <label htmlFor="mcp-server-transport" className="space-y-1 text-sm">
-                    <span>Transport</span>
-                    <select
-                      id="mcp-server-transport"
-                      value={draft.type}
-                      onChange={(event) =>
-                        setDraft({ ...draft, type: event.target.value as McpTransport })
-                      }
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="stdio">stdio</option>
-                      <option value="http">HTTP</option>
-                      <option value="sse">SSE</option>
-                    </select>
-                  </label>
-                </div>
-                {draft.type === 'stdio' ? (
-                  <>
-                    <label htmlFor="mcp-command" className="block space-y-1 text-sm">
-                      <span>Command</span>
-                      <Input
-                        id="mcp-command"
-                        value={draft.command}
-                        onChange={(event) => setDraft({ ...draft, command: event.target.value })}
-                      />
-                    </label>
-                    <label htmlFor="mcp-arguments" className="block space-y-1 text-sm">
-                      <span>Arguments (one per line)</span>
-                      <Textarea
-                        id="mcp-arguments"
-                        value={draft.args}
-                        onChange={(event) => setDraft({ ...draft, args: event.target.value })}
-                      />
-                    </label>
-                    <label htmlFor="mcp-environment" className="block space-y-1 text-sm">
-                      <span>Environment (NAME=value, one per line)</span>
-                      <Textarea
-                        id="mcp-environment"
-                        value={draft.env}
-                        onChange={(event) => setDraft({ ...draft, env: event.target.value })}
-                      />
-                    </label>
-                  </>
-                ) : (
-                  <>
-                    <label htmlFor="mcp-url" className="block space-y-1 text-sm">
-                      <span>URL</span>
-                      <Input
-                        id="mcp-url"
-                        type="url"
-                        value={draft.url}
-                        onChange={(event) => setDraft({ ...draft, url: event.target.value })}
-                      />
-                    </label>
-                    <label htmlFor="mcp-headers" className="block space-y-1 text-sm">
-                      <span>Headers (NAME=value, one per line)</span>
-                      <Textarea
-                        id="mcp-headers"
-                        value={draft.headers}
-                        onChange={(event) => setDraft({ ...draft, headers: event.target.value })}
-                      />
-                    </label>
-                  </>
-                )}
-                {!validation.valid && draft.name.trim().length > 0 && (
-                  <p role="alert" className="text-xs text-destructive">
-                    {validation.errors.join(' ')}
-                  </p>
-                )}
-              </div>
-            )
-          )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeDialog}>
+            <Button type="button" variant="outline" disabled={saving} onClick={closeDialog}>
               Cancel
             </Button>
-            {importMode ? (
-              <Button type="button" disabled={saving} onClick={() => void saveImport()}>
-                {saving ? 'Saving…' : 'Parse & Save'}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                disabled={!validation.valid || saving}
-                onClick={() => void persistDraft()}
-              >
-                {saving ? 'Saving…' : 'Save'}
-              </Button>
-            )}
+            <Button
+              type="button"
+              disabled={jsonText.trim().length === 0 || saving}
+              onClick={() => void saveJson()}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -294,6 +294,28 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('timeout setters are desktop-only no-ops on the WS transport', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const sentBefore = sock.sent.length
+
+    // The standalone server has no settings surface and configures these via
+    // the TERMUL_ACP_* env vars — the setters must resolve without sending
+    // anything over the wire (and without throwing).
+    await transport.setTurnTimeout(7200)
+    await transport.setTurnIdleTimeout(1800)
+    await transport.setSessionNewTimeout(120)
+    await transport.setSessionReopenTimeout(300)
+    await transport.setFirstPromptWarmupTimeout(0)
+
+    expect(sock.sent.length).toBe(sentBefore)
+    transport.dispose()
+  })
+
   it('switchProject maps completed replies and subscribes the new session', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

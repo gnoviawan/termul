@@ -70,6 +70,10 @@ export interface AcpTransport {
   ): Promise<InstallAcpRegistryBinaryOutcome>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
+  setTurnIdleTimeout(secs: number | null): Promise<void>
+  setSessionNewTimeout(secs: number | null): Promise<void>
+  setSessionReopenTimeout(secs: number | null): Promise<void>
+  setFirstPromptWarmupTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
   /**
    * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
@@ -183,6 +187,11 @@ function createTauriAcpTransport(): AcpTransport {
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
+    setTurnIdleTimeout: (secs) => invoke<void>('acp_set_turn_idle_timeout', { secs }),
+    setSessionNewTimeout: (secs) => invoke<void>('acp_set_session_new_timeout', { secs }),
+    setSessionReopenTimeout: (secs) => invoke<void>('acp_set_session_reopen_timeout', { secs }),
+    setFirstPromptWarmupTimeout: (secs) =>
+      invoke<void>('acp_set_first_prompt_warmup_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
@@ -575,6 +584,26 @@ export class WsAcpTransport implements AcpTransport {
   async setTurnTimeout(_secs: number | null): Promise<void> {
     // Desktop-only: the standalone server has no settings surface and
     // configures the turn timeout via TERMUL_ACP_TURN_TIMEOUT_SECS.
+  }
+
+  async setTurnIdleTimeout(_secs: number | null): Promise<void> {
+    // Desktop-only: the standalone server has no settings surface and
+    // configures the turn idle timeout via TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS.
+  }
+
+  async setSessionNewTimeout(_secs: number | null): Promise<void> {
+    // Desktop-only: the standalone server has no settings surface and configures
+    // the session/new timeout via TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS.
+  }
+
+  async setSessionReopenTimeout(_secs: number | null): Promise<void> {
+    // Desktop-only: the standalone server has no settings surface and configures
+    // the session reopen timeout via TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS.
+  }
+
+  async setFirstPromptWarmupTimeout(_secs: number | null): Promise<void> {
+    // Desktop-only: the standalone server has no settings surface and configures
+    // the first-prompt warmup timeout via TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS.
   }
 
   async fetchRegistrySnapshot(_forceRefresh = false): Promise<AcpRegistrySnapshot> {

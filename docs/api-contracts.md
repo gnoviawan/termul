@@ -174,7 +174,14 @@ Runs rollback logic for a migration.
 
 Desktop renderer chat history is stored under the Tauri app-data directory by a
 Rust-owned, versioned file store. The commands preserve the existing renderer
-`SessionIndexEntry` / `SessionPayload` JSON shape:
+`SessionIndexEntry` / `SessionPayload` JSON shape. `SessionPayload` carries
+`{ metadata, messages, toolCalls? }`: `toolCalls` is an optional mirror of the
+session's ACP tool calls so history reopens and post-reload resumes restore the
+tool cards in the timeline. Persisted tool calls drop `rawOutput` and unknown
+fields, normalize mid-flight statuses to `failed`, keep only the most recent
+calls, and are bounded per call by a serialized byte budget
+(`sanitizeToolCallsForPersistence`); payloads written before the field existed
+omit it.
 
 - `acp_history_list` returns `{ sessions, legacyImportComplete }`.
 - `acp_history_get` returns one full payload or `null` when absent.
