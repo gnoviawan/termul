@@ -91,6 +91,7 @@ export function FileTreeNode({
   return (
     <>
       <div
+        data-path={entry.path}
         className={cn(
           'group relative flex min-w-0 items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
           isIgnored && 'opacity-50',

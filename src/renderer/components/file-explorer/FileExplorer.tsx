@@ -1,5 +1,5 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { ChevronsDownUp, LoaderCircle, Search, X } from 'lucide-react'
+import { ChevronsDownUp, FilePlus, FolderPlus, LoaderCircle, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
@@ -520,6 +520,109 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     setInputValue('')
   }, [])
 
+  /** Find a directory entry by absolute path across all loaded directories. */
+  const findEntryByPath = useCallback(
+    (path: string): DirectoryEntry | undefined => {
+      for (const entries of directoryContents.values()) {
+        const found = entries.find((entry) => entry.path === path)
+        if (found) return found
+      }
+      return undefined
+    },
+    [directoryContents]
+  )
+
+  /**
+   * VSCode-style target resolution for header creation actions (GH-539):
+   * selected directory > parent of selected file > project root.
+   * Multi-selection or unresolvable selections fall back to the root.
+   */
+  const getCreateTargetDir = useCallback((): string => {
+    if (!rootPath) return ''
+    if (selectedPaths.size === 1) {
+      const selectedPath = Array.from(selectedPaths)[0]
+      const selectedEntry = findEntryByPath(selectedPath)
+      if (selectedEntry?.type === 'directory') return selectedEntry.path
+      if (selectedEntry?.type === 'file') {
+        const normalized = selectedEntry.path.replace(/\\/g, '/')
+        const lastSlash = normalized.lastIndexOf('/')
+        return lastSlash > 0 ? normalized.slice(0, lastSlash) : lastSlash === 0 ? '/' : rootPath
+      }
+    }
+    return rootPath
+  }, [rootPath, selectedPaths, findEntryByPath])
+
+  /** Expand every directory from the project root down to (and including) the target. */
+  const expandDirectoryChain = useCallback(
+    async (targetDir: string): Promise<boolean> => {
+      if (!rootPath) return false
+      const normalizedRoot = rootPath.replace(/\\/g, '/')
+      let normalizedTarget = targetDir.replace(/\\/g, '/')
+      if (
+        normalizedTarget !== normalizedRoot &&
+        !normalizedTarget.startsWith(`${normalizedRoot}/`)
+      ) {
+        normalizedTarget = normalizedRoot
+      }
+
+      const chain: string[] = []
+      let current = normalizedTarget
+      while (
+        current !== normalizedRoot &&
+        current.length > normalizedRoot.length &&
+        current.startsWith(`${normalizedRoot}/`)
+      ) {
+        chain.push(current)
+        const lastSlash = current.lastIndexOf('/')
+        if (lastSlash <= 0) break
+        current = current.slice(0, lastSlash)
+      }
+      chain.push(normalizedRoot)
+      chain.reverse()
+
+      for (const dir of chain) {
+        if (!useFileExplorerStore.getState().expandedDirs.has(dir)) {
+          await toggleDirectory(dir)
+        }
+        // Abort if the directory could not be expanded (load failure) or the
+        // project changed mid-chain — never create into an invisible or
+        // foreign tree.
+        const state = useFileExplorerStore.getState()
+        if (!state.expandedDirs.has(dir) || state.rootPath !== rootPath) return false
+      }
+      return true
+    },
+    [rootPath, toggleDirectory]
+  )
+
+  /** Header New File / New Folder: resolve + expand the target, then start inline create. */
+  const startHeaderCreate = useCallback(
+    async (type: 'file' | 'folder') => {
+      // Never clobber an in-progress create/rename input.
+      if (inlineInput) return
+      const targetDir = getCreateTargetDir()
+      if (!targetDir) return
+      const expanded = await expandDirectoryChain(targetDir)
+      if (!expanded) return
+      setContextMenu(null)
+      setInlineInput({ parentPath: targetDir, type, mode: 'create' })
+      setInputValue('')
+    },
+    [inlineInput, getCreateTargetDir, expandDirectoryChain]
+  )
+
+  /** Select a newly created entry and scroll its row into view (best-effort). */
+  const revealCreatedEntry = useCallback(
+    (path: string) => {
+      selectPath(path)
+      window.requestAnimationFrame(() => {
+        const row = containerRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+        row?.scrollIntoView({ block: 'nearest' })
+      })
+    },
+    [selectPath]
+  )
+
   const handleRename = useCallback((entry: DirectoryEntry) => {
     setContextMenu(null)
     const normalizedPath = entry.path.replace(/\\/g, '/')
@@ -560,6 +663,13 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     }
 
     const name = inputValue.trim()
+    // Reject path separators and dot-segments so creation can never escape
+    // the target directory (GH-539).
+    if (name === '.' || name === '..' || /[/\\]/.test(name)) {
+      toast.error('Invalid name: file and folder names cannot contain path separators')
+      submitFailedRef.current = true
+      return
+    }
     const fullPath = `${inlineInput.parentPath}/${name}`
 
     try {
@@ -590,6 +700,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         }
       }
       await refreshDirectory(inlineInput.parentPath)
+      if (inlineInput.mode === 'create') {
+        // GH-539: newly created entries are selected and revealed in the tree.
+        revealCreatedEntry(fullPath)
+      }
       setInlineInput(null)
       setInputValue('')
     } catch (err) {
@@ -598,7 +712,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     } finally {
       isSubmittingRef.current = false
     }
-  }, [inlineInput, inputValue, refreshDirectory])
+  }, [inlineInput, inputValue, refreshDirectory, revealCreatedEntry])
 
   const handleInlineInputCancel = useCallback(() => {
     if (isSubmittingRef.current) return
@@ -858,13 +972,36 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Explorer</span>
-        <button
-          onClick={collapseAll}
-          className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
-          title="Collapse All"
-        >
-          <ChevronsDownUp size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void startHeaderCreate('file')}
+            disabled={!rootPath || !!rootLoadError}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="New File"
+            aria-label="New File"
+          >
+            <FilePlus size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void startHeaderCreate('folder')}
+            disabled={!rootPath || !!rootLoadError}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="New Folder"
+            aria-label="New Folder"
+          >
+            <FolderPlus size={14} />
+          </button>
+          <button
+            onClick={collapseAll}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
+            title="Collapse All"
+            aria-label="Collapse All"
+          >
+            <ChevronsDownUp size={14} />
+          </button>
+        </div>
       </div>
 
       <div className="px-3 py-1.5 border-b border-border">

@@ -63,3 +63,6 @@ export const useAppearanceMode = () => useAppSettingsStore((state) => state.sett
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
 export const useAcpTurnTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)
+export const useEditorAutoSave = () => useAppSettingsStore((state) => state.settings.editorAutoSave)
+export const useEditorAutoSaveDelayMs = () =>
+  useAppSettingsStore((state) => state.settings.editorAutoSaveDelayMs)

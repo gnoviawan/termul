@@ -67,6 +67,10 @@ export interface AppSettings {
   /** ACP turn hard-cap timeout in seconds, or null = use the Rust default
    * (3h). Set via App Preferences; pushed to the Rust core. */
   acpTurnTimeoutSecs: number | null
+  /** Automatically save dirty editor files after edits pause (GH-539). */
+  editorAutoSave: boolean
+  /** Idle delay in ms before a dirty editor file is auto-saved (GH-539). */
+  editorAutoSaveDelayMs: number
 }
 
 /** Whole-UI zoom bounds — match the native View menu semantics (0.5x–3.0x, 10% steps). */
@@ -118,6 +122,14 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
   { value: 600000, label: '10 minutes' },
   { value: 1800000, label: '30 minutes' },
   { value: 3600000, label: '1 hour' }
+]
+
+// Editor auto-save delay options (GH-539)
+export const EDITOR_AUTO_SAVE_DELAY_OPTIONS = [
+  { value: 500, label: '0.5 seconds' },
+  { value: 1000, label: '1 second' },
+  { value: 2000, label: '2 seconds' },
+  { value: 5000, label: '5 seconds' }
 ]
 
 // Terminal renderer strategy options
@@ -187,7 +199,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   colorTheme: 'termul',
   appearanceMode: 'dark',
   uiZoomLevel: UI_ZOOM_DEFAULT,
-  acpTurnTimeoutSecs: null
+  acpTurnTimeoutSecs: null,
+  editorAutoSave: false,
+  editorAutoSaveDelayMs: 1000
 }
 
 // Persistence key for app settings

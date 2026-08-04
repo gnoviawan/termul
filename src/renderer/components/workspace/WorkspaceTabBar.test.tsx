@@ -354,6 +354,89 @@ describe('WorkspaceTabBar', () => {
     expect(mockCloseTab).not.toHaveBeenCalled()
   })
 
+  it('renders the unsaved-changes indicator only on dirty editor tabs (GH-539)', async () => {
+    mockEditorOpenFiles.set('/a.ts', { isDirty: true, operationStatus: 'idle' })
+    mockEditorOpenFiles.set('/b.ts', { isDirty: false, operationStatus: 'idle' })
+    const tabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' }
+    ]
+
+    const { container } = render(
+      <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="edit-/a.ts" />
+    )
+
+    await flushShellEffect()
+
+    const dirtyDots = container.querySelectorAll('.w-2.h-2.rounded-full.bg-primary')
+    expect(dirtyDots.length).toBe(1)
+  })
+
+  it('routes Close Others through the dirty-aware close callback (GH-539)', async () => {
+    mockEditorOpenFiles.set('/a.ts', { isDirty: false, operationStatus: 'idle' })
+    mockEditorOpenFiles.set('/b.ts', { isDirty: true, operationStatus: 'idle' })
+    mockEditorOpenFiles.set('/c.ts', { isDirty: true, operationStatus: 'idle' })
+    const onCloseEditorTab = vi.fn()
+    const tabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' },
+      { type: 'editor', id: 'edit-/c.ts', filePath: '/c.ts' }
+    ]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+        onCloseEditorTab={onCloseEditorTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    const activeTabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
+    fireEvent.contextMenu(activeTabEl)
+    fireEvent.click(await screen.findByText('Close Others'))
+
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/b.ts')
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/c.ts')
+    expect(onCloseEditorTab).not.toHaveBeenCalledWith('/a.ts')
+    // Dirty tabs must go through the upstream dialog path, never the
+    // silent fallback close.
+    expect(mockCloseFileIfIdle).not.toHaveBeenCalled()
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
+  it('routes Close All through the dirty-aware close callback (GH-539)', async () => {
+    mockEditorOpenFiles.set('/a.ts', { isDirty: true, operationStatus: 'idle' })
+    mockEditorOpenFiles.set('/b.ts', { isDirty: true, operationStatus: 'idle' })
+    const onCloseEditorTab = vi.fn()
+    const tabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' }
+    ]
+
+    render(
+      <WorkspaceTabBar
+        paneId="pane-a"
+        tabs={tabs}
+        activeTabId="edit-/a.ts"
+        onCloseEditorTab={onCloseEditorTab}
+      />
+    )
+
+    await flushShellEffect()
+
+    const activeTabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
+    fireEvent.contextMenu(activeTabEl)
+    fireEvent.click(await screen.findByText('Close All'))
+
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/a.ts')
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/b.ts')
+    expect(mockCloseFileIfIdle).not.toHaveBeenCalled()
+    expect(mockCloseTab).not.toHaveBeenCalled()
+  })
+
   it('closes terminal tab on middle click without affecting regular click behavior', async () => {
     const onCloseTerminal = vi.fn()
     const tabs: WorkspaceTab[] = [{ type: 'terminal', id: 'tab-1', terminalId: 'term-1' }]

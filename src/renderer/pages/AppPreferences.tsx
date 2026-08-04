@@ -36,6 +36,7 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
+import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
@@ -45,6 +46,8 @@ import {
   useConfirmTerminalClose,
   useDefaultProjectColor,
   useDefaultShell,
+  useEditorAutoSave,
+  useEditorAutoSaveDelayMs,
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
@@ -61,6 +64,8 @@ import type { ProjectColor } from '@/types/project'
 import {
   ACP_TURN_TIMEOUT_OPTIONS,
   BUFFER_SIZE_OPTIONS,
+  DEFAULT_APP_SETTINGS,
+  EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
   MAX_TERMINALS_OPTIONS,
   ORPHAN_TIMEOUT_OPTIONS,
@@ -76,7 +81,7 @@ import {
 const APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'appearance', label: 'Terminal Appearance', icon: <Palette size={16} /> },
   { id: 'shell', label: 'Default Shell', icon: <Terminal size={16} /> },
-  { id: 'behavior', label: 'Terminal Behavior', icon: <Sliders size={16} /> },
+  { id: 'behavior', label: 'Behavior', icon: <Sliders size={16} /> },
   { id: 'project-defaults', label: 'New Project Defaults', icon: <Monitor size={16} /> },
   { id: 'ai-agents', label: 'AI Agents', icon: <Bot size={16} /> },
   { id: 'mcp-servers', label: 'MCP Servers', icon: <Network size={16} /> },
@@ -146,6 +151,18 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Timeout Before Cleanup',
     description: 'Duration before inactive terminals are cleaned up.',
     keywords: ['orphan', 'inactive']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Auto Save',
+    description: 'Automatically save editor files after you stop typing.',
+    keywords: ['editor', 'autosave', 'auto save', 'save']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Auto Save Delay',
+    description: 'Idle time before editor files are saved automatically.',
+    keywords: ['editor', 'autosave', 'delay', 'timeout']
   },
   {
     categoryId: 'project-defaults',
@@ -219,6 +236,8 @@ export default function AppPreferences(): React.JSX.Element {
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
+  const editorAutoSave = useEditorAutoSave()
+  const editorAutoSaveDelayMs = useEditorAutoSaveDelayMs()
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -341,6 +360,18 @@ export default function AppPreferences(): React.JSX.Element {
     } catch (error) {
       console.error('Failed to apply ACP turn timeout:', error)
     }
+  }
+
+  const handleEditorAutoSaveToggle = async (enabled: boolean) => {
+    await updateSetting('editorAutoSave', enabled)
+    // Cover buffers that were already dirty when the setting was turned on.
+    if (enabled) {
+      scheduleAllDirtyAutoSaves()
+    }
+  }
+
+  const handleEditorAutoSaveDelayChange = async (value: number) => {
+    await updateSetting('editorAutoSaveDelayMs', value)
   }
 
   const handleResetConfirm = async () => {
@@ -620,9 +651,9 @@ export default function AppPreferences(): React.JSX.Element {
           <SettingsSection id="behavior">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
+                <h2 className="text-lg font-medium text-foreground">Behavior</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Configure how inactive terminals are managed.
+                  Configure terminal cleanup and editor auto-save behavior.
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
@@ -699,6 +730,68 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Terminals inactive for this duration will be cleaned up (only if not displayed).
+                  </p>
+                </div>
+
+                {/* Editor Auto Save Toggle (GH-539) */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Editor Auto Save
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Enable auto save</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Automatically save editor files after you stop typing
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={editorAutoSave}
+                      aria-label="Enable auto save"
+                      onClick={() => handleEditorAutoSaveToggle(!editorAutoSave)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        editorAutoSave ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          editorAutoSave ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Auto Save Delay Dropdown (GH-539) */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Auto Save Delay
+                  </label>
+                  <select
+                    value={
+                      EDITOR_AUTO_SAVE_DELAY_OPTIONS.some(
+                        (option) => option.value === editorAutoSaveDelayMs
+                      )
+                        ? editorAutoSaveDelayMs
+                        : DEFAULT_APP_SETTINGS.editorAutoSaveDelayMs
+                    }
+                    onChange={(e) => handleEditorAutoSaveDelayChange(parseInt(e.target.value, 10))}
+                    disabled={!editorAutoSave}
+                    aria-label="Auto save delay"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {EDITOR_AUTO_SAVE_DELAY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Time to wait after your last edit before saving automatically.
                   </p>
                 </div>
               </div>
