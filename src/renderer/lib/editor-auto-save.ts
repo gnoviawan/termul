@@ -112,10 +112,12 @@ export function clearAutoSaveFailure(filePath: string): void {
   failedAutoSavePaths.delete(filePath)
 }
 
-/** Schedule auto-save for every already-dirty open file (toggle-on). */
+/** Schedule auto-save for every already-dirty open file (toggle-on). Files
+ * mid-save/reload get a deferred timer — scheduleAutoSave re-checks status at
+ * fire time — so nothing dirtied before the toggle is skipped. */
 export function scheduleAllDirtyAutoSaves(): void {
   useEditorStore.getState().openFiles.forEach((file, filePath) => {
-    if (file.isDirty && file.operationStatus !== 'saving' && file.operationStatus !== 'reloading') {
+    if (file.isDirty) {
       scheduleAutoSave(filePath)
     }
   })

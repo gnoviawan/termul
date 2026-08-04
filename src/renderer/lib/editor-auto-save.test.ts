@@ -214,17 +214,25 @@ describe('editor-auto-save (GH-539)', () => {
     expect(mocks.saveFile).toHaveBeenCalledTimes(1)
   })
 
-  it('scheduleAllDirtyAutoSaves schedules every dirty idle file', () => {
+  it('scheduleAllDirtyAutoSaves queues every dirty file, deferring busy ones', () => {
     setOpenFile('/project/a.txt')
     setOpenFile('/project/b.txt', { operationStatus: 'saving' })
     setOpenFile('/project/c.txt', { isDirty: false })
 
     scheduleAllDirtyAutoSaves()
 
-    expect(getPendingAutoSaveCount()).toBe(1)
+    // Both dirty files get timers (the busy one is deferred at fire time).
+    expect(getPendingAutoSaveCount()).toBe(2)
+
     vi.advanceTimersByTime(1000)
     expect(mocks.saveFile).toHaveBeenCalledTimes(1)
     expect(mocks.saveFile).toHaveBeenCalledWith('/project/a.txt')
+
+    // The busy file's timer deferred and re-scheduled; once idle it saves.
+    mocks.openFiles.set('/project/b.txt', { isDirty: true, operationStatus: 'idle' })
+    vi.advanceTimersByTime(1000)
+    expect(mocks.saveFile).toHaveBeenCalledTimes(2)
+    expect(mocks.saveFile).toHaveBeenCalledWith('/project/b.txt')
   })
 
   it('cancelAutoSave clears only the pending timer for that file', () => {

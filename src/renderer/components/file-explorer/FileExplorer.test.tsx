@@ -764,7 +764,7 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     expect(screen.queryByPlaceholderText('Folder name...')).not.toBeInTheDocument()
   })
 
-  it('rejects names containing path separators or dot-segments', async () => {
+  it('rejects invalid names, then accepts a valid name (submission lock released)', async () => {
     openProjectWithRootEntries([])
 
     render(<FileExplorer />)
@@ -781,6 +781,80 @@ describe('FileExplorer header toolbar (GH-539)', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     await waitFor(() => expect(mockCreateFile).not.toHaveBeenCalled())
+
+    // After the rejections the input must still submit successfully.
+    fireEvent.change(input, { target: { value: 'ok.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/ok.txt'))
+  })
+
+  it('serializes concurrent header creates while expansion is in flight', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src'])
+    setExpandedDirs(new Set(['/project']))
+
+    // Hold the expansion open until the test releases it.
+    let releaseToggle: (() => void) | undefined
+    mockToggleDirectory.mockImplementationOnce(
+      (dirPath: string) =>
+        new Promise<void>((resolve) => {
+          releaseToggle = () => {
+            mockStoreGetState.expandedDirs.add(dirPath)
+            resolve()
+          }
+        })
+    )
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+    // Second click lands while the first chain is still awaiting — must be ignored.
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    releaseToggle?.()
+
+    const input = await screen.findByPlaceholderText('File name...')
+    expect(input).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Folder name...')).not.toBeInTheDocument()
+  })
+
+  it('clamps an out-of-root resolved target to the active project root', async () => {
+    setProjectRoot('/project')
+    mockExplorerState.directoryContents = new Map([
+      ['/project', []],
+      ['/elsewhere', [{ path: '/elsewhere/file.ts', name: 'file.ts', type: 'file' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/elsewhere/file.ts'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'safe.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // Creation must land inside the active root, never '/elsewhere'.
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/safe.txt'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('/elsewhere/safe.txt')
+  })
+
+  it('creates inside a child of a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([
+      ['/', [{ path: '/src', name: 'src', type: 'directory' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/src'])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'app.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/src/app.ts'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('//src/app.ts')
   })
 
   it('disables header actions while the root failed to load', () => {
