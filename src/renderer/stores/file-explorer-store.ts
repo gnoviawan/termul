@@ -86,12 +86,16 @@ export interface FileExplorerState {
   pendingCollapses: Map<string, PendingDirectoryCollapse>
   /** Skip tree motion (e.g. collapse all) */
   suppressTreeAnimations: boolean
+  /** True while a header-initiated refreshTree pass is in flight (GH-540). */
+  refreshingTree: boolean
 
   setRootPath: (path: string | null) => void
   setWorktreeRoot: (path: string | null) => void
   toggleDirectory: (path: string) => Promise<void>
   finalizeDirectoryCollapse: (path: string) => void
   refreshDirectory: (path: string) => Promise<void>
+  /** Re-read the root and every expanded directory (GH-540 header Refresh). */
+  refreshTree: () => Promise<void>
   selectPath: (path: string | null) => void
   togglePathSelection: (path: string) => void
   selectPathRange: (fromPath: string, toPath: string) => void
@@ -238,6 +242,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   searchLastCompletedQuery: '',
   pendingCollapses: new Map<string, PendingDirectoryCollapse>(),
   suppressTreeAnimations: false,
+  refreshingTree: false,
 
   setRootPath: (path: string | null): void => {
     // Unwatch all previously expanded directories
@@ -412,6 +417,34 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       }
     } catch {
       // Silently fail on refresh
+    }
+  },
+
+  refreshTree: async (): Promise<void> => {
+    const { rootPath } = get()
+    if (!rootPath || get().refreshingTree) return
+
+    set({ refreshingTree: true })
+    try {
+      const capturedRoot = rootPath
+      // Only re-read directories that belong to the current root; stale
+      // expanded dirs from a previous worktree override must not be fetched.
+      const dirsToRefresh = new Set<string>([
+        rootPath,
+        ...Array.from(get().expandedDirs).filter((dir) => isPathWithinRoot(dir, rootPath))
+      ])
+
+      // Sequential on purpose: re-check live state before each read so a
+      // collapse or project switch that lands mid-refresh is honored instead
+      // of being overwritten by stale in-flight results.
+      for (const dir of dirsToRefresh) {
+        const state = get()
+        if (state.rootPath !== capturedRoot) return
+        if (dir !== capturedRoot && !state.expandedDirs.has(dir)) continue
+        await state.refreshDirectory(dir)
+      }
+    } finally {
+      set({ refreshingTree: false })
     }
   },
 
@@ -953,6 +986,7 @@ export function useFileExplorerActions(): Pick<
   | 'toggleDirectory'
   | 'finalizeDirectoryCollapse'
   | 'refreshDirectory'
+  | 'refreshTree'
   | 'selectPath'
   | 'togglePathSelection'
   | 'selectPathRange'
@@ -979,6 +1013,7 @@ export function useFileExplorerActions(): Pick<
       toggleDirectory: state.toggleDirectory,
       finalizeDirectoryCollapse: state.finalizeDirectoryCollapse,
       refreshDirectory: state.refreshDirectory,
+      refreshTree: state.refreshTree,
       selectPath: state.selectPath,
       togglePathSelection: state.togglePathSelection,
       selectPathRange: state.selectPathRange,

@@ -1,5 +1,13 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { ChevronsDownUp, LoaderCircle, Search, X } from 'lucide-react'
+import {
+  ChevronsDownUp,
+  FilePlus,
+  FolderPlus,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  X
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
@@ -64,6 +72,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     duplicateSelected,
     collapseAll,
     refreshDirectory,
+    refreshTree,
     setRootLoadError,
     setSearchQuery,
     searchInRoot,
@@ -94,6 +103,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const resizeCleanupRef = useRef<(() => void) | null>(null)
   const userSelectedTabRef = useRef(false)
+  // Mirror of inlineInput so async handlers can re-check the latest value
+  // after awaiting directory expansion (GH-540 re-entrancy guard).
+  const inlineInputRef = useRef<InlineInputState | null>(null)
+  inlineInputRef.current = inlineInput
 
   const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined
   const normalizedSearchQuery = searchQuery ?? ''
@@ -520,6 +533,122 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     setInputValue('')
   }, [])
 
+  /** Find a directory entry by absolute path across all loaded directories. */
+  const findEntryByPath = useCallback(
+    (path: string): DirectoryEntry | undefined => {
+      for (const entries of directoryContents.values()) {
+        const found = entries.find((entry) => entry.path === path)
+        if (found) return found
+      }
+      return undefined
+    },
+    [directoryContents]
+  )
+
+  /**
+   * VSCode-style target resolution for header creation actions (GH-540):
+   * selected directory > parent of selected file > project root.
+   * Multi-selection or unresolvable selections fall back to the root.
+   */
+  const getCreateTargetDir = useCallback((): string => {
+    if (!rootPath) return ''
+    if (selectedPaths.size === 1) {
+      const selectedPath = Array.from(selectedPaths)[0]
+      const selectedEntry = findEntryByPath(selectedPath)
+      if (selectedEntry?.type === 'directory') return selectedEntry.path.replace(/\\/g, '/')
+      if (selectedEntry?.type === 'file') {
+        const normalized = selectedEntry.path.replace(/\\/g, '/')
+        const lastSlash = normalized.lastIndexOf('/')
+        return lastSlash > 0 ? normalized.slice(0, lastSlash) : lastSlash === 0 ? '/' : rootPath
+      }
+    }
+    return rootPath
+  }, [rootPath, selectedPaths, findEntryByPath])
+
+  /** Expand every directory from the project root down to (and including) the target. */
+  const expandDirectoryChain = useCallback(
+    async (targetDir: string): Promise<'expanded' | 'load-failed' | 'root-changed'> => {
+      if (!rootPath) return 'load-failed'
+      const normalizedRoot = rootPath.replace(/\\/g, '/')
+      let normalizedTarget = targetDir.replace(/\\/g, '/')
+      if (
+        normalizedTarget !== normalizedRoot &&
+        !normalizedTarget.startsWith(`${normalizedRoot}/`)
+      ) {
+        normalizedTarget = normalizedRoot
+      }
+
+      const chain: string[] = []
+      let current = normalizedTarget
+      while (
+        current !== normalizedRoot &&
+        current.length > normalizedRoot.length &&
+        current.startsWith(`${normalizedRoot}/`)
+      ) {
+        chain.push(current)
+        const lastSlash = current.lastIndexOf('/')
+        if (lastSlash <= 0) break
+        current = current.slice(0, lastSlash)
+      }
+      chain.push(normalizedRoot)
+      chain.reverse()
+
+      for (const dir of chain) {
+        if (!useFileExplorerStore.getState().expandedDirs.has(dir)) {
+          await toggleDirectory(dir)
+        }
+        // Abort if the directory could not be expanded (load failure) or the
+        // project changed mid-chain.
+        const state = useFileExplorerStore.getState()
+        if (state.rootPath !== rootPath) return 'root-changed'
+        if (!state.expandedDirs.has(dir)) return 'load-failed'
+      }
+      return 'expanded'
+    },
+    [rootPath, toggleDirectory]
+  )
+
+  /** Best-effort scroll of a tree row (by entry path) into view. */
+  const revealTreePath = useCallback((path: string) => {
+    window.requestAnimationFrame(() => {
+      const row = containerRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+      row?.scrollIntoView({ block: 'nearest' })
+    })
+  }, [])
+
+  /**
+   * Header New File / New Folder (GH-540): resolve + expand + reveal the
+   * target directory, then start the existing inline create flow.
+   */
+  const startHeaderCreate = useCallback(
+    async (type: 'file' | 'folder') => {
+      if (inlineInputRef.current) return
+      const targetDir = getCreateTargetDir()
+      if (!targetDir) return
+      const expandResult = await expandDirectoryChain(targetDir)
+      // Re-check after the awaits: another flow may have opened an input or
+      // switched projects while the chain was expanding.
+      if (expandResult !== 'expanded' || inlineInputRef.current) {
+        if (expandResult === 'load-failed') {
+          toast.error('Could not open the target directory', {
+            description: 'The folder could not be expanded. Try again once the tree is loaded.'
+          })
+        }
+        return
+      }
+      revealTreePath(targetDir)
+      setContextMenu(null)
+      setInlineInput({ parentPath: targetDir, type, mode: 'create' })
+      setInputValue('')
+    },
+    [getCreateTargetDir, expandDirectoryChain, revealTreePath]
+  )
+
+  /** Header Refresh (GH-540): re-read root + expanded dirs, keeping state. */
+  const handleHeaderRefresh = useCallback(() => {
+    void refreshTree()
+  }, [refreshTree])
+
   const handleRename = useCallback((entry: DirectoryEntry) => {
     setContextMenu(null)
     const normalizedPath = entry.path.replace(/\\/g, '/')
@@ -858,13 +987,48 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Explorer</span>
-        <button
-          onClick={collapseAll}
-          className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
-          title="Collapse All"
-        >
-          <ChevronsDownUp size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void startHeaderCreate('file')}
+            disabled={!rootPath}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            title="New File"
+            aria-label="New File"
+          >
+            <FilePlus size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void startHeaderCreate('folder')}
+            disabled={!rootPath}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            title="New Folder"
+            aria-label="New Folder"
+          >
+            <FolderPlus size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={handleHeaderRefresh}
+            disabled={!rootPath}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            <RefreshCw size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={collapseAll}
+            disabled={!rootPath}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Collapse All"
+            aria-label="Collapse All"
+          >
+            <ChevronsDownUp size={14} />
+          </button>
+        </div>
       </div>
 
       <div className="px-3 py-1.5 border-b border-border">
