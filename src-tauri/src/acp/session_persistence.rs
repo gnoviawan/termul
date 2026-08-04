@@ -493,6 +493,26 @@ impl SessionPersistence {
         *self.replay_hook.lock() = Some(hook);
     }
 
+    /// Materialize the renderer-shaped `SessionPayload` for a session from its
+    /// durable records (standalone `get_session_payload` source).
+    ///
+    /// Same barrier pattern as `subscribe_snapshot`: flush the writer queue
+    /// first so every already-assigned seq is on disk before reading an active
+    /// session (finalized sessions short-circuit the flush). Unknown session
+    /// ids surface as [`SessionPersistenceError::SessionNotFound`]; any storage
+    /// failure propagates as an error — never a fabricated empty payload.
+    pub async fn session_payload_async(
+        self: &Arc<Self>,
+        session_id: &str,
+    ) -> Result<crate::acp::session_payload::MaterializedSessionPayload> {
+        self.flush_session(session_id).await?;
+        let metadata = self.metadata(session_id)?;
+        let records = self.replay_after_async(session_id.to_string(), 0).await?;
+        Ok(crate::acp::session_payload::materialize_session_payload(
+            &metadata, &records,
+        ))
+    }
+
     /// Completed client turn ids reconstructed from durable prompt-complete
     /// records. This survives restart without treating arbitrary browser input
     /// as authoritative transcript state.
@@ -584,16 +604,21 @@ impl SessionPersistence {
                 .filter(|record| is_tool_event(&record.type_))
                 .count() as u64;
             metadata.last_seq = records.last().map_or(0, |record| record.seq);
+            // Agent subprocesses cannot survive a host restart. A session that
+            // was still `Active` at shutdown has no live agent or writer to
+            // restore, so mark it `Closed` before persisting: resume hooks
+            // must not chase a dead process (reopen still works via
+            // `openHistorySession` → agent respawn). `Error` stays `Error`.
+            if metadata.status == PersistedSessionStatus::Active {
+                metadata.status = PersistedSessionStatus::Closed;
+            }
             self.persist_metadata(&metadata)?;
             recovered.insert(metadata.session_id.clone(), metadata);
         }
 
         for metadata in recovered.values() {
-            if metadata.status == PersistedSessionStatus::Active {
-                self.install_runtime(metadata.clone())?;
-            } else {
-                self.install_catalog_entry(metadata.clone());
-            }
+            // Read-only catalog entries: no writer runtime survives a restart.
+            self.install_catalog_entry(metadata.clone());
         }
         // The index is a cache. Always rebuild it from canonical per-session
         // metadata + logs so stale titles/status/counts/namespaces cannot survive.
@@ -1387,6 +1412,287 @@ mod tests {
         assert_eq!(reopened.list_sessions().len(), 1);
         assert_eq!(reopened.list_sessions()[0].storage_key, second.storage_key);
         assert!(!reopened.list_sessions()[0].resume_eligible);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn payload_record(seq: u64, type_: &str, payload: Value) -> PersistedEventRecord {
+        PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: "session-1".to_string(),
+            seq,
+            type_: type_.to_string(),
+            recorded_at: 1_000 + seq,
+            payload,
+        }
+    }
+
+    fn enqueue_turn(
+        persistence: &SessionPersistence,
+        seq: u64,
+        turn_id: &str,
+        prompt: &str,
+        reply: &str,
+    ) {
+        persistence
+            .enqueue_event(payload_record(
+                seq,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "turnId": turn_id,
+                    "content": [{"type": "text", "text": prompt}],
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                seq + 1,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": reply},
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                seq + 2,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": turn_id, "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_payload_round_trips_materialized_transcript() {
+        let root = temp_dir("payload-roundtrip");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        // tool_call between text runs splits the agent bubble.
+        persistence
+            .enqueue_event(payload_record(
+                4,
+                "tool_call",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "toolCall": {"toolCallId": "t-1", "kind": "execute", "status": "completed"},
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                5,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "after tool"},
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                6,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+
+        let payload = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(payload.metadata.id, "session-1");
+        assert_eq!(payload.metadata.agent_config_id.as_deref(), Some("one"));
+        assert_eq!(payload.metadata.agent_id, "runtime-1");
+        assert_eq!(payload.metadata.project_id, "project-1");
+        assert_eq!(payload.metadata.status, PersistedSessionStatus::Active);
+        assert_eq!(payload.metadata.message_count, 3);
+        assert_eq!(payload.metadata.last_seq, 6);
+        assert_eq!(
+            payload
+                .messages
+                .iter()
+                .map(|message| (message.id.as_str(), message.seq))
+                .collect::<Vec<_>>(),
+            vec![
+                ("turn:turn-1", 1),
+                ("snapshot:agent:2", 2),
+                ("snapshot:agent:5", 5),
+            ]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_async_unknown_session_is_not_found() {
+        let root = temp_dir("payload-not-found");
+        let (persistence, _) = registered(&root).await;
+        let error = persistence
+            .session_payload_async("missing")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SessionPersistenceError::SessionNotFound));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn restart_downgrades_active_to_closed_without_writer() {
+        let root = temp_dir("restart-downgrade");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        assert_eq!(
+            persistence.metadata("session-1").unwrap().status,
+            PersistedSessionStatus::Active
+        );
+        persistence.shutdown().await.unwrap();
+
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        let metadata = reopened.metadata("session-1").unwrap();
+        assert_eq!(
+            metadata.status,
+            PersistedSessionStatus::Closed,
+            "restarted host must not claim the dead agent's session is active"
+        );
+        assert!(
+            !reopened.inner.sessions.lock().contains_key("session-1"),
+            "no writer runtime may be reinstalled after restart"
+        );
+        assert!(matches!(
+            reopened.enqueue_event(record(4, "message_chunk")),
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+        // The payload stays fetchable read-only after the downgrade.
+        let payload = reopened.session_payload_async("session-1").await.unwrap();
+        assert_eq!(payload.metadata.status, PersistedSessionStatus::Closed);
+        assert_eq!(payload.messages.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_survives_reopen_identically() {
+        let root = temp_dir("payload-reopen");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        let before = serde_json::to_value(
+            persistence
+                .session_payload_async("session-1")
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        persistence.shutdown().await.unwrap();
+
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        let after = serde_json::to_value(
+            reopened.session_payload_async("session-1").await.unwrap(),
+        )
+        .unwrap();
+        // `status` is expected to differ (Active → Closed across restart); the
+        // transcript itself must survive byte-identically.
+        assert_eq!(before["messages"], after["messages"]);
+        assert_eq!(before["metadata"]["id"], after["metadata"]["id"]);
+        assert_eq!(before["metadata"]["lastSeq"], after["metadata"]["lastSeq"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_readable_after_finalize_removes_writer() {
+        let root = temp_dir("payload-finalized");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        // Finalization removed the writer; the flush barrier short-circuits and
+        // the payload is served read-only from the durable log.
+        let payload = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(payload.metadata.status, PersistedSessionStatus::Closed);
+        assert_eq!(payload.messages.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_corrupt_log_fails_closed() {
+        let root = temp_dir("payload-corrupt");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        // Simulate storage degradation: append an invalid record to the
+        // transcript log. The read must surface an error — never fabricate an
+        // empty payload that would wipe the client's transcript.
+        let storage_key = persistence.metadata("session-1").unwrap().storage_key;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(persistence.root().join(&storage_key).join(MESSAGES_FILE))
+            .unwrap();
+        file.write_all(b"{not valid json}\n").unwrap();
+        file.flush().unwrap();
+        drop(file);
+        let error = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, SessionPersistenceError::CorruptSession),
+            "a malformed durable record must surface as CorruptSession, got: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn restart_preserves_error_status_without_downgrade() {
+        let root = temp_dir("restart-error");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Error)
+            .await
+            .unwrap();
+        persistence.shutdown().await.unwrap();
+
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        assert_eq!(
+            reopened.metadata("session-1").unwrap().status,
+            PersistedSessionStatus::Error,
+            "only Active sessions downgrade on restart; Error must survive as-is"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn unclean_exit_still_downgrades_active_on_restart() {
+        let root = temp_dir("restart-crash");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        // Durable on disk, but NO finalize/shutdown: simulates a kill/crash, so
+        // the on-disk status stays `Active` behind a dead host process.
+        persistence.flush_session("session-1").await.unwrap();
+        drop(persistence);
+
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        assert_eq!(
+            reopened.metadata("session-1").unwrap().status,
+            PersistedSessionStatus::Closed,
+            "an unclean shutdown must not leave a dead session claiming Active"
+        );
+        let payload = reopened
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(payload.messages.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 }

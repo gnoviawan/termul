@@ -968,8 +968,8 @@ async fn handle_list_persisted_sessions(
 
 /// `get_session_payload` — fetch the FULL stored transcript (`{ metadata,
 /// messages }`) for a session id. Desktop-hosted path reads the durable Rust
-/// history store; the standalone VPS falls through to `SessionPersistence`
-/// once Story 4.3 attaches its file-backed payload fetch. Returns
+/// history store; the standalone VPS materializes the same renderer shape
+/// from the file-backed `SessionPersistence` JSONL records. Returns
 /// `{ ok:false, err:'not_found' }` when the id is absent (web shows "chat
 /// unavailable").
 async fn handle_get_session_payload(
@@ -1028,10 +1028,43 @@ async fn handle_get_session_payload(
             ),
         };
     }
-    // Standalone VPS path: Story 4.3 will attach a file-backed payload fetch
-    // here. Until then a VPS without the cache returns not_found.
-    let _ = relay;
-    WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+    // Standalone VPS path: materialize the renderer-shaped payload from the
+    // durable JSONL records (pure fold of `user_prompt` / `message_chunk`).
+    // `session_payload_async` flushes the writer queue first, so an active
+    // session reads every already-assigned seq; a finalized session is served
+    // read-only. Errors fail closed — never a fabricated empty payload.
+    match relay.persistence() {
+        Some(persistence) => {
+            match persistence.session_payload_async(&parsed.session_id).await {
+                Ok(payload) => {
+                    tracing::debug!(
+                        target: "termul::web::ws",
+                        session_id = %parsed.session_id,
+                        messages = payload.messages.len(),
+                        "get_session_payload: materialized standalone payload"
+                    );
+                    ok_with_payload(id, &payload)
+                }
+                Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+                    WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+                }
+                Err(error) => {
+                    // Fail closed with a generic client-facing message: storage
+                    // error strings can carry absolute paths and internal
+                    // detail that do not belong on the wire. The full context
+                    // stays in the host log.
+                    tracing::warn!(
+                        target: "termul::web::ws",
+                        session_id = %parsed.session_id,
+                        error = %error,
+                        "get_session_payload: standalone payload materialization failed"
+                    );
+                    WsReply::err(id, WsErrorCode::Unsupported, "failed to read session payload")
+                }
+            }
+        }
+        None => WsReply::err(id, WsErrorCode::NotFound, "session payload not found"),
+    }
 }
 
 async fn handle_recover_session_snapshot(
@@ -4328,6 +4361,282 @@ mod tests {
         .await;
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// Desktop branch contract: the stored payload is served byte-for-byte
+    /// (this story must not alter the `ChatHistoryStore` path).
+    #[tokio::test]
+    async fn get_session_payload_desktop_branch_is_byte_for_byte() {
+        let store = crate::acp::ChatHistoryStore::new();
+        let stored = desktop_history_payload("s-byte");
+        store.save("s-byte", stored.clone()).unwrap();
+        let relay = Arc::new(WsRelaySink::new());
+        let reply = handle_get_session_payload(
+            "r1".to_string(),
+            &json!({ "sessionId": "s-byte" }),
+            &relay,
+            Some(&store),
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok);
+        let value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(value["payload"], stored);
+    }
+
+    fn standalone_payload_record(
+        session_id: &str,
+        seq: u64,
+        type_: &str,
+        payload: Value,
+    ) -> crate::acp::PersistedEventRecord {
+        crate::acp::PersistedEventRecord {
+            schema_version: crate::acp::session_persistence::SESSION_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            seq,
+            type_: type_.to_string(),
+            recorded_at: 2_000 + seq,
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn get_session_payload_materializes_standalone_durable_history() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-payload-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-p".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: Some("runtime-p".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd,
+            })
+            .await
+            .unwrap();
+        // Turn with a tool boundary mid-stream: user bubble + two agent runs.
+        for record in [
+            standalone_payload_record(
+                "session-p",
+                1,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-p",
+                    "sessionId": "session-p",
+                    "turnId": "turn-1",
+                    "content": [{"type": "text", "text": "hello"}],
+                }),
+            ),
+            standalone_payload_record(
+                "session-p",
+                2,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-p",
+                    "sessionId": "session-p",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "wor"},
+                }),
+            ),
+            standalone_payload_record(
+                "session-p",
+                3,
+                "tool_call",
+                json!({
+                    "agentId": "runtime-p",
+                    "sessionId": "session-p",
+                    "toolCall": {"toolCallId": "t-1", "kind": "execute", "status": "completed"},
+                }),
+            ),
+            standalone_payload_record(
+                "session-p",
+                4,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-p",
+                    "sessionId": "session-p",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "ld"},
+                }),
+            ),
+            standalone_payload_record(
+                "session-p",
+                5,
+                "prompt_complete",
+                json!({"sessionId": "session-p", "turnId": "turn-1", "stopReason": "end_turn"}),
+            ),
+        ] {
+            persistence.enqueue_event(record).unwrap();
+        }
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+
+        let reply = handle_get_session_payload(
+            "r1".to_string(),
+            &json!({ "sessionId": "session-p" }),
+            &relay,
+            None,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "reply: {reply:?}");
+        let value = serde_json::to_value(&reply).unwrap();
+        let payload = &value["payload"];
+        assert_eq!(payload["metadata"]["id"], "session-p");
+        assert_eq!(payload["metadata"]["agentId"], "runtime-p");
+        assert_eq!(payload["metadata"]["agentConfigId"], "claude");
+        assert_eq!(payload["metadata"]["projectId"], "p-1");
+        assert_eq!(payload["metadata"]["messageCount"], 3);
+        assert_eq!(payload["metadata"]["lastSeq"], 5);
+        assert_eq!(payload["metadata"]["status"], "active");
+        assert_eq!(payload["messages"][0]["id"], "turn:turn-1");
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["seq"], 1);
+        assert_eq!(payload["messages"][0]["streaming"], false);
+        assert_eq!(payload["messages"][0]["blocks"][0]["text"], "hello");
+        // tool_call at seq 3 splits the agent run; text coalesces per run.
+        assert_eq!(payload["messages"][1]["id"], "snapshot:agent:2");
+        assert_eq!(payload["messages"][1]["blocks"][0]["text"], "wor");
+        assert_eq!(payload["messages"][2]["id"], "snapshot:agent:4");
+        assert_eq!(payload["messages"][2]["blocks"][0]["text"], "ld");
+
+        // Stable re-read: a second request is byte-identical.
+        let reply2 = handle_get_session_payload(
+            "r2".to_string(),
+            &json!({ "sessionId": "session-p" }),
+            &relay,
+            None,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply2.ok);
+        let value2 = serde_json::to_value(&reply2).unwrap();
+        assert_eq!(value2["payload"], payload.clone());
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn get_session_payload_standalone_unknown_session_is_not_found() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-payload-nf-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-known".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let reply = handle_get_session_payload(
+            "r1".to_string(),
+            &json!({ "sessionId": "session-absent" }),
+            &relay,
+            None,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn get_session_payload_without_store_or_persistence_is_not_found() {
+        let relay = Arc::new(WsRelaySink::new());
+        let reply = handle_get_session_payload(
+            "r1".to_string(),
+            &json!({ "sessionId": "s-1" }),
+            &relay,
+            None,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Storage degradation after finalization: the transcript log becomes
+    /// unreadable. The handler must fail closed with `unsupported` — never a
+    /// fabricated empty payload that would wipe the client's transcript.
+    #[tokio::test]
+    async fn get_session_payload_standalone_corrupt_log_is_unsupported() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-payload-corrupt-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-c".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+            })
+            .await
+            .unwrap();
+        persistence
+            .enqueue_event(standalone_payload_record(
+                "session-c",
+                1,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-c",
+                    "sessionId": "session-c",
+                    "turnId": "turn-1",
+                    "content": [{"type": "text", "text": "hello"}],
+                }),
+            ))
+            .unwrap();
+        persistence
+            .finalize_session("session-c", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        // Corrupt the durable transcript log after finalization.
+        let storage_key = persistence.metadata("session-c").unwrap().storage_key;
+        let log_path = persistence
+            .root()
+            .join(&storage_key)
+            .join("messages.jsonl");
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&log_path)
+                .unwrap();
+            file.write_all(b"{not valid json}\n").unwrap();
+            file.flush().unwrap();
+        }
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let reply = handle_get_session_payload(
+            "r1".to_string(),
+            &json!({ "sessionId": "session-c" }),
+            &relay,
+            None,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
