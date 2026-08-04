@@ -316,6 +316,58 @@ impl SessionPersistence {
         Ok(metadata)
     }
 
+    /// Register a session imported from a legacy renderer-authored store.
+    /// Unlike [`Self::register_session`], provenance is preserved (`created_at`
+    /// and `title` come from the caller) and the legacy `cwd` is accepted
+    /// verbatim — archival sessions may point at directories that no longer
+    /// exist, and no liveness guarantee is implied. Idempotent by session id.
+    pub async fn register_imported_session(
+        &self,
+        registration: SessionRegistration,
+        created_at: u64,
+        title: Option<String>,
+    ) -> Result<SessionMetadata> {
+        if registration.cwd.as_os_str().is_empty() {
+            return Err(SessionPersistenceError::Io(io::Error::other(
+                "imported session cwd is empty",
+            )));
+        }
+        if self
+            .inner
+            .catalog
+            .lock()
+            .contains_key(&registration.session_id)
+        {
+            return self.metadata(&registration.session_id);
+        }
+        let storage_key = Uuid::new_v4().to_string();
+        let metadata = SessionMetadata {
+            schema_version: SESSION_SCHEMA_VERSION,
+            storage_key,
+            session_id: registration.session_id.clone(),
+            stable_agent_namespace: registration.stable_agent_namespace,
+            runtime_agent_id: registration.runtime_agent_id,
+            project_id: registration.project_id,
+            cwd: registration.cwd.to_string_lossy().into_owned(),
+            title,
+            created_at,
+            last_activity_at: created_at,
+            status: PersistedSessionStatus::Active,
+            message_count: 0,
+            tool_count: 0,
+            last_seq: 0,
+        };
+        self.persist_metadata(&metadata)?;
+        self.install_runtime(metadata.clone())?;
+        if let Err(error) = self.persist_index().await {
+            self.inner.sessions.lock().remove(&registration.session_id);
+            self.inner.catalog.lock().remove(&registration.session_id);
+            let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
+            return Err(error);
+        }
+        Ok(metadata)
+    }
+
     pub fn enqueue_event(&self, mut record: PersistedEventRecord) -> Result<()> {
         if !is_durable_event(&record.type_) {
             return Ok(());
@@ -448,6 +500,65 @@ impl SessionPersistence {
 
     pub fn last_seq(&self, session_id: &str) -> Result<u64> {
         Ok(self.metadata(session_id)?.last_seq)
+    }
+
+    /// Permanently remove a persisted session: drain the writer runtime when
+    /// one is still live, delete the on-disk session directory, drop the
+    /// catalog entry, and refresh the index. Unknown ids surface as
+    /// [`SessionPersistenceError::SessionNotFound`].
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        let metadata = self.metadata(session_id)?;
+        // Drain the writer (if any) so a queued append cannot race the
+        // directory removal below. The durability result of the drain is
+        // irrelevant: the stored bytes are about to be deleted.
+        if let Ok(runtime) = self.runtime(session_id) {
+            if !runtime.tx.is_closed() {
+                let (tx, rx) = oneshot::channel();
+                if runtime.tx.send(WriterCommand::Shutdown(tx)).await.is_ok() {
+                    let _ = rx.await;
+                }
+            }
+        }
+        self.inner.sessions.lock().remove(session_id);
+        let dir = self.session_dir(&metadata.storage_key)?;
+        fs::remove_dir_all(&dir)?;
+        self.inner.catalog.lock().remove(session_id);
+        self.persist_index().await?;
+        log::info!(
+            "[acp-history] host store delete success storage_key={}",
+            metadata.storage_key
+        );
+        Ok(())
+    }
+
+    /// Most-recent session for a `(project_id, cwd)` pair with some agent
+    /// identity, optionally narrowed to a stable agent namespace. Mirrors the
+    /// legacy `ChatHistoryStore::find_most_recent_for_project` used by the
+    /// project switch-back reopen.
+    #[must_use]
+    pub fn find_most_recent_for_project(
+        &self,
+        project_id: &str,
+        cwd: &str,
+        stable_agent_namespace: Option<&str>,
+    ) -> Option<SessionIndexEntry> {
+        self.list_sessions()
+            .into_iter()
+            .filter(|entry| {
+                entry.project_id.as_deref() == Some(project_id)
+                    && entry.cwd == cwd
+                    && (entry.stable_agent_namespace.is_some()
+                        || entry.runtime_agent_id.is_some())
+                    && stable_agent_namespace.is_none_or(|namespace| {
+                        entry.stable_agent_namespace.as_deref() == Some(namespace)
+                    })
+            })
+            .max_by(|left, right| {
+                left.last_activity_at
+                    .cmp(&right.last_activity_at)
+                    .then(left.created_at.cmp(&right.created_at))
+                    .then(left.session_id.cmp(&right.session_id))
+            })
     }
 
     pub fn replay_after(&self, session_id: &str, cursor: u64) -> Result<Vec<PersistedEventRecord>> {
@@ -1669,6 +1780,128 @@ mod tests {
             PersistedSessionStatus::Error,
             "only Active sessions downgrade on restart; Error must survive as-is"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn open_rejects_a_file_root() {
+        // Degraded-mode source: callers must be able to detect an unusable
+        // sessions root at startup (the desktop then boots live-only).
+        let root = temp_dir("open-file-root");
+        let file_path = root.join("not-a-dir");
+        fs::write(&file_path, b"x").unwrap();
+        let error = match SessionPersistence::open(file_path).await {
+            Ok(_) => panic!("a non-directory root must not open"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, SessionPersistenceError::Io(_)),
+            "a non-directory root must surface as an IO error, got: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_live_writer_directory_and_index_entry() {
+        let root = temp_dir("delete-live");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        let storage_key = persistence.metadata("session-1").unwrap().storage_key;
+        persistence.delete_session("session-1").await.unwrap();
+        assert!(matches!(
+            persistence.metadata("session-1"),
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+        assert!(persistence.list_sessions().is_empty());
+        assert!(!persistence.root().join(&storage_key).exists());
+        // The writer runtime is gone with the session.
+        assert!(matches!(
+            persistence.enqueue_event(record(4, "message_chunk")),
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+        persistence.shutdown().await.unwrap();
+        // Nothing must resurrect on reopen.
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        assert!(reopened.list_sessions().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn delete_session_works_for_finalized_and_unknown_ids() {
+        let root = temp_dir("delete-finalized");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        persistence.delete_session("session-1").await.unwrap();
+        assert!(matches!(
+            persistence.delete_session("session-1").await,
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+        assert!(matches!(
+            persistence.delete_session("missing").await,
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn find_most_recent_for_project_filters_and_orders() {
+        let root = temp_dir("find-project");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+        for (session_id, project, namespace) in [
+            ("a", Some("project-1"), Some("config:one")),
+            ("b", Some("project-1"), Some("config:two")),
+            ("c", Some("project-2"), Some("config:one")),
+            // No stable namespace but a runtime agent id — still an identity.
+            ("d", Some("project-1"), None),
+        ] {
+            persistence
+                .register_session(SessionRegistration {
+                    session_id: session_id.to_string(),
+                    stable_agent_namespace: namespace.map(str::to_string),
+                    runtime_agent_id: Some(format!("runtime-{session_id}")),
+                    project_id: project.map(str::to_string),
+                    cwd: cwd.clone(),
+                })
+                .await
+                .unwrap();
+        }
+        // Deterministic activity ordering via explicit recorded_at.
+        let bump = |session_id: &str, recorded_at: u64| PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            seq: 1,
+            type_: "message_chunk".to_string(),
+            recorded_at,
+            payload: json!({"sessionId": session_id, "role": "agent", "content": [{"type": "text", "text": "hi"}]}),
+        };
+        persistence.enqueue_event(bump("a", 1_000)).unwrap();
+        persistence.enqueue_event(bump("b", 3_000)).unwrap();
+        persistence.enqueue_event(bump("d", 5_000)).unwrap();
+        for session_id in ["a", "b", "d"] {
+            persistence.flush_session(session_id).await.unwrap();
+        }
+
+        let cwd_str = persistence.metadata("a").unwrap().cwd;
+        let hit = persistence
+            .find_most_recent_for_project("project-1", &cwd_str, None)
+            .unwrap();
+        assert_eq!(hit.session_id, "d", "most recent activity wins");
+        let narrowed = persistence
+            .find_most_recent_for_project("project-1", &cwd_str, Some("config:one"))
+            .unwrap();
+        assert_eq!(narrowed.session_id, "a");
+        assert!(persistence
+            .find_most_recent_for_project("project-1", &cwd_str, Some("config:missing"))
+            .is_none());
+        assert!(persistence
+            .find_most_recent_for_project("project-9", &cwd_str, None)
+            .is_none());
         let _ = fs::remove_dir_all(root);
     }
 

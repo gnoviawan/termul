@@ -90,10 +90,7 @@ import {
   loadSessionPayload,
   markSessionPayloadPinned,
   queueSessionPayloadDelete,
-  queueSessionPayloadSave,
   type SessionIndexEntry,
-  type SessionPayload,
-  saveSessionIndex as saveSessionIndexToDisk,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
 import {
@@ -908,21 +905,6 @@ function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMess
 }
 
 /**
- * Merge the cached full payload with the live (possibly trimmed) window so
- * disk persistence never loses messages. Messages present in the live window
- * (more up-to-date) replace their cached counterparts; messages trimmed out
- * of the live window are restored from the cache.
- */
-function mergeTranscriptMessages(cached: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
-  if (cached.length === 0) return live
-  if (live.length === 0) return cached
-  const liveIds = new Set(live.map((m) => m.id))
-  // Keep cached messages not in the live window (older, trimmed) + all live.
-  const older = cached.filter((m) => !liveIds.has(m.id))
-  return [...older, ...live]
-}
-
-/**
  * Free per-session transcript maps held in the WebView heap.
  * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
  * Call only after any needed `persistSession` so the last mirror is flushed.
@@ -1102,9 +1084,10 @@ function scheduleTurnEnd(
 }
 
 /**
- * Mirror a session to disk (index entry + debounced payload) using the current
- * store snapshot. Best-effort: persistence failures are logged, never thrown
- * into the runtime path.
+ * Update the local session-index projection for a session using the current
+ * store snapshot (CAP-2: the host event/session layer now authors durable
+ * history — the renderer no longer writes payloads). The index entry keeps the
+ * desktop sidebar responsive between host refetches; best-effort, never throws.
  */
 function persistSession(
   state: {
@@ -1119,28 +1102,15 @@ function persistSession(
   const session = state.sessions[sessionId]
   if (!session) return
   // Never mirror a mid-replay transcript: while `session/load` is replaying,
-  // `messages` holds a partial reconstruction, and persisting it (e.g. via a
-  // title update streamed as part of the replay) would truncate the on-disk
-  // history if the app quits before the next full persist.
+  // `messages` holds a partial reconstruction, and projecting it (e.g. via a
+  // title update streamed as part of the replay) would truncate the local view
+  // until the next host refetch.
   if (session.replaying) return
-  // After WebView transcript eviction the map key is absent. Never rewrite
-  // disk with `[]` from a second close / late prompt-complete / title event.
+  // After WebView transcript eviction the map key is absent; skip projection.
   if (!(sessionId in state.messages)) return
-  // `streaming` is transient UI state; persisting it would restore a message
-  // stuck in its shimmer state after a restart.
   const liveMessages = (state.messages[sessionId] ?? []).map((m) =>
     m.streaming ? { ...m, streaming: false } : m
   )
-  // Merge with the cached full payload so the live-window trim never prunes
-  // the persisted copy. The cache holds the full transcript (populated by
-  // `loadSessionPayload` / `saveSessionPayload`); the live window is a trimmed
-  // projection of it. Messages present in the live window (more up-to-date)
-  // replace their cached counterparts; messages trimmed out of the live window
-  // are restored from the cache. Disk format is unchanged.
-  const cachedPayload = getCachedSessionPayload(sessionId)
-  const cachedMessages = cachedPayload?.messages ?? []
-  const messages =
-    cachedMessages.length > 0 ? mergeTranscriptMessages(cachedMessages, liveMessages) : liveMessages
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
@@ -1154,26 +1124,32 @@ function persistSession(
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(messages, fallbackTitle),
+    title: session.title ?? deriveTitle(liveMessages, fallbackTitle),
     cwd: session.cwd,
     projectId: session.projectId,
     createdAt: session.createdAt,
     lastActivityAt: Date.now(),
-    messageCount: messages.length,
-    // R3: surface the real persisted max message seq in the index-list (the
-    // minor deferred item; get_session_cursor stays the functional cursor).
-    // seq is optional on legacy messages, so degrade to 0 when absent.
-    lastSeq: messages.reduce((max, m) => Math.max(max, typeof m.seq === 'number' ? m.seq : 0), 0),
+    messageCount: liveMessages.length,
+    lastSeq: liveMessages.reduce(
+      (max, m) => Math.max(max, typeof m.seq === 'number' ? m.seq : 0),
+      0
+    ),
     status: session.status
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
-  const payload: SessionPayload = { metadata: entry, messages }
-  // Rust owns the durable index and updates it with the payload in the queued
-  // save. saveSessionIndexToDisk remains a compatibility no-op for non-desktop
-  // callers while queueSessionPayloadSave owns the serialized durable write.
-  void saveSessionIndexToDisk(nextIndex)
-  void queueSessionPayloadSave(sessionId, payload)
+}
+
+/**
+ * CAP-2: history is host-owned. Refresh the desktop sidebar from the host
+ * index after session lifecycle events — browser-origin sessions never flow
+ * through `createSession`, and the host's `chat_history_changed` broadcast
+ * reaches WS clients only, not the desktop renderer. Skipped on the WS
+ * transport (its sidebar refetches from the negotiated push).
+ */
+function refreshHostOwnedIndex(get: () => AcpState): void {
+  if (getAcpTransport().historyMode?.() !== undefined) return
+  void get().loadSessionIndex()
 }
 
 /**
@@ -2612,7 +2588,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         })
       }
       const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers, {
-        ephemeral: opts?.backendEphemeral ?? false
+        ephemeral: opts?.backendEphemeral ?? false,
+        ...(projectId ? { projectId } : {})
       })
       const sessionId = outcome.sessionId
       invalidateSessionReopen(sessionId)
@@ -3684,13 +3661,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   flushLiveSessionSaves: () => {
-    // R4: snapshot every live session's cached payload (non-debounced) so a
-    // hard refresh does not lose the last `queueSessionPayloadSave` that was
-    // still coalescing. Reuses `persistSession` — its `session.replaying` /
-    // absent-message-key guards + `streaming:true` strip are preserved, so a
-    // mid-replay transcript is never truncated and the durable copy is at worst
-    // one turn behind. `WorkspaceLayout.persistBeforeUnload` then awaits
-    // `flushSessionHistory()` to drain the queued writes (best-effort,
+    // CAP-2: durable writes are host-owned; on unload we only refresh the local
+    // index projection for every live session. Reuses `persistSession` — its
+    // `session.replaying` / absent-message-key guards + `streaming:true` strip
+    // are preserved. `WorkspaceLayout.persistBeforeUnload` still awaits
+    // `flushSessionHistory()` to drain any queued deletes (best-effort,
     // never throws — matching `persistSession`'s contract).
     const state = get()
     for (const sessionId of Object.keys(state.sessions)) {
@@ -4427,6 +4402,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })
     cacheOptionsFromSession(set, get, e.sessionId)
+    refreshHostOwnedIndex(get)
   },
 
   _onUserPrompt: (e) =>
@@ -5091,6 +5067,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       persistSession(get(), e.sessionId, (entries) => set({ sessionIndex: entries }))
     }
     set((s) => dropSessionTranscriptState(s, e.sessionId))
+    refreshHostOwnedIndex(get)
   }
 }))
 

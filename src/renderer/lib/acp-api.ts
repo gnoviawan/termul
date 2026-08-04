@@ -536,7 +536,7 @@ export async function acpNewSession(
   agentId: AgentId,
   cwd: string,
   mcpServers?: McpServer[],
-  options?: { ephemeral?: boolean }
+  options?: { ephemeral?: boolean; projectId?: string }
 ): Promise<NewSessionOutcome> {
   return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
 }

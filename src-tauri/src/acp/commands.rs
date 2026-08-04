@@ -42,6 +42,8 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
 }
 
 /// Create a new session. `mcpServers` is passed through to `session/new` as-is.
+/// `projectId` (CAP-2 attribution) is optional; the renderer passes the owning
+/// project so the host-owned durable record is project-scoped.
 #[tauri::command]
 pub async fn acp_new_session(
     manager: State<'_, Arc<AcpManager>>,
@@ -49,6 +51,7 @@ pub async fn acp_new_session(
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
     ephemeral: Option<bool>,
+    project_id: Option<String>,
 ) -> Result<NewSessionOutcome, String> {
     manager
         .new_session_with_context(
@@ -56,7 +59,7 @@ pub async fn acp_new_session(
             cwd,
             mcp_servers.unwrap_or_default(),
             SessionCreationContext {
-                project_id: None,
+                project_id: project_id.filter(|id| !id.trim().is_empty()),
                 ephemeral: ephemeral.unwrap_or(false),
             },
         )

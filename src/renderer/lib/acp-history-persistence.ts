@@ -307,29 +307,12 @@ export async function loadSessionPayload(id: string): Promise<SessionPayload | n
 }
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
+  // CAP-2: the host event/session layer is now the sole author of durable
+  // history in every mode (desktop shared-live included). Renderer payload
+  // writes are retired; this stays a no-op so any residual queued save never
+  // reaches a store. The payload cache still records the projection locally.
   if (deletedSessionIds.has(id)) return
-  const mode = historyMode()
-  if (mode === 'server' || mode === 'live_only') return
-
-  // If an inactive LRU entry was evicted while its live renderer window stayed
-  // trimmed, recover the durable prefix before saving so eviction is lossless.
-  let nextPayload = payload
-  if (!payloadCache.has(id) && payload.messages.length > 0) {
-    const durable = await acpHistoryApi.get(id)
-    if (durable) {
-      const liveIds = new Set(payload.messages.map((message) => message.id))
-      const durablePrefix = durable.messages.filter((message) => !liveIds.has(message.id))
-      if (durablePrefix.length > 0) {
-        nextPayload = {
-          metadata: { ...payload.metadata },
-          messages: [...durablePrefix, ...payload.messages]
-        }
-        nextPayload.metadata.messageCount = nextPayload.messages.length
-      }
-    }
-  }
-  touchPayload(id, nextPayload)
-  await acpHistoryApi.save(id, nextPayload)
+  touchPayload(id, payload)
 }
 
 export async function deleteSessionPayload(id: string): Promise<void> {
@@ -356,7 +339,9 @@ export async function runHistoryWipeMigration(): Promise<void> {
   const mode = historyMode()
   if (mode === 'server' || mode === 'live_only') return
 
-  const rustState = await acpHistoryApi.list()
+  // Reads/verification target the LEGACY store (read-your-writes). Host
+  // convergence happens inside `save` / `markLegacyImportComplete`.
+  const rustState = await acpHistoryApi.listLegacy()
   if (rustState.legacyImportComplete) return
 
   const indexResult = await persistenceApi.read<SessionIndexEntry[]>(SESSION_INDEX_KEY)
@@ -386,7 +371,7 @@ export async function runHistoryWipeMigration(): Promise<void> {
   for (const entry of rustState.sessions) {
     const legacy = legacyById.get(entry.id)
     if (!legacy) continue
-    const existing = await acpHistoryApi.get(entry.id)
+    const existing = await acpHistoryApi.getLegacy(entry.id)
     if (!existing || stablePayload(existing) !== stablePayload(legacy)) {
       throw new Error(`Durable history differs from legacy session ${entry.id}; import left intact`)
     }
@@ -397,7 +382,7 @@ export async function runHistoryWipeMigration(): Promise<void> {
     }
   }
 
-  const verified = await acpHistoryApi.list()
+  const verified = await acpHistoryApi.listLegacy()
   for (const legacy of payloads) {
     const verifiedEntry = verified.sessions.find((entry) => entry.id === legacy.metadata.id)
     if (
@@ -409,7 +394,7 @@ export async function runHistoryWipeMigration(): Promise<void> {
     ) {
       throw new Error(`Legacy import metadata verification failed for ${legacy.metadata.id}`)
     }
-    const durable = await acpHistoryApi.get(legacy.metadata.id)
+    const durable = await acpHistoryApi.getLegacy(legacy.metadata.id)
     if (!durable || stablePayload(durable) !== stablePayload(legacy)) {
       throw new Error(`Legacy payload verification failed for ${legacy.metadata.id}`)
     }

@@ -180,6 +180,35 @@ impl ProjectRegistry {
             .filter(|p| !p.trim().is_empty())
     }
 
+    /// Resolve a cwd (`path`) → its project id, or `None` when no registered
+    /// project matches. Best-effort identity for host-owned sessions created
+    /// with a cwd but no explicit project (CAP-2 attribution): an exact path
+    /// match wins; otherwise a cwd INSIDE a project directory (worktree or
+    /// subfolder) falls back to that project so the session stays
+    /// project-scoped instead of vanishing from the sidebar.
+    #[must_use]
+    pub fn find_by_path(&self, cwd: &str) -> Option<String> {
+        let target = cwd.trim();
+        if target.is_empty() {
+            return None;
+        }
+        let g = self.inner.lock();
+        let mut ancestor: Option<String> = None;
+        for project in g.projects.iter().filter(|p| !p.is_archived) {
+            let Some(path) = project.path.as_deref() else {
+                continue;
+            };
+            let path = path.trim();
+            if path == target {
+                return Some(project.id.clone());
+            }
+            if ancestor.is_none() && is_within_dir(target, path) {
+                ancestor = Some(project.id.clone());
+            }
+        }
+        ancestor
+    }
+
     /// Clear the mirror (called on `remote_server_stop` so a stale list does
     /// not linger after the server is off). Idempotent.
     pub fn clear(&self) {
@@ -199,6 +228,23 @@ impl ProjectRegistry {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// `true` when `candidate` is a path strictly inside `dir` (a worktree or
+/// subfolder), honoring both `/` and `\` separators. Prefix matches that do
+/// not land on a separator boundary are rejected so `/a/bc` is NOT inside
+/// `/a/b`.
+#[must_use]
+fn is_within_dir(candidate: &str, dir: &str) -> bool {
+    let dir = dir.trim_end_matches(['/', '\\']);
+    if dir.is_empty() || candidate.len() <= dir.len() {
+        return false;
+    }
+    candidate.starts_with(dir)
+        && candidate[dir.len()..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch == '/' || ch == '\\')
 }
 
 /// Map a file-backed VFS root to the wire [`ProjectSummary`] (VPS-mode seed).
@@ -454,5 +500,36 @@ mod tests {
         assert_eq!(context.mcp_servers.len(), 1);
         let public = serde_json::to_value(reg.snapshot()).expect("public snapshot");
         assert!(public["projects"][0].get("mcpServers").is_none());
+    }
+
+    /// CAP-2 attribution: `find_by_path` resolves an exact project path, and
+    /// falls back to the enclosing project for a nested cwd (worktree or
+    /// subfolder). A prefix that does not land on a separator is NOT a match,
+    /// archived projects are skipped, and empty input yields `None`.
+    #[test]
+    fn find_by_path_exact_ancestor_and_boundary() {
+        let reg = ProjectRegistry::new();
+        reg.set(
+            vec![
+                sample("p-app", Some("/dev/app"), false),
+                sample("p-archived", Some("/dev/old"), true),
+            ],
+            None,
+        );
+        // Exact match wins.
+        assert_eq!(reg.find_by_path("/dev/app").as_deref(), Some("p-app"));
+        // Nested cwd falls back to the enclosing project.
+        assert_eq!(
+            reg.find_by_path("/dev/app/worktrees/feat").as_deref(),
+            Some("p-app")
+        );
+        assert_eq!(reg.find_by_path("/dev/app/sub").as_deref(), Some("p-app"));
+        // Separator-boundary guard: `/dev/application` is NOT inside `/dev/app`.
+        assert_eq!(reg.find_by_path("/dev/application"), None);
+        // Archived projects never match.
+        assert_eq!(reg.find_by_path("/dev/old"), None);
+        // Unrelated path / empty input.
+        assert_eq!(reg.find_by_path("/elsewhere"), None);
+        assert_eq!(reg.find_by_path("   "), None);
     }
 }

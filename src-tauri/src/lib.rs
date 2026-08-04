@@ -1045,7 +1045,55 @@ pub fn run() {
                 "[acp-history] store ready path={}",
                 chat_history_store.root().display()
             );
+
+            // Host-owned durable ACP history (CAP-2). The desktop attaches the
+            // same file-backed `SessionPersistence` the standalone server uses,
+            // so every non-ephemeral session becomes durable at the host
+            // event/session layer regardless of which client created it. The
+            // sessions root is desktop-private: NEVER share it with a
+            // standalone `termul-server` on the same machine (two processes on
+            // one JSONL store would corrupt both). The persistence must exist
+            // BEFORE any agent spawn — driver threads clone it at spawn time.
+            let sessions_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("acp-sessions");
+            let session_persistence =
+                match tauri::async_runtime::block_on(SessionPersistence::open(
+                    sessions_root.clone(),
+                )) {
+                    Ok(persistence) => {
+                        log::info!(
+                            "[acp-history] host persistence ready path={}",
+                            persistence.root().display()
+                        );
+                        Some(persistence)
+                    }
+                    Err(error) => {
+                        // Degrade, don't crash: history becomes live-only, the
+                        // app must still boot (parity with the store-free web
+                        // negotiation path).
+                        log::error!(
+                            "[acp-history] host persistence unavailable path={} error={error}",
+                            sessions_root.display()
+                        );
+                        None
+                    }
+                };
+            // Idempotent incremental import of legacy renderer-authored
+            // history so existing desktop sessions survive the ownership
+            // transfer. Runs at every startup; per-entry fail-open inside.
+            if let Some(persistence) = &session_persistence {
+                let imported = tauri::async_runtime::block_on(
+                    crate::acp::import_chat_history(persistence, &chat_history_store),
+                );
+                if imported > 0 {
+                    log::info!("[acp-history] legacy store imported sessions={imported}");
+                }
+            }
             app.manage(chat_history_store);
+            app.manage(commands::HostHistoryStore(session_persistence.clone()));
 
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
@@ -1054,15 +1102,36 @@ pub fn run() {
             // `WsRelaySink` (the shared-live web server's per-session event log
             // + subscriber set). `fan_out` serializes once and fans N, so adding
             // the second sink does not change the `TauriEventSink` payloads.
+            // With host persistence attached, the relay additionally durables
+            // every session-scoped event (the same seam the standalone server
+            // uses) — transport-agnostic, so desktop-origin and browser-origin
+            // sessions are persisted identically.
             //
             // The shared-live web server (`remote/host.rs`) pulls both
             // `Arc<AcpManager>` and `Arc<WsRelaySink>` as Tauri state and serves
             // the desktop's live sessions to a browser/phone over the LAN.
-            let ws_relay = Arc::new(WsRelaySink::new());
-            let acp_manager = Arc::new(AcpManager::new(vec![
-                Arc::new(TauriEventSink::new(handle.clone())),
-                ws_relay.clone(),
-            ]));
+            let mut sinks: Vec<Arc<dyn crate::web::EventSink>> =
+                vec![Arc::new(TauriEventSink::new(handle.clone()))];
+            let (ws_relay, acp_manager) = match &session_persistence {
+                Some(persistence) => {
+                    let relay = Arc::new(WsRelaySink::with_persistence(
+                        4096,
+                        Arc::clone(persistence),
+                    ));
+                    sinks.push(relay.clone());
+                    let manager = Arc::new(AcpManager::with_persistence(
+                        sinks,
+                        Arc::clone(persistence),
+                    ));
+                    (relay, manager)
+                }
+                None => {
+                    let relay = Arc::new(WsRelaySink::new());
+                    sinks.push(relay.clone());
+                    let manager = Arc::new(AcpManager::new(sinks));
+                    (relay, manager)
+                }
+            };
             // Attach the server-side permission rendezvous so a phone can
             // respond to `acp:permission_request` over WS. The desktop renderer
             // still responds via the `acp_respond_permission` Tauri command
@@ -1407,6 +1476,8 @@ pub fn run() {
             commands::acp_history_delete,
             commands::acp_history_flush,
             commands::acp_history_mark_legacy_import_complete,
+            commands::acp_history_list_legacy,
+            commands::acp_history_get_legacy,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
         ])
@@ -1469,7 +1540,15 @@ pub fn run() {
                     }
                     pty_manager_clone.kill_all().await;
                     if let Some(acp_manager) = acp_manager {
+                        // kill_all -> kill_all_checked flushes durable queues;
+                        // shutdown_persistence then stops the writers so the
+                        // host history index is canonical at exit.
                         acp_manager.kill_all().await;
+                        if let Err(error) = acp_manager.shutdown_persistence().await {
+                            log::error!(
+                                "[acp-history] persistence shutdown failed at exit: {error}"
+                            );
+                        }
                     }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
@@ -1483,6 +1562,9 @@ pub fn run() {
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     acp_manager.kill_all().await;
+                    if let Err(error) = acp_manager.shutdown_persistence().await {
+                        log::error!("[acp-history] persistence shutdown failed at exit: {error}");
+                    }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }

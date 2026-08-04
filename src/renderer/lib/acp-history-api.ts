@@ -27,6 +27,15 @@ export const acpHistoryApi = {
     return invokeHistory<SessionPayload | null>('acp_history_get', { sessionId })
   },
 
+  /** Legacy-store reads for the one-time KV wipe migration only. */
+  listLegacy(): Promise<DesktopHistoryListResult> {
+    return invokeHistory<DesktopHistoryListResult>('acp_history_list_legacy')
+  },
+
+  getLegacy(sessionId: string): Promise<SessionPayload | null> {
+    return invokeHistory<SessionPayload | null>('acp_history_get_legacy', { sessionId })
+  },
+
   async save(sessionId: string, payload: SessionPayload): Promise<void> {
     await invokeHistory<void>('acp_history_save', { sessionId, payload })
   },
