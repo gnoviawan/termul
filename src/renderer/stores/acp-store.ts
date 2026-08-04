@@ -518,6 +518,13 @@ interface AcpState {
   // Actions — MCP server registry (P6)
   loadMcpServers: () => Promise<void>
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
+  /**
+   * Append multiple new registry entries atomically: one optimistic state
+   * update, one disk write, rollback on failure. Used by the Settings JSON add
+   * flow so a multi-server import persists as a single batch — no per-entry
+   * writes, no partial prefix left behind to duplicate on retry.
+   */
+  importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
 
@@ -4105,6 +4112,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       void logFrontendError({
         source: 'acp-store.saveMcpServer',
         message: `Failed to persist MCP registry (${String(err)})`
+      })
+      throw err
+    }
+  },
+
+  importMcpServers: async (servers) => {
+    if (servers.length === 0) return
+    const list = get().mcpServers
+    const next = [...list, ...servers]
+    set({ mcpServers: next })
+    try {
+      await saveMcpServersToDisk(next)
+    } catch (err) {
+      set({ mcpServers: list })
+      void logFrontendError({
+        source: 'acp-store.importMcpServers',
+        message: `Failed to persist MCP registry import (${String(err)})`
       })
       throw err
     }

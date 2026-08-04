@@ -4071,6 +4071,44 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
   })
 
+  it('importMcpServers appends a batch in a single atomic persist', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
+    })
+    await useAcpStore.getState().importMcpServers([
+      { id: 'm2', type: 'stdio', name: 'a', command: 'node', enabled: true },
+      { id: 'm3', type: 'http', name: 'b', url: 'https://b.test/mcp', enabled: true }
+    ])
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0', 'm2', 'm3'])
+    // One disk write for the whole batch — not one per entry.
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'm2' }),
+        expect.objectContaining({ id: 'm3' })
+      ])
+    )
+  })
+
+  it('rolls back an import batch when registry persistence fails', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
+    })
+    await expect(
+      useAcpStore
+        .getState()
+        .importMcpServers([{ id: 'm4', type: 'stdio', name: 'c', command: 'node', enabled: true }])
+    ).rejects.toThrow('disk full')
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0'])
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-store.importMcpServers' })
+    )
+  })
+
   it('derives enabled MCP servers from capabilities when no override is supplied', async () => {
     useAcpStore.setState({
       agents: {

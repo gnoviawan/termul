@@ -11,6 +11,7 @@ const { toastError, toastSuccess } = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: toastError, success: toastSuccess } }))
 
 const saveMcpServer = vi.fn(async () => {})
+const importMcpServers = vi.fn(async (_servers: unknown[]) => {})
 const setMcpServerEnabled = vi.fn(async () => {})
 const deleteMcpServer = vi.fn(async () => {})
 const probeMcpServer = vi.fn(async () => {})
@@ -27,6 +28,7 @@ function seedStore(): void {
     mcpToolsLoaded: {},
     mcpProbing: {},
     saveMcpServer,
+    importMcpServers,
     setMcpServerEnabled,
     deleteMcpServer,
     probeMcpServer,
@@ -63,8 +65,9 @@ describe('McpServersSettings', () => {
     typeJson(JSON.stringify({ command: 'npx', args: ['-y', 'x'], env: { K: 'v' }, name: 'Files' }))
     expect(save).toBeEnabled()
     fireEvent.click(save)
-    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
-    expect(saveMcpServer).toHaveBeenCalledWith(
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    // Add persists through the atomic batch action (one store write).
+    expect(importMcpServers).toHaveBeenCalledWith([
       expect.objectContaining({
         type: 'stdio',
         name: 'Files',
@@ -73,16 +76,16 @@ describe('McpServersSettings', () => {
         env: [{ name: 'K', value: 'v' }],
         enabled: true
       })
-    )
-    expect(saveMcpServer.mock.calls[0]?.[0].id).toMatch(UUID_RE)
+    ])
+    expect(importMcpServers.mock.calls[0]?.[0]?.[0]?.id).toMatch(UUID_RE)
     await waitFor(() =>
-      expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/imported 1 mcp server/i))
+      expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/added 1 mcp server/i))
     )
     // The dialog closes after a fully successful save.
     expect(screen.queryByLabelText('MCP JSON')).not.toBeInTheDocument()
   })
 
-  it('adds both servers from a Claude Desktop wrapper, each with a fresh id', async () => {
+  it('adds both servers from a Claude Desktop wrapper in one atomic batch', async () => {
     render(<McpServersSettings />)
     openAddDialog()
     typeJson(
@@ -94,11 +97,14 @@ describe('McpServersSettings', () => {
       })
     )
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(2))
-    expect(saveMcpServer).toHaveBeenCalledWith(
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    // One call with the whole batch — not one save per entry.
+    const batch = vi.mocked(importMcpServers).mock.calls[0]?.[0] ?? []
+    expect(batch).toHaveLength(2)
+    expect(batch[0]).toEqual(
       expect.objectContaining({ type: 'stdio', name: 'alpha', command: 'node', enabled: true })
     )
-    expect(saveMcpServer).toHaveBeenCalledWith(
+    expect(batch[1]).toEqual(
       expect.objectContaining({
         type: 'http',
         name: 'beta',
@@ -106,8 +112,8 @@ describe('McpServersSettings', () => {
         enabled: true
       })
     )
-    const firstId = saveMcpServer.mock.calls[0]?.[0].id
-    const secondId = saveMcpServer.mock.calls[1]?.[0].id
+    const firstId = batch[0]?.id as string | undefined
+    const secondId = batch[1]?.id as string | undefined
     expect(firstId).toMatch(UUID_RE)
     expect(secondId).toMatch(UUID_RE)
     expect(firstId).not.toBe(secondId)
@@ -119,10 +125,10 @@ describe('McpServersSettings', () => {
     typeJson('{ this is not json')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/invalid json/i))
-    expect(saveMcpServer).not.toHaveBeenCalled()
+    expect(importMcpServers).not.toHaveBeenCalled()
   })
 
-  it('saves valid entries and keeps per-server errors inline for the bad ones', async () => {
+  it('rejects the whole batch while any entry is invalid, then saves all once corrected', async () => {
     render(<McpServersSettings />)
     openAddDialog()
     typeJson(
@@ -134,13 +140,29 @@ describe('McpServersSettings', () => {
       })
     )
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
-    expect(saveMcpServer).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'good', command: 'node', args: ['server.js'] })
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/command is required for stdio/i)
     )
-    // The rejected entry's reason stays visible so the user can fix and re-save.
-    expect(screen.getByRole('alert')).toHaveTextContent(/command is required for stdio/i)
-    expect(toastSuccess).not.toHaveBeenCalled()
+    // All-or-nothing: nothing persists while any entry is invalid, so the
+    // corrected re-save cannot duplicate an earlier partial save.
+    expect(importMcpServers).not.toHaveBeenCalled()
+    typeJson(
+      JSON.stringify({
+        mcpServers: {
+          good: { command: 'node', args: ['server.js'] },
+          bad: { command: 'node', args: ['bad.js'] }
+        }
+      })
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    expect(importMcpServers).toHaveBeenCalledWith([
+      expect.objectContaining({ name: 'good', command: 'node', args: ['server.js'] }),
+      expect.objectContaining({ name: 'bad', command: 'node', args: ['bad.js'] })
+    ])
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/added 2 mcp servers/i))
+    )
   })
 
   it('reports an empty wrapper without saving', async () => {
@@ -151,7 +173,7 @@ describe('McpServersSettings', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(/no mcp servers found in the json/i)
     )
-    expect(saveMcpServer).not.toHaveBeenCalled()
+    expect(importMcpServers).not.toHaveBeenCalled()
   })
 
   it('pre-fills the edit dialog and updates the same registry entry', async () => {
@@ -307,7 +329,7 @@ describe('McpServersSettings', () => {
   })
 
   it('keeps the dialog open and shows the rollback toast when saving fails', async () => {
-    saveMcpServer.mockRejectedValueOnce(new Error('disk full'))
+    importMcpServers.mockRejectedValueOnce(new Error('disk full'))
     render(<McpServersSettings />)
     openAddDialog()
     typeJson(JSON.stringify({ name: 'Files', command: 'node' }))
@@ -317,6 +339,30 @@ describe('McpServersSettings', () => {
     )
     // The dialog stays open so the JSON is not lost after a rollback.
     expect(screen.getByLabelText('MCP JSON')).toBeInTheDocument()
+  })
+
+  it('blocks dialog dismissal while a save is pending', async () => {
+    // A save that never settles until the test releases it.
+    let releaseSave: (() => void) | undefined
+    importMcpServers.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        })
+    )
+    render(<McpServersSettings />)
+    openAddDialog()
+    typeJson(JSON.stringify({ name: 'Files', command: 'node' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+    // While the save is in flight, Cancel is disabled and overlay/Escape
+    // dismissal (onOpenChange) is ignored — the JSON must not be lost.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    fireEvent.keyDown(screen.getByLabelText('MCP JSON'), { key: 'Escape' })
+    expect(screen.getByLabelText('MCP JSON')).toBeInTheDocument()
+    // Once the save settles the dialog completes normally.
+    releaseSave?.()
+    await waitFor(() => expect(screen.queryByLabelText('MCP JSON')).not.toBeInTheDocument())
   })
 
   it('keeps the edit dialog open when the update fails', async () => {

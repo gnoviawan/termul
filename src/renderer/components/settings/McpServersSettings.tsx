@@ -67,6 +67,7 @@ function serverToJson(server: StoredMcpServer): string {
 export function McpServersSettings(): React.JSX.Element {
   const servers = useAcpStore((state) => state.mcpServers)
   const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
+  const importMcpServers = useAcpStore((state) => state.importMcpServers)
   const setMcpServerEnabled = useAcpStore((state) => state.setMcpServerEnabled)
   const deleteMcpServer = useAcpStore((state) => state.deleteMcpServer)
   const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
@@ -117,39 +118,36 @@ export function McpServersSettings(): React.JSX.Element {
   }
 
   // Add mode: accepts a Claude Desktop `{"mcpServers": {...}}` wrapper or a
-  // bare single-server object; every parsed entry saves with a fresh id (no
-  // overwrite-by-name).
+  // bare single-server object. The input is validated as a whole BEFORE any
+  // persistence, and the accepted batch is committed through a single atomic
+  // store write — so fixing a rejected entry and re-saving can never duplicate
+  // previously saved entries, and a multi-server import triggers one registry
+  // update (one on-mount probe pass) instead of one per server.
   const saveAdd = async (): Promise<void> => {
-    let savedCount = 0
+    const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
+    if (errors.length > 0) {
+      // All-or-nothing: nothing is persisted until every entry parses, so a
+      // corrected re-save starts from the same registry state.
+      setJsonErrors(errors)
+      return
+    }
+    if (parsedServers.length === 0) {
+      setJsonErrors(['No MCP servers found in the JSON.'])
+      return
+    }
+    const batch = parsedServers.map((parsed) => ({
+      ...parsed,
+      id: crypto.randomUUID(),
+      enabled: true
+    }))
     try {
-      const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
-      // Valid servers still save when some entries are rejected (per-server
-      // errors stay visible inline so the user can fix and re-save).
-      for (const parsed of parsedServers) {
-        await saveMcpServer({ ...parsed, id: crypto.randomUUID(), enabled: true })
-        savedCount += 1
-      }
-      if (errors.length > 0) {
-        setJsonErrors(errors)
-        return
-      }
-      if (parsedServers.length === 0) {
-        setJsonErrors(['No MCP servers found in the JSON.'])
-        return
-      }
-      toast.success(
-        `Imported ${parsedServers.length} MCP server${parsedServers.length === 1 ? '' : 's'}`
-      )
+      await importMcpServers(batch)
+      toast.success(`Added ${batch.length} MCP server${batch.length === 1 ? '' : 's'}`)
       closeDialog()
     } catch {
-      // A mid-loop throw leaves earlier saves persisted (fresh IDs each time).
-      // Tell the user how many landed so they do not blindly re-save and
-      // create duplicates.
-      toast.error(
-        savedCount > 0
-          ? `Imported ${savedCount} server${savedCount === 1 ? '' : 's'} before a save failed. Review the remaining entries before re-saving.`
-          : 'Could not save the MCP server. Your previous settings were restored.'
-      )
+      // importMcpServers rolls back the whole batch on failure — nothing was
+      // persisted, so the dialog stays open for a safe retry.
+      toast.error('Could not save the MCP servers. Your previous settings were restored.')
     }
   }
 
@@ -403,7 +401,10 @@ export function McpServersSettings(): React.JSX.Element {
       <Dialog
         open={dialog !== null}
         onOpenChange={(open) => {
-          if (!open) closeDialog()
+          // Block dismissal while a save is in flight — otherwise the in-flight
+          // completion handler would close a newly opened editor, and a failed
+          // save's JSON would be lost.
+          if (!open && !saving) closeDialog()
         }}
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -440,7 +441,7 @@ export function McpServersSettings(): React.JSX.Element {
             )}
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeDialog}>
+            <Button type="button" variant="outline" disabled={saving} onClick={closeDialog}>
               Cancel
             </Button>
             <Button
