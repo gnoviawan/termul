@@ -932,14 +932,10 @@ describe('acp-store', () => {
     const [entry] = useAcpStore.getState().sessionIndex
     expect(entry.title).toBe('siapa itu faiz intifada?')
     expect(entry.messageCount).toBe(1)
+    // CAP-2: durable writes are host-owned; the renderer only updates its
+    // local index projection and must not queue a payload save.
     const { queueSessionPayloadSave } = await import('@/lib/acp-history-persistence')
-    expect(queueSessionPayloadSave).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-        metadata: expect.objectContaining({ title: 'siapa itu faiz intifada?' }),
-        messages: [expect.objectContaining({ role: 'user' })]
-      })
-    )
+    expect(queueSessionPayloadSave).not.toHaveBeenCalled()
   })
 
   it('enqueues a second prompt while a turn is active', async () => {
@@ -1244,8 +1240,9 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/refused/i)
   })
 
-  it('prompt_complete mirrors the transcript to disk so agent replies survive a restart', async () => {
-    // Only user sends used to persist; a reply followed by an app quit was lost.
+  it('prompt_complete keeps the transcript in the store projection (durable write is host-owned)', async () => {
+    // CAP-2: the host event layer persists agent replies; the renderer only
+    // keeps its local projection consistent and must not queue a payload save.
     seedSession('s1', 'agent-1')
     useAcpStore.setState({
       sessionIndex: [
@@ -1276,12 +1273,11 @@ describe('acp-store', () => {
       stopReason: 'end_turn'
     })
     await flushTurnEnd()
-    expect(queueSessionPayloadSave).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-        messages: [expect.objectContaining({ role: 'agent', streaming: false })]
-      })
-    )
+    // The agent reply stays in the local transcript projection…
+    const stored = useAcpStore.getState().messages['s1']
+    expect(stored.some((m) => m.role === 'agent' && !m.streaming)).toBe(true)
+    // …and no renderer-side durable write is queued (host authors history).
+    expect(queueSessionPayloadSave).not.toHaveBeenCalled()
   })
 
   it('prompt_complete mirrors tool calls to disk so history reopens restore them', async () => {
@@ -2321,7 +2317,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
-      mcpServers: []
+      mcpServers: [],
+      projectId: 'p1'
     })
   })
 
@@ -2811,7 +2808,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
-      mcpServers: []
+      mcpServers: [],
+      projectId: 'p1'
     })
   })
 
@@ -4443,7 +4441,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/work',
-      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }]
+      mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }],
+      projectId: 'p1'
     })
     expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(1)
     expect(toastWarning).toHaveBeenCalledWith(
@@ -4463,7 +4462,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/work',
-      mcpServers: []
+      mcpServers: [],
+      projectId: 'p1'
     })
     expect(toastWarning).not.toHaveBeenCalled()
   })
@@ -4495,7 +4495,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenNthCalledWith(2, 'acp_new_session', {
       agentId: 'agent-9',
       cwd: '/work',
-      mcpServers: servers
+      mcpServers: servers,
+      projectId: 'p1'
     })
   })
 

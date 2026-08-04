@@ -14,6 +14,7 @@ pub mod client;
 pub mod commands;
 pub mod config;
 pub mod events;
+pub mod history_import;
 pub mod manager;
 pub mod mcp_probe;
 pub mod project_registry;
@@ -32,6 +33,8 @@ pub use chat_history_store::{
 };
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
+#[allow(unused_imports)]
+pub use history_import::import_chat_history;
 pub use manager::{AcpManager, SessionCreationContext};
 pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]

@@ -106,10 +106,6 @@ pub async fn serve(
         exit_code_tracker,
         ws_relay,
         registry,
-        // The standalone VPS binary has no desktop chat-history store; it
-        // relies on file-backed `SessionPersistence` (Story 4.3). The desktop
-        // host attaches its Rust-owned durable history store instead.
-        None,
         registry_persistence,
         projects_file,
         cfg,
@@ -176,7 +172,6 @@ pub async fn serve_router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
-    chat_history_store: Option<Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
@@ -201,11 +196,11 @@ pub async fn serve_router(
         );
     }
 
-    // Advertise `Server` history mode when EITHER the durable Rust history
-    // store is attached (desktop-hosted) OR file-backed persistence is attached
-    // (standalone VPS, Story 4.3). Otherwise the web client negotiates
-    // `live_only` (no stored transcript mirror).
-    let history_mode = if chat_history_store.is_some() || ws_relay.persistence().is_some() {
+    // Advertise `Server` history mode when the host-owned file-backed
+    // `SessionPersistence` is attached to the relay (both desktop shared-live
+    // and the standalone VPS attach it now — CAP-2). Otherwise the web client
+    // negotiates `live_only` (no stored transcript mirror).
+    let history_mode = if ws_relay.persistence().is_some() {
         HistoryMode::Server
     } else {
         HistoryMode::LiveOnly
@@ -219,7 +214,6 @@ pub async fn serve_router(
         exit_code_tracker,
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
-        chat_history_store,
         registry_persistence,
         projects_file,
         cfg.project_root.clone(),

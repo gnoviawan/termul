@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -934,6 +934,32 @@ impl EventSink for WsRelaySink {
                 }
             }
         }
+
+        // CAP-2: history is now host-owned. When a session is created or
+        // finalized at the host (regardless of which client drove it), notify
+        // every connected client so sidebars refetch the host index instead of
+        // depending on a desktop renderer save. Only fires when durable
+        // persistence is attached (live-only mode has nothing to refetch).
+        if self.persistence().is_some()
+            && matches!(type_, "session_created" | "session_closed")
+        {
+            self.notify_history_changed();
+        }
+    }
+}
+
+impl WsRelaySink {
+    /// Agent-level `chat_history_changed` fan-out (mirrors
+    /// `broadcast_chat_history_changed`, but callable from inside `emit` where
+    /// no `Arc<Self>` is available). Empty payload; clients refetch the index.
+    fn notify_history_changed(&self) {
+        let type_ = "chat_history_changed";
+        let se = SequencedEvent::new(None, 0, type_, json!({}));
+        let tier = tier_of(type_);
+        let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
+        for client_id in targets {
+            self.enqueue(client_id, se.clone(), tier);
+        }
     }
 }
 
@@ -1629,5 +1655,63 @@ mod tests {
         assert_eq!(drained[0].seq, 0, "agent-level event: seq must be 0");
         // The payload is empty `{}` — the web client refetches the index.
         assert!(drained[0].payload.as_object().unwrap().is_empty());
+    }
+
+    /// CAP-2: with host persistence attached, session lifecycle events fan an
+    /// agent-level `chat_history_changed` so connected sidebars refetch the
+    /// host-owned index (browser-origin sessions never flow through a desktop
+    /// renderer save).
+    #[tokio::test]
+    async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-sink-history-broadcast-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
+
+        for type_ in ["acp:session_created", "acp:session_closed"] {
+            relay.emit(&AcpEvent {
+                sid: Some("sess-1".to_string()),
+                type_,
+                payload: json!({"agentId": "a-1", "sessionId": "sess-1"}),
+            });
+        }
+
+        let drained = drain_rx(&mut rx);
+        let notifications = drained
+            .iter()
+            .filter(|event| event.type_ == "chat_history_changed")
+            .count();
+        assert_eq!(
+            notifications, 2,
+            "each lifecycle event fans one chat_history_changed"
+        );
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Live-only relays (no host persistence) must NOT fan history-changed
+    /// notifications — there is no durable index to refetch.
+    #[tokio::test]
+    async fn session_lifecycle_is_silent_without_persistence() {
+        let relay = Arc::new(WsRelaySink::new());
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
+
+        relay.emit(&AcpEvent {
+            sid: Some("sess-1".to_string()),
+            type_: "acp:session_closed",
+            payload: json!({"agentId": "a-1", "sessionId": "sess-1"}),
+        });
+
+        let drained = drain_rx(&mut rx);
+        assert!(
+            drained.iter().all(|event| event.type_ != "chat_history_changed"),
+            "no history notification without durable persistence"
+        );
     }
 }

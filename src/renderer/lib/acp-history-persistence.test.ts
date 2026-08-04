@@ -10,6 +10,8 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
   mockHistoryApi: {
     list: vi.fn(),
     get: vi.fn(),
+    listLegacy: vi.fn(),
+    getLegacy: vi.fn(),
     save: vi.fn(),
     delete: vi.fn(),
     flush: vi.fn(),
@@ -95,6 +97,8 @@ beforeEach(() => {
   mockTransport.historyMode.mockReturnValue('tauri_store')
   mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.get.mockResolvedValue(null)
+  mockHistoryApi.listLegacy.mockResolvedValue({ sessions: [], legacyImportComplete: false })
+  mockHistoryApi.getLegacy.mockResolvedValue(null)
   mockHistoryApi.save.mockResolvedValue(undefined)
   mockHistoryApi.delete.mockResolvedValue(undefined)
   mockHistoryApi.flush.mockResolvedValue(undefined)
@@ -375,10 +379,13 @@ describe('provider routing', () => {
     await expect(loadSessionIndex()).resolves.toEqual([])
   })
 
-  it('routes desktop save/delete/flush to dedicated Rust commands', async () => {
+  it('retires desktop payload writes (host-authored) but still routes flush', async () => {
     const stored = payload('desktop', [msg('user', 'hi')])
     await saveSessionPayload('desktop', stored)
-    expect(mockHistoryApi.save).toHaveBeenCalledWith('desktop', stored)
+    // CAP-2: the host event/session layer owns durable writes; the renderer
+    // save path must not reach the store (the payload stays a local cache).
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
+    expect(getCachedSessionPayload('desktop')).toEqual(stored)
 
     await flushSessionHistory()
     expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
@@ -420,19 +427,15 @@ describe('bounded full-payload cache', () => {
     unpinSessionPayload('pinned')
   })
 
-  it('loads and merges the durable prefix before an evicted cache-miss save', async () => {
-    const old = msg('user', 'old')
+  it('saveSessionPayload never reads or writes the store (host-authored history)', async () => {
     const retained = msg('agent', 'retained')
     const latest = msg('agent', 'latest')
-    mockHistoryApi.get.mockResolvedValueOnce(payload('merge', [old, retained]))
 
     await saveSessionPayload('merge', payload('merge', [retained, latest]))
 
-    expect(mockHistoryApi.save).toHaveBeenCalledWith(
-      'merge',
-      expect.objectContaining({ messages: [old, retained, latest] })
-    )
-    expect(getCachedSessionPayload('merge')?.messages).toEqual([old, retained, latest])
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
+    expect(mockHistoryApi.get).not.toHaveBeenCalled()
+    expect(getCachedSessionPayload('merge')?.messages).toEqual([retained, latest])
   })
 
   it('keeps live tool calls when merging a durable message prefix', async () => {
@@ -492,17 +495,19 @@ describe('legacy import', () => {
 
   it('round-trips every payload before deleting only ACP history keys', async () => {
     mockLegacyReads()
-    mockHistoryApi.list
+    mockHistoryApi.listLegacy
       .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
       .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
-    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
+    mockHistoryApi.getLegacy.mockImplementation(async (id: string) =>
+      id === 'old-1' ? old1 : old2
+    )
 
     await runHistoryWipeMigration()
 
     expect(mockHistoryApi.save).toHaveBeenNthCalledWith(1, 'old-1', old1)
     expect(mockHistoryApi.save).toHaveBeenNthCalledWith(2, 'old-2', old2)
-    expect(mockHistoryApi.get).toHaveBeenCalledWith('old-1')
-    expect(mockHistoryApi.get).toHaveBeenCalledWith('old-2')
+    expect(mockHistoryApi.getLegacy).toHaveBeenCalledWith('old-1')
+    expect(mockHistoryApi.getLegacy).toHaveBeenCalledWith('old-2')
     expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-1'))
     expect(persistenceApi.delete).toHaveBeenCalledWith(sessionPayloadKey('old-2'))
     expect(persistenceApi.delete).toHaveBeenCalledWith(SESSION_INDEX_KEY)
@@ -511,7 +516,10 @@ describe('legacy import', () => {
   })
 
   it('is idempotent when Rust marks legacy import complete', async () => {
-    mockHistoryApi.list.mockResolvedValueOnce({ sessions: index, legacyImportComplete: true })
+    mockHistoryApi.listLegacy.mockResolvedValueOnce({
+      sessions: index,
+      legacyImportComplete: true
+    })
     await runHistoryWipeMigration()
     expect(persistenceApi.read).not.toHaveBeenCalled()
     expect(mockHistoryApi.save).not.toHaveBeenCalled()
@@ -536,11 +544,11 @@ describe('legacy import', () => {
 
   it('does not overwrite a newer differing durable payload on retry', async () => {
     mockLegacyReads()
-    mockHistoryApi.list.mockResolvedValueOnce({
+    mockHistoryApi.listLegacy.mockResolvedValueOnce({
       sessions: [old1.metadata],
       legacyImportComplete: false
     })
-    mockHistoryApi.get.mockResolvedValueOnce(payload('old-1', [msg('user', 'newer')]))
+    mockHistoryApi.getLegacy.mockResolvedValueOnce(payload('old-1', [msg('user', 'newer')]))
     await expect(runHistoryWipeMigration()).rejects.toThrow('Durable history differs')
     expect(mockHistoryApi.save).not.toHaveBeenCalled()
     expect(persistenceApi.delete).not.toHaveBeenCalled()
@@ -559,7 +567,7 @@ describe('legacy import', () => {
 
   it('fails closed when Rust verification fails and retains all legacy keys', async () => {
     mockLegacyReads()
-    mockHistoryApi.list
+    mockHistoryApi.listLegacy
       .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
       .mockResolvedValueOnce({ sessions: [old1.metadata], legacyImportComplete: false })
 
@@ -570,10 +578,12 @@ describe('legacy import', () => {
 
   it('restores the complete legacy source if cleanup fails part-way', async () => {
     mockLegacyReads()
-    mockHistoryApi.list
+    mockHistoryApi.listLegacy
       .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
       .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
-    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
+    mockHistoryApi.getLegacy.mockImplementation(async (id: string) =>
+      id === 'old-1' ? old1 : old2
+    )
     ;(persistenceApi.delete as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ success: true })
       .mockResolvedValueOnce({ success: false, error: 'delete failed', code: 'DELETE_ERROR' })
@@ -587,10 +597,12 @@ describe('legacy import', () => {
 
   it('reports rollback write failures', async () => {
     mockLegacyReads()
-    mockHistoryApi.list
+    mockHistoryApi.listLegacy
       .mockResolvedValueOnce({ sessions: [], legacyImportComplete: false })
       .mockResolvedValueOnce({ sessions: index, legacyImportComplete: false })
-    mockHistoryApi.get.mockImplementation(async (id: string) => (id === 'old-1' ? old1 : old2))
+    mockHistoryApi.getLegacy.mockImplementation(async (id: string) =>
+      id === 'old-1' ? old1 : old2
+    )
     ;(persistenceApi.delete as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       success: false,
       error: 'delete failed',
@@ -608,38 +620,23 @@ describe('legacy import', () => {
 describe('serialized save/delete/close barriers', () => {
   const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-  it('coalesces repeated streaming saves to the latest pending payload', async () => {
-    let releaseFirst!: () => void
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve
-    })
-    mockHistoryApi.save.mockImplementationOnce(() => firstGate)
+  it('coalesces repeated queued saves to the latest pending payload (host-authored, no store)', async () => {
     const first = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'one')]))
     await flush()
     const second = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'two')]))
     const third = queueSessionPayloadSave('stream', payload('stream', [msg('user', 'three')]))
-    releaseFirst()
     await Promise.all([first, second, third, waitForPendingSessionIndexWrite()])
-    expect(mockHistoryApi.save).toHaveBeenCalledTimes(2)
-    expect(mockHistoryApi.save).toHaveBeenLastCalledWith(
-      'stream',
-      expect.objectContaining({ messages: [msg('user', 'three')] })
-    )
+    // CAP-2: writes are host-owned — the queue still coalesces + resolves, but
+    // nothing reaches the renderer-owned store; the last payload stays cached.
+    expect(mockHistoryApi.save).not.toHaveBeenCalled()
+    expect(getCachedSessionPayload('stream')?.messages).toEqual([msg('user', 'three')])
   })
 
   it('delete supersedes a stale pending save for the same session', async () => {
-    let releaseOther!: () => void
-    mockHistoryApi.save.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseOther = resolve
-        })
-    )
     const other = queueSessionPayloadSave('other', payload('other'))
     await flush()
     const stale = queueSessionPayloadSave('deleted', payload('deleted', [msg('user', 'stale')]))
     const deletion = queueSessionPayloadDelete('deleted')
-    releaseOther()
     await Promise.all([other, stale, deletion, waitForPendingSessionIndexWrite()])
     expect(mockHistoryApi.save).not.toHaveBeenCalledWith('deleted', expect.anything())
     expect(mockHistoryApi.delete).toHaveBeenCalledWith('deleted')
@@ -651,27 +648,23 @@ describe('serialized save/delete/close barriers', () => {
 
     await expect(queueSessionPayloadDelete('recreated')).rejects.toThrow('delete failed')
     await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'blocked')]))
-    expect(mockHistoryApi.save).not.toHaveBeenCalledWith('recreated', expect.anything())
+    // Tombstone still set: the queued save is dropped without caching.
+    expect(getCachedSessionPayload('recreated')).toBeUndefined()
 
     await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
     await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'saved')]))
     await waitForPendingSessionIndexWrite()
-    expect(mockHistoryApi.save).toHaveBeenCalledWith(
-      'recreated',
-      expect.objectContaining({ messages: [msg('user', 'saved')] })
-    )
+    // Tombstone cleared: the save applies (local cache only — host owns writes).
+    expect(getCachedSessionPayload('recreated')?.messages).toEqual([msg('user', 'saved')])
     consoleError.mockRestore()
   })
 
-  it('flush waits for a gated tracked session save before invoking Rust flush', async () => {
+  it('flush waits for a gated tracked write before invoking Rust flush', async () => {
     let releaseSave!: () => void
-    mockHistoryApi.save.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseSave = resolve
-        })
-    )
-    void queueSessionPayloadSave('close', payload('close'))
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve
+    })
+    void trackPendingIndexWrite(() => saveGate)
     let flushed = false
     void flushSessionHistory().then(() => {
       flushed = true

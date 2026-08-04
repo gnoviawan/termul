@@ -288,11 +288,6 @@ pub struct AppState {
     /// In-memory, renderer-fed project registry — source for `GET /projects`
     /// + `switch_project` cwd resolution. Empty on the standalone path.
     pub registry: Arc<ProjectRegistry>,
-    /// Durable, disk-backed Rust chat-history store — source for
-    /// `list_persisted_sessions` + `get_session_payload` + switch-back reopen
-    /// on the desktop-hosted path. `None` on the standalone VPS (which uses
-    /// file-backed `SessionPersistence` for Story 4.3).
-    pub chat_history_store: Option<Arc<crate::acp::ChatHistoryStore>>,
     /// Optional writable VPS file registry + configured path. Desktop shared-live
     /// passes `None`, so switching there remains file-free.
     pub registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
@@ -451,7 +446,6 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Epic-4 bridge: the in-memory project registry — source for `GET /projects`
     // (router) + `switch_project` cwd resolution (this handler).
     let registry = Arc::clone(&state.registry);
-    let chat_history_store = state.chat_history_store.clone();
     let registry_persistence = state.registry_persistence.clone();
     let projects_file = state.projects_file.clone();
     let history_mode = state.history_mode;
@@ -570,7 +564,6 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                         &acp,
                         &relay,
                         &registry,
-                        chat_history_store.as_ref(),
                         registry_persistence.as_ref(),
                         projects_file.as_deref(),
                         &write_tx,
@@ -688,7 +681,6 @@ async fn handle_request(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<&PathBuf>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
@@ -752,7 +744,7 @@ async fn handle_request(
         "ping" => WsReply::ok(id, Some(json!({}))),
         "subscribe" => handle_subscribe(id, &req.payload, relay, out_tx, subscribed_clients).await,
         "list_persisted_sessions" => {
-            handle_list_persisted_sessions(id, relay, chat_history_store, history_mode).await
+            handle_list_persisted_sessions(id, relay, history_mode).await
         }
         "open_persisted_session" => {
             handle_open_persisted_session(
@@ -766,8 +758,7 @@ async fn handle_request(
             .await
         }
         "get_session_payload" => {
-            handle_get_session_payload(id, &req.payload, relay, chat_history_store, history_mode)
-                .await
+            handle_get_session_payload(id, &req.payload, relay, history_mode).await
         }
         "recover_session_snapshot" => {
             handle_recover_session_snapshot(
@@ -785,8 +776,7 @@ async fn handle_request(
         // subscription), this only returns `{ sessionId, watermark }` so a
         // refreshed transport seeds `lastSeq` before its first subscribe.
         "get_session_cursor" => {
-            handle_get_session_cursor(id, &req.payload, relay, chat_history_store, history_mode)
-                .await
+            handle_get_session_cursor(id, &req.payload, relay, history_mode).await
         }
         // Story 1.7: `respond_permission` — route the browser's permission
         // decision through the server-side rendezvous (first-response-wins,
@@ -807,6 +797,7 @@ async fn handle_request(
                 id,
                 &req.payload,
                 acp,
+                registry,
                 current_agent,
                 current_session,
                 current_project,
@@ -858,7 +849,6 @@ async fn handle_request(
                 acp,
                 relay,
                 registry,
-                chat_history_store,
                 registry_persistence,
                 projects_file,
                 out_tx,
@@ -911,7 +901,6 @@ async fn handle_request(
 async fn handle_list_persisted_sessions(
     id: String,
     relay: &Arc<WsRelaySink>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     history_mode: HistoryMode,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
@@ -921,59 +910,8 @@ async fn handle_list_persisted_sessions(
             "persisted history is unavailable",
         );
     }
-    // Desktop-hosted path: read the durable renderer-history index and map it
-    // to the existing browser wire shape without retaining transcript copies.
-    if let Some(store) = chat_history_store {
-        let task_store = Arc::clone(store);
-        let (entries, _) = match tokio::task::spawn_blocking(move || task_store.list()).await {
-            Ok(result) => result,
-            Err(error) => {
-                return WsReply::err(
-                    id,
-                    WsErrorCode::Unsupported,
-                    format!("failed to list session history: {error}"),
-                )
-            }
-        };
-        let sessions: Vec<crate::acp::SessionIndexEntry> = entries
-            .into_iter()
-            .map(|entry| {
-                let resume_eligible = entry.agent_config_id.is_some() || !entry.agent_id.is_empty();
-                crate::acp::SessionIndexEntry {
-                    storage_key: entry.id.clone(),
-                    session_id: entry.id,
-                    stable_agent_namespace: entry
-                        .agent_config_id
-                        .as_ref()
-                        .map(|config_id| format!("config:{config_id}")),
-                    runtime_agent_id: (!entry.agent_id.is_empty()).then_some(entry.agent_id),
-                    project_id: (!entry.project_id.is_empty()).then_some(entry.project_id),
-                    cwd: entry.cwd,
-                    title: Some(entry.title),
-                    created_at: entry.created_at,
-                    last_activity_at: entry.last_activity_at,
-                    status: match entry.status {
-                        crate::acp::ChatHistoryStatus::Initializing
-                        | crate::acp::ChatHistoryStatus::Active => {
-                            crate::acp::PersistedSessionStatus::Active
-                        }
-                        crate::acp::ChatHistoryStatus::Error => {
-                            crate::acp::PersistedSessionStatus::Error
-                        }
-                        crate::acp::ChatHistoryStatus::Closed => {
-                            crate::acp::PersistedSessionStatus::Closed
-                        }
-                    },
-                    message_count: entry.message_count,
-                    tool_count: 0,
-                    last_seq: 0,
-                    resume_eligible,
-                }
-            })
-            .collect();
-        return ok_with_payload(id, &sessions);
-    }
-    // Standalone VPS path: the file-backed `SessionPersistence` (Story 4.3).
+    // Host-owned history (CAP-2): both desktop shared-live and the standalone
+    // server serve the file-backed `SessionPersistence` index.
     match relay.persistence() {
         Some(persistence) => ok_with_payload(id, &persistence.list_sessions()),
         None => WsReply::err(
@@ -985,16 +923,15 @@ async fn handle_list_persisted_sessions(
 }
 
 /// `get_session_payload` — fetch the FULL stored transcript (`{ metadata,
-/// messages }`) for a session id. Desktop-hosted path reads the durable Rust
-/// history store; the standalone VPS materializes the same renderer shape
-/// from the file-backed `SessionPersistence` JSONL records. Returns
+/// messages }`) for a session id. Both desktop shared-live and the standalone
+/// server materialize the renderer shape from the host-owned
+/// `SessionPersistence` JSONL records. Returns
 /// `{ ok:false, err:'not_found' }` when the id is absent (web shows "chat
 /// unavailable").
 async fn handle_get_session_payload(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     history_mode: HistoryMode,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
@@ -1019,35 +956,8 @@ async fn handle_get_session_payload(
             )
         }
     };
-    // Desktop-hosted path: read the full payload on demand from the durable
-    // provider. No second all-session transcript cache is materialized.
-    if let Some(store) = chat_history_store {
-        let task_store = Arc::clone(store);
-        let task_id = parsed.session_id.clone();
-        let result = match tokio::task::spawn_blocking(move || task_store.get(&task_id)).await {
-            Ok(result) => result,
-            Err(error) => {
-                return WsReply::err(
-                    id,
-                    WsErrorCode::Unsupported,
-                    format!("failed to read session payload: {error}"),
-                )
-            }
-        };
-        return match result {
-            Ok(value) => ok_with_payload(id, &value),
-            Err(crate::acp::ChatHistoryStoreError::SessionNotFound) => {
-                WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
-            }
-            Err(error) => WsReply::err(
-                id,
-                WsErrorCode::Unsupported,
-                format!("failed to read session payload: {error}"),
-            ),
-        };
-    }
-    // Standalone VPS path: materialize the renderer-shaped payload from the
-    // durable JSONL records (pure fold of `user_prompt` / `message_chunk`).
+    // Host-owned history (CAP-2): materialize the renderer-shaped payload from
+    // the durable JSONL records (pure fold of `user_prompt` / `message_chunk`).
     // `session_payload_async` flushes the writer queue first, so an active
     // session reads every already-assigned seq; a finalized session is served
     // read-only. Errors fail closed — never a fabricated empty payload.
@@ -1059,7 +969,7 @@ async fn handle_get_session_payload(
                         target: "termul::web::ws",
                         session_id = %parsed.session_id,
                         messages = payload.messages.len(),
-                        "get_session_payload: materialized standalone payload"
+                        "get_session_payload: materialized host payload"
                     );
                     ok_with_payload(id, &payload)
                 }
@@ -1075,7 +985,7 @@ async fn handle_get_session_payload(
                         target: "termul::web::ws",
                         session_id = %parsed.session_id,
                         error = %error,
-                        "get_session_payload: standalone payload materialization failed"
+                        "get_session_payload: host payload materialization failed"
                     );
                     WsReply::err(id, WsErrorCode::Unsupported, "failed to read session payload")
                 }
@@ -1173,7 +1083,6 @@ async fn handle_get_session_cursor(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     history_mode: HistoryMode,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
@@ -1201,38 +1110,25 @@ async fn handle_get_session_cursor(
     if parsed.session_id.is_empty() {
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
-    // Desktop-hosted path (serve_router): the durable renderer-history store
-    // owns the transcripts; its `last_seq` reads the persisted payload's max
-    // message `seq`. Standalone VPS path falls through to the file-backed
-    // `SessionPersistence::last_seq` (the authoritative JSONL append log).
+    // Host-owned history (CAP-2): both desktop shared-live and the standalone
+    // server resolve the authoritative JSONL append log's `last_seq`.
     // `last_seq` returns `Ok(0)` for a genuinely unknown (brand-new) session,
     // but `Err(_)` for a real I/O / decode failure. `unwrap_or(0)` would mask a
     // storage failure as "new session" in the reply + logs; log the `Err` first
     // so a corrupted payload or permission error is visible, then default to 0.
-    let watermark = if let Some(store) = chat_history_store {
-        store.last_seq(&parsed.session_id).unwrap_or_else(|error| {
-            tracing::warn!(
-                session_id = %parsed.session_id,
-                error = ?error,
-                "get_session_cursor: last_seq lookup failed"
-            );
-            0
-        })
-    } else {
-        relay
-            .persistence()
-            .map(|persistence| {
-                persistence.last_seq(&parsed.session_id).unwrap_or_else(|error| {
-                    tracing::warn!(
-                        session_id = %parsed.session_id,
-                        error = ?error,
-                        "get_session_cursor: last_seq lookup failed"
-                    );
-                    0
-                })
+    let watermark = relay
+        .persistence()
+        .map(|persistence| {
+            persistence.last_seq(&parsed.session_id).unwrap_or_else(|error| {
+                tracing::warn!(
+                    session_id = %parsed.session_id,
+                    error = ?error,
+                    "get_session_cursor: last_seq lookup failed"
+                );
+                0
             })
-            .unwrap_or(0)
-    };
+        })
+        .unwrap_or(0);
     tracing::debug!(
         target: "termul::web::ws",
         session_id = %parsed.session_id,
@@ -1425,6 +1321,7 @@ async fn handle_create_session(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
+    registry: &Arc<ProjectRegistry>,
     current_agent: &mut Option<crate::acp::AgentId>,
     current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
@@ -1449,13 +1346,18 @@ async fn handle_create_session(
             "create_session requires a non-empty `cwd`",
         );
     }
+    // CAP-2 attribution: resolve the project id best-effort from the registry
+    // by cwd, so browser-origin sessions persist under their owning project
+    // (switch-back reopen + project-scoped listings). Unknown cwds stay
+    // project-less.
+    let project_id = registry.find_by_path(&parsed.cwd);
     match acp
         .new_session_with_context(
             &parsed.agent_id,
             parsed.cwd,
             parsed.mcp_servers,
             SessionCreationContext {
-                project_id: None,
+                project_id,
                 ephemeral: parsed.ephemeral,
             },
         )
@@ -1577,17 +1479,17 @@ fn project_switch_failed_event(
 }
 
 /// Attempt to reopen the most-recent resumable session for a project switch
-/// (switch-back restore). Looks up the cache for the target `(project_id,
-/// cwd)`, gates on the agent's `load`/`resume` capability, and reopens via
-/// `resume_session` (preferred) or `load_session`. Returns `Ok(Some(id))` on a
-/// successful reopen, `Ok(None)` when there is no resumable session or the
-/// agent lacks both capabilities, and `Err` when the reopen attempt fails
-/// (the caller falls back to `new_session_with_context` in both the `None` and
-/// `Err` cases).
+/// (switch-back restore). Looks up the host persistence store for the target
+/// `(project_id, cwd)`, gates on the agent's `load`/`resume` capability, and
+/// reopens via `resume_session` (preferred) or `load_session`. Returns
+/// `Ok(Some(id))` on a successful reopen, `Ok(None)` when there is no
+/// resumable session or the agent lacks both capabilities, and `Err` when the
+/// reopen attempt fails (the caller falls back to `new_session_with_context`
+/// in both the `None` and `Err` cases).
 async fn try_reopen_session_for_switch(
     acp: &Arc<AcpManager>,
     agent_id: &AgentId,
-    cache: &Arc<crate::acp::ChatHistoryStore>,
+    persistence: &Arc<crate::acp::SessionPersistence>,
     target: &ProjectSwitchContext,
 ) -> Result<Option<SessionId>, String> {
     // Resolve the current agent's stable namespace (config id or safe
@@ -1597,14 +1499,14 @@ async fn try_reopen_session_for_switch(
     // namespace cannot be resolved (agent unknown / has no stable
     // namespace).
     let agent_namespace = acp.stable_agent_namespace(agent_id).ok().flatten();
-    let Some(entry) = cache.find_most_recent_for_project(
+    let Some(entry) = persistence.find_most_recent_for_project(
         &target.project_id,
         &target.cwd,
         agent_namespace.as_deref(),
     ) else {
         return Ok(None);
     };
-    let session_id = SessionId(entry.id.clone());
+    let session_id = SessionId(entry.session_id.clone());
     // Prefer resume; fall back to load. The store's `resumeEligible` flag
     // only guarantees the session has SOME stable agent namespace — it does
     // NOT guarantee that namespace matches the current agent. The
@@ -1646,7 +1548,6 @@ async fn execute_project_switch(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<&PathBuf>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
@@ -1664,14 +1565,16 @@ async fn execute_project_switch(
     let mcp_server_count = target.mcp_servers.len();
     // Switch-back reopen (Epic-4 bridge): before minting a new session, look up
     // the most-recent resumable session for the target `(project_id, cwd)` in
-    // the durable Rust history store. If found AND the agent has the `load`/`resume`
-    // capability, reopen it so the web client restores the previous
-    // conversation instead of starting a blank chat (mirrors desktop's
+    // the host-owned durable history store. If found AND the agent has the
+    // `load`/`resume` capability, reopen it so the web client restores the
+    // previous conversation instead of starting a blank chat (mirrors desktop's
     // "restore the last tab"). Falls back to `new_session_with_context` when
     // no resumable session exists, the agent lacks the capability, or the
     // reopen fails (e.g. the session was purged).
-    let reopened = match chat_history_store {
-        Some(cache) => try_reopen_session_for_switch(acp, agent_id, cache, &target).await,
+    let reopened = match relay.persistence() {
+        Some(persistence) => {
+            try_reopen_session_for_switch(acp, agent_id, &persistence, &target).await
+        }
         None => Ok(None),
     }
     .unwrap_or(None);
@@ -1810,7 +1713,6 @@ async fn run_switch_queue(
     acp: Arc<AcpManager>,
     relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
-    chat_history_store: Option<Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<Arc<PathBuf>>,
     out_tx: mpsc::UnboundedSender<Outbound>,
@@ -1862,7 +1764,6 @@ async fn run_switch_queue(
             &acp,
             &relay,
             &registry,
-            chat_history_store.as_ref(),
             registry_persistence.as_ref(),
             projects_file.as_deref(),
             &current_session,
@@ -1923,7 +1824,6 @@ async fn handle_switch_project(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    chat_history_store: Option<&Arc<crate::acp::ChatHistoryStore>>,
     registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<&PathBuf>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
@@ -2000,7 +1900,6 @@ async fn handle_switch_project(
             acp,
             relay,
             registry,
-            chat_history_store,
             registry_persistence,
             projects_file,
             current_session,
@@ -2037,7 +1936,6 @@ async fn handle_switch_project(
                     Arc::clone(acp),
                     Arc::clone(relay),
                     Arc::clone(registry),
-                    chat_history_store.cloned(),
                     registry_persistence.cloned(),
                     projects_file.cloned().map(Arc::new),
                     out_tx.clone(),
@@ -3147,7 +3045,6 @@ mod tests {
                 &registry,
                 None,
                 None,
-                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
@@ -3440,7 +3337,6 @@ mod tests {
                 &registry,
                 None,
                 None,
-                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
@@ -3524,7 +3420,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
@@ -3574,7 +3469,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
@@ -3610,7 +3504,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
@@ -3627,7 +3520,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -3662,7 +3554,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -3752,7 +3643,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs,
             &mut current_agent,
@@ -3784,7 +3674,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -3834,7 +3723,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
@@ -3869,7 +3757,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs.clone(),
             &mut current_agent,
@@ -3885,7 +3772,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -3919,7 +3805,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -3977,7 +3862,6 @@ mod tests {
                 &registry,
                 None,
                 None,
-                None,
                 &tx,
                 &mut subs,
                 &mut current_agent,
@@ -4001,7 +3885,6 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
-                None,
                 None,
                 None,
                 &tx,
@@ -4028,7 +3911,6 @@ mod tests {
                 &registry,
                 None,
                 None,
-                None,
                 &tx,
                 &mut subs2,
                 &mut current_agent,
@@ -4052,7 +3934,6 @@ mod tests {
                 &acp,
                 &relay,
                 &registry,
-                None,
                 None,
                 None,
                 &tx,
@@ -4103,7 +3984,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -4160,7 +4040,6 @@ mod tests {
             &acp,
             &relay,
             &registry,
-            None,
             None,
             None,
             &tx,
@@ -4283,7 +4162,6 @@ mod tests {
             &registry,
             None,
             None,
-            None,
             &tx,
             &mut subs,
             &mut current_agent,
@@ -4296,110 +4174,49 @@ mod tests {
         assert_eq!(reply.err.unwrap().code, "not_found");
     }
 
-    fn desktop_history_payload(session_id: &str) -> Value {
-        json!({
-            "metadata": {
-                "id": session_id,
-                "agentId": "agent-1",
-                "agentConfigId": "claude",
-                "title": "Chat",
-                "cwd": "/a",
-                "projectId": "p-1",
-                "createdAt": 1,
-                "lastActivityAt": 2,
-                "messageCount": 1,
-                "status": "closed"
-            },
-            "messages": [{ "id": "m-1", "seq": 1 }]
-        })
-    }
-
+    /// Host-owned history (CAP-2): `list_persisted_sessions` serves the
+    /// host `SessionPersistence` index — the same seam on desktop shared-live
+    /// and standalone.
     #[tokio::test]
-    async fn list_persisted_sessions_reads_durable_desktop_store() {
-        let store = crate::acp::ChatHistoryStore::new();
-        store.save("s-1", desktop_history_payload("s-1")).unwrap();
-        let relay = Arc::new(WsRelaySink::new());
-        let reply = handle_list_persisted_sessions(
-            "r1".to_string(),
-            &relay,
-            Some(&store),
-            HistoryMode::Server,
-        )
-        .await;
+    async fn list_persisted_sessions_serves_host_persistence() {
+        let root = std::env::temp_dir().join(format!("termul-ws-list-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "s-1".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: Some("agent-1".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd,
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let reply =
+            handle_list_persisted_sessions("r1".to_string(), &relay, HistoryMode::Server).await;
         assert!(reply.ok);
         let value = serde_json::to_value(&reply).unwrap();
         assert_eq!(value["payload"][0]["sessionId"], "s-1");
-    }
-
-    #[tokio::test]
-    async fn get_session_payload_reads_durable_desktop_store() {
-        let store = crate::acp::ChatHistoryStore::new();
-        store.save("s-9", desktop_history_payload("s-9")).unwrap();
-        let relay = Arc::new(WsRelaySink::new());
-        let reply = handle_get_session_payload(
-            "r1".to_string(),
-            &json!({ "sessionId": "s-9" }),
-            &relay,
-            Some(&store),
-            HistoryMode::Server,
-        )
-        .await;
-        assert!(reply.ok);
-        let value = serde_json::to_value(&reply).unwrap();
-        assert_eq!(value["payload"]["metadata"]["id"], "s-9");
-    }
-
-    #[tokio::test]
-    async fn get_session_payload_not_found_when_absent() {
-        let store = crate::acp::ChatHistoryStore::new();
-        let relay = Arc::new(WsRelaySink::new());
-        let reply = handle_get_session_payload(
-            "r1".to_string(),
-            &json!({ "sessionId": "missing" }),
-            &relay,
-            Some(&store),
-            HistoryMode::Server,
-        )
-        .await;
-        assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "not_found");
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn get_session_payload_unsupported_in_live_only() {
-        let store = crate::acp::ChatHistoryStore::new();
         let relay = Arc::new(WsRelaySink::new());
         let reply = handle_get_session_payload(
             "r1".to_string(),
             &json!({ "sessionId": "s-1" }),
             &relay,
-            Some(&store),
             HistoryMode::LiveOnly,
         )
         .await;
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
-    }
-
-    /// Desktop branch contract: the stored payload is served byte-for-byte
-    /// (this story must not alter the `ChatHistoryStore` path).
-    #[tokio::test]
-    async fn get_session_payload_desktop_branch_is_byte_for_byte() {
-        let store = crate::acp::ChatHistoryStore::new();
-        let stored = desktop_history_payload("s-byte");
-        store.save("s-byte", stored.clone()).unwrap();
-        let relay = Arc::new(WsRelaySink::new());
-        let reply = handle_get_session_payload(
-            "r1".to_string(),
-            &json!({ "sessionId": "s-byte" }),
-            &relay,
-            Some(&store),
-            HistoryMode::Server,
-        )
-        .await;
-        assert!(reply.ok);
-        let value = serde_json::to_value(&reply).unwrap();
-        assert_eq!(value["payload"], stored);
     }
 
     fn standalone_payload_record(
@@ -4497,7 +4314,6 @@ mod tests {
             "r1".to_string(),
             &json!({ "sessionId": "session-p" }),
             &relay,
-            None,
             HistoryMode::Server,
         )
         .await;
@@ -4527,7 +4343,6 @@ mod tests {
             "r2".to_string(),
             &json!({ "sessionId": "session-p" }),
             &relay,
-            None,
             HistoryMode::Server,
         )
         .await;
@@ -4563,7 +4378,6 @@ mod tests {
             "r1".to_string(),
             &json!({ "sessionId": "session-absent" }),
             &relay,
-            None,
             HistoryMode::Server,
         )
         .await;
@@ -4580,7 +4394,6 @@ mod tests {
             "r1".to_string(),
             &json!({ "sessionId": "s-1" }),
             &relay,
-            None,
             HistoryMode::Server,
         )
         .await;
@@ -4647,7 +4460,6 @@ mod tests {
             "r1".to_string(),
             &json!({ "sessionId": "session-c" }),
             &relay,
-            None,
             HistoryMode::Server,
         )
         .await;
@@ -4659,7 +4471,12 @@ mod tests {
 
     #[tokio::test]
     async fn try_reopen_returns_none_when_no_stored_session() {
-        let store = crate::acp::ChatHistoryStore::new();
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-reopen-none-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
         let acp = Arc::new(AcpManager::new(vec![]));
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
@@ -4668,10 +4485,11 @@ mod tests {
             is_active: false,
         };
         let result =
-            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &store, &target)
+            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
                 .await
                 .unwrap();
         assert!(result.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Switch-back reopen returns `Err` (fallback) when a durable session exists
@@ -4679,20 +4497,41 @@ mod tests {
     /// this and falls back to a new session.
     #[tokio::test]
     async fn try_reopen_falls_back_when_agent_cannot_load() {
-        let store = crate::acp::ChatHistoryStore::new();
-        store.save("s-1", desktop_history_payload("s-1")).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-reopen-fallback-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "s-1".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: Some("agent-1".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd: cwd.clone(),
+            })
+            .await
+            .unwrap();
         let acp = Arc::new(AcpManager::new(vec![]));
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
-            cwd: "/a".to_string(),
+            // `register_session` canonicalizes cwd; match exactly so the
+            // `(project_id, cwd)` lookup finds the stored session.
+            cwd: persistence.metadata("s-1").unwrap().cwd,
             mcp_servers: vec![],
             is_active: false,
         };
         let result =
-            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &store, &target).await;
+            try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
+                .await;
         assert!(
             result.is_err(),
             "no registered agent → reopen fails → Err → new session"
         );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
