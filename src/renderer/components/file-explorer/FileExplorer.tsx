@@ -8,7 +8,7 @@ import {
   Search,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -111,8 +111,12 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const userSelectedTabRef = useRef(false)
   // Mirrors of component state so async header-create handlers can re-check
   // the latest values after awaiting chain expansion (GH-539 / GH-540).
+  // Synced in useLayoutEffect (not during render) so the mirror is committed
+  // before any post-paint handler runs.
   const inlineInputRef = useRef<InlineInputState | null>(null)
-  inlineInputRef.current = inlineInput
+  useLayoutEffect(() => {
+    inlineInputRef.current = inlineInput
+  }, [inlineInput])
   const headerCreateInFlightRef = useRef(false)
 
   const rootEntries = rootPath ? directoryContents.get(rootPath) : undefined
@@ -719,7 +723,12 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       isSubmittingRef.current = false
       return
     }
-    const fullPath = `${inlineInput.parentPath}/${name}`
+    // Separator-safe join: a filesystem-root parent ('/') must not gain a
+    // second slash before the name.
+    const targetParent = inlineInput.parentPath
+    const fullPath = targetParent.endsWith('/')
+      ? `${targetParent}${name}`
+      : `${targetParent}/${name}`
 
     try {
       let result: { success: boolean; error?: string } | undefined

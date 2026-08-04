@@ -872,6 +872,38 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     expect(mockCreateFile).not.toHaveBeenCalledWith('//src/app.ts')
   })
 
+  it('creates a file directly under a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([['/', []]])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'notes.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/notes.txt'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('//notes.txt')
+  })
+
+  it('creates a folder directly under a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([['/', []]])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    const input = await screen.findByPlaceholderText('Folder name...')
+    fireEvent.change(input, { target: { value: 'docs' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateDirectory).toHaveBeenCalledWith('/docs'))
+    expect(mockCreateDirectory).not.toHaveBeenCalledWith('//docs')
+  })
+
   it('aborts creation when the target directory cannot be expanded', async () => {
     openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
     mockExplorerState.selectedPaths = new Set(['/project/src'])
