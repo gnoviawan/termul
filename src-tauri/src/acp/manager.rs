@@ -386,8 +386,12 @@ where
             }
             None => {
                 // No deadlines (fully unlimited): only completion or cancel can
-                // end the turn. `idle_rx.changed()` is still polled so activity
-                // stays drained, but it no longer resets any deadline.
+                // end the turn. The `idle_rx` arm is intentionally absent —
+                // there is no deadline to reset, and a closed watch channel
+                // would otherwise return `Err` ready on every poll and busy-loop
+                // (starving the runtime). If a deadline is later configured it
+                // routes through the `Some` branch above, where the idle arm
+                // resets the idle deadline.
                 tokio::select! {
                     biased;
                     result = &mut prompt => return result,
@@ -397,7 +401,6 @@ where
                             Err(_) => Ok(StopReason::Cancelled),
                         };
                     }
-                    _ = idle_rx.changed() => {}
                 }
             }
         }

@@ -64,8 +64,9 @@ export interface AppSettings {
   appearanceMode: 'light' | 'dark'
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
-  /** ACP turn hard-cap timeout in seconds, or null = use the Rust default
-   * (unlimited by default). Set via App Preferences; pushed to the Rust core. */
+  /** ACP turn hard-cap timeout in seconds, or null = use the env var / Rust
+   * default (unlimited by default). Set via App Preferences; pushed to the
+   * Rust core. */
   acpTurnTimeoutSecs: number | null
   /** Automatically save dirty editor files after edits pause (GH-539). */
   editorAutoSave: boolean
