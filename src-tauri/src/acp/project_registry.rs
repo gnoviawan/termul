@@ -48,8 +48,10 @@ use tracing::{info, warn};
 
 /// Current on-disk JSON schema version. Bump when the [`RegistryFile`] shape
 /// changes; [`FileProjectRegistry::load`] routes any other version through
-/// the [`migrate`] hook (today: reject as [`ProjectRegistryError::BadSchemaVersion`]).
-pub const SCHEMA_VERSION: u32 = 2;
+/// the [`migrate`] hook. v3 renamed `activeProjectId` → `defaultProjectId`
+/// (the host default, distinct from any client's active selection); v2 files
+/// deserialize transparently via `#[serde(alias = "activeProjectId")]`.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A single VFS root served to the web client in VPS mode.
 ///
@@ -83,9 +85,12 @@ pub struct VfsRoot {
 pub struct RegistryFile {
     /// Schema version; must equal [`SCHEMA_VERSION`] (routed through [`migrate`]).
     pub schema_version: u32,
-    /// The operator's active project id, or `None` when none is active.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_project_id: Option<String>,
+    /// The host's default project id (seeds new web clients' initial
+    /// `activeProjectId`), or `None` when none is set. v2 files used the
+    /// field name `activeProjectId`; the serde alias deserializes both names
+    /// transparently so a v2 file loads without a manual rename step.
+    #[serde(default, alias = "activeProjectId", skip_serializing_if = "Option::is_none")]
+    pub default_project_id: Option<String>,
     /// The VFS roots (non-archived + archived; the web list shows both).
     pub projects: Vec<VfsRoot>,
 }
@@ -94,11 +99,12 @@ pub struct RegistryFile {
 ///
 /// Built by [`load`] from a `RegistryFile` (paths canonicalized, schema
 /// checked, roots validated). The standalone binary retains this registry so a
-/// successful project switch can persist the active id with [`save_atomic`].
+/// successful `set_default_project` can persist the default id with
+/// [`save_atomic`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProjectRegistry {
     roots: Vec<VfsRoot>,
-    active_project_id: Option<String>,
+    default_project_id: Option<String>,
 }
 
 /// Load / save failure for [`FileProjectRegistry`].
@@ -166,25 +172,34 @@ impl std::error::Error for ProjectRegistryError {
 }
 
 impl FileProjectRegistry {
-    /// An empty registry (no roots, no active project). The Ok path for a
+    /// An empty registry (no roots, no default project). The Ok path for a
     /// missing registry file — the binary still serves; `GET /projects`
     /// returns an empty list.
     #[must_use]
     pub fn empty() -> Self {
         Self {
             roots: Vec::new(),
-            active_project_id: None,
+            default_project_id: None,
         }
     }
 
-    /// Build a registry from already-loaded roots + an active id. Used by
+    /// Build a registry from already-loaded roots + a default id. Used by
     /// tests and seeders that construct the registry in-memory rather than
     /// from a file; the VPS runtime path is [`load`](Self::load).
+    ///
+    /// Drops `default_project_id` to `None` when it references a project not
+    /// in `roots` (P4: no dangling default — a stale id left by a deleted
+    /// project must not survive into the in-memory registry).
     #[must_use]
-    pub fn from_roots(roots: Vec<VfsRoot>, active_project_id: Option<String>) -> Self {
+    pub fn from_roots(roots: Vec<VfsRoot>, default_project_id: Option<String>) -> Self {
+        let default_project_id = default_project_id.filter(|id| {
+            roots.iter().any(|r| {
+                r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty()
+            })
+        });
         Self {
             roots,
-            active_project_id,
+            default_project_id,
         }
     }
 
@@ -222,8 +237,11 @@ impl FileProjectRegistry {
             }
         };
 
-        // Route any non-current schema through the migration hook. v1 upgrades
-        // to v2 with empty per-project MCP configuration; unknown versions fail.
+        // Route any non-current schema through the migration hook. v1/v2
+        // upgrade to v3: v1→v2 added empty per-project MCP configuration;
+        // v2→v3 renamed `activeProjectId` → `defaultProjectId` (the serde
+        // alias on the field handles the rename transparently, so the migrate
+        // arm only bumps the version). Unknown versions fail.
         let file = if file.schema_version != SCHEMA_VERSION {
             migrate(file.schema_version, file)?
         } else {
@@ -243,9 +261,19 @@ impl FileProjectRegistry {
             roots.push(root);
         }
 
+        // P4: drop a default_project_id that references a project not in the
+        // loaded roots (a stale id left by a deleted project must not survive
+        // into the in-memory registry). Also reject archived/empty-path
+        // defaults (not switchable — same conditions as `set_default_project`).
+        let default_project_id = file.default_project_id.filter(|id| {
+            roots.iter().any(|r| {
+                r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty()
+            })
+        });
+
         Ok(Self {
             roots,
-            active_project_id: file.active_project_id,
+            default_project_id,
         })
     }
 
@@ -261,7 +289,7 @@ impl FileProjectRegistry {
     pub fn save_atomic(&self, path: &Path) -> Result<(), ProjectRegistryError> {
         let file = RegistryFile {
             schema_version: SCHEMA_VERSION,
-            active_project_id: self.active_project_id.clone(),
+            default_project_id: self.default_project_id.clone(),
             projects: self.roots.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(ProjectRegistryError::Parse)?;
@@ -275,17 +303,19 @@ impl FileProjectRegistry {
         &self.roots
     }
 
-    /// The operator's active project id, or `None`.
+    /// The host's default project id, or `None`.
     #[must_use]
-    pub fn active_project_id(&self) -> Option<&str> {
-        self.active_project_id.as_deref()
+    pub fn default_project_id(&self) -> Option<&str> {
+        self.default_project_id.as_deref()
     }
 
-    /// Validate and update the active project id in memory.
+    /// Validate and update the default project id in memory.
     ///
     /// Persistence remains an explicit caller-owned `save_atomic` step so a
-    /// switch transaction can create its target ACP session before committing.
-    pub fn set_active_project(&mut self, project_id: &str) -> Result<(), ProjectRegistryError> {
+    /// `set_default_project` transaction can broadcast + persist atomically
+    /// (the caller persists after the registry + broadcast succeed, with
+    /// rollback on failure).
+    pub fn set_default_project(&mut self, project_id: &str) -> Result<(), ProjectRegistryError> {
         let root = self
             .roots
             .iter()
@@ -306,17 +336,17 @@ impl FileProjectRegistry {
                 reason: "project has no working directory".to_string(),
             });
         }
-        self.active_project_id = Some(project_id.to_string());
+        self.default_project_id = Some(project_id.to_string());
         Ok(())
     }
 
-    /// Restore a previously captured active id during transaction rollback.
+    /// Restore a previously captured default id during transaction rollback.
     ///
     /// This deliberately does not revalidate: the value came from this loaded
     /// registry immediately before a validated mutation, and may legitimately
     /// be `None`. Callers must persist the restored value with `save_atomic`.
-    pub(crate) fn restore_active_project(&mut self, active_project_id: Option<String>) {
-        self.active_project_id = active_project_id;
+    pub(crate) fn restore_default_project(&mut self, default_project_id: Option<String>) {
+        self.default_project_id = default_project_id;
     }
 
     /// Resolve a project id → its canonical VFS root path. Returns `None` for
@@ -344,14 +374,30 @@ impl FileProjectRegistry {
     }
 }
 
-/// Single schema migration seam. Version 1 upgrades in-memory to version 2;
-/// unknown versions are rejected without reinterpretation.
+/// Single schema migration seam. v1 upgrades in-memory to v3; v2 upgrades to
+/// v3 (the `activeProjectId` → `defaultProjectId` rename is handled transparently
+/// by the `#[serde(alias)]` on `RegistryFile.default_project_id`, so the v2
+/// arm only bumps the version); unknown versions are rejected without
+/// reinterpretation.
 fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectRegistryError> {
     match from {
         // v1 had the same project fields except project-scoped MCP servers.
         // `VfsRoot.mcp_servers` deserializes with `default`, so the explicit
         // migration is lossless and makes the new meaning/version deliberate.
+        // v1 also used `activeProjectId` (now `defaultProjectId`); the serde
+        // alias on the field accepts both names, so no manual field rename is
+        // needed — the bump to v3 records the semantic change.
         1 => {
+            file.schema_version = SCHEMA_VERSION;
+            Ok(file)
+        }
+        // v2 → v3: the registry's `activeProjectId` became `defaultProjectId`
+        // (the host default for new web clients, distinct from any client's
+        // per-connection active selection). The serde alias on
+        // `RegistryFile.default_project_id` deserializes a v2 file's
+        // `activeProjectId` transparently, so the migration only bumps the
+        // recorded schema version.
+        2 => {
             file.schema_version = SCHEMA_VERSION;
             Ok(file)
         }
@@ -486,7 +532,7 @@ mod tests {
 
         let reg = FileProjectRegistry::load(&file).expect("load ok");
         assert_eq!(reg.roots().len(), 2, "two roots loaded");
-        assert_eq!(reg.active_project_id(), Some("p-1"));
+        assert_eq!(reg.default_project_id(), Some("p-1"));
         let resolved = reg.resolve_path("p-1").expect("resolve p-1");
         // The loaded path is the canonical absolute form of root_a.
         assert!(resolved.is_absolute());
@@ -502,7 +548,7 @@ mod tests {
         let reg = FileProjectRegistry::load(&missing).expect("missing => Ok(empty)");
         assert!(reg.is_empty());
         assert_eq!(reg.roots().len(), 0);
-        assert_eq!(reg.active_project_id(), None);
+        assert_eq!(reg.default_project_id(), None);
         assert!(reg.resolve_path("anything").is_none());
         cleanup(&dir);
     }
@@ -607,7 +653,7 @@ mod tests {
         // Reload + deep-equal round-trip.
         let reloaded = FileProjectRegistry::load(&file).expect("reload ok");
         assert_eq!(reloaded.roots(), reg.roots());
-        assert_eq!(reloaded.active_project_id(), reg.active_project_id());
+        assert_eq!(reloaded.default_project_id(), reg.default_project_id());
         assert_eq!(reloaded, reg);
         cleanup(&dir);
     }
@@ -669,8 +715,61 @@ mod tests {
         assert_eq!(reg.resolve_path("missing"), None);
     }
 
+    // P4 — from_roots drops a default_project_id that references a project not
+    // in the roots list (no dangling default). Also drops a default pointing
+    // at an archived or empty-path root (not switchable — same conditions as
+    // `set_default_project`).
     #[test]
-    fn v1_migrates_to_v2_with_empty_mcp_configuration() {
+    fn from_roots_drops_dangling_or_unswitchable_default() {
+        let reg = FileProjectRegistry::from_roots(
+            vec![
+                root("p-live", Path::new("/a"), false),
+                root("p-archived", Path::new("/b"), true),
+                VfsRoot {
+                    id: "p-empty".to_string(),
+                    name: "Empty".to_string(),
+                    path: PathBuf::new(),
+                    color: "blue".to_string(),
+                    is_archived: false,
+                    mcp_servers: Vec::new(),
+                },
+            ],
+            // Dangling (p-deleted doesn't exist) — must be dropped.
+            Some("p-deleted".to_string()),
+        );
+        assert_eq!(reg.default_project_id(), None);
+
+        // A valid switchable default survives.
+        let reg = FileProjectRegistry::from_roots(
+            vec![root("p-live", Path::new("/a"), false)],
+            Some("p-live".to_string()),
+        );
+        assert_eq!(reg.default_project_id(), Some("p-live"));
+
+        // An archived default is dropped (not switchable).
+        let reg = FileProjectRegistry::from_roots(
+            vec![root("p-archived", Path::new("/b"), true)],
+            Some("p-archived".to_string()),
+        );
+        assert_eq!(reg.default_project_id(), None);
+
+        // An empty-path default is dropped (not switchable).
+        let reg = FileProjectRegistry::from_roots(
+            vec![VfsRoot {
+                id: "p-empty".to_string(),
+                name: "Empty".to_string(),
+                path: PathBuf::new(),
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: Vec::new(),
+            }],
+            Some("p-empty".to_string()),
+        );
+        assert_eq!(reg.default_project_id(), None);
+    }
+
+    #[test]
+    fn v1_migrates_to_v3_with_empty_mcp_configuration() {
         let dir = tempdir_like("migrate-v1");
         let root_a = real_dir(&dir, "proj-a");
         let file = dir.join("projects.json");
@@ -688,27 +787,98 @@ mod tests {
         );
         let reg = FileProjectRegistry::load(&file).expect("v1 migrates");
         assert!(reg.roots()[0].mcp_servers.is_empty());
-        reg.save_atomic(&file).expect("save v2");
+        // The serde alias deserializes v1's `activeProjectId` into
+        // `default_project_id` transparently.
+        assert_eq!(reg.default_project_id(), Some("p-1"));
+        reg.save_atomic(&file).expect("save v3");
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-        assert_eq!(saved["schemaVersion"], 2);
+        assert_eq!(saved["schemaVersion"], 3);
+        assert_eq!(saved["defaultProjectId"], "p-1");
+        assert!(
+            saved.get("activeProjectId").is_none(),
+            "v3 must serialize under the new field name"
+        );
+        cleanup(&dir);
+    }
+
+    /// v2 → v3 migration: a v2 file used `activeProjectId`; the serde alias on
+    /// `RegistryFile.default_project_id` deserializes it transparently, and the
+    /// migrate arm bumps the recorded schema version to 3. After a save→reload
+    /// the field is stored under the new `defaultProjectId` name.
+    #[test]
+    fn v2_migrates_to_v3_via_serde_alias() {
+        let dir = tempdir_like("migrate-v2");
+        let root_a = real_dir(&dir, "proj-a");
+        let file = dir.join("projects.json");
+        write_json(
+            &file,
+            &serde_json::json!({
+                "schemaVersion": 2,
+                "activeProjectId": "p-1",
+                "projects": [{
+                    "id": "p-1", "name": "Project p-1", "path": root_a,
+                    "color": "blue", "isArchived": false
+                }]
+            })
+            .to_string(),
+        );
+        let reg = FileProjectRegistry::load(&file).expect("v2 migrates to v3");
+        // The serde alias carried `activeProjectId` into `default_project_id`.
+        assert_eq!(reg.default_project_id(), Some("p-1"));
+        // Re-saving persists under the new field name + bumps the version.
+        reg.save_atomic(&file).expect("save v3");
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["schemaVersion"], 3);
+        assert_eq!(saved["defaultProjectId"], "p-1");
+        assert!(
+            saved.get("activeProjectId").is_none(),
+            "v3 must serialize under the new field name only"
+        );
+        cleanup(&dir);
+    }
+
+    /// P4 — load drops a `default_project_id` that references a project not in
+    /// the file's roots (a stale id left by a deleted project must not survive
+    /// into the in-memory registry).
+    #[test]
+    fn load_drops_dangling_default_project_id() {
+        let dir = tempdir_like("load-dangling-default");
+        let root_a = real_dir(&dir, "proj-a");
+        let file = dir.join("projects.json");
+        write_json(
+            &file,
+            &serde_json::json!({
+                "schemaVersion": 3,
+                "defaultProjectId": "p-deleted",
+                "projects": [{
+                    "id": "p-1", "name": "Project p-1", "path": root_a,
+                    "color": "blue", "isArchived": false
+                }]
+            })
+            .to_string(),
+        );
+        let reg = FileProjectRegistry::load(&file).expect("load ok");
+        // The dangling default is dropped (no project with id "p-deleted").
+        assert_eq!(reg.default_project_id(), None);
+        assert_eq!(reg.roots().len(), 1);
         cleanup(&dir);
     }
 
     #[test]
-    fn set_active_project_validates_before_mutating() {
+    fn set_default_project_validates_before_mutating() {
         let reg_root = root("live", Path::new("/a"), false);
         let archived = root("archived", Path::new("/b"), true);
         let mut reg =
             FileProjectRegistry::from_roots(vec![reg_root, archived], Some("live".to_string()));
-        assert!(reg.set_active_project("missing").is_err());
-        assert_eq!(reg.active_project_id(), Some("live"));
-        assert!(reg.set_active_project("archived").is_err());
-        assert_eq!(reg.active_project_id(), Some("live"));
+        assert!(reg.set_default_project("missing").is_err());
+        assert_eq!(reg.default_project_id(), Some("live"));
+        assert!(reg.set_default_project("archived").is_err());
+        assert_eq!(reg.default_project_id(), Some("live"));
     }
 
     #[test]
-    fn restore_active_project_supports_persistence_rollback() {
-        let dir = tempdir_like("active-rollback");
+    fn restore_default_project_supports_persistence_rollback() {
+        let dir = tempdir_like("default-rollback");
         let root_a = real_dir(&dir, "proj-a");
         let root_b = real_dir(&dir, "proj-b");
         let file = dir.join("projects.json");
@@ -717,20 +887,20 @@ mod tests {
             Some("p-1".to_string()),
         );
         reg.save_atomic(&file).expect("seed registry");
-        let previous = reg.active_project_id().map(str::to_string);
-        reg.set_active_project("p-2").expect("switch active");
-        reg.save_atomic(&file).expect("persist switch");
+        let previous = reg.default_project_id().map(str::to_string);
+        reg.set_default_project("p-2").expect("set default");
+        reg.save_atomic(&file).expect("persist default");
 
-        reg.restore_active_project(previous);
+        reg.restore_default_project(previous);
         reg.save_atomic(&file).expect("persist rollback");
         let reloaded = FileProjectRegistry::load(&file).expect("reload rolled back registry");
-        assert_eq!(reloaded.active_project_id(), Some("p-1"));
+        assert_eq!(reloaded.default_project_id(), Some("p-1"));
         cleanup(&dir);
     }
 
     #[test]
-    fn active_project_persists_across_reload() {
-        let dir = tempdir_like("active-switch");
+    fn default_project_persists_across_reload() {
+        let dir = tempdir_like("default-switch");
         let root_a = real_dir(&dir, "proj-a");
         let root_b = real_dir(&dir, "proj-b");
         let file = dir.join("projects.json");
@@ -739,11 +909,11 @@ mod tests {
             Some("p-1".to_string()),
         );
         reg.save_atomic(&file).expect("seed registry");
-        reg.set_active_project("p-2").expect("switch active");
-        reg.save_atomic(&file).expect("persist switch");
+        reg.set_default_project("p-2").expect("set default");
+        reg.save_atomic(&file).expect("persist default");
 
         let reloaded = FileProjectRegistry::load(&file).expect("reload switched registry");
-        assert_eq!(reloaded.active_project_id(), Some("p-2"));
+        assert_eq!(reloaded.default_project_id(), Some("p-2"));
         cleanup(&dir);
     }
 }

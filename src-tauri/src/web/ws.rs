@@ -37,7 +37,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
 use crate::acp::config::AgentConfig;
 use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
@@ -857,13 +857,27 @@ async fn handle_request(
                 acp,
                 relay,
                 registry,
-                registry_persistence,
-                projects_file,
                 out_tx,
                 current_agent,
                 current_session,
                 current_project,
                 switch_queue,
+            )
+            .await
+        }
+        // Explicit host-default change (Epic 7 — cross-client continuity).
+        // Distinct from `switch_project` (per-connection): updates the host's
+        // `default_project_id`, persists to `FileProjectRegistry` (VPS, with
+        // rollback), and broadcasts `projects_changed` to ALL clients. Any
+        // authenticated client can set the default for now (Epic 2 wires auth).
+        "set_default_project" => {
+            handle_set_default_project(
+                id,
+                &req.payload,
+                relay,
+                registry,
+                registry_persistence,
+                projects_file,
             )
             .await
         }
@@ -1396,6 +1410,154 @@ struct SwitchProjectPayload {
     project_id: String,
 }
 
+/// `set_default_project` WS request payload. Changes the host's default
+/// project (distinct from a per-connection `switch_project`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetDefaultProjectPayload {
+    project_id: String,
+}
+
+/// `set_default_project` WS handler — the explicit host-default change.
+///
+/// Validates the target (unknown/archived/pathless → `NOT_FOUND`), updates
+/// `registry.set_default_project`, persists to `FileProjectRegistry` (VPS only,
+/// with rollback on failure), and broadcasts `projects_changed` carrying the
+/// new `defaultProjectId` to ALL connected clients. Desktop-hosted mode has
+/// no `FileProjectRegistry` (`registry_persistence`/`projects_file` are
+/// `None`) — it updates the in-memory registry + broadcasts only. The
+/// `remote_sync_projects` desktop push is the other path that changes the
+/// default (the desktop user IS the host operator).
+///
+/// # Error code mapping (P9)
+///
+/// The WS protocol's fixed `WsErrorCode` enum has no dedicated
+/// "persistence failed" variant (the 10 stable codes are mirrored in TS).
+/// Malformed payloads use `Unsupported` (matching `switch_project`); a
+/// persistence failure also maps to `Unsupported` but with a distinct
+/// message ("failed to persist default project: ..."). The HTTP route
+/// (`POST /projects/default`) uses the free-form `IpcBody.code` string
+/// `PERSIST_FAILED` for the same condition — the codes differ by transport
+/// but the messages are unambiguous.
+#[allow(clippy::too_many_arguments)]
+async fn handle_set_default_project(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+) -> WsReply {
+    let parsed: SetDefaultProjectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "set_default_project: malformed payload (want projectId)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed set_default_project payload (want projectId): {e}"),
+            );
+        }
+    };
+    // Validate via the in-memory registry (unknown/archived/pathless → NOT_FOUND).
+    // `switch_context` re-checks the same conditions; reuse it so the
+    // validation path is identical to `switch_project`.
+    if registry.switch_context(&parsed.project_id).is_none() {
+        warn!(
+            target: "termul::web::ws",
+            project_id = %parsed.project_id,
+            "set_default_project: project not found or not switchable"
+        );
+        return WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            format!(
+                "project '{}' not found or not switchable",
+                parsed.project_id
+            ),
+        );
+    }
+    // VPS persistence (with rollback). Desktop-hosted mode skips this (no file
+    // registry). The old default is captured so the in-memory-set failure path
+    // below can roll the file back (P1: no split-brain — if
+    // `registry.set_default_project` returns false after the file was already
+    // persisted, the file is restored + re-saved before returning the error).
+    let mut persisted_old_default: Option<Option<String>> = None;
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_default = file_registry.default_project_id().map(str::to_string);
+            match file_registry.set_default_project(&parsed.project_id) {
+                Ok(()) => match file_registry.save_atomic(path) {
+                    Ok(()) => {
+                        persisted_old_default = Some(old_default);
+                        Ok(())
+                    }
+                    Err(error) => {
+                        file_registry.restore_default_project(old_default);
+                        Err(error)
+                    }
+                },
+                Err(error) => Err(error),
+            }
+        };
+        if let Err(error) = persistence_result {
+            error!(
+                target: "termul::web::ws",
+                project_id = %parsed.project_id,
+                error = %error,
+                "set_default_project: persistence failed (rolled back)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("failed to persist default project: {error}"),
+            );
+        }
+    }
+    // Update the in-memory registry default + broadcast to all clients.
+    // If the in-memory set fails (target vanished between validation and
+    // commit), roll back the file registry (P1: no split-brain).
+    if !registry.set_default_project(&parsed.project_id) {
+        if let (Some(file_registry), Some(path), Some(old_default)) = (
+            registry_persistence,
+            projects_file,
+            persisted_old_default,
+        ) {
+            let mut file_registry = file_registry.lock();
+            file_registry.restore_default_project(old_default);
+            if let Err(error) = file_registry.save_atomic(path) {
+                warn!(
+                    target: "termul::web::ws",
+                    error = %error,
+                    "set_default_project: failed to persist in-memory-set rollback"
+                );
+            }
+        }
+        warn!(
+            target: "termul::web::ws",
+            project_id = %parsed.project_id,
+            "set_default_project: target became unavailable before commit (file rolled back)"
+        );
+        return WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            "target project became unavailable before commit",
+        );
+    }
+    broadcast_projects_changed(relay, Some(&parsed.project_id));
+    info!(
+        target: "termul::web::ws",
+        project_id = %parsed.project_id,
+        "set_default_project: host default updated + broadcast"
+    );
+    WsReply::ok(id, Some(json!({})))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(
     tag = "status",
@@ -1559,9 +1721,6 @@ async fn execute_project_switch(
     previous_session_id: SessionId,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
-    registry: &Arc<ProjectRegistry>,
-    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<&PathBuf>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> Result<SwitchProjectOutcome, String> {
@@ -1607,46 +1766,20 @@ async fn execute_project_switch(
             outcome.session_id
         }
     };
-    let mut persisted_previous_active: Option<Option<String>> = None;
 
-    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
-        let persistence_result = {
-            let mut file_registry = file_registry.lock();
-            let old_active = file_registry.active_project_id().map(str::to_string);
-            if let Err(error) = file_registry.set_active_project(&target.project_id) {
-                Err(error.to_string())
-            } else if let Err(error) = file_registry.save_atomic(path) {
-                file_registry.restore_active_project(old_active);
-                Err(error.to_string())
-            } else {
-                persisted_previous_active = Some(old_active);
-                Ok(())
-            }
-        };
-        if let Err(error) = persistence_result {
-            let _ = acp.close_session(agent_id, new_session.clone()).await;
-            return Err(format!("failed to persist active project: {error}"));
-        }
-    }
-
-    if !registry.set_active_project(&target.project_id) {
-        if let (Some(file_registry), Some(path), Some(old_active)) = (
-            registry_persistence,
-            projects_file,
-            persisted_previous_active,
-        ) {
-            let mut file_registry = file_registry.lock();
-            file_registry.restore_active_project(old_active);
-            if let Err(error) = file_registry.save_atomic(path) {
-                warn!("[ws] failed to persist active-project rollback: {error}");
-            }
-        }
-        let _ = acp.close_session(agent_id, new_session.clone()).await;
-        return Err("target project became unavailable before commit".to_string());
-    }
-    broadcast_projects_changed(relay, Some(&target.project_id));
+    // Per-connection switch (Epic 7): update only this connection's
+    // `current_project`. No `registry.set_default_project`, no
+    // `broadcast_projects_changed`, no `FileProjectRegistry` persistence —
+    // a per-client switch is ephemeral; only `set_default_project` writes
+    // the durable default. Other connected clients are unaffected.
     *current_session.lock() = Some(new_session.clone());
     *current_project.lock() = Some(target.project_id.clone());
+    debug!(
+        target: "termul::web::ws",
+        project_id = %target.project_id,
+        session_id = %new_session.0,
+        "switch_project: per-connection switch committed (no broadcast)"
+    );
 
     if previous_session_id != new_session {
         if let Err(error) = acp.close_session(agent_id, previous_session_id).await {
@@ -1662,57 +1795,22 @@ async fn execute_project_switch(
     })
 }
 
-/// Cold-tab (no live agent) `switch_project`: deferred select. Updates the
-/// shared `active_project_id` (+ persists to disk with rollback, mirroring
-/// `execute_project_switch`) and the connection's `current_project`, then
-/// broadcasts `projects_changed`. No agent is spawned and no session is
-/// created — the Ask-First resolution stands; the web client spawns the agent
-/// lazily when a chat starts. Returns `Selected`; errors (persistence failure,
-/// target vanished between lookup and commit) are `String`s the caller maps
-/// via `acp_err_to_reply` (same mapping as the live-agent path).
+/// Cold-tab (no live agent) `switch_project`: deferred select. Updates only
+/// the requesting connection's `current_project`. No agent is spawned and no
+/// session is created — the Ask-First resolution stands; the web client
+/// spawns the agent lazily when a chat starts. Returns `Selected`. The shared
+/// `default_project_id` is NOT touched (per-connection switch); only
+/// `set_default_project` changes the host default.
 fn execute_cold_tab_select(
     target: ProjectSwitchContext,
-    relay: &Arc<WsRelaySink>,
-    registry: &Arc<ProjectRegistry>,
-    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<&PathBuf>,
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> Result<SwitchProjectOutcome, String> {
-    let mut persisted_previous_active: Option<Option<String>> = None;
-    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
-        let persistence_result = {
-            let mut file_registry = file_registry.lock();
-            let old_active = file_registry.active_project_id().map(str::to_string);
-            if let Err(error) = file_registry.set_active_project(&target.project_id) {
-                Err(error.to_string())
-            } else if let Err(error) = file_registry.save_atomic(path) {
-                file_registry.restore_active_project(old_active);
-                Err(error.to_string())
-            } else {
-                persisted_previous_active = Some(old_active);
-                Ok(())
-            }
-        };
-        if let Err(error) = persistence_result {
-            return Err(format!("failed to persist active project: {error}"));
-        }
-    }
-    if !registry.set_active_project(&target.project_id) {
-        if let (Some(file_registry), Some(path), Some(old_active)) = (
-            registry_persistence,
-            projects_file,
-            persisted_previous_active,
-        ) {
-            let mut file_registry = file_registry.lock();
-            file_registry.restore_active_project(old_active);
-            if let Err(error) = file_registry.save_atomic(path) {
-                warn!("[ws] failed to persist active-project rollback: {error}");
-            }
-        }
-        return Err("target project became unavailable before commit".to_string());
-    }
-    broadcast_projects_changed(relay, Some(&target.project_id));
     *current_project.lock() = Some(target.project_id.clone());
+    debug!(
+        target: "termul::web::ws",
+        project_id = %target.project_id,
+        "switch_project: cold-tab per-connection select (no broadcast, no persistence)"
+    );
     Ok(SwitchProjectOutcome::Selected {
         project_id: target.project_id,
         cwd: target.cwd,
@@ -1724,9 +1822,6 @@ async fn run_switch_queue(
     agent_id: AgentId,
     acp: Arc<AcpManager>,
     relay: Arc<WsRelaySink>,
-    registry: Arc<ProjectRegistry>,
-    registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<Arc<PathBuf>>,
     out_tx: mpsc::UnboundedSender<Outbound>,
     current_session: Arc<parking_lot::Mutex<Option<SessionId>>>,
     current_project: Arc<parking_lot::Mutex<Option<String>>>,
@@ -1775,9 +1870,6 @@ async fn run_switch_queue(
             pending.previous_session_id.clone(),
             &acp,
             &relay,
-            &registry,
-            registry_persistence.as_ref(),
-            projects_file.as_deref(),
             &current_session,
             &current_project,
         )
@@ -1836,8 +1928,6 @@ async fn handle_switch_project(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<&PathBuf>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
     current_agent: &mut Option<AgentId>,
     current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
@@ -1874,18 +1964,12 @@ async fn handle_switch_project(
     };
     let agent_id = match current_agent.clone() {
         Some(agent_id) => agent_id,
-        // Cold tab (no live agent): deferred select — update the shared active
-        // project (+ persist) + `current_project`, broadcast
-        // `projects_changed`, return `Selected`. No agent spawn / session
-        // (Ask-First stands; the web client spawns lazily on chat start).
-        None => match execute_cold_tab_select(
-            target,
-            relay,
-            registry,
-            registry_persistence,
-            projects_file,
-            current_project,
-        ) {
+        // Cold tab (no live agent): deferred per-connection select — update
+        // only this connection's `current_project`, return `Selected`. No
+        // agent spawn / session (Ask-First stands; the web client spawns
+        // lazily on chat start). No host-default change, no broadcast, no
+        // persistence (per-connection switch is ephemeral).
+        None => match execute_cold_tab_select(target, current_project) {
             Ok(outcome) => return ok_with_payload(id, &outcome),
             Err(error) => return acp_err_to_reply(id, error),
         },
@@ -1911,9 +1995,6 @@ async fn handle_switch_project(
             previous_session_id,
             acp,
             relay,
-            registry,
-            registry_persistence,
-            projects_file,
             current_session,
             current_project,
         )
@@ -1947,9 +2028,6 @@ async fn handle_switch_project(
                     agent_id,
                     Arc::clone(acp),
                     Arc::clone(relay),
-                    Arc::clone(registry),
-                    registry_persistence.cloned(),
-                    projects_file.cloned().map(Arc::new),
                     out_tx.clone(),
                     Arc::clone(current_session),
                     Arc::clone(current_project),
@@ -2992,7 +3070,6 @@ mod tests {
                 project_id: project_id.to_string(),
                 cwd: format!("/work/{project_id}"),
                 mcp_servers: Vec::new(),
-                is_active: false,
             },
             previous_session_id: SessionId("s-old".to_string()),
         };
@@ -4018,9 +4095,11 @@ mod tests {
 
     /// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
     /// sends `switch_project` → deferred `Selected` (Ask-First resolution:
-    /// do NOT auto-spawn). The shared `active_project_id` is updated,
-    /// `projects_changed` is broadcast, and no agent/session is touched —
-    /// the web client spawns the agent lazily when a chat starts.
+    /// do NOT auto-spawn). Per-connection `current_project` is updated; the
+    /// host default is NOT touched (no `registry.set_default_project`, no
+    /// `broadcast_projects_changed`, no persistence — a per-client switch is
+    /// ephemeral). No agent/session is created — the web client spawns the
+    /// agent lazily when a chat starts.
     #[test]
     fn handle_switch_project_cold_tab_is_deferred_select() {
         let relay = Arc::new(WsRelaySink::new());
@@ -4033,7 +4112,7 @@ mod tests {
                 color: "blue".to_string(),
                 path: Some("/a".to_string()),
                 is_archived: false,
-                is_active: false,
+                is_default: false,
             }],
             None,
         );
@@ -4067,11 +4146,12 @@ mod tests {
         assert_eq!(payload["cwd"], "/a");
         // Cold tab: no session was created.
         assert!(current_session.lock().is_none());
-        // The shared active-project mirror + connection tracking reflect it.
-        let snap = registry.snapshot();
-        assert_eq!(snap.active_project_id.as_deref(), Some("p-1"));
+        // Per-connection tracking reflects the switch.
         let cp = current_project.lock().clone();
         assert_eq!(cp.as_deref(), Some("p-1"));
+        // The host default is UNCHANGED (per-connection switch — Epic 7).
+        let snap = registry.snapshot();
+        assert_eq!(snap.default_project_id, None);
     }
 
     /// Cold-tab `switch_project` with an unknown/archived/pathless `projectId`
@@ -4089,7 +4169,7 @@ mod tests {
                 color: "blue".to_string(),
                 path: Some("/a".to_string()),
                 is_archived: false,
-                is_active: true,
+                is_default: true,
             }],
             Some("p-1".to_string()),
         );
@@ -4120,12 +4200,16 @@ mod tests {
         assert_eq!(reply.err.unwrap().code, "not_found");
     }
 
-    /// Cold-tab deferred select persists the new active project to the
-    /// `--projects-file` (rollback-safe), mirroring the live-agent path. A
-    /// desktop/server restart therefore reflects the web tab's selection.
+    /// Cold-tab `switch_project` is per-connection (Epic 7): it updates only
+    /// the requester's `current_project`. It does NOT persist to the
+    /// `--projects-file` (only `set_default_project` writes the durable
+    /// default) and does NOT broadcast `projects_changed`.
     #[test]
-    fn execute_cold_tab_select_persists_active_project() {
-        let relay = Arc::new(WsRelaySink::new());
+    fn execute_cold_tab_select_is_per_connection_no_persistence_no_broadcast() {
+        // A relay is wired (VPS-mode fixture) but the cold-tab switch must NOT
+        // touch it (no broadcast). Prefix `_` so the unused binding documents
+        // the intent without failing the build.
+        let _relay = Arc::new(WsRelaySink::new());
         let registry = Arc::new(ProjectRegistry::new());
         registry.set(
             vec![crate::web::project_registry::ProjectSummary {
@@ -4134,10 +4218,12 @@ mod tests {
                 color: "blue".to_string(),
                 path: Some("/a".to_string()),
                 is_archived: false,
-                is_active: false,
+                is_default: false,
             }],
             None,
         );
+        // A file registry + path are wired (VPS-mode fixtures), but the
+        // cold-tab switch must NOT touch them.
         let file_registry = FileProjectRegistry::from_roots(
             vec![crate::acp::VfsRoot {
                 id: "p-1".to_string(),
@@ -4151,7 +4237,7 @@ mod tests {
         );
         let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
         let path = std::env::temp_dir().join(format!(
-            "termul-ws-cold-tab-persist-{}.json",
+            "termul-ws-cold-tab-noperist-{}.json",
             std::process::id()
         ));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
@@ -4159,19 +4245,10 @@ mod tests {
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
-            is_active: false,
         };
-        let result = execute_cold_tab_select(
-            target,
-            &relay,
-            &registry,
-            Some(&file_registry),
-            Some(&path),
-            &current_project,
-        );
-        // Capture the persisted file before best-effort cleanup so a failing
-        // assertion cannot leak the temp file.
-        let saved = std::fs::read_to_string(&path).ok();
+        let result = execute_cold_tab_select(target, &current_project);
+        // Capture whether a file was written (it must NOT be).
+        let leaked = std::fs::read_to_string(&path).ok();
         let _ = std::fs::remove_file(&path);
         let outcome = result.expect("cold-tab select succeeds");
         let SwitchProjectOutcome::Selected { project_id, cwd } = outcome else {
@@ -4179,18 +4256,15 @@ mod tests {
         };
         assert_eq!(project_id, "p-1");
         assert_eq!(cwd, "/a");
-        // In-memory file registry + web registry + connection all reflect it.
-        let file_active = file_registry.lock().active_project_id().map(str::to_string);
-        assert_eq!(file_active.as_deref(), Some("p-1"));
-        let snap = registry.snapshot();
-        assert_eq!(snap.active_project_id.as_deref(), Some("p-1"));
+        // Per-connection tracking reflects the switch.
         let cp = current_project.lock().clone();
         assert_eq!(cp.as_deref(), Some("p-1"));
-        // The persisted file on disk carries the active id (read raw — `load`
-        // would re-validate root paths against the real fs).
-        let saved = saved.expect("persisted file written");
-        let v: Value = serde_json::from_str(&saved).expect("valid json");
-        assert_eq!(v["activeProjectId"], "p-1");
+        // The host default is UNCHANGED (per-connection switch).
+        assert_eq!(registry.snapshot().default_project_id, None);
+        // The file registry is UNCHANGED (no persistence on switch).
+        assert_eq!(file_registry.lock().default_project_id(), None);
+        // No file was written to disk.
+        assert!(leaked.is_none(), "switch must not write the projects file");
     }
 
     /// `switch_project` with a live agent but an unknown `projectId` →
@@ -4209,7 +4283,7 @@ mod tests {
                 color: "blue".to_string(),
                 path: Some("/a".to_string()),
                 is_archived: false,
-                is_active: true,
+                is_default: true,
             }],
             Some("p-1".to_string()),
         );
@@ -4548,7 +4622,6 @@ mod tests {
             project_id: "p-1".to_string(),
             cwd: "/a".to_string(),
             mcp_servers: vec![],
-            is_active: false,
         };
         let result =
             try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
@@ -4589,7 +4662,6 @@ mod tests {
             // `(project_id, cwd)` lookup finds the stored session.
             cwd: persistence.metadata("s-1").unwrap().cwd,
             mcp_servers: vec![],
-            is_active: false,
         };
         let result =
             try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
@@ -4599,5 +4671,495 @@ mod tests {
             "no registered agent → reopen fails → Err → new session"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `set_default_project` WS request (Epic 7): updates the host default,
+    /// persists to the `FileProjectRegistry` (VPS, rollback-safe), and
+    /// broadcasts `projects_changed`. Mirrors the `set_host_default_project`
+    /// Tauri command + `POST /projects/default` HTTP route (transport parity).
+    #[tokio::test]
+    async fn handle_set_default_project_updates_host_default_and_persists() {
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![
+                crate::web::project_registry::ProjectSummary {
+                    id: "p-1".to_string(),
+                    name: "Proj p-1".to_string(),
+                    color: "blue".to_string(),
+                    path: Some("/a".to_string()),
+                    is_archived: false,
+                    is_default: true,
+                },
+                crate::web::project_registry::ProjectSummary {
+                    id: "p-2".to_string(),
+                    name: "Proj p-2".to_string(),
+                    color: "green".to_string(),
+                    path: Some("/b".to_string()),
+                    is_archived: false,
+                    is_default: false,
+                },
+            ],
+            Some("p-1".to_string()),
+        );
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![
+                crate::acp::VfsRoot {
+                    id: "p-1".to_string(),
+                    name: "Proj p-1".to_string(),
+                    path: PathBuf::from("/a"),
+                    color: "blue".to_string(),
+                    is_archived: false,
+                    mcp_servers: vec![],
+                },
+                crate::acp::VfsRoot {
+                    id: "p-2".to_string(),
+                    name: "Proj p-2".to_string(),
+                    path: PathBuf::from("/b"),
+                    color: "green".to_string(),
+                    is_archived: false,
+                    mcp_servers: vec![],
+                },
+            ],
+            Some("p-1".to_string()),
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let path = std::env::temp_dir().join(format!(
+            "termul-ws-set-default-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+
+        let reply = handle_set_default_project(
+            "r1".to_string(),
+            &json!({ "projectId": "p-2" }),
+            &relay,
+            &registry,
+            Some(&file_registry),
+            Some(&path),
+        )
+        .await;
+        let saved = std::fs::read_to_string(&path).ok();
+        let _ = std::fs::remove_file(&path);
+        assert!(reply.ok, "{:?}", reply.err);
+        // In-memory registry default + flags updated.
+        let snap = registry.snapshot();
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-2"));
+        assert!(!snap.projects[0].is_default);
+        assert!(snap.projects[1].is_default);
+        // File registry persisted (VPS mode).
+        assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
+        let saved = saved.expect("persisted file written");
+        let v: Value = serde_json::from_str(&saved).expect("valid json");
+        assert_eq!(v["schemaVersion"], 3);
+        assert_eq!(v["defaultProjectId"], "p-2");
+    }
+
+    /// `set_default_project` WS request with an unknown/archived/pathless id →
+    /// `NOT_FOUND` (validation rejects before any mutation or persistence).
+    #[tokio::test]
+    async fn handle_set_default_project_unknown_id_is_not_found() {
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![
+                crate::web::project_registry::ProjectSummary {
+                    id: "p-1".to_string(),
+                    name: "Proj p-1".to_string(),
+                    color: "blue".to_string(),
+                    path: Some("/a".to_string()),
+                    is_archived: false,
+                    is_default: true,
+                },
+                crate::web::project_registry::ProjectSummary {
+                    id: "p-archived".to_string(),
+                    name: "Archived".to_string(),
+                    color: "blue".to_string(),
+                    path: Some("/b".to_string()),
+                    is_archived: true,
+                    is_default: false,
+                },
+                crate::web::project_registry::ProjectSummary {
+                    id: "p-pathless".to_string(),
+                    name: "Pathless".to_string(),
+                    color: "blue".to_string(),
+                    path: None,
+                    is_archived: false,
+                    is_default: false,
+                },
+            ],
+            Some("p-1".to_string()),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "termul-ws-set-default-nf-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        for bad in ["missing", "p-archived", "p-pathless"] {
+            let reply = handle_set_default_project(
+                "r1".to_string(),
+                &json!({ "projectId": bad }),
+                &relay,
+                &registry,
+                None,
+                Some(&path),
+            )
+            .await;
+            assert!(!reply.ok, "{bad} should be rejected");
+            assert_eq!(reply.err.unwrap().code, "not_found");
+            // Default unchanged.
+            assert_eq!(
+                registry.snapshot().default_project_id.as_deref(),
+                Some("p-1")
+            );
+        }
+        // No file was written (validation rejected before persistence).
+        assert!(
+            !path.exists(),
+            "no file should be written on validation failure"
+        );
+    }
+
+    /// `set_default_project` WS request is a distinct operation from
+    /// `switch_project`: the host default changes + broadcasts to ALL clients,
+    /// while a per-connection switch touches only the requester's
+    /// `current_project`. This test documents the parity boundary.
+    #[tokio::test]
+    async fn handle_set_default_project_broadcasts_unlike_switch() {
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_default: false,
+            }],
+            None,
+        );
+        // Subscribe a client to prove the broadcast reaches it.
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
+
+        let reply = handle_set_default_project(
+            "r1".to_string(),
+            &json!({ "projectId": "p-1" }),
+            &relay,
+            &registry,
+            None,
+            None,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        // P13: inspect the broadcast event type + payload (not just count).
+        let mut drained = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            drained.push(evt);
+        }
+        assert_eq!(drained.len(), 1, "exactly one projects_changed broadcast");
+        let evt = &drained[0];
+        assert_eq!(evt.type_, "projects_changed");
+        assert!(
+            evt.sid.is_none(),
+            "agent-level event: sid must be null"
+        );
+        assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
+        assert_eq!(
+            evt.payload["defaultProjectId"], "p-1",
+            "the broadcast carries the new default project id"
+        );
+    }
+
+    /// P7 — live-agent `switch_project` success path: no `projects_changed`
+    /// broadcast, no `FileProjectRegistry` persistence. The cold-tab path has
+    /// this assertion; this test covers the live-agent `execute_project_switch`
+    /// path. A `block_on` AcpManager can't spawn a real agent, so we call
+    /// `execute_project_switch` directly with a no-op AcpManager — the key
+    /// assertion is that NO broadcast fires (the relay's event log stays empty)
+    /// and the file registry default is UNCHANGED even though the connection's
+    /// `current_project` was updated.
+    ///
+    /// Note: `AcpManager::new(vec![])` has no registered agents, so
+    /// `new_session_with_context` will fail. We assert the error path does NOT
+    /// broadcast (the success path can't be exercised without a real agent).
+    /// This is a structural gap — a regression that adds a broadcast BEFORE
+    /// the session-creation step would be caught here.
+    #[tokio::test]
+    async fn execute_project_switch_live_agent_path_does_not_broadcast() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_default: true,
+            }],
+            Some("p-1".to_string()),
+        );
+        // A file registry + path are wired (VPS fixtures), but the switch must
+        // NOT touch them.
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: PathBuf::from("/a"),
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![],
+            }],
+            Some("p-1".to_string()),
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let path = std::env::temp_dir().join(format!(
+            "termul-ws-live-switch-nobroadcast-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        // Subscribe a client to prove NO broadcast reaches it.
+        let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
+
+        let current_session =
+            Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let target = ProjectSwitchContext {
+            project_id: "p-1".to_string(),
+            cwd: "/a".to_string(),
+            mcp_servers: vec![],
+        };
+        // The live-agent path will fail (no registered agent →
+        // new_session_with_context errors), but the key assertion is that NO
+        // broadcast fires even on this path. A regression that calls
+        // broadcast_projects_changed BEFORE the session-creation error would
+        // be caught.
+        let _result = execute_project_switch(
+            &AgentId("a-1".to_string()),
+            target,
+            SessionId("s-old".to_string()),
+            &acp,
+            &relay,
+            &current_session,
+            &current_project,
+        )
+        .await;
+        // No broadcast reached the subscribed client.
+        assert!(
+            rx.try_recv().is_err(),
+            "switch_project must NOT broadcast projects_changed (per-connection)"
+        );
+        // The file registry default is UNCHANGED (no persistence on switch).
+        assert_eq!(
+            file_registry.lock().default_project_id(),
+            Some("p-1"),
+            "switch must not persist to the file registry"
+        );
+        // No file was written to disk.
+        assert!(
+            !path.exists(),
+            "switch must not write the projects file"
+        );
+    }
+
+    /// P8 — multi-client: a `switch_project` by one client does NOT fan out
+    /// a `projects_changed` event to other subscribed clients. This is the
+    /// symmetric negative of `handle_set_default_project_broadcasts_unlike_switch`
+    /// (which proves `set_default_project` DOES broadcast). The cold-tab path
+    /// is used (no live agent) — the assertion is that the relay's event log
+    /// stays empty for the non-switching client.
+    #[tokio::test]
+    async fn switch_project_cold_tab_does_not_fan_out_to_other_clients() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_default: false,
+            }],
+            None,
+        );
+        // Client A subscribes to sess-a; client B subscribes to sess-b.
+        let (_client_a, mut rx_a, _replay_a) = relay.subscribe("sess-a", None).await;
+        let (_client_b, mut rx_b, _replay_b) = relay.subscribe("sess-b", None).await;
+
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let mut authed = true;
+        let mut current_agent: Option<crate::acp::AgentId> = None;
+        let current_session =
+            Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_project_a = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue =
+            Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+
+        // Client A sends switch_project (cold-tab path).
+        let reply_a = block_on(handle_request(
+            r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project_a,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+        ));
+        assert!(reply_a.ok, "client A switch succeeds: {:?}", reply_a.err);
+
+        // Client A's current_project reflects the switch.
+        assert_eq!(current_project_a.lock().as_deref(), Some("p-1"));
+
+        // P8: client B receives ZERO projects_changed events (no fan-out).
+        let mut b_drained = 0;
+        while rx_b.try_recv().is_ok() {
+            b_drained += 1;
+        }
+        assert_eq!(
+            b_drained, 0,
+            "switch_project must not fan out to other clients"
+        );
+        // Client A also receives nothing (switch_project responds to the
+        // requester ONLY — no broadcast).
+        let mut a_drained = 0;
+        while rx_a.try_recv().is_ok() {
+            a_drained += 1;
+        }
+        assert_eq!(a_drained, 0, "switch_project must not broadcast at all");
+    }
+
+    /// P10 — cold-tab `switch_project` with `registry_persistence: Some(...)`
+    /// still does NOT write the file (the persistence block was removed from
+    /// the switch path entirely — only `set_default_project` persists).
+    #[test]
+    fn execute_cold_tab_select_with_persistence_does_not_write_file() {
+        let _relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_default: false,
+            }],
+            None,
+        );
+        // Wire a REAL file registry + path (VPS-mode fixtures) — the switch
+        // must NOT touch them.
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: PathBuf::from("/a"),
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![],
+            }],
+            None,
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let path = std::env::temp_dir().join(format!(
+            "termul-ws-cold-tab-vps-noperist-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let target = ProjectSwitchContext {
+            project_id: "p-1".to_string(),
+            cwd: "/a".to_string(),
+            mcp_servers: vec![],
+        };
+        // The cold-tab switch only takes (target, current_project) now — it
+        // no longer accepts registry_persistence/projects_file. Calling it
+        // directly proves the file is untouched even when VPS fixtures exist
+        // in the caller's scope.
+        let result = execute_cold_tab_select(target, &current_project);
+        let leaked = std::fs::read_to_string(&path).ok();
+        let _ = std::fs::remove_file(&path);
+        let outcome = result.expect("cold-tab select succeeds");
+        let SwitchProjectOutcome::Selected { project_id, cwd } = outcome else {
+            panic!("expected Selected, got {:?}", outcome);
+        };
+        assert_eq!(project_id, "p-1");
+        assert_eq!(cwd, "/a");
+        assert_eq!(current_project.lock().as_deref(), Some("p-1"));
+        // The host default is UNCHANGED (per-connection switch).
+        assert_eq!(registry.snapshot().default_project_id, None);
+        // The file registry is UNCHANGED.
+        assert_eq!(file_registry.lock().default_project_id(), None);
+        // No file was written.
+        assert!(leaked.is_none(), "switch must not write the projects file");
+    }
+
+    /// P17 — `connection_already_on_project` gate: when the connection's
+    /// `current_project` already matches the target, the switch returns early
+    /// (a no-op `Completed` with the previous session). The cold-tab test
+    /// (`execute_cold_tab_select_is_per_connection_no_persistence_no_broadcast`)
+    /// covers the non-matching path; this test pins the matching path.
+    #[tokio::test]
+    async fn execute_project_switch_returns_early_when_already_on_project() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![crate::web::project_registry::ProjectSummary {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                color: "blue".to_string(),
+                path: Some("/a".to_string()),
+                is_archived: false,
+                is_default: true,
+            }],
+            Some("p-1".to_string()),
+        );
+        let current_session =
+            Arc::new(parking_lot::Mutex::new(Some(SessionId("s-prev".to_string()))));
+        // The connection is ALREADY on p-1.
+        let current_project = Arc::new(parking_lot::Mutex::new(Some("p-1".to_string())));
+        let target = ProjectSwitchContext {
+            project_id: "p-1".to_string(),
+            cwd: "/a".to_string(),
+            mcp_servers: vec![],
+        };
+        let outcome = execute_project_switch(
+            &AgentId("a-1".to_string()),
+            target,
+            SessionId("s-prev".to_string()),
+            &acp,
+            &relay,
+            &current_session,
+            &current_project,
+        )
+        .await
+        .expect("early return succeeds");
+        // The switch is a no-op: same session, no new session created.
+        let SwitchProjectOutcome::Completed {
+            project_id,
+            session_id,
+            cwd,
+            mcp_server_count: _,
+        } = outcome
+        else {
+            panic!("expected Completed (early return), got {:?}", outcome);
+        };
+        assert_eq!(project_id, "p-1");
+        assert_eq!(session_id.0, "s-prev");
+        assert_eq!(cwd, "/a");
+        // current_session unchanged (no new session).
+        assert_eq!(current_session.lock().as_ref().unwrap().0, "s-prev");
     }
 }

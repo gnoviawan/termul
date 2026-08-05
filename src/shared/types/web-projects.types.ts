@@ -30,33 +30,56 @@ export interface ProjectSummary {
   path: string | null
   /** `true` when the project is archived (rendered greyed, not clickable). */
   isArchived: boolean
-  /** `true` when this is the desktop's active project. */
-  isActive: boolean
+  /**
+   * `true` when this is the host's default project (set by the host based on
+   * `default_project_id`). Distinct from a client's per-connection active
+   * project — the host cannot know which project a specific client is on.
+   * The renderer's `Project.isActive` stays (set locally by `selectProject`).
+   */
+  isDefault: boolean
 }
 
 /** `GET /projects` response body (wrapped in `IpcResult<T>` by the server). */
 export interface ProjectListPayload {
   /** Non-archived + archived summaries (the web list shows both, archived greyed). */
   projects: ProjectSummary[]
-  /** The desktop's active project id, or `null` when none. */
-  activeProjectId: string | null
+  /**
+   * The host's default project id (seeds a new web client's initial
+   * `activeProjectId`), or `null` when none is set.
+   */
+  defaultProjectId: string | null
 }
 
 /**
  * `projects_changed` WS event payload (agent-level: `sid: null`, `seq: 0`).
  *
- * Carries only the new `activeProjectId` — the web client refetches `GET
+ * Carries only the new `defaultProjectId` — the web client refetches `GET
  * /projects` for the full list rather than receiving the payload inline (the
- * list can be large and the desktop is the source of truth).
+ * list can be large and the host is the source of truth). On the initial load
+ * a client seeds `activeProjectId` from `defaultProjectId`; on subsequent
+ * events the client preserves its own `activeProjectId` (no silent retarget).
  */
 export interface ProjectsChangedEvent {
-  /** The desktop's new active project id, or `null` when none. */
-  activeProjectId: string | null
+  /** The host's new default project id, or `null` when none is set. */
+  defaultProjectId: string | null
 }
 
 /** `switch_project` WS request payload (client→server). */
 export interface SwitchProjectRequest {
   /** Target project id (resolved to a cwd via the registry server-side). */
+  projectId: string
+}
+
+/**
+ * `set_default_project` WS request payload (client→server) — the explicit
+ * host-default change. Distinct from `switch_project` (per-connection): this
+ * updates the host default that new web clients start with, persists to the
+ * `FileProjectRegistry` (VPS), and broadcasts `projects_changed` to ALL
+ * clients. Mirrors the `set_host_default_project` Tauri command + the
+ * `POST /projects/default` HTTP route (transport parity).
+ */
+export interface SetDefaultProjectRequest {
+  /** Target project id (validated switchable: known, not archived, has cwd). */
   projectId: string
 }
 
@@ -77,11 +100,13 @@ export interface SwitchProjectQueued {
 }
 
 /**
- * Cold-tab `switch_project` outcome (server→client). The shared active project
- * changed but no session was created and no agent was spawned — the web
- * client spawns the agent lazily when a chat starts (Ask-First resolution
- * stands). `cwd` lets the client resolve the project root without a second
- * registry round-trip. Mirrors the Rust `SwitchProjectOutcome::Selected`.
+ * Cold-tab `switch_project` outcome (server→client). The requesting
+ * connection's `current_project` changed but no session was created and no
+ * agent was spawned — the web client spawns the agent lazily when a chat
+ * starts (Ask-First resolution stands). The host default is NOT touched
+ * (per-connection switch). `cwd` lets the client resolve the project root
+ * without a second registry round-trip. Mirrors the Rust
+ * `SwitchProjectOutcome::Selected`.
  */
 export interface SwitchProjectSelected {
   status: 'selected'

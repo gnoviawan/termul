@@ -503,4 +503,51 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/'workspace:manifest:delete'/)
     })
   })
+
+  // Epic 7 — cross-client workspace continuity: the explicit host-default
+  // change ships on THREE transports (Tauri command `set_host_default_project`,
+  // HTTP `POST /projects/default`, WS `set_default_project` request). This
+  // block pins the TS-side parity (the Rust-side parity — router route + ws
+  // handler + Tauri command registration — is covered by the Rust test suite).
+  // Also pins the wire rename `activeProjectId` → `defaultProjectId` +
+  // `ProjectSummary.isActive` → `isDefault`.
+  describe('Project default parity (Epic 7)', () => {
+    const TauriRemoteApi = join(LIB_DIR, 'tauri-remote-api.ts')
+    const WebServerApi = join(LIB_DIR, 'web-server-api.ts')
+    const SharedTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-projects.types.ts')
+
+    it('shared types rename activeProjectId → defaultProjectId + isActive → isDefault', () => {
+      expect(existsSync(SharedTypes), 'web-projects.types.ts should exist').toBe(true)
+      const content = readFileSync(SharedTypes, 'utf-8')
+      // Renamed wire field declarations.
+      expect(content).toMatch(/defaultProjectId:\s*string\s*\|\s*null/)
+      expect(content).toMatch(/isDefault:\s*boolean/)
+      // The OLD wire field names must NOT survive as declarations on the wire
+      // shapes. (Comments may still mention the renderer's per-client
+      // `activeProjectId`/`Project.isActive` — those are distinct concepts.)
+      expect(content).not.toMatch(/^\s*activeProjectId:/m)
+      expect(content).not.toMatch(/^\s*isActive:/m)
+      // New explicit-default request type.
+      expect(content).toMatch(/export\s+interface\s+SetDefaultProjectRequest\b/)
+      expect(content).toMatch(/projectId:\s*string/)
+    })
+
+    it('tauri-remote-api.ts exports setHostDefaultProject + invokes set_host_default_project', () => {
+      expect(existsSync(TauriRemoteApi), 'tauri-remote-api.ts should exist').toBe(true)
+      const content = readFileSync(TauriRemoteApi, 'utf-8')
+      expect(content).toMatch(/export\s+async\s+function\s+setHostDefaultProject\b/)
+      expect(content).toMatch(/set_host_default_project/)
+      // syncProjects param renamed to defaultProjectId (desktop active IS the
+      // host default in desktop-hosted mode — same value, new param name).
+      expect(content).toMatch(/defaultProjectId:\s*string\s*\|\s*null/)
+      expect(content).not.toMatch(/activeProjectId:\s*string\s*\|\s*null/)
+    })
+
+    it('web-server-api.ts exposes setDefaultProject hitting POST /projects/default', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/setDefaultProject\b/)
+      expect(content).toMatch(/\/projects\/default/)
+    })
+  })
 })

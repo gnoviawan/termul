@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Clock3, FolderGit2, Loader2 } from 'lucide-react'
+import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -9,6 +9,9 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { getColorClasses } from '@/lib/colors'
+import { setHostDefaultProject } from '@/lib/tauri-remote-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { webServerProjects } from '@/lib/web-server-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
@@ -26,6 +29,13 @@ interface ProjectSwitcherDrawerProps {
  * not clickable. The currently active project is marked. The Tauri desktop
  * transport has no `switchProject` — this drawer is mounted only in web/remote
  * mode, so a missing method is a no-op (defensive).
+ *
+ * Epic 7 (cross-client continuity): a project `isDefault` (the host default,
+ * set by the host's `default_project_id`) shows a "host default" badge. A
+ * "Set as host default" action calls `set_host_default_project` (Tauri) or
+ * `POST /projects/default` (web) depending on transport — distinct from the
+ * per-connection `switch_project` (which only updates this client's
+ * `activeProjectId` and never broadcasts).
  */
 export function ProjectSwitcherDrawer({
   open,
@@ -38,6 +48,7 @@ export function ProjectSwitcherDrawer({
   const failedProjectSwitchId = useAcpStore((s) => s.failedProjectSwitchId)
   const setFailedProjectSwitch = useAcpStore((s) => s.setFailedProjectSwitch)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
+  const [defaultingId, setDefaultingId] = useState<string | null>(null)
 
   // The inline "Failed" badge is transient: dismiss it when the drawer closes
   // so a stale red indicator doesn't reappear on the next open. A fresh switch
@@ -68,6 +79,37 @@ export function ProjectSwitcherDrawer({
     }
   }
 
+  // Explicit host-default change (Epic 7). Distinct from `switchProject`
+  // (per-connection): updates the host default that new web clients start
+  // with + broadcasts `projects_changed` to ALL clients. Transport parity:
+  // Tauri → `set_host_default_project`; web → `POST /projects/default`.
+  async function handleSetDefault(project: Project): Promise<void> {
+    if (defaultingId !== null) return
+    setDefaultingId(project.id)
+    try {
+      const result = isTauriContext()
+        ? await setHostDefaultProject(project.id)
+        : await webServerProjects.setDefaultProject(project.id)
+      if (!result.success) {
+        // P15: guard against undefined error string (avoid "undefined" toast).
+        toast.error('Failed to set host default: ' + (result.error ?? 'unknown error'))
+      } else {
+        // P6: update isDefault flags locally so the badge refreshes
+        // immediately (desktop-hosted mode doesn't refetch on set_default;
+        // web mode refetches on the subsequent projects_changed broadcast
+        // but the local update avoids a flash of the stale badge).
+        useProjectStore.setState((s) => ({
+          projects: s.projects.map((p) => ({ ...p, isDefault: p.id === project.id }))
+        }))
+        toast.success(`"${project.name}" is now the host default`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDefaultingId(null)
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -93,23 +135,25 @@ export function ProjectSwitcherDrawer({
               {projects.map((project) => {
                 const isArchived = project.isArchived ?? false
                 const isActive = project.id === activeProjectId
+                const isHostDefault = project.isDefault === true
                 const isSwitching = switchingId === project.id
+                const isSettingDefault = defaultingId === project.id
                 const isQueued = queuedProjectSwitchId === project.id
                 const isFailed = failedProjectSwitchId === project.id
-                const disabled =
+                const switchDisabled =
                   isArchived || isActive || switchingId !== null || queuedProjectSwitchId !== null
                 return (
-                  <li key={project.id}>
+                  <li key={project.id} className="flex items-center gap-1">
                     <button
                       type="button"
-                      disabled={disabled}
+                      disabled={switchDisabled}
                       aria-current={isActive ? 'true' : undefined}
                       onClick={() => void handleSwitch(project)}
                       className={[
-                        'flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
+                        'flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
                         isActive ? 'bg-primary/20' : 'hover:bg-sidebar-accent/50',
                         isArchived ? 'opacity-50' : '',
-                        disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+                        switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
                       <span
@@ -122,6 +166,15 @@ export function ProjectSwitcherDrawer({
                       <span className="min-w-0 flex-1 truncate text-foreground">
                         {project.name}
                       </span>
+                      {isHostDefault && !isSwitching && !isQueued && !isFailed && (
+                        <span
+                          title="Host default (new clients start here)"
+                          className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
+                        >
+                          <Home size={12} />
+                          Default
+                        </span>
+                      )}
                       {isSwitching ? (
                         <Loader2
                           size={14}
@@ -141,6 +194,37 @@ export function ProjectSwitcherDrawer({
                         <Check size={14} className="shrink-0 text-primary" />
                       ) : null}
                     </button>
+                    {/* Set as host default (Epic 7) — distinct from the
+                     * per-connection switch. Hidden when already the host
+                     * default (no-op), archived, or pathless (P5: a
+                     * pathless project can't be a default — the host would
+                     * reject it with NOT_FOUND). */}
+                    {!isHostDefault && !isArchived && project.path !== undefined && (
+                      <button
+                        type="button"
+                        disabled={isSettingDefault || defaultingId !== null}
+                        aria-label={`Set "${project.name}" as host default`}
+                        title="Set as host default"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleSetDefault(project)
+                        }}
+                        className={[
+                          'shrink-0 rounded p-1.5 text-muted-foreground transition-colors',
+                          isSettingDefault
+                            ? 'cursor-wait'
+                            : defaultingId !== null
+                              ? 'cursor-not-allowed opacity-50'
+                              : 'hover:bg-sidebar-accent/50 hover:text-foreground'
+                        ].join(' ')}
+                      >
+                        {isSettingDefault ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Home size={14} />
+                        )}
+                      </button>
+                    )}
                   </li>
                 )
               })}

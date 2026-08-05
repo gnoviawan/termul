@@ -3352,12 +3352,17 @@ pub async fn remote_server_status(
 /// so connected web clients refetch `GET /projects`. Called by the renderer
 /// on server-start success + on every project-store mutation while the server
 /// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
+///
+/// In desktop-hosted mode the desktop's `activeProjectId` IS the host default
+/// (the desktop user is the host operator), so it is pushed as `defaultProjectId`.
+/// The web client seeds its initial `activeProjectId` from it on the first
+/// `GET /projects` but preserves its own selection on subsequent refetches.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncProjectsPayload {
     pub projects: Vec<crate::web::ProjectSummary>,
     #[serde(default)]
-    pub active_project_id: Option<String>,
+    pub default_project_id: Option<String>,
 }
 
 #[tauri::command]
@@ -3366,8 +3371,52 @@ pub async fn remote_sync_projects(
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    project_registry.set(payload.projects, payload.active_project_id.clone());
-    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.active_project_id.as_deref());
+    project_registry.set(payload.projects, payload.default_project_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.default_project_id.as_deref());
+    Ok(IpcResult::success(()))
+}
+
+/// Explicitly set the host's default project (Epic 7 — cross-client
+/// workspace continuity). Distinct from a per-connection `switch_project`:
+/// this changes the host default that new web clients start with. Validates
+/// the project is switchable, updates `registry.set_default_project`, and
+/// broadcasts `projects_changed` to all connected web clients. Desktop-hosted
+/// mode has no `FileProjectRegistry` (the file registry is VPS-only); the
+/// desktop pushes its active selection as the default via `remote_sync_projects`,
+/// but this command lets the desktop set a default DIFFERENT from its own
+/// active project.
+#[tauri::command]
+pub async fn set_host_default_project(
+    project_id: String,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
+    if project_registry.switch_context(&project_id).is_none() {
+        log::warn!(
+            "set_host_default_project: project '{}' not found or not switchable",
+            project_id
+        );
+        return Ok(IpcResult::error(
+            format!("project '{project_id}' not found or not switchable"),
+            "NOT_FOUND",
+        ));
+    }
+    if !project_registry.set_default_project(&project_id) {
+        log::warn!(
+            "set_host_default_project: project '{}' became unavailable before commit",
+            project_id
+        );
+        return Ok(IpcResult::error(
+            "target project became unavailable before commit".to_string(),
+            "NOT_FOUND",
+        ));
+    }
+    crate::web::broadcast_projects_changed(ws_relay.inner(), Some(&project_id));
+    log::info!(
+        "set_host_default_project: host default updated to '{}' + broadcast",
+        project_id
+    );
     Ok(IpcResult::success(()))
 }
 

@@ -33,10 +33,10 @@ vi.mock('@/lib/api', () => ({
 
 const payload: ProjectListPayload = {
   projects: [
-    { id: 'p1', name: 'Alpha', color: 'blue', path: '/a', isArchived: false, isActive: true },
-    { id: 'p2', name: 'Beta', color: 'gray', path: null, isArchived: true, isActive: false }
+    { id: 'p1', name: 'Alpha', color: 'blue', path: '/a', isArchived: false, isDefault: true },
+    { id: 'p2', name: 'Beta', color: 'gray', path: null, isArchived: true, isDefault: false }
   ],
-  activeProjectId: 'p1'
+  defaultProjectId: 'p1'
 }
 
 describe('useProjectsLoader (web/remote mode)', () => {
@@ -63,17 +63,78 @@ describe('useProjectsLoader (web/remote mode)', () => {
       expect(useProjectStore.getState().projects).toHaveLength(2)
     })
     expect(mockPersistenceRead).not.toHaveBeenCalled()
+    // Epic 7: the initial load seeds activeProjectId from the host default.
     expect(useProjectStore.getState().activeProjectId).toBe('p1')
     expect(useProjectStore.getState().projects[1].isArchived).toBe(true)
   })
 
-  it('refetches /projects when the desktop broadcasts projects_changed', async () => {
+  it('initial load seeds activeProjectId from defaultProjectId (Epic 7)', async () => {
+    // Host default is p2; the client has no prior selection.
+    mockList.mockResolvedValue({
+      success: true,
+      data: { ...payload, defaultProjectId: 'p2', projects: payload.projects }
+    })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().activeProjectId).toBe('p2')
+    })
+  })
+
+  it('initial load falls back to the first project when defaultProjectId is null', async () => {
+    mockList.mockResolvedValue({
+      success: true,
+      data: { ...payload, defaultProjectId: null }
+    })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    })
+  })
+
+  it('initial load falls back to the first project when defaultProjectId is dangling (P2)', async () => {
+    // The host's default references a project that was deleted from the list.
+    // The client must NOT seed from a dangling id — fall back to the first
+    // project in the list instead.
+    mockList.mockResolvedValue({
+      success: true,
+      data: { ...payload, defaultProjectId: 'p-deleted' }
+    })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    })
+  })
+
+  it('refetches /projects on projects_changed but PRESERVES activeProjectId (no silent retarget)', async () => {
+    // Initial load seeds activeProjectId = p1 (the host default).
     mockList
       .mockResolvedValueOnce({ success: true, data: payload })
-      .mockResolvedValueOnce({ success: true, data: { ...payload, activeProjectId: 'p2' } })
+      // A subsequent projects_changed carries a DIFFERENT defaultProjectId
+      // (e.g. the desktop switched). The client must NOT adopt it as its
+      // active selection — only the list + isDefault flags refresh.
+      // The host sets isDefault on the matching project (p2).
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          projects: [
+            { ...payload.projects[0]!, isDefault: false },
+            { ...payload.projects[1]!, isDefault: true }
+          ],
+          defaultProjectId: 'p2'
+        }
+      })
 
     renderHook(() => useProjectsLoader())
     await waitFor(() => expect(mockList).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    })
 
     // The loader registered a `projects_changed` listener; firing it refetches.
     const listener = mockOnEvent.mock.calls[0]?.[1] as (() => void) | undefined
@@ -81,8 +142,40 @@ describe('useProjectsLoader (web/remote mode)', () => {
     listener?.()
 
     await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2))
-    await waitFor(() => {
-      expect(useProjectStore.getState().activeProjectId).toBe('p2')
+    // Epic 7: the client's own activeProjectId is PRESERVED (not retargeted
+    // to the host's new defaultProjectId 'p2').
+    expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    // P16: the isDefault flags DO refresh from the new host default — the
+    // project matching the new defaultProjectId has isDefault === true.
+    const projects = useProjectStore.getState().projects
+    expect(projects.find((p) => p.id === 'p2')?.isDefault).toBe(true)
+    expect(projects.find((p) => p.id === 'p1')?.isDefault).toBe(false)
+  })
+
+  it('falls back to defaultProjectId when the current project is deleted by the host', async () => {
+    // Initial load: client is on p1 (the default).
+    mockList.mockResolvedValueOnce({ success: true, data: payload })
+    // Subsequent refetch: p1 was deleted; the host default is now p2.
+    mockList.mockResolvedValueOnce({
+      success: true,
+      data: {
+        projects: [{ ...payload.projects[1]!, isArchived: false, isDefault: true }],
+        defaultProjectId: 'p2'
+      }
     })
+
+    renderHook(() => useProjectsLoader())
+    await waitFor(() => expect(mockList).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    })
+
+    const listener = mockOnEvent.mock.calls[0]?.[1] as (() => void) | undefined
+    listener?.()
+
+    await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2))
+    // The client's activeProjectId (p1) is no longer in the list → fall back
+    // to the host default (p2).
+    expect(useProjectStore.getState().activeProjectId).toBe('p2')
   })
 })
