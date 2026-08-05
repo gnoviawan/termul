@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { setManifestRestoreInProgress } from '@/stores/workspace-manifest-sync-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import {
   browserTabId,
@@ -17,6 +18,7 @@ import {
 import type { Terminal } from '@/types/project'
 import type { PaneDirection, PaneNode, SplitNode } from '@/types/workspace.types'
 import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import { loadWorkspaceManifest } from './use-workspace-manifest-sync'
 import { loadPersistedTerminals } from './useTerminalAutoSave'
 
 interface PersistedEditorFile {
@@ -302,7 +304,7 @@ function createTerminalMatcher(
   }
 }
 
-function reconcileTerminalTabs(
+export function reconcileTerminalTabs(
   root: PaneNode,
   openFilePaths: Set<string>,
   liveTerminals: Terminal[],
@@ -499,6 +501,11 @@ export function useEditorPersistence(projectId: string): void {
 
     async function restore(): Promise<void> {
       isRestoringRef.current = true
+      // Guard the manifest writer for the entire restore window so a half-built
+      // tree (mid open-files loop, mid pane rebuild) is never persisted as the
+      // new host manifest. The terminal-restore guard already covers PTY
+      // reattachment; this mirrors it for the manifest's portable projection.
+      setManifestRestoreInProgress(projectId, true)
       try {
         // Persist old project state before clearing
         if (oldProjectId) {
@@ -517,8 +524,16 @@ export function useEditorPersistence(projectId: string): void {
         }
 
         if (!result.success || !result.data) {
-          // No persisted state — reset to single empty pane
-          useWorkspaceStore.getState().resetLayout()
+          // No persisted renderer-local editor state. A host manifest may still
+          // exist (cross-client: this client never opened the project before).
+          // Consult the manifest; if absent, start fresh.
+          const manifestRestored = await loadWorkspaceManifest(projectId)
+          if (isStale()) {
+            return
+          }
+          if (!manifestRestored) {
+            useWorkspaceStore.getState().resetLayout()
+          }
           return
         }
 
@@ -579,30 +594,48 @@ export function useEditorPersistence(projectId: string): void {
           editorStore.setActiveFilePath(persisted.activeFilePath)
         }
 
-        // Restore pane layout — single atomic setState replaces the old tree
-        if (persisted.paneLayout) {
-          const restoredTree = deserializePaneTree(persisted.paneLayout)
-          const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
-          const liveProjectTerminals = useTerminalStore
-            .getState()
-            .terminals.filter((terminal) => terminal.projectId === projectId && !!terminal.ptyId)
-          const persistedTerminalLayout = await loadPersistedTerminals(projectId)
-          if (isStale()) {
-            return
-          }
+        // Restore pane layout. The manifest is authoritative for portable
+        // topology (terminalIds + editorIds + activeTabId + activePaneId). If a
+        // manifest exists it wins; else fall back to editorStateKey.paneLayout
+        // (legacy path carrying all tab variants incl. browser/git/agent-chat).
+        // The manifest load runs AFTER the open-files loop above so renderer-
+        // local editor state (drafts/scroll/cursor) is reconciled with the
+        // manifest topology. Non-portable tab variants are absent on manifest
+        // restore (CAP-5 contract decision) — they survive only in the legacy
+        // editorStateKey.paneLayout path. The manifestRestoreInProgress guard
+        // set at the top of restore() covers this load + tree build.
+        const manifestRestored = await loadWorkspaceManifest(projectId)
+        if (isStale()) {
+          return
+        }
 
-          const cleanTree = reconcileTerminalTabs(
-            restoredTree,
-            openFilePaths,
-            liveProjectTerminals,
-            persistedTerminalLayout
-          )
-          useWorkspaceStore.getState().loadProjectWorkspace(cleanTree, persisted.activePaneId)
-        } else {
-          // Legacy fallback: build a fresh layout with editor tabs
-          useWorkspaceStore.getState().resetLayout()
-          const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
-          useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
+        if (!manifestRestored) {
+          // No manifest (or load failed — logged + degraded gracefully).
+          // Fall back to the existing renderer-local paneLayout path.
+          if (persisted.paneLayout) {
+            const restoredTree = deserializePaneTree(persisted.paneLayout)
+            const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
+            const liveProjectTerminals = useTerminalStore
+              .getState()
+              .terminals.filter((terminal) => terminal.projectId === projectId && !!terminal.ptyId)
+            const persistedTerminalLayout = await loadPersistedTerminals(projectId)
+            if (isStale()) {
+              return
+            }
+
+            const cleanTree = reconcileTerminalTabs(
+              restoredTree,
+              openFilePaths,
+              liveProjectTerminals,
+              persistedTerminalLayout
+            )
+            useWorkspaceStore.getState().loadProjectWorkspace(cleanTree, persisted.activePaneId)
+          } else {
+            // Legacy fallback: build a fresh layout with editor tabs
+            useWorkspaceStore.getState().resetLayout()
+            const openFilePaths = Array.from(useEditorStore.getState().openFiles.keys())
+            useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
+          }
         }
 
         // Restore expanded directory tree after root initialization.
@@ -613,6 +646,7 @@ export function useEditorPersistence(projectId: string): void {
       } finally {
         if (restoreRunIdRef.current === restoreRunId) {
           isRestoringRef.current = false
+          setManifestRestoreInProgress(projectId, false)
         }
       }
     }

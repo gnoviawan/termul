@@ -4,9 +4,11 @@ import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeAp
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
 import { webServerProjects } from '@/lib/web-server-api'
+import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
   PersistedProject,
@@ -626,10 +628,35 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     // Delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
-    // Cascade delete: remove terminal layout and snapshots for this project
+    // Patch 15: evict the deleted project's entries from the manifest sync
+    // store (basedRevision + restore-in-progress flags) so they don't leak.
+    const syncStore = useWorkspaceManifestSyncStore.getState()
+    syncStore.setBasedRevision(id, null)
+    syncStore.setManifestRestoreInProgress(id, false)
+    // Clear a pending conflict that belonged to the deleted project.
+    if (syncStore.pendingConflict?.projectId === id) {
+      syncStore.setPendingConflict(null)
+    }
+
+    // Cascade delete: remove terminal layout and snapshots for this project.
+    // Story 6: also delete the host-owned workspace manifest (best-effort —
+    // a failure is logged but never blocks the project delete; the host's
+    // delete is idempotent whether or not the manifest file existed).
     await Promise.all([
       persistenceApi.delete(PersistenceKeys.terminals(id)),
-      persistenceApi.delete(PersistenceKeys.snapshots(id))
+      persistenceApi.delete(PersistenceKeys.snapshots(id)),
+      workspaceManifestApi
+        .deleteManifest(id)
+        .then((result) => {
+          if (!result.success) {
+            console.warn(
+              `[projects] manifest delete unsuccessful for ${id}: ${result.error} (${result.code})`
+            )
+          }
+        })
+        .catch((error) => {
+          console.warn(`[projects] manifest delete threw for ${id}:`, error)
+        })
     ])
 
     // Persist the updated projects list
