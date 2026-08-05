@@ -181,6 +181,21 @@ const P1_DOMAINS: DomainCheck[] = [
     methods: ['onShortcut'],
     apiBridgeExport: 'keyboardApi',
     testFile: 'tauri-keyboard-api.test.ts' // May not exist yet
+  },
+  // CAP-5 / Story 5: Workspace manifest facade + parity surfaces. The
+  // Tauri adapter (tauri-workspace-manifest-api.ts) mirrors the three
+  // `#[tauri::command] workspace_manifest_*` handlers; the web adapter
+  // (web-workspace-manifest-api.ts) mirrors the three HTTP routes in
+  // `web/workspace_api.rs`. Both return the SAME `IpcResult<...>` shape
+  // byte-for-byte; this entry pins desktop↔web manifest parity.
+  {
+    domain: 'WorkspaceManifest',
+    priority: 'P1',
+    tauriAdapterFile: 'tauri-workspace-manifest-api.ts',
+    adapterExportName: 'createTauriWorkspaceManifestApi',
+    methods: ['getManifest', 'writeManifest', 'deleteManifest'],
+    apiBridgeExport: 'workspaceManifestApi',
+    testFile: 'tauri-workspace-manifest-api.test.ts'
   }
 ]
 
@@ -347,6 +362,124 @@ describe('Parity Checklist Automation', () => {
       const p0Complete = p0Results.every((r) => r.implemented && r.wired && r.tested)
 
       expect(p0Complete, 'All P0 domains must be fully implemented, wired, and tested').toBe(true)
+    })
+  })
+
+  // CAP-5 / Story 5: Workspace manifest parity surfaces. Pins that the
+  // desktop Tauri command + the web HTTP route + the renderer facade all
+  // carry the SAME shape (camelCase IpcResult + tag=status WriteOutcome).
+  // A drift between any pair surfaces here as a parity test failure.
+  describe('Workspace Manifest parity (CAP-5)', () => {
+    const TauriAdapter = join(LIB_DIR, 'tauri-workspace-manifest-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-workspace-manifest-api.ts')
+
+    it('tauri-workspace-manifest-api.ts exists and exports the factory', () => {
+      expect(existsSync(TauriAdapter), 'tauri-workspace-manifest-api.ts should exist').toBe(true)
+      expect(
+        fileContains(
+          'tauri-workspace-manifest-api.ts',
+          /export\s+(const|function)\s+\bcreateTauriWorkspaceManifestApi\b/
+        ),
+        'should export createTauriWorkspaceManifestApi'
+      ).toBe(true)
+    })
+
+    it('web-workspace-manifest-api.ts exists and exports the singleton', () => {
+      expect(existsSync(WebAdapter), 'web-workspace-manifest-api.ts should exist').toBe(true)
+      expect(
+        fileContains(
+          'web-workspace-manifest-api.ts',
+          /export\s+const\s+\bwebWorkspaceManifestApi\b/
+        ),
+        'should export webWorkspaceManifestApi'
+      ).toBe(true)
+    })
+
+    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
+      const facade = join(LIB_DIR, 'workspace-manifest-api.ts')
+      expect(existsSync(facade), 'workspace-manifest-api.ts should exist').toBe(true)
+      const content = readFileSync(facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/createTauriWorkspaceManifestApi/)
+      expect(content).toMatch(/webWorkspaceManifestApi/)
+    })
+
+    it('api.ts exports the workspaceManifestApi singleton', () => {
+      const apiPath = join(LIB_DIR, 'api.ts')
+      const content = readFileSync(apiPath, 'utf-8')
+      expect(content).toMatch(/export\s*\{[^}]*\bworkspaceManifestApi\b[^}]*\}/)
+    })
+
+    it('Tauri adapter invokes the three commands (get/write/delete)', () => {
+      const content = readFileSync(TauriAdapter, 'utf-8')
+      expect(content).toMatch(/workspace_manifest_get/)
+      expect(content).toMatch(/workspace_manifest_write/)
+      expect(content).toMatch(/workspace_manifest_delete/)
+      // The Tauri adapter must pass through `basedRevision` (null = initial
+      // write) + `manifest` + `projectId` to the write command — these are
+      // the camelCase wire args the Rust `#[tauri::command]` declares.
+      expect(content).toMatch(/basedRevision/)
+      expect(content).toMatch(/manifest/)
+      expect(content).toMatch(/projectId/)
+    })
+
+    it('Web adapter hits the three HTTP routes (GET /workspace/:id, POST write, POST delete)', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/\/workspace\/\$\{encoded\}/)
+      expect(content).toMatch(/\/workspace\/\$\{encoded\}\/write/)
+      expect(content).toMatch(/\/workspace\/\$\{encoded\}\/delete/)
+      // Network/parse failures must map to `NETWORK_ERROR` (mirrors the
+      // existing web-server-api.ts transport-failure convention).
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('both adapters expose getManifest / writeManifest / deleteManifest on the typed facade', () => {
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      for (const method of ['getManifest', 'writeManifest', 'deleteManifest']) {
+        expect(tauri, `tauri-workspace-manifest-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+        expect(web, `web-workspace-manifest-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+      }
+    })
+
+    it('shared types file exists with expected exports (Patch 16)', () => {
+      // Patch 16: this test was previously named "shared types file exists
+      // and mirrors the Rust serde shapes (camelCase)" but only greps for
+      // export presence — it does NOT verify TS field names match Rust serde
+      // field names byte-for-byte (that would require running the Rust
+      // serde shape tests, which live in the Rust suite). Renamed for
+      // accuracy; the Rust side has its own serde shape pinning tests.
+      const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'workspace-manifest.types.ts')
+      expect(existsSync(typesPath), 'workspace-manifest.types.ts should exist').toBe(true)
+      const content = readFileSync(typesPath, 'utf-8')
+      // Core shapes mirrored from `src-tauri/src/acp/workspace_manifest.rs`.
+      expect(content).toMatch(/export\s+interface\s+WorkspaceManifest\b/)
+      expect(content).toMatch(/export\s+type\s+WriteOutcome\b/)
+      expect(content).toMatch(/export\s+interface\s+TerminalDescriptor\b/)
+      expect(content).toMatch(/export\s+interface\s+EditorDescriptor\b/)
+      expect(content).toMatch(/export\s+type\s+PaneNode\b/)
+      // WriteOutcome must be the discriminated union with `status: 'updated' |
+      // 'conflict'` (byte-identical to the Rust serde tagged enum).
+      expect(content).toMatch(/status:\s*'updated'/)
+      expect(content).toMatch(/status:\s*'conflict'/)
+    })
+
+    it('ipc.types.ts declares the WorkspaceManifestIpcChannels map (Patch 11)', () => {
+      // Patch 11: the channel keys use the colon-separated pattern
+      // (`workspace:manifest:get`, etc.) to mirror the existing
+      // `TerminalIpcChannels` (`terminal:spawn`, `terminal:attach`, …).
+      const ipcPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'ipc.types.ts')
+      const content = readFileSync(ipcPath, 'utf-8')
+      expect(content).toMatch(/WorkspaceManifestIpcChannels\b/)
+      // All three channel keys must be present (colon-separated, mirroring
+      // `TerminalIpcChannels`'s `terminal:spawn` pattern).
+      expect(content).toMatch(/'workspace:manifest:get'/)
+      expect(content).toMatch(/'workspace:manifest:write'/)
+      expect(content).toMatch(/'workspace:manifest:delete'/)
     })
   })
 })

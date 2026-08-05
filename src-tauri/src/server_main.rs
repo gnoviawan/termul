@@ -22,7 +22,7 @@ use termul_manager_lib::web::{
 };
 use termul_manager_lib::{
     AcpManager, CwdTracker, ExitCodeTracker, FileProjectRegistry, GitTracker, PtyManager,
-    SessionPersistence, TerminalEventHub,
+    SessionPersistence, TerminalEventHub, WorkspaceManifestService,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -73,6 +73,22 @@ fn main() -> ExitCode {
             Ok(persistence) => persistence,
             Err(error) => {
                 eprintln!("termul-server: failed to open sessions store: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        // CAP-5 / Story 5: open the host-owned workspace-manifests root. The
+        // standalone binary owns its own root — NEVER shared with a desktop
+        // host on the same machine (two processes on one JSONL store would
+        // corrupt both). Defaults to `<state dir>/workspace-manifests`; the
+        // explicit `--workspace-manifests-dir` flag overrides.
+        let workspace_manifests_dir = cfg
+            .workspace_manifests_dir
+            .clone()
+            .unwrap_or_else(|| cfg.service_account_state_dir().join("workspace-manifests"));
+        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await {
+            Ok(service) => Some(service),
+            Err(error) => {
+                eprintln!("termul-server: failed to open workspace-manifests store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -168,6 +184,7 @@ fn main() -> ExitCode {
             registry_persistence,
             projects_file,
             cfg,
+            workspace_manifest,
         )
         .await
         {
@@ -181,7 +198,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH]\n\n\
      Options:\n\
        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
        --port PORT                 Bind port (default: 8080)\n\
@@ -191,5 +208,6 @@ fn usage() -> &'static str {
        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
        --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
+       --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
        -h, --help                  Show this help"
 }

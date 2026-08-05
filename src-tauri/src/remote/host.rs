@@ -34,7 +34,7 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::acp::AcpManager;
+use crate::acp::{AcpManager, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::web::sink::WsRelaySink;
 use crate::web::{serve_router, ProjectRegistry, ServerConfig};
@@ -222,6 +222,12 @@ impl RemoteServerState {
     /// graceful drain and `status()` can detect a dead task. If a concurrent
     /// start wins the slot race, the loser signals its spawned task to drain
     /// before returning `Err` (no orphaned second server).
+    ///
+    /// `workspace_manifest` is the desktop's own `WorkspaceManifestService`
+    /// (opened under `<app_data_dir>/workspace-manifests` in `lib.rs`).
+    /// Threaded through to `serve_router` so the web/remote client can
+    /// read/write a project's manifest through `/workspace/*`. `None`
+    /// degrades to fresh-only mode.
     pub async fn start(
         &self,
         acp: Arc<AcpManager>,
@@ -229,6 +235,7 @@ impl RemoteServerState {
         ws_relay: Arc<WsRelaySink>,
         registry: Arc<ProjectRegistry>,
         _bind_mode: RemoteBindMode,
+        workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     ) -> Result<RemoteStatus, String> {
         // The built-in cloudflared quick-tunnel forwards to localhost, so the
         // desktop-hosted server always binds localhost regardless of the
@@ -289,6 +296,13 @@ impl RemoteServerState {
             // file-backed `acp::project_registry` is VPS-mode-only.
             projects_file: None,
             sessions_dir: None,
+            // CAP-5 / Story 5: the desktop shared-live host threads its own
+            // `WorkspaceManifestService` (opened under
+            // `<app_data_dir>/workspace-manifests` in `lib.rs`) through to
+            // `serve_router` so the web/remote client can read/write a
+            // project's manifest through the three `/workspace/*` routes.
+            // `None` degrades to fresh-only mode (no host store attached).
+            workspace_manifests_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -310,6 +324,7 @@ impl RemoteServerState {
             None,
             cfg,
             shutdown,
+            workspace_manifest,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
@@ -601,6 +616,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await
             .expect("start on localhost binds an OS-assigned port");
@@ -631,6 +647,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await
             .expect("restart after stop succeeds");
@@ -652,6 +669,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await
             .expect("first start succeeds");
@@ -663,6 +681,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await;
         assert!(
@@ -692,6 +711,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await
             .expect("start succeeds");
@@ -720,6 +740,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
             )
             .await
             .expect("start");
