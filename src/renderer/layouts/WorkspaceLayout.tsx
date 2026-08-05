@@ -28,6 +28,7 @@ import {
 } from '@/components/TitlebarPanelToggles'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
+import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
 import {
   useUpdateAppSetting,
   useUpdatePanelVisibility,
@@ -46,6 +47,7 @@ import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
+import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
@@ -519,6 +521,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Editor state persistence
   useEditorPersistence(activeProjectId)
+
+  // Story 6: cross-client workspace manifest sync (load happens inside
+  // useEditorPersistence's restore flow via loadAndRestoreManifest; this hook
+  // wires the debounced write side + conflict surfacing).
+  useWorkspaceManifestSync(activeProjectId)
 
   useEffect(() => {
     return () => {
@@ -1870,6 +1877,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
                   {/* Main Content Area */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+                    <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
 

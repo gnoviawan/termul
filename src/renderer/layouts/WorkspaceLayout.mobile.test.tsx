@@ -216,6 +216,18 @@ vi.mock('@/lib/api', async () => {
 vi.mock('@/components/workspace/PaneRenderer', () => ({
   PaneRenderer: () => <div data-pane-renderer-stub />
 }))
+
+// P17: shared canonical mock shape for the Story 6 sync hook + banner —
+// identical inline factories across the three WorkspaceLayout suites.
+vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
+  useWorkspaceManifestSync: vi.fn(),
+  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
+  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
+  performManifestWrite: vi.fn().mockResolvedValue(undefined)
+}))
+vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
+  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
+}))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
 vi.mock('@/pages/AppPreferences', () => ({ default: () => <div>preferences</div> }))

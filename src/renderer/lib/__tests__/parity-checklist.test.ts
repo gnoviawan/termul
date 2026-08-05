@@ -446,6 +446,27 @@ describe('Parity Checklist Automation', () => {
       }
     })
 
+    it('Story 6 sync hook imports workspaceManifestApi from the facade (not direct transport impls)', () => {
+      // Story 6 wires the renderer to the manifest via the facade singleton
+      // only; it must never import the tauri/web transport impls directly
+      // (Biome's noRestrictedImports bans @tauri-apps/** outside lib/, and
+      // the facade is the transport-neutral seam). This assertion pins that
+      // the sync hook calls through `@/lib/workspace-manifest-api`.
+      const syncHookPath = join(LIB_DIR, '..', 'hooks', 'use-workspace-manifest-sync.ts')
+      expect(existsSync(syncHookPath), 'use-workspace-manifest-sync.ts should exist').toBe(true)
+      const content = readFileSync(syncHookPath, 'utf-8')
+      // P15: must be an actual import line (not a comment mentioning the path).
+      expect(content).toMatch(/^\s*import\s+.*from\s+['"]@\/lib\/workspace-manifest-api['"]/m)
+      // Must NOT import the transport impls directly (strengthened to require
+      // an import-line match, not a bare string mention).
+      expect(content).not.toMatch(
+        /^\s*import\s+.*from\s+['"]@\/lib\/tauri-workspace-manifest-api['"]/m
+      )
+      expect(content).not.toMatch(
+        /^\s*import\s+.*from\s+['"]@\/lib\/web-workspace-manifest-api['"]/m
+      )
+    })
+
     it('shared types file exists with expected exports (Patch 16)', () => {
       // Patch 16: this test was previously named "shared types file exists
       // and mirrors the Rust serde shapes (camelCase)" but only greps for

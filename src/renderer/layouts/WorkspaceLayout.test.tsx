@@ -233,6 +233,19 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
   persistState: vi.fn()
 }))
 
+// P17: shared canonical mock shape for the Story 6 sync hook + banner —
+// identical inline factories across the three WorkspaceLayout suites so a
+// future export-surface refactor breaks all three with the same error.
+vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
+  useWorkspaceManifestSync: vi.fn(),
+  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
+  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
+  performManifestWrite: vi.fn().mockResolvedValue(undefined)
+}))
+vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
+  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
+}))
+
 const { mockSaveTerminalLayout } = vi.hoisted(() => ({
   mockSaveTerminalLayout: vi.fn(() => Promise.resolve())
 }))
@@ -415,6 +428,8 @@ describe('WorkspaceLayout - Empty States', () => {
     // Panel-visibility toggles were relocated into the macOS titlebar strip.
     expect(strip?.querySelector('button[title="Toggle sidebar"]')).not.toBeNull()
     expect(strip?.querySelector('button[title="Toggle file explorer"]')).not.toBeNull()
+    // Patch 18: the Story 6 conflict banner is mounted at the workspace root.
+    expect(screen.getByTestId('workspace-conflict-banner')).toBeInTheDocument()
   })
 
   it('renders active project name in macOS titlebar strip when a project is active', () => {
@@ -441,6 +456,10 @@ describe('WorkspaceLayout - Empty States', () => {
     mockUseActiveProject.mockReturnValue(createProject('project-1', '/workspace/project-1', 'blue'))
 
     renderWithRouter()
+
+    // Patch 19: the Story 6 sync hook is mounted with the active project id.
+    const { useWorkspaceManifestSync } = await import('@/hooks/use-workspace-manifest-sync')
+    expect(useWorkspaceManifestSync).toHaveBeenCalledWith('project-1')
 
     window.dispatchEvent(new Event('beforeunload'))
 
