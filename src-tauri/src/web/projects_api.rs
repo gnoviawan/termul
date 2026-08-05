@@ -82,6 +82,7 @@ mod tests {
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
             project_root: Arc::new(std::path::PathBuf::new()),
+            workspace_manifest: None,
         }
     }
 

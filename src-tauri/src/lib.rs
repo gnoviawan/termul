@@ -122,7 +122,10 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 // Re-exports for commands
-pub use acp::{AcpManager, ChatHistoryStore, FileProjectRegistry, SessionPersistence};
+pub use acp::{
+    AcpManager, ChatHistoryStore, FileProjectRegistry, SessionPersistence,
+    WorkspaceManifestService,
+};
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -1095,6 +1098,43 @@ pub fn run() {
             app.manage(chat_history_store);
             app.manage(commands::HostHistoryStore(session_persistence.clone()));
 
+            // CAP-5 / Story 5: open the host-owned workspace-manifests root
+            // under `<app_data_dir>/workspace-manifests`. The desktop owns its
+            // own root — NEVER shared with a standalone `termul-server` on the
+            // same machine (two processes on one JSONL store would corrupt
+            // both). `None` degrades to fresh-only mode (the
+            // `workspace_manifest_*` commands return `Ok(None)` / idempotent
+            // success; the web routes follow suit).
+            let workspace_manifests_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("workspace-manifests");
+            let workspace_manifest_service =
+                match tauri::async_runtime::block_on(WorkspaceManifestService::open(
+                    workspace_manifests_root.clone(),
+                )) {
+                    Ok(service) => {
+                        log::info!(
+                            "[workspace-manifest] host service ready path={}",
+                            service.root().display()
+                        );
+                        Some(service)
+                    }
+                    Err(error) => {
+                        // Degrade, don't crash: workspace manifests become
+                        // fresh-only, the app must still boot.
+                        log::error!(
+                            "[workspace-manifest] host service unavailable path={} error={error}",
+                            workspace_manifests_root.display()
+                        );
+                        None
+                    }
+                };
+            app.manage(commands::HostWorkspaceManifestStore::new(
+                workspace_manifest_service.clone(),
+            ));
+
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
             // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
@@ -1483,6 +1523,10 @@ pub fn run() {
             commands::acp_history_get_legacy,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
+            // Workspace manifest (CAP-5 / Story 5)
+            commands::workspace_manifest_get,
+            commands::workspace_manifest_write,
+            commands::workspace_manifest_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

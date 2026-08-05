@@ -1028,6 +1028,7 @@ mod tests {
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             project_root: Arc::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf())),
+            workspace_manifest: None,
         }
     }
 

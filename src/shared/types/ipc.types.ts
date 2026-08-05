@@ -1,4 +1,6 @@
 // IPC Result pattern from architecture.md
+import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
+
 export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code: string }
@@ -90,6 +92,31 @@ export type TerminalIpcChannels = {
   'terminal:write': (terminalId: string, data: string) => IpcResult<void>
   'terminal:resize': (terminalId: string, cols: number, rows: number) => IpcResult<void>
   'terminal:kill': (terminalId: string) => IpcResult<void>
+}
+
+// CAP-5 / Story 5: Workspace manifest IPC channels. Mirrors the three Tauri
+// commands (`workspace_manifest_get` / `_write` / `_delete`) and the three
+// HTTP routes (`GET /workspace/:projectId`, `POST /workspace/:projectId/write`,
+// `POST /workspace/:projectId/delete`) — both transports return the SAME
+// `IpcResult<...>` shape byte-for-byte. Conflict is a SUCCESS body variant of
+// `WriteOutcome` (NOT an error code); an excluded-field payload (`envVars`,
+// raw `claim`, `fullscreenPaneId`) fails serde `deny_unknown_fields` and maps
+// to `VALIDATION_ERROR` with no state change.
+//
+// Patch 11: the channel keys use the colon-separated pattern
+// (`workspace:manifest:get`, etc.) to mirror the existing
+// `TerminalIpcChannels` (`terminal:spawn`, `terminal:attach`, …). The Tauri
+// adapter's IPC_COMMANDS map uses the underscored Rust command names
+// (`workspace_manifest_get`); the channel map keys are a documentation /
+// type-safety surface, not the literal invoke() strings.
+export type WorkspaceManifestIpcChannels = {
+  'workspace:manifest:get': (projectId: string) => IpcResult<WorkspaceManifest | null>
+  'workspace:manifest:write': (
+    projectId: string,
+    basedRevision: number | null,
+    manifest: WorkspaceManifest
+  ) => IpcResult<WriteOutcome>
+  'workspace:manifest:delete': (projectId: string) => IpcResult<void>
 }
 
 // Event types for main -> renderer communication

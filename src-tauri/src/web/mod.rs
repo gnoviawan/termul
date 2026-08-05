@@ -29,6 +29,7 @@ pub mod projects_api;
 pub mod router;
 pub mod sink;
 pub mod terminal_ws;
+pub mod workspace_api;
 pub mod ws;
 
 pub use config::ServerConfig;
@@ -80,6 +81,13 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// and calls [`serve_router`] directly (it never reaches this `serve`
 /// wrapper).
 ///
+/// `workspace_manifest` is the host-owned [`WorkspaceManifestService`] for
+/// CAP-5 / Story 5 — atomically persists one versioned workspace manifest per
+/// project. The standalone binary opens it under
+/// `<service_account_state_dir>/workspace-manifests`; the desktop host opens
+/// its own under `<app_data_dir>/workspace-manifests` (never shared across
+/// processes — `Never`-clause). `None` degrades to fresh-only mode.
+///
 /// The standalone binary owns its agent lifetime end-to-end, so it kills agents
 /// on exit. The desktop-hosted shared-live path calls [`serve_router`] directly
 /// and must NOT kill the desktop's live agents — see [`serve_router`].
@@ -96,6 +104,7 @@ pub async fn serve(
     registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
+    workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
@@ -110,6 +119,7 @@ pub async fn serve(
         projects_file,
         cfg,
         shutdown_signal_future(),
+        workspace_manifest,
     )
     .await?;
 
@@ -176,6 +186,7 @@ pub async fn serve_router(
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
+    workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -218,6 +229,7 @@ pub async fn serve_router(
         projects_file,
         cfg.project_root.clone(),
         history_mode,
+        workspace_manifest,
     );
 
     let handle = tokio::spawn(async move {

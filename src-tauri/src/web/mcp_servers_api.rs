@@ -129,6 +129,7 @@ mod tests {
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             project_root: Arc::new(dir),
+            workspace_manifest: None,
         };
         axum::Router::new()
             .route("/mcp-servers", get(super::get).put(super::put))

@@ -27,6 +27,7 @@ export * as tauriVersionSkipService from './tauri-version-skip'
 export { addRendererRef, removeRendererRef, terminalApi } from './terminal-api'
 export { visibilityApi } from './visibility-api'
 export { windowApi } from './window-api'
+export { workspaceManifestApi } from './workspace-manifest-api'
 export { worktreeApi } from './worktree-api'
 
 import { createTauriDataMigrationApi } from './tauri-data-migration-api'

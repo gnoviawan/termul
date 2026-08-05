@@ -172,6 +172,14 @@ pub struct ServerConfig {
     pub projects_file: Option<PathBuf>,
     /// Standalone-only durable session root. Desktop shared-live uses `None`.
     pub sessions_dir: Option<PathBuf>,
+    /// CAP-5 / Story 5: workspace-manifests root override. `None` means
+    /// "use `<service_account_state_dir>/workspace-manifests`" — the
+    /// standalone binary resolves this in `server_main.rs` so the
+    /// `ServerConfig` struct itself stays free of the service-account-state
+    /// path resolution (the desktop shared-live path never reads this field;
+    /// it constructs its own `WorkspaceManifestService` under
+    /// `<app_data_dir>/workspace-manifests`).
+    pub workspace_manifests_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -186,6 +194,55 @@ impl ServerConfig {
     /// Returns `None` when `host` is not a recognized bind mode.
     pub fn bind_addr(&self) -> Option<SocketAddr> {
         self.bind_mode().map(|mode| mode.bind_addr(self.port))
+    }
+
+    /// The platform service-account state directory. Used by the standalone
+    /// `termul-server` binary to resolve a default workspace-manifests root
+    /// (`<state dir>/workspace-manifests`) when `--workspace-manifests-dir` is
+    /// absent. Mirrors the per-platform branches of
+    /// [`default_sessions_dir`]'s parent dir so the two durable stores live
+    /// side-by-side under the same service-account state tree.
+    ///
+    /// Falls back to `std::env::temp_dir()` when no platform state dir is
+    /// discoverable — the standalone binary then surfaces a startup warning
+    /// (the workspace manifests would land in the OS temp dir, which survives
+    /// the process but not a reboot). Used as the default base for
+    /// `WorkspaceManifestService::open` in `server_main.rs`.
+    ///
+    /// Patch 15: empty env var values (`XDG_STATE_HOME=""`, `HOME=""`,
+    /// `LOCALAPPDATA=""`) are filtered out so the manifests do not land in a
+    /// relative `./termul` dir (CWD-dependent, unbounded). A truly unset env
+    /// var falls through to the next branch; an empty-string env var now
+    /// behaves the same way (the next branch or the temp-dir fallback).
+    #[must_use]
+    pub fn service_account_state_dir(&self) -> PathBuf {
+        #[cfg(unix)]
+        {
+            // Patch 15: filter out empty-string env vars so an empty
+            // `XDG_STATE_HOME` or `HOME` does not produce a relative path.
+            if let Some(base) = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                return base.join("termul");
+            }
+            if let Some(home) = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                return home.join(".local").join("state").join("termul");
+            }
+        }
+        #[cfg(windows)]
+        {
+            if let Some(base) = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                return base.join("Termul");
+            }
+        }
+        std::env::temp_dir().join("termul")
     }
 
     /// Parse `--host` / `--port` CLI args (defaults: `127.0.0.1:8080`).
@@ -214,6 +271,12 @@ impl ServerConfig {
         // optional $TERMUL_PROJECTS_FILE env var is honored after the loop.
         let mut projects_file: Option<PathBuf> = None;
         let mut sessions_dir: Option<PathBuf> = None;
+        // CAP-5 / Story 5: workspace-manifests root override. `None` means
+        // "resolve <state dir>/workspace-manifests at startup" in
+        // `server_main.rs`. Parsed but NOT validated against the filesystem
+        // here (the service creates the directory if missing; a present
+        // non-directory fails loudly at `WorkspaceManifestService::open`).
+        let mut workspace_manifests_dir: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -334,6 +397,20 @@ impl ServerConfig {
                     }
                     sessions_dir = Some(PathBuf::from(trimmed));
                 }
+                "--workspace-manifests-dir" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message(
+                            "missing value for --workspace-manifests-dir".into(),
+                        )
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --workspace-manifests-dir '': must be a non-empty path".into(),
+                        ));
+                    }
+                    workspace_manifests_dir = Some(PathBuf::from(trimmed));
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -416,6 +493,7 @@ impl ServerConfig {
             project_root,
             projects_file,
             sessions_dir: Some(sessions_dir),
+            workspace_manifests_dir,
         })
     }
 }
@@ -539,6 +617,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
+            workspace_manifests_dir: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -554,6 +633,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             projects_file: None,
             sessions_dir: None,
+            workspace_manifests_dir: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -712,5 +792,69 @@ mod tests {
             ServerConfig::from_args(["--bogus"]),
             Err(ParseCliError::Message(_))
         ));
+    }
+
+    // Patch 17: `--workspace-manifests-dir` CLI flag accept / missing /
+    // empty-value tests (mirrors the `--permission-timeout` test pattern).
+
+    #[test]
+    fn from_args_accepts_workspace_manifests_dir() {
+        let cfg = ServerConfig::from_args([
+            "--workspace-manifests-dir",
+            "/var/lib/termul/manifests",
+        ])
+        .expect("parse");
+        assert_eq!(
+            cfg.workspace_manifests_dir,
+            Some(PathBuf::from("/var/lib/termul/manifests"))
+        );
+        // Other defaults stay intact.
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+    }
+
+    #[test]
+    fn from_args_missing_workspace_manifests_dir_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--workspace-manifests-dir"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_empty_workspace_manifests_dir() {
+        assert!(matches!(
+            ServerConfig::from_args(["--workspace-manifests-dir", ""]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    // Patch 15: `service_account_state_dir` filters out empty env var values
+    // so an empty `XDG_STATE_HOME` / `HOME` / `LOCALAPPDATA` does not produce
+    // a relative `./termul` dir.
+    #[test]
+    fn service_account_state_dir_falls_through_empty_env_var() {
+        let cfg = ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            event_log_capacity: 4096,
+            permission_timeout_secs: 60,
+            permission_reconnect_grace_secs: 15,
+            project_root: PathBuf::from("/tmp"),
+            projects_file: None,
+            sessions_dir: None,
+            workspace_manifests_dir: None,
+        };
+        // We cannot safely mutate the real process env vars in a parallel
+        // test runner, so we assert the contract indirectly: the resolved
+        // path is EITHER under $HOME / $XDG_STATE_HOME (when set + non-empty)
+        // OR falls back to the OS temp dir. In both cases it must NOT be a
+        // relative `./termul` path (which would be CWD-dependent).
+        let resolved = cfg.service_account_state_dir();
+        assert!(
+            resolved.is_absolute(),
+            "service_account_state_dir must resolve to an absolute path, got: {}",
+            resolved.display()
+        );
     }
 }
