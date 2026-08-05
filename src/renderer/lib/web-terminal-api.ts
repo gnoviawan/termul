@@ -1,14 +1,16 @@
 import type {
   GitStatus,
   IpcResult,
+  RotatedClaim,
+  SpawnedTerminal,
   TerminalApi,
+  TerminalAttachResult,
   TerminalCwdChangedCallback,
   TerminalDataCallback,
   TerminalExitCallback,
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
-  TerminalInfo,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
 import type {
@@ -50,6 +52,20 @@ interface TerminalTracker {
   exited: boolean
   /** Active renderer reference count (detach when it reaches 0). */
   refCount: number
+  /**
+   * CAP-3 lease credential for this terminal (in-memory only — never
+   * persisted). Adopted ONLY on server-confirmed success (spawn reply or a
+   * verified attach/rotate); dropped on any server rejection (the host returns
+   * one generic UNAUTHORIZED for unknown terminal and bad/revoked credential
+   * alike) — and never re-presented afterwards.
+   */
+  claim?: string
+  /**
+   * Terminal is unattachable from this client (no/invalid credential). Disconnected
+   * terminals are skipped by the reconnect re-attach loop and do not drive
+   * reconnect scheduling.
+   */
+  disconnected: boolean
 }
 
 export class WebTerminalClient {
@@ -127,14 +143,34 @@ export class WebTerminalClient {
         this.reconnectAttempt = 0
         this.connecting = null
         this.connectingReject = null
-        // Re-attach only terminals that haven't exited, using their lastSeq.
+        // CAP-3: re-attach ONLY terminals with a stored lease credential,
+        // using their lastSeq cursor. Terminals without a claim cannot be
+        // re-attached — mark them disconnected (no credential is ever
+        // presented id-only, and a rejected credential is never re-presented).
         for (const [terminalId, tracker] of this.trackers) {
           if (tracker.exited) continue
-          void this.request('attach', { terminalId, lastSeq: tracker.lastSeq }).then((r) => {
-            if (!r.success && r.code === 'TERMINAL_NOT_FOUND') {
-              // Terminal gone — stop reconnecting it and notify exit.
-              this.markExited(terminalId)
+          if (!tracker.claim) {
+            tracker.disconnected = true
+            continue
+          }
+          void this.request('attach', {
+            terminalId,
+            claim: tracker.claim,
+            lastSeq: tracker.lastSeq
+          }).then((r) => {
+            if (r.success) {
+              tracker.disconnected = false
+              return
             }
+            if (r.code !== 'NETWORK_ERROR') {
+              // Server rejection (single generic UNAUTHORIZED — the host never
+              // distinguishes terminal-gone from credential-gone): the lease is
+              // invalid/rotated/revoked or the terminal no longer exists. Drop
+              // the credential and stop re-presenting it.
+              tracker.claim = undefined
+              tracker.disconnected = true
+            }
+            // NETWORK_ERROR keeps the claim for the next reconnect attempt.
           })
         }
         resolve()
@@ -157,25 +193,92 @@ export class WebTerminalClient {
   }
 
   /**
-   * Attach to a terminal's output stream. Only marks the terminal as tracked
-   * after the server confirms the attachment. Uses the stored lastSeq so
-   * reconnect doesn't duplicate output.
+   * CAP-3 verified attach (always a server round trip). The credential is the
+   * gate:
+   * - with no credential available, fail locally and mark the terminal
+   *   disconnected — an id-only attach is never presented;
+   * - the claim and cursor are adopted ONLY on server-confirmed success;
+   * - on server rejection the adopted claim is dropped and the terminal is
+   *   marked disconnected (never re-present a rejected credential);
+   * - refCount is only ever incremented on success — a concurrent slow-path
+   *   attach must not reset an outstanding refCount.
    */
-  async attach(terminalId: string): Promise<IpcResult<void>> {
+  private async performAttach(
+    terminalId: string,
+    claim: string | undefined,
+    lastSeq: number | undefined
+  ): Promise<IpcResult<TerminalAttachResult>> {
     const tracker = this.getOrCreate(terminalId)
-    if (tracker.refCount > 0) {
-      // Already attached — just increment the ref count.
+    const credential = claim ?? tracker.claim
+    if (!credential) {
+      tracker.disconnected = true
+      return { success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }
+    }
+    const result = await this.request<TerminalAttachResult>('attach', {
+      terminalId,
+      claim: credential,
+      lastSeq: lastSeq ?? tracker.lastSeq
+    })
+    if (result.success) {
+      // Increment — never `= 1`: in-flight attaches must not discard refs.
+      tracker.refCount += 1
+      tracker.claim = credential
+      tracker.disconnected = false
+    } else if (result.code !== 'NETWORK_ERROR') {
+      // Server rejection (generic UNAUTHORIZED): drop the adopted claim and
+      // stop re-presenting it on reconnect.
+      tracker.claim = undefined
+      tracker.disconnected = true
+    }
+    return result
+  }
+
+  /**
+   * Attach using the stored cursor (spawn / renderer-ref flow). Fast path:
+   * an already-attached terminal just increments the ref count.
+   */
+  async attach(terminalId: string, claim?: string): Promise<IpcResult<void>> {
+    const tracker = this.getOrCreate(terminalId)
+    if (tracker.refCount > 0 && claim === undefined) {
+      // Already attached — just increment the ref count (no round trip).
       tracker.refCount++
       return { success: true, data: undefined }
     }
-    const result = await this.request<void>('attach', {
-      terminalId,
-      lastSeq: tracker.lastSeq
-    })
-    if (result.success) {
-      tracker.refCount = 1
-    }
-    return result
+    const result = await this.performAttach(terminalId, claim, undefined)
+    return result.success ? { success: true, data: undefined } : result
+  }
+
+  /** Attach with an explicit cursor (cross-client handoff / desktop parity). */
+  async attachWithCursor(
+    terminalId: string,
+    claim: string,
+    lastSeq: number
+  ): Promise<IpcResult<TerminalAttachResult>> {
+    return this.performAttach(terminalId, claim, lastSeq)
+  }
+
+  /**
+   * Adopt a server-issued credential (spawn issuance / successful rotation).
+   * Issuance is server-confirmed by definition, so adoption is immediate.
+   */
+  adoptClaim(terminalId: string, claim?: string): void {
+    const tracker = this.getOrCreate(terminalId)
+    tracker.claim = claim
+    tracker.disconnected = claim === undefined
+  }
+
+  /**
+   * Drop the credential and mark the terminal disconnected (revocation or
+   * rotate/revoke teardown). The server has severed this connection's
+   * attachment + authorization, so outstanding renderer refs can no longer be
+   * counted as attached: the next attach must re-verify with a credential.
+   */
+  severClaim(terminalId: string, newClaim?: string): void {
+    const tracker = this.trackers.get(terminalId)
+    if (!tracker) return
+    tracker.refCount = 0
+    tracker.claim = newClaim
+    tracker.disconnected = !newClaim
   }
 
   /** Detach from a terminal's output stream when ref count reaches 0. */
@@ -198,7 +301,7 @@ export class WebTerminalClient {
   private getOrCreate(terminalId: string): TerminalTracker {
     let tracker = this.trackers.get(terminalId)
     if (!tracker) {
-      tracker = { lastSeq: 0, exited: false, refCount: 0 }
+      tracker = { lastSeq: 0, exited: false, refCount: 0, disconnected: false }
       this.trackers.set(terminalId, tracker)
     }
     return tracker
@@ -349,8 +452,11 @@ export class WebTerminalClient {
 
   private scheduleReconnect(): void {
     if (this.disposed || this.reconnectTimer) return
-    // Stop reconnecting if all terminals have exited.
-    const activeCount = Array.from(this.trackers.values()).filter((t) => !t.exited).length
+    // Stop reconnecting if no terminal is both live AND holds a lease
+    // credential — exited/disconnected terminals are never re-presented.
+    const activeCount = Array.from(this.trackers.values()).filter(
+      (t) => !t.exited && !t.disconnected
+    ).length
     if (activeCount === 0) return
     if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) return
     const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt++, RECONNECT_MAX_MS)
@@ -482,18 +588,51 @@ const client = new WebTerminalClient()
 
 export function createWebTerminalApi(): TerminalApi {
   return {
-    async spawn(options: TerminalSpawnOptions = {}): Promise<IpcResult<TerminalInfo>> {
-      const result = await client.request<TerminalInfo>('spawn', options as Record<string, unknown>)
+    async spawn(options: TerminalSpawnOptions = {}): Promise<IpcResult<SpawnedTerminal>> {
+      const result = await client.request<SpawnedTerminal>(
+        'spawn',
+        options as Record<string, unknown>
+      )
       if (result.success) {
-        // Attach after spawn succeeds so output flows immediately.
-        const attachResult = await client.attach(result.data.id)
-        if (!attachResult.success) {
-          // Attach failed — the PTY exists but we can't receive output.
-          // Kill it to avoid orphaning, and return the attach failure.
-          void client.request('kill', { terminalId: result.data.id })
-          client.removeTracker(result.data.id)
-          return { success: false, error: attachResult.error, code: attachResult.code }
+        if (result.data.claim) {
+          // Adopt the issued credential, then attach with it so output flows
+          // immediately. Reconnect re-attach afterwards reuses the stored claim.
+          client.adoptClaim(result.data.id, result.data.claim)
+          const attachResult = await client.attach(result.data.id, result.data.claim)
+          if (!attachResult.success) {
+            // Attach failed — the PTY exists but we can't receive output.
+            // Kill it to avoid orphaning, and return the attach failure.
+            void client.request('kill', { terminalId: result.data.id })
+            client.removeTracker(result.data.id)
+            return { success: false, error: attachResult.error, code: attachResult.code }
+          }
+        } else {
+          // Defensive: a claim-less spawn success cannot attach (no credential
+          // to present). Return the spawn result WITHOUT killing the PTY — the
+          // tracker stays claim-less and reconnect marks it disconnected. This
+          // path is unreachable against a host that issues claims; it exists so
+          // a malformed reply can never destroy a freshly spawned terminal.
+          client.adoptClaim(result.data.id)
         }
+      }
+      return result
+    },
+    attach: (terminalId, claim, lastSeq) => client.attachWithCursor(terminalId, claim, lastSeq),
+    async rotateClaim(terminalId: string, claim: string): Promise<IpcResult<RotatedClaim>> {
+      const result = await client.request<RotatedClaim>('rotate_claim', { terminalId, claim })
+      if (result.success) {
+        // Teardown (amendment R1): the server detached this connection's
+        // attachment and authorization. Adopt the fresh credential and force
+        // a re-verified attach for any outstanding refs.
+        client.severClaim(terminalId, result.data.claim)
+      }
+      return result
+    },
+    async revokeClaim(terminalId: string, claim: string): Promise<IpcResult<void>> {
+      const result = await client.request<void>('revoke_claim', { terminalId, claim })
+      if (result.success) {
+        // Teardown (amendment R1): output stream + write/resize access gone.
+        client.severClaim(terminalId)
       }
       return result
     },
@@ -502,7 +641,7 @@ export function createWebTerminalApi(): TerminalApi {
     async kill(terminalId): Promise<IpcResult<void>> {
       const result = await client.request<void>('kill', { terminalId })
       // Kill is idempotent on the server (not_found = success).
-      // Either way, stop tracking and detach.
+      // Either way, stop tracking and detach (the claim goes with the tracker).
       client.removeTracker(terminalId)
       return result
     },

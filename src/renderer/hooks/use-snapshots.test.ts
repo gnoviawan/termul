@@ -8,6 +8,7 @@ const {
   mockGetSnapshot,
   mockAddTerminal,
   mockSetTerminalPtyId,
+  mockSetTerminalClaim,
   mockCloseTerminal,
   mockSelectTerminal
 } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const {
   mockGetSnapshot: vi.fn(),
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
+  mockSetTerminalClaim: vi.fn(),
   mockCloseTerminal: vi.fn(),
   mockSelectTerminal: vi.fn()
 }))
@@ -25,6 +27,7 @@ const mockTerminalStoreState = {
   closeTerminal: mockCloseTerminal,
   addTerminal: mockAddTerminal,
   setTerminalPtyId: mockSetTerminalPtyId,
+  setTerminalClaim: mockSetTerminalClaim,
   selectTerminal: mockSelectTerminal
 }
 
@@ -76,7 +79,11 @@ describe('useRestoreSnapshot', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockTerminalStoreState.terminals = []
-    mockTerminalApiSpawn.mockResolvedValue({ success: true, data: { id: 'pty-1' } })
+    // CAP-3: spawn is the only claim issuance path — the fixture carries it.
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-1', claim: 'lease-claim-snapshot' }
+    })
     mockTerminalApiKill.mockResolvedValue({ success: true, data: undefined })
     mockGetSnapshot.mockResolvedValue(snapshot)
     mockAddTerminal.mockReturnValue({ id: 'term-1' })
@@ -89,5 +96,7 @@ describe('useRestoreSnapshot', () => {
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: 'proj-1' })
     )
+    // CAP-3: the issued claim from the snapshot re-spawn lands in the terminal store.
+    expect(mockSetTerminalClaim).toHaveBeenCalledWith('pty-1', 'lease-claim-snapshot')
   })
 })

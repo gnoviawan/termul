@@ -67,9 +67,10 @@ describe('useSSHConnection', () => {
       ptyIdIndex: new Map()
     })
 
+    // CAP-3: spawn is the only claim issuance path — the fixture carries it.
     mocks.spawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'ssh', cwd: '/' }
+      data: { id: 'pty-1', shell: 'ssh', cwd: '/', claim: 'lease-claim-ssh' }
     })
     mocks.write.mockResolvedValue({ success: true, data: undefined })
     mocks.connect.mockResolvedValue({
@@ -152,6 +153,10 @@ describe('useSSHConnection', () => {
     expect(conn?.status).toBe('connected')
     expect(conn?.id).toBe('conn-1') // swapped to the backend id
     expect(result.current.sftpReady).toBe(true)
+
+    // CAP-3: the issued claim from the spawn response lands in the terminal store.
+    const storedTerminal = useTerminalStore.getState().terminals.find((t) => t.ptyId === 'pty-1')
+    expect(storedTerminal?.claim).toBe('lease-claim-ssh')
   })
 
   it('does NOT report connected when the backend SSH connect fails', async () => {

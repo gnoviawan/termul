@@ -102,6 +102,13 @@ export interface Terminal {
   agentProgram?: string // Resolved/declared program for restore re-spawn (no prompt)
   agentArgs?: string[] // baseArgs only (seed prompt intentionally excluded for restore)
   kind?: 'shell' | 'agent' // Session type marker; defaults to 'shell' when unset
+  /**
+   * CAP-3: the reclaimable-terminal lease credential issued at spawn.
+   * IN-MEMORY ONLY — never written to auto-save/snapshot persistence,
+   * localStorage, or any browser storage. Set on spawn/rotate, cleared on
+   * kill/close/restart/clearTerminalPtyId.
+   */
+  claim?: string
 }
 
 export interface TerminalLine {

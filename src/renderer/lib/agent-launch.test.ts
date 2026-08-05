@@ -87,9 +87,11 @@ describe('launchAgentInPane', () => {
     vi.clearAllMocks()
     mockTerminals.length = 0
     mockIsTerminalLimitReached.mockReturnValue(false)
+    // CAP-3: spawn is the only claim issuance path — the fixture carries the
+    // issued lease credential alongside the terminal info.
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'claude', cwd: '/test' }
+      data: { id: 'pty-1', shell: 'claude', cwd: '/test', claim: 'claim-agent-1' }
     })
   })
 
@@ -138,6 +140,29 @@ describe('launchAgentInPane', () => {
       ptyId: 'pty-1'
     })
     expect(JSON.stringify(lastCreatedTerminal())).not.toContain('do a thing')
+  })
+
+  it('captures the issued claim on the created terminal record', async () => {
+    const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
+
+    expect(result.success).toBe(true)
+    // CAP-3: the lease credential lands in the batched set() record alongside
+    // the ptyId — no spawn path may produce a lease-less terminal record.
+    expect(lastCreatedTerminal()).toMatchObject({
+      ptyId: 'pty-1',
+      claim: 'claim-agent-1'
+    })
+  })
+
+  it('omits the claim key when the spawn response carries none', async () => {
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-2', shell: 'claude', cwd: '/test' }
+    })
+
+    await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
+
+    expect(lastCreatedTerminal()).not.toHaveProperty('claim')
   })
 
   it('names the terminal after the agent, selects it, and adds a tab', async () => {

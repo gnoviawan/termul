@@ -1,4 +1,10 @@
-import type { GitStatus, TerminalInfo, TerminalSpawnOptions } from './ipc.types'
+import type {
+  GitStatus,
+  RotatedClaim,
+  SpawnedTerminal,
+  TerminalAttachResult,
+  TerminalSpawnOptions
+} from './ipc.types'
 
 export type WebTerminalRequestType =
   | 'spawn'
@@ -7,6 +13,8 @@ export type WebTerminalRequestType =
   | 'kill'
   | 'attach'
   | 'detach'
+  | 'rotate_claim'
+  | 'revoke_claim'
   | 'get_cwd'
   | 'get_git_branch'
   | 'get_git_status'
@@ -79,4 +87,14 @@ export type WebTerminalFrame<T = unknown> =
   | WebTerminalGapFrame
   | WebTerminalEventFrame
 
-export type WebTerminalSpawnReply = WebTerminalReply<TerminalInfo>
+/**
+ * CAP-3: the spawn reply carries the issued claim credential (flattened
+ * camelCase, same shape as the desktop `terminal_spawn` IpcResult data).
+ */
+export type WebTerminalSpawnReply = WebTerminalReply<SpawnedTerminal>
+
+/** CAP-3: attach reply — shared TerminalAttachResult shape (never a claim). */
+export type WebTerminalAttachReply = WebTerminalReply<TerminalAttachResult>
+
+/** CAP-3: rotate reply — the fresh credential. */
+export type WebTerminalRotateClaimReply = WebTerminalReply<RotatedClaim>

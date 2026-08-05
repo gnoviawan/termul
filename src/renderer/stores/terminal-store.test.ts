@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { serializeTerminalsForProject } from '../hooks/useTerminalAutoSave'
 import { useProjectStore } from './project-store'
 import {
   HIDDEN_BUFFER_TRUNCATION_DELAY,
@@ -833,6 +834,137 @@ describe('terminal-store', () => {
       useTerminalStore.getState().setTerminalNeedsAttention('does-not-exist', true)
       const after = useTerminalStore.getState().terminals
       expect(after).toBe(before)
+    })
+  })
+
+  // ========== CAP-3: reclaimable terminal lease (claim) lifecycle ==========
+  // The claim credential is in-memory only: set on spawn/rotate, cleared on
+  // kill/close/restart/clearTerminalPtyId, and NEVER written to persistence.
+
+  describe('CAP-3 terminal claim lifecycle', () => {
+    it('setTerminalClaim sets the claim on the terminal owning the ptyId', () => {
+      const { setTerminalPtyId, setTerminalClaim } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-claim')
+      setTerminalClaim('pty-cap3-claim', 'lease-credential-1')
+
+      const { terminals } = useTerminalStore.getState()
+      expect(terminals.find((t) => t.id === 't1')?.claim).toBe('lease-credential-1')
+      expect(terminals.find((t) => t.id === 't2')?.claim).toBeUndefined()
+      expect(terminals.find((t) => t.id === 't3')?.claim).toBeUndefined()
+    })
+
+    it('setTerminalClaim is a no-op for an unknown ptyId', () => {
+      const { setTerminalPtyId, setTerminalClaim } = useTerminalStore.getState()
+      setTerminalPtyId('t1', 'pty-cap3-known')
+
+      const before = useTerminalStore.getState().terminals
+      setTerminalClaim('pty-cap3-unknown', 'lease-orphan')
+      const after = useTerminalStore.getState().terminals
+
+      // Same state reference: nothing was rewritten for a ptyId nobody owns.
+      expect(after).toBe(before)
+      expect(after.find((t) => t.id === 't1')?.claim).toBeUndefined()
+      expect(after.some((t) => t.claim === 'lease-orphan')).toBe(false)
+    })
+
+    it('clears the claim when setTerminalClaim is called with undefined', () => {
+      const { setTerminalPtyId, setTerminalClaim } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-clear')
+      setTerminalClaim('pty-cap3-clear', 'lease-to-clear')
+      expect(useTerminalStore.getState().terminals.find((t) => t.id === 't1')?.claim).toBe(
+        'lease-to-clear'
+      )
+
+      setTerminalClaim('pty-cap3-clear', undefined)
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.claim).toBeUndefined()
+      // The ptyId binding survives claim clearing — only the lease is gone.
+      expect(terminal?.ptyId).toBe('pty-cap3-clear')
+    })
+
+    it('rotation semantics: setting a new claim replaces the previous credential', () => {
+      const { setTerminalPtyId, setTerminalClaim } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-rotate')
+      setTerminalClaim('pty-cap3-rotate', 'lease-generation-1')
+      setTerminalClaim('pty-cap3-rotate', 'lease-generation-2')
+
+      const { terminals } = useTerminalStore.getState()
+      expect(terminals.find((t) => t.id === 't1')?.claim).toBe('lease-generation-2')
+      // The rotated-out credential must not linger on any terminal record.
+      expect(terminals.some((t) => t.claim === 'lease-generation-1')).toBe(false)
+    })
+
+    it('clearTerminalPtyId drops the claim bound to that PTY', () => {
+      const { setTerminalPtyId, setTerminalClaim, clearTerminalPtyId } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-drop')
+      setTerminalClaim('pty-cap3-drop', 'lease-bound-to-pty')
+
+      clearTerminalPtyId('pty-cap3-drop')
+
+      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === 't1')
+      expect(terminal?.ptyId).toBeUndefined()
+      expect(terminal?.claim).toBeUndefined()
+    })
+
+    it('closeTerminal removes the record carrying the claim', () => {
+      const { setTerminalPtyId, setTerminalClaim, closeTerminal } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-close')
+      setTerminalClaim('pty-cap3-close', 'lease-on-closed-terminal')
+
+      closeTerminal('t1', '1')
+
+      const { terminals } = useTerminalStore.getState()
+      expect(terminals.find((t) => t.id === 't1')).toBeUndefined()
+      expect(terminals.some((t) => t.claim === 'lease-on-closed-terminal')).toBe(false)
+    })
+
+    it('restartTerminal drops the stale claim of the replaced PTY', () => {
+      const { setTerminalPtyId, setTerminalClaim, restartTerminal } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-restart')
+      setTerminalClaim('pty-cap3-restart', 'lease-stale-after-restart')
+
+      restartTerminal('t1')
+
+      const { terminals } = useTerminalStore.getState()
+      const restarted = terminals.find((t) => t.id === 't1')
+      // The old lease belonged to the old PTY — the record gets a fresh
+      // placeholder ptyId and no claim until the restart re-spawns.
+      expect(restarted?.claim).toBeUndefined()
+      expect(restarted?.ptyId).toBeDefined()
+      expect(restarted?.ptyId).not.toBe('pty-cap3-restart')
+      expect(terminals.some((t) => t.claim === 'lease-stale-after-restart')).toBe(false)
+    })
+
+    it('excludes the claim from the auto-save persisted payload (persistence exclusion)', () => {
+      const claimCredential = 'cap3-lease-credential-0123456789abcdef'
+      const { setTerminalPtyId, setTerminalClaim, appendTranscript } = useTerminalStore.getState()
+
+      setTerminalPtyId('t1', 'pty-cap3-persist')
+      setTerminalClaim('pty-cap3-persist', claimCredential)
+      appendTranscript('pty-cap3-persist', 'persisted output line 1\npersisted output line 2\n')
+
+      const { terminals, activeTerminalId } = useTerminalStore.getState()
+      const layout = serializeTerminalsForProject(terminals, '1', activeTerminalId)
+
+      const persisted = layout.terminals.find((t) => t.id === 't1')
+      expect(persisted).toBeDefined()
+      // Ordinary continuity data still persists...
+      expect(persisted?.transcript).toBe('persisted output line 1\npersisted output line 2\n')
+      expect(persisted?.scrollback).toEqual(['persisted output line 1', 'persisted output line 2'])
+      // ...but the lease credential never does.
+      expect(persisted).not.toHaveProperty('claim')
+      expect(persisted).not.toHaveProperty('ptyId')
+
+      const serialized = JSON.stringify(layout)
+      expect(serialized).not.toContain(claimCredential)
+      expect(serialized).not.toContain('"claim"')
     })
   })
 })

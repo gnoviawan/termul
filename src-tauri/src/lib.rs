@@ -1324,6 +1324,9 @@ pub fn run() {
             export_log_to_default_command,
             // Terminal commands
             commands::terminal_spawn,
+            commands::terminal_attach,
+            commands::terminal_rotate_claim,
+            commands::terminal_revoke_claim,
             commands::terminal_write,
             commands::terminal_resize,
             commands::terminal_kill,

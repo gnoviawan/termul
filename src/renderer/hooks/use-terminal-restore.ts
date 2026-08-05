@@ -837,6 +837,9 @@ async function restoreFromLayout(
       // R3: DEC private-mode snapshot replayed before pendingScrollback on mount.
       pendingModes?: PersistedTerminal['modes']
       ptyId?: string
+      // CAP-3: lease credential issued by the restore re-spawn (in-memory
+      // only, never persisted).
+      claim?: string
       // ADR-004.4: restored agent metadata (re-applied after store insert)
       kind?: 'shell' | 'agent'
       agentId?: string
@@ -990,6 +993,8 @@ async function restoreFromLayout(
           pendingScrollback: persistedTerminal.scrollback,
           transcript: persistedTerminal.transcript,
           ptyId: spawnData.id,
+          // CAP-3: the restore re-spawn issues a fresh lease — capture it.
+          ...(spawnData.claim ? { claim: spawnData.claim } : {}),
           // R3: carry the captured DEC mode snapshot so ConnectedTerminal can
           // replay it (via restoreScrollback) before the scrollback content.
           ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
@@ -1247,6 +1252,10 @@ async function createDefaultTerminal(
     // Create default terminal - addTerminal also sets it as active
     const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, cwd)
     terminalStore.setTerminalPtyId(newTerminal.id, spawnData.id)
+    // CAP-3: store the issued lease credential (in-memory only).
+    if (spawnData.claim) {
+      terminalStore.setTerminalClaim(spawnData.id, spawnData.claim)
+    }
 
     // Explicitly select to ensure activeTerminalId is set correctly
     terminalStore.selectTerminal(newTerminal.id)
