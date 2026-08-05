@@ -1,14 +1,16 @@
 import type {
   GitStatus,
   IpcResult,
+  RotatedClaim,
+  SpawnedTerminal,
   TerminalApi,
+  TerminalAttachResult,
   TerminalCwdChangedCallback,
   TerminalDataCallback,
   TerminalExitCallback,
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
-  TerminalInfo,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
 import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
@@ -48,6 +50,9 @@ type SharedListenerEntry<T> = {
  */
 const IPC_COMMANDS = {
   SPAWN: 'terminal_spawn',
+  ATTACH: 'terminal_attach',
+  ROTATE_CLAIM: 'terminal_rotate_claim',
+  REVOKE_CLAIM: 'terminal_revoke_claim',
   WRITE: 'terminal_write',
   RESIZE: 'terminal_resize',
   KILL: 'terminal_kill',
@@ -252,8 +257,12 @@ export function createTauriTerminalApi(): TerminalApi {
   return {
     /**
      * Spawn a new terminal PTY
+     *
+     * CAP-3: the successful result carries the issued `claim` credential —
+     * spawn is the only issuance path. Callers must store the claim in the
+     * terminal store (in-memory only; it is never persisted).
      */
-    async spawn(options?: TerminalSpawnOptions): Promise<IpcResult<TerminalInfo>> {
+    async spawn(options?: TerminalSpawnOptions): Promise<IpcResult<SpawnedTerminal>> {
       if (IS_DEV) {
         const spawnId = `spawn-${SPAWN_CALL_COUNTER++}-${Date.now().toString(36)}`
         const stack = captureStackTrace()
@@ -337,7 +346,10 @@ export function createTauriTerminalApi(): TerminalApi {
         }
       }
 
-      const result = await invokeIpc<TerminalInfo>(IPC_COMMANDS.SPAWN, { options, onData: on_data })
+      const result = await invokeIpc<SpawnedTerminal>(IPC_COMMANDS.SPAWN, {
+        options,
+        onData: on_data
+      })
 
       if (result.success && result.data) {
         capturedTerminalId = result.data.id
@@ -362,6 +374,62 @@ export function createTauriTerminalApi(): TerminalApi {
       }
 
       return result
+    },
+
+    /**
+     * CAP-3: attach to a terminal's output stream with terminalId + claim +
+     * lastSeq. The host verifies the credential BEFORE any replay; every
+     * verification failure resolves to the generic UNAUTHORIZED error with no
+     * terminal metadata or output. Output streams through a dedicated raw
+     * channel (parity with the spawn channel), and the response's `latestSeq`
+     * is the desktop reattach cursor.
+     */
+    async attach(
+      terminalId: string,
+      claim: string,
+      lastSeq: number
+    ): Promise<IpcResult<TerminalAttachResult>> {
+      // Never present an id-only attach — the credential is the gate.
+      if (!claim) {
+        return { success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }
+      }
+      const on_data = new Channel<ArrayBuffer>()
+      on_data.onmessage = (buf: ArrayBuffer) => {
+        const bytes = new Uint8Array(buf)
+        for (const callback of dataCallbacks) {
+          try {
+            callback(terminalId, bytes)
+          } catch (err) {
+            console.error('[BinaryChannel] Error in attach data callback:', err)
+          }
+        }
+      }
+      const result = await invokeIpc<TerminalAttachResult>(IPC_COMMANDS.ATTACH, {
+        terminalId,
+        claim,
+        lastSeq,
+        onData: on_data
+      })
+      if (!result.success) {
+        // Rejected (or failed) — release the channel so it cannot leak.
+        on_data.onmessage = () => {}
+      }
+      return result
+    },
+
+    /**
+     * CAP-3: possession-based rotation — the returned credential replaces the
+     * presented one atomically.
+     */
+    async rotateClaim(terminalId: string, claim: string): Promise<IpcResult<RotatedClaim>> {
+      return invokeIpc<RotatedClaim>(IPC_COMMANDS.ROTATE_CLAIM, { terminalId, claim })
+    },
+
+    /**
+     * CAP-3: revoke the credential; the PTY keeps running.
+     */
+    async revokeClaim(terminalId: string, claim: string): Promise<IpcResult<void>> {
+      return invokeIpc<void>(IPC_COMMANDS.REVOKE_CLAIM, { terminalId, claim })
     },
 
     /**

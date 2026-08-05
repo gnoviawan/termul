@@ -30,17 +30,42 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: Record<string, unknown> }
+    if (req.type === 'spawn') {
+      // CAP-3: spawn is the only issuance path — the reply carries the claim.
+      this.emitReply({ id: req.id, success: true, data: spawnReplyData })
+      return
+    }
     if (req.type === 'attach') {
-      if (attachReply === 'not_found') {
+      if (attachReply === 'unauthorized') {
+        // The single generic rejection — no distinguishing detail. The real
+        // host returns this for unknown terminal AND bad/rotated/revoked claim
+        // alike (existence is never revealed).
         this.emitReply({
           id: req.id,
           success: false,
-          error: 'terminal not found',
-          code: 'TERMINAL_NOT_FOUND'
+          error: 'Unauthorized',
+          code: 'UNAUTHORIZED'
         })
         return
       }
-      this.emitReply({ id: req.id, success: true, data: undefined })
+      this.emitReply({
+        id: req.id,
+        success: true,
+        data: {
+          id: req.payload.terminalId,
+          shell: 'bash',
+          cwd: '/tmp',
+          pid: 1,
+          cols: 80,
+          rows: 24,
+          latestSeq: (req.payload.lastSeq as number) ?? 0,
+          gap: false
+        }
+      })
+      return
+    }
+    if (req.type === 'rotate_claim') {
+      this.emitReply({ id: req.id, success: true, data: { claim: rotateReplyClaim } })
       return
     }
     this.emitReply({ id: req.id, success: true, data: undefined })
@@ -60,10 +85,30 @@ class FakeWebSocket {
   }
 }
 
-/** Test knob: make `attach` replies fail with TERMINAL_NOT_FOUND. */
-let attachReply: 'ok' | 'not_found' = 'ok'
+/** Test knob: make `attach` replies fail with the generic UNAUTHORIZED. */
+let attachReply: 'ok' | 'unauthorized' = 'ok'
 
-type Tracker = { lastSeq: number; exited: boolean; refCount: number }
+/** Test knob: the spawn reply data (CAP-3 issuance carries the claim). */
+let spawnReplyData: Record<string, unknown> = {
+  id: 'pty-spawn-1',
+  shell: 'bash',
+  cwd: '/tmp',
+  pid: 42,
+  cols: 80,
+  rows: 24,
+  claim: 'issued-claim-64-hex'
+}
+
+/** Test knob: credential returned by rotate_claim replies. */
+let rotateReplyClaim = 'rotated-claim-64-hex'
+
+type Tracker = {
+  lastSeq: number
+  exited: boolean
+  refCount: number
+  claim?: string
+  disconnected: boolean
+}
 
 type ClientInternals = {
   socket: FakeWebSocket
@@ -113,6 +158,16 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
   afterEach(() => {
     restoreVisibility()
     attachReply = 'ok'
+    spawnReplyData = {
+      id: 'pty-spawn-1',
+      shell: 'bash',
+      cwd: '/tmp',
+      pid: 42,
+      cols: 80,
+      rows: 24,
+      claim: 'issued-claim-64-hex'
+    }
+    rotateReplyClaim = 'rotated-claim-64-hex'
     vi.useRealTimers()
   })
 
@@ -124,8 +179,8 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     )
     const internals = client as unknown as ClientInternals
     await client.connect()
-    // Track a terminal and advance its cursor past the initial 0.
-    await client.attach('t1')
+    // Track a terminal with its lease credential and advance its cursor.
+    await client.attach('t1', 'claim-t1')
     const oldSocket = internals.socket
     oldSocket.emit({ type: 'data', terminalId: 't1', seq: 7, data: [65] })
     await Promise.resolve() // flush handleFrame
@@ -143,10 +198,11 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
 
     expect(internals.socket).not.toBe(oldSocket) // torn down + replaced
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
-    // The new socket re-attached the tracker carrying its stored cursor.
+    // The new socket re-attached the tracker carrying its stored claim +
+    // cursor (CAP-3: reattach requires the lease credential).
     const attachReq = findSentRequest(internals.socket, 'attach')
     expect(attachReq).toBeDefined()
-    expect(attachReq?.payload).toEqual({ terminalId: 't1', lastSeq: 7 })
+    expect(attachReq?.payload).toEqual({ terminalId: 't1', claim: 'claim-t1', lastSeq: 7 })
 
     if (internals.reconnectTimer) {
       clearTimeout(internals.reconnectTimer)
@@ -163,7 +219,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     )
     const internals = client as unknown as ClientInternals
     await client.connect()
-    await client.attach('t1')
+    await client.attach('t1', 'claim-t1')
     const forceSpy = vi.spyOn(
       client as unknown as { forceReconnect: (reason: string) => void },
       'forceReconnect'
@@ -197,7 +253,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     client.dispose()
   })
 
-  it('marks a tracker exited when re-attach returns TERMINAL_NOT_FOUND', async () => {
+  it('drops the claim and marks disconnected when re-attach is rejected (terminal torn down while AFK)', async () => {
     vi.useFakeTimers()
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',
@@ -205,23 +261,29 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     )
     const internals = client as unknown as ClientInternals
     await client.connect()
-    await client.attach('t1')
+    await client.attach('t1', 'claim-t1')
     expect(internals.trackers.get('t1')?.exited).toBe(false)
 
     // The server tore the terminal down during AFK — the reconnect's re-attach
-    // replies TERMINAL_NOT_FOUND.
-    attachReply = 'not_found'
+    // now receives the single generic UNAUTHORIZED (the host never distinguishes
+    // terminal-gone from credential-gone, so TERMINAL_NOT_FOUND is never sent).
+    attachReply = 'unauthorized'
 
     dispatchVisibility('hidden')
     await vi.advanceTimersByTimeAsync(31_000)
     dispatchVisibility('visible')
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(600)
-    // The TERMINAL_NOT_FOUND reply + the onopen re-attach `.then` mark it exited.
+    // The rejection reply + the onopen re-attach `.then` settle.
     await vi.advanceTimersByTimeAsync(0)
     await Promise.resolve()
 
-    expect(internals.trackers.get('t1')?.exited).toBe(true)
+    // CAP-3: the credential is dropped and never re-presented; the tracker is
+    // marked disconnected. It is NOT marked exited — the generic rejection gives
+    // the client no signal that the PTY is dead vs. the claim merely invalid.
+    expect(internals.trackers.get('t1')?.claim).toBeUndefined()
+    expect(internals.trackers.get('t1')?.disconnected).toBe(true)
+    expect(internals.trackers.get('t1')?.exited).toBe(false)
 
     if (internals.reconnectTimer) {
       clearTimeout(internals.reconnectTimer)
@@ -238,7 +300,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     )
     const internals = client as unknown as ClientInternals
     await client.connect()
-    await client.attach('t1')
+    await client.attach('t1', 'claim-t1')
     const oldSocket = internals.socket
 
     // Simulate prior suspensions having exhausted the backoff ceiling. At MAX,
@@ -299,7 +361,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     )
     const internals = client as unknown as ClientInternals
     await client.connect()
-    await client.attach('t1')
+    await client.attach('t1', 'claim-t1')
     const oldSocket = internals.socket
     // The server tore the socket down during AFK (CLOSED), but the client
     // hasn't received onclose yet (suspended-tab / half-open link).
@@ -410,6 +472,297 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
     }
 
     client.dispose()
+  })
+
+  describe('CAP-3 claim lifecycle (issuance, adoption, rejection)', () => {
+    function makeClient(): {
+      client: WebTerminalClient
+      internals: ClientInternals
+    } {
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      return { client, internals: client as unknown as ClientInternals }
+    }
+
+    afterEach(() => {
+      attachReply = 'ok'
+      vi.useRealTimers()
+    })
+
+    it('spawn reply carries the issued claim (round-trip shape)', async () => {
+      vi.useFakeTimers()
+      const { client } = makeClient()
+      const result = await client.request<{ id: string; claim: string }>('spawn', {
+        projectId: 'p1'
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.id).toBe('pty-spawn-1')
+        expect(result.data.claim).toBe('issued-claim-64-hex')
+      }
+      client.dispose()
+    })
+
+    it('attaches with claim + lastSeq and adopts both only on server-confirmed success', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      const sock = internals.socket
+
+      const result = await client.attach('t1', 'lease-abc')
+      expect(result.success).toBe(true)
+      const tracker = internals.trackers.get('t1')
+      expect(tracker?.claim).toBe('lease-abc')
+      expect(tracker?.refCount).toBe(1)
+      expect(tracker?.disconnected).toBe(false)
+
+      const attachReq = findSentRequest(sock, 'attach')
+      expect(attachReq?.payload).toEqual({ terminalId: 't1', claim: 'lease-abc', lastSeq: 0 })
+      client.dispose()
+    })
+
+    it('rejects an id-only attach locally (no round trip) and marks disconnected', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      const sock = internals.socket
+
+      const result = await client.attach('t2')
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('UNAUTHORIZED')
+      expect(internals.trackers.get('t2')?.disconnected).toBe(true)
+      // No attach frame was presented to the server.
+      expect(findSentRequest(sock, 'attach')).toBeUndefined()
+      client.dispose()
+    })
+
+    it('rejection drops the adopted claim and never re-presents it on reconnect', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      attachReply = 'unauthorized'
+
+      const result = await client.attach('t1', 'stolen-or-rotated-claim')
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('UNAUTHORIZED')
+      expect(internals.trackers.get('t1')?.claim).toBeUndefined()
+      expect(internals.trackers.get('t1')?.disconnected).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(0)
+
+      // Reconnect: the rejected credential must NOT be re-presented — a
+      // disconnected terminal does not drive reconnect scheduling at all.
+      attachReply = 'ok'
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600)
+      await Promise.resolve()
+      expect(internals.socket).toBeNull()
+      expect(internals.reconnectTimer).toBeNull()
+
+      client.dispose()
+    })
+
+    it('preserves outstanding refCounts across concurrent slow-path attaches', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+
+      // Two renderers attach concurrently (both enter the slow path while
+      // refCount is still 0). Success must INCREMENT, never reset to 1.
+      const [a, b] = await Promise.all([
+        client.attach('t1', 'lease-abc'),
+        client.attach('t1', 'lease-abc')
+      ])
+      expect(a.success).toBe(true)
+      expect(b.success).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(2)
+
+      // Fast path increments too.
+      const c = await client.attach('t1')
+      expect(c.success).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(3)
+      client.dispose()
+    })
+
+    it('reconnect re-attaches terminals with a stored claim only', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+
+      // t1 holds a lease; t3 does not (e.g. a cross-client record without a
+      // credential).
+      await client.attach('t1', 'lease-abc')
+      internals.trackers.set('t3', { lastSeq: 0, exited: false, refCount: 0, disconnected: false })
+
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600)
+      await Promise.resolve()
+
+      // Exactly one attach frame — for the credentialed terminal only.
+      const attachFrames = internals.socket.sent
+        .map((raw) => JSON.parse(raw) as { type: string; payload: { terminalId: string } })
+        .filter((f) => f.type === 'attach')
+      expect(attachFrames).toHaveLength(1)
+      expect(attachFrames[0].payload.terminalId).toBe('t1')
+      // The claim-less terminal is marked disconnected.
+      expect(internals.trackers.get('t3')?.disconnected).toBe(true)
+
+      if (internals.reconnectTimer) {
+        clearTimeout(internals.reconnectTimer)
+        internals.reconnectTimer = null
+      }
+      client.dispose()
+    })
+
+    it('rotate adopts the fresh credential and forces a re-verified attach', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      await client.attach('t1', 'lease-old')
+      expect(internals.trackers.get('t1')?.refCount).toBe(1)
+
+      const rotated = await client.request<{ claim: string }>('rotate_claim', {
+        terminalId: 't1',
+        claim: 'lease-old'
+      })
+      expect(rotated.success).toBe(true)
+      if (rotated.success) expect(rotated.data.claim).toBe('rotated-claim-64-hex')
+
+      // Facade-level teardown semantics (severClaim): fresh credential held,
+      // outstanding refs require a fresh verified attach.
+      client.severClaim('t1', rotated.success ? rotated.data.claim : undefined)
+      const tracker = internals.trackers.get('t1')
+      expect(tracker?.claim).toBe('rotated-claim-64-hex')
+      expect(tracker?.refCount).toBe(0)
+      expect(tracker?.disconnected).toBe(false)
+
+      // Re-attach with the rotated credential succeeds.
+      const reattach = await client.attach('t1', 'rotated-claim-64-hex')
+      expect(reattach.success).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(1)
+      client.dispose()
+    })
+
+    it('revoke drops the credential and marks the terminal disconnected', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      await client.attach('t1', 'lease-old')
+
+      const revoked = await client.request<void>('revoke_claim', {
+        terminalId: 't1',
+        claim: 'lease-old'
+      })
+      expect(revoked.success).toBe(true)
+
+      client.severClaim('t1')
+      const tracker = internals.trackers.get('t1')
+      expect(tracker?.claim).toBeUndefined()
+      expect(tracker?.refCount).toBe(0)
+      expect(tracker?.disconnected).toBe(true)
+
+      // The revoked terminal no longer drives reconnect scheduling.
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600)
+      expect(internals.reconnectTimer).toBeNull()
+      client.dispose()
+    })
+
+    it('re-attach with a supplied claim while refs are outstanding increments refCount (never resets)', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+
+      // Renderer A attaches with the lease...
+      const a = await client.attach('t1', 'lease-abc')
+      expect(a.success).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(1)
+
+      // ...then renderer B re-attaches presenting the same claim while A's
+      // ref is outstanding. Success must INCREMENT — a `refCount = 1` reset
+      // would discard renderer A's reference and tear its stream down.
+      const b = await client.attach('t1', 'lease-abc')
+      expect(b.success).toBe(true)
+      expect(internals.trackers.get('t1')?.refCount).toBe(2)
+      expect(internals.trackers.get('t1')?.claim).toBe('lease-abc')
+      expect(internals.trackers.get('t1')?.disconnected).toBe(false)
+      client.dispose()
+    })
+
+    it('handoff attach with supplied claim + cursor adopts both for reconnect', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      const sock = internals.socket
+
+      // Cross-client handoff: the facade attach (attachWithCursor) presents
+      // the supplied claim + cursor to the server.
+      const result = await client.attachWithCursor('t1', 'handoff-claim', 87)
+      expect(result.success).toBe(true)
+      expect(findSentRequest(sock, 'attach')?.payload).toEqual({
+        terminalId: 't1',
+        claim: 'handoff-claim',
+        lastSeq: 87
+      })
+
+      // Server confirmed → the credential is adopted, terminal attachable.
+      const tracker = internals.trackers.get('t1')
+      expect(tracker?.claim).toBe('handoff-claim')
+      expect(tracker?.refCount).toBe(1)
+      expect(tracker?.disconnected).toBe(false)
+
+      // Seq-tagged output delivery (bounded replay / live) advances the cursor.
+      sock.emit({ type: 'data', terminalId: 't1', seq: 90, data: [104, 105] })
+      expect(internals.trackers.get('t1')?.lastSeq).toBe(90)
+
+      // A reconnect re-presents the adopted claim + cursor.
+      sock.close()
+      await vi.advanceTimersByTimeAsync(600)
+      await Promise.resolve()
+      expect(internals.socket).not.toBe(sock)
+      expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+        terminalId: 't1',
+        claim: 'handoff-claim',
+        lastSeq: 90
+      })
+
+      if (internals.reconnectTimer) {
+        clearTimeout(internals.reconnectTimer)
+        internals.reconnectTimer = null
+      }
+      client.dispose()
+    })
+
+    it('rejected handoff attach (claim + cursor) drops the adopted claim and never re-presents it', async () => {
+      vi.useFakeTimers()
+      const { client, internals } = makeClient()
+      await client.connect()
+      attachReply = 'unauthorized'
+
+      // Facade attach (attachWithCursor) with supplied claim + cursor — the
+      // server rejects with the single generic UNAUTHORIZED error.
+      const result = await client.attachWithCursor('t1', 'stolen-or-rotated-claim', 87)
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('UNAUTHORIZED')
+
+      // No adopted credential survives the rejection.
+      const tracker = internals.trackers.get('t1')
+      expect(tracker?.claim).toBeUndefined()
+      expect(tracker?.disconnected).toBe(true)
+      expect(tracker?.refCount).toBe(0)
+
+      // Reconnect: the rejected credential must never be re-presented — a
+      // disconnected terminal does not drive reconnect scheduling at all.
+      attachReply = 'ok'
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600)
+      await Promise.resolve()
+      expect(internals.socket).toBeNull()
+      expect(internals.reconnectTimer).toBeNull()
+
+      client.dispose()
+    })
   })
 
   it('rejects a request awaiting connect to NETWORK_ERROR when forceReconnect fires mid-handshake', async () => {

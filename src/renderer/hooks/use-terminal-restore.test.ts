@@ -108,7 +108,8 @@ const mockTerminalStoreState = {
   selectTerminal: vi.fn(),
   setTerminals: vi.fn(),
   addTerminal: vi.fn(),
-  setTerminalPtyId: vi.fn()
+  setTerminalPtyId: vi.fn(),
+  setTerminalClaim: vi.fn()
 }
 
 vi.mock('../stores/terminal-store', () => ({
@@ -183,7 +184,11 @@ beforeEach(() => {
   })
   mockLoadPersistedTerminals.mockResolvedValue(null)
   mockSaveTerminalLayout.mockResolvedValue(undefined)
-  mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-1' } })
+  // CAP-3: spawn is the only claim issuance path — the fixture carries it.
+  mockTerminalSpawn.mockResolvedValue({
+    success: true,
+    data: { id: 'pty-1', claim: 'lease-claim-restore' }
+  })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
   mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
 })
@@ -720,6 +725,13 @@ describe('useTerminalRestore', () => {
     await waitFor(() => {
       expect(mockTerminalSpawn).toHaveBeenCalledWith(
         expect.objectContaining({ projectId: 'project-a' })
+      )
+    })
+    // CAP-3: the issued claim from the fallback spawn lands in the terminal store.
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminalClaim).toHaveBeenCalledWith(
+        'pty-1',
+        'lease-claim-restore'
       )
     })
     consoleErrorSpy.mockRestore()

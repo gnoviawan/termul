@@ -3,6 +3,7 @@
 //! This module provides terminal spawning, I/O, and lifecycle management
 //! ported from the Electron implementation.
 
+use crate::pty::claims::ClaimError;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub};
 use parking_lot::RwLock;
 use portable_pty::{Child, MasterPty, PtySize};
@@ -474,6 +475,39 @@ pub struct TerminalInfo {
     pub rows: u16,
 }
 
+/// Spawn response carrying the terminal info PLUS the issued claim credential.
+///
+/// Serializes FLATTENED — `{id, shell, cwd, pid, cols, rows, claim}` — so both
+/// transports (desktop `terminal_spawn` IpcResult data and the web `spawn`
+/// reply data) expose the same top-level camelCase shape. This is the only
+/// issuance path for the credential.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnedTerminal {
+    #[serde(flatten)]
+    pub info: TerminalInfo,
+    pub claim: String,
+}
+
+/// Shared attach response — byte-identical camelCase shape on both transports
+/// (desktop `terminal_attach` IpcResult data; web `attach` reply data).
+///
+/// Carries the live terminal metadata plus the replay cursor (`latestSeq`) and
+/// `gap` flag. It NEVER carries a claim key: attach is credential-consuming,
+/// never credential-issuing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalAttachResult {
+    pub id: String,
+    pub shell: String,
+    pub cwd: String,
+    pub pid: u32,
+    pub cols: u16,
+    pub rows: u16,
+    pub latest_seq: u64,
+    pub gap: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOutputChunk {
@@ -740,6 +774,29 @@ impl Drop for TerminalSlotReservation {
     }
 }
 
+/// RAII rollback for a claim issued before PTY creation: if any spawn step
+/// fails, the guard's drop removes the dangling claim record so no terminal
+/// exists with a live credential but no PTY (and vice versa).
+struct ClaimRollbackGuard<'a> {
+    claims: &'a crate::pty::claims::TerminalClaimRegistry,
+    terminal_id: String,
+    active: bool,
+}
+
+impl ClaimRollbackGuard<'_> {
+    fn commit(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for ClaimRollbackGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.claims.remove(&self.terminal_id);
+        }
+    }
+}
+
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
@@ -752,6 +809,10 @@ pub struct PtyManager {
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
     exit_code_tracker: Arc<ExitCodeTracker>,
+    /// Claim credential registry (CAP-3). Single ownership here keeps the
+    /// claim lifecycle coupled to the terminal lifecycle: issued at spawn,
+    /// removed at kill/reap.
+    claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
     /// When true, orphan detection and kill operations are deferred.
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
@@ -778,6 +839,7 @@ impl PtyManager {
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
+            claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
         }
     }
 
@@ -872,6 +934,7 @@ impl PtyManager {
         let cwd_tracker = self.cwd_tracker.clone();
         let git_tracker = self.git_tracker.clone();
         let exit_code_tracker = self.exit_code_tracker.clone();
+        let claims = self.claims.clone();
         let active_slots = self.active_terminal_slots.clone();
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
@@ -926,6 +989,7 @@ impl PtyManager {
                         cwd_tracker.stop_tracking(&id);
                         git_tracker.remove_terminal(&id);
                         exit_code_tracker.remove_terminal(&id);
+                        claims.remove(&id);
                     }
                 }
             }
@@ -942,12 +1006,19 @@ impl PtyManager {
         format!("terminal-{}-{}", timestamp, counter)
     }
 
-    /// Spawn a new terminal (with binary channel IPC)
+    /// Spawn a new terminal (with binary channel IPC).
+    ///
+    /// CAP-3: the claim credential is issued BEFORE PTY creation, bound to the
+    /// same `project_id` that is co-derived onto the [`TerminalInstance`]
+    /// (write-once; the verify side reads the instance binding, so issuance and
+    /// verification can never diverge). Any failure path rolls the issuance
+    /// back via the RAII guard, so a credential never outlives its terminal.
+    /// Returns the shared [`SpawnedTerminal`] shape feeding both transports.
     pub async fn spawn(
         &self,
         options: SpawnOptions,
         on_data: Option<Channel<Response>>,
-    ) -> Result<TerminalInfo, String> {
+    ) -> Result<SpawnedTerminal, String> {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
@@ -957,6 +1028,35 @@ impl PtyManager {
 
         let id = self.generate_id();
 
+        let claim = self.claims.issue(&id, options.project_id.as_deref());
+        let mut claim_guard = ClaimRollbackGuard {
+            claims: &self.claims,
+            terminal_id: id.clone(),
+            active: true,
+        };
+
+        let info = match self.spawn_pty(id.clone(), options, on_data).await {
+            Ok(info) => info,
+            Err(e) => {
+                // claim_guard drops here and removes the dangling record.
+                return Err(e);
+            }
+        };
+
+        claim_guard.commit();
+        slot_reservation.commit();
+        Ok(SpawnedTerminal { info, claim })
+    }
+
+    /// Platform-specific PTY creation (the former `spawn` body). `id` and the
+    /// claim lifecycle are owned by [`spawn`](Self::spawn); slot reservation
+    /// commits there too, so a failure on any branch rolls everything back.
+    async fn spawn_pty(
+        &self,
+        id: String,
+        options: SpawnOptions,
+        on_data: Option<Channel<Response>>,
+    ) -> Result<TerminalInfo, String> {
         // ADR-004.2: Resolve the program to run. When `program` is set we run
         // that executable directly (terminal-native agent launch); otherwise we
         // resolve a login shell exactly as before. `program == None` keeps the
@@ -1127,8 +1227,6 @@ impl PtyManager {
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
 
-            slot_reservation.commit();
-
             Ok(TerminalInfo {
                 id,
                 shell: shell_path,
@@ -1273,8 +1371,6 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
-
-            slot_reservation.commit();
 
             Ok(TerminalInfo {
                 id,
@@ -1610,6 +1706,7 @@ impl PtyManager {
         self.git_tracker.remove_terminal(id);
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
+        self.claims.remove(id);
 
         Ok(())
     }
@@ -1638,6 +1735,7 @@ impl PtyManager {
         self.git_tracker.remove_terminal(id);
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
+        self.claims.remove(id);
 
         Ok(())
     }
@@ -1688,6 +1786,74 @@ impl PtyManager {
 
     pub fn exit_code_tracker(&self) -> Arc<ExitCodeTracker> {
         Arc::clone(&self.exit_code_tracker)
+    }
+
+    /// Verify a claim credential for a terminal.
+    ///
+    /// The project binding checked is the terminal's OWN write-once
+    /// `project_id` (co-derived with the issuance binding at spawn), so
+    /// issuance and verification can never diverge. Every failure mode —
+    /// unknown terminal, oversized probe, wrong/revoked credential, binding
+    /// mismatch — collapses to the same [`crate::pty::claims::ClaimError`].
+    pub fn verify_claim(&self, terminal_id: &str, claim: &str) -> Result<(), ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .verify(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Rotate a claim: possession of the current credential yields a fresh
+    /// credential and atomically invalidates the old one. The generation bump
+    /// is the signal for credential-derived access (desktop attach forwarders)
+    /// to terminate.
+    pub fn rotate_claim(&self, terminal_id: &str, claim: &str) -> Result<String, ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .rotate(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Revoke a claim credential. The PTY itself is untouched — revocation
+    /// only severs credential-derived access (never-clause).
+    pub fn revoke_claim(&self, terminal_id: &str, claim: &str) -> Result<(), ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .revoke(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Current claim generation for a terminal, if a claim record exists.
+    /// Desktop attach forwarders capture this at attach time and terminate
+    /// when it changes (rotate/revoke) or disappears (kill/reap).
+    pub fn claim_generation(&self, terminal_id: &str) -> Option<u64> {
+        self.claims.generation(terminal_id)
+    }
+
+    /// Build the shared attach result (byte-identical camelCase shape on both
+    /// transports). Resolves the terminal's LIVE cwd from the `CwdTracker`,
+    /// falling back to the spawn-time cwd when no tracked value exists.
+    pub fn build_attach_result(
+        &self,
+        instance: &TerminalInstance,
+        replay: &TerminalReplay,
+    ) -> TerminalAttachResult {
+        let cwd = self
+            .cwd_tracker
+            .get_cwd(&instance.id)
+            .unwrap_or_else(|| instance.cwd.clone());
+        TerminalAttachResult {
+            id: instance.id.clone(),
+            shell: instance.shell.clone(),
+            cwd,
+            pid: instance.pid,
+            cols: *instance.cols.read(),
+            rows: *instance.rows.read(),
+            latest_seq: replay.latest_seq,
+            gap: replay.gap,
+        }
     }
 
     /// Get terminal by ID
@@ -1744,6 +1910,7 @@ impl PtyManager {
             git_tracker.remove_terminal(&id);
             exit_code_tracker.remove_terminal(&id);
             self.terminal_events.remove(&id);
+            self.claims.remove(&id);
         }
     }
 
@@ -2908,6 +3075,88 @@ mod tests {
         assert_eq!(options.cwd, Some("C:\\".to_string()));
         assert_eq!(options.cols, Some(120));
         assert_eq!(options.rows, Some(40));
+    }
+
+    // ========== CAP-3 serde shape tests ==========
+    // Pin the golden wire shapes so cross-language drift (serde flatten /
+    // camelCase) cannot ship untested: clients rely on byte-identical shapes
+    // across the desktop IPC and web WS surfaces.
+
+    #[test]
+    fn test_spawned_terminal_serializes_flat_with_claim() {
+        let spawned = SpawnedTerminal {
+            info: TerminalInfo {
+                id: "terminal-123-0".to_string(),
+                shell: "pwsh".to_string(),
+                cwd: "C:\\work".to_string(),
+                pid: 42,
+                cols: 120,
+                rows: 32,
+            },
+            claim: "f3a9".to_string(),
+        };
+
+        let value: serde_json::Value = serde_json::to_value(&spawned).unwrap();
+        let obj = value.as_object().expect("spawn reply is an object");
+
+        // FLATTENS to top-level info fields — no nested `info` key.
+        assert!(
+            !obj.contains_key("info"),
+            "SpawnedTerminal must flatten info, not nest it"
+        );
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("terminal-123-0"));
+        assert_eq!(obj.get("shell").and_then(|v| v.as_str()), Some("pwsh"));
+        assert_eq!(obj.get("cwd").and_then(|v| v.as_str()), Some("C:\\work"));
+        assert_eq!(obj.get("pid").and_then(|v| v.as_u64()), Some(42));
+        assert_eq!(obj.get("cols").and_then(|v| v.as_u64()), Some(120));
+        assert_eq!(obj.get("rows").and_then(|v| v.as_u64()), Some(32));
+        assert_eq!(obj.get("claim").and_then(|v| v.as_str()), Some("f3a9"));
+
+        // Exactly the golden shape — no extra keys may sneak in.
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["cols", "cwd", "id", "pid", "rows", "shell", "claim"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<&str>>()
+        );
+    }
+
+    #[test]
+    fn test_terminal_attach_result_serializes_camelcase_without_claim() {
+        let result = TerminalAttachResult {
+            id: "terminal-123-0".to_string(),
+            shell: "pwsh".to_string(),
+            cwd: "C:\\work".to_string(),
+            pid: 42,
+            cols: 120,
+            rows: 32,
+            latest_seq: 87,
+            gap: false,
+        };
+
+        let value: serde_json::Value = serde_json::to_value(&result).unwrap();
+        let obj = value.as_object().expect("attach reply is an object");
+
+        // camelCase seq fields — never snake_case.
+        assert_eq!(obj.get("latestSeq").and_then(|v| v.as_u64()), Some(87));
+        assert_eq!(obj.get("gap").and_then(|v| v.as_bool()), Some(false));
+        assert!(!obj.contains_key("latest_seq"));
+        assert!(!obj.contains_key("latestseq"));
+
+        // Attach NEVER issues a credential.
+        assert!(
+            !obj.contains_key("claim"),
+            "TerminalAttachResult must never carry a claim key"
+        );
+
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["id", "shell", "cwd", "pid", "cols", "rows", "latestSeq", "gap"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<&str>>()
+        );
     }
 
     // ========== Git Bash resolution tests ==========

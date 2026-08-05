@@ -1058,6 +1058,12 @@ function ConnectedTerminalComponent({
             if (onBoundToStoreTerminalRef.current) {
               onBoundToStoreTerminalRef.current(result.data.id)
             }
+            // CAP-3: capture the issued lease into the terminal store
+            // (in-memory only). Runs after onBoundToStoreTerminal so the
+            // store record's ptyId is set and the linear scan finds it.
+            if (result.data.claim) {
+              useTerminalStore.getState().setTerminalClaim(result.data.id, result.data.claim)
+            }
           } else {
             const errorMsg = result.error || 'Unknown spawn error'
             console.error('[Terminal Spawn Failed]', errorMsg)
@@ -1699,6 +1705,11 @@ function ConnectedTerminalComponent({
               restoreScrollback(terminal, initialScrollbackRef.current, initialModesRef.current)
             if (onSpawnedRef.current) onSpawnedRef.current(result.data.id)
             if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(result.data.id)
+            // CAP-3: capture the issued lease (in-memory only), after the
+            // store record's ptyId binding so the scan finds it.
+            if (result.data.claim) {
+              useTerminalStore.getState().setTerminalClaim(result.data.id, result.data.claim)
+            }
           } else if (onErrorRef.current) onErrorRef.current(result.error)
         } catch (err) {
           if (onErrorRef.current)

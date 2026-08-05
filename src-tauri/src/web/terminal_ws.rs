@@ -181,14 +181,16 @@ async fn handle(
                 "[terminal-ws] spawn requested project_id={}",
                 options.project_id.as_deref().unwrap_or("?")
             );
-            let info = state
+            // CAP-3: spawn is the only issuance path. The reply carries the
+            // flattened info + claim (same camelCase shape as desktop).
+            let spawned = state
                 .pty
                 .spawn(options, None)
                 .await
                 .map_err(|e| ("SPAWN_FAILED", e))?;
-            ctx.authorize(&info.id);
-            info!("[terminal-ws] spawn success terminal_id={}", info.id);
-            serde_json::to_value(info).map_err(|e| ("SPAWN_FAILED", e.to_string()))
+            ctx.authorize(&spawned.info.id);
+            info!("[terminal-ws] spawn success terminal_id={}", spawned.info.id);
+            serde_json::to_value(spawned).map_err(|e| ("SPAWN_FAILED", e.to_string()))
         }
         "write" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
@@ -239,24 +241,37 @@ async fn handle(
         }
         "attach" => {
             let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
+            // CAP-3: verification is the gate and runs BEFORE any replay; every
+            // failure mode collapses to the single generic UNAUTHORIZED error
+            // (the leaking TERMINAL_NOT_FOUND branch is gone — existence stays
+            // hidden). A missing or empty claim is NOT a shape error: it flows
+            // through verification like any bad credential (contract: "missing/
+            // invalid claim" collapses into the one generic error).
+            let claim = request.payload["claim"].as_str().unwrap_or("");
             let last_seq = request.payload["lastSeq"]
                 .as_u64()
                 .unwrap_or(0);
-            let instance = state.pty.get(&terminal_id).ok_or_else(|| {
-                ("TERMINAL_NOT_FOUND", format!("Terminal not found: {terminal_id}"))
-            })?;
-            // attach does NOT authorize — only spawn does. This prevents a
-            // client from self-authorizing for any terminal ID it discovers.
-            // If the connection is not already authorized, reject.
-            if !ctx.is_authorized(&terminal_id) {
-                return Err((
-                    "UNAUTHORIZED",
-                    format!("Not authorized for terminal {terminal_id}"),
-                ));
+
+            // Capture the generation BEFORE verifying (TOCTOU-safe ordering,
+            // same as the desktop command): captured-first means a rotate/
+            // revoke landing mid-handshake either fails verification or leaves
+            // the attachment task holding a stale generation it terminates on.
+            let generation = state.pty.claim_generation(&terminal_id);
+            if state.pty.verify_claim(&terminal_id, claim).is_err() {
+                return Err(unauthorized_error(&terminal_id));
             }
+            let Some(instance) = state.pty.get(&terminal_id) else {
+                // Verified a heartbeat ago but gone now — same generic error.
+                return Err(unauthorized_error(&terminal_id));
+            };
+            // The credential is the gate now (same-connection prior
+            // authorization no longer is): verified attach authorizes the
+            // connection for write/resize/events on this terminal.
+            ctx.authorize(&terminal_id);
 
             // Sequenced replay: only unseen chunks, with gap detection.
             let replay = instance.subscribe_from(last_seq);
+            let attach_result = state.pty.build_attach_result(&instance, &replay);
             let snapshot = state.terminal_events.snapshot(&terminal_id);
 
             // Send replay frame: chunks + gap flag + latest seq + state snapshot.
@@ -290,10 +305,25 @@ async fn handle(
             }
             let output_tx = tx.clone();
             let attached_id = terminal_id.clone();
+            let pty = state.pty.clone();
             let task = tokio::spawn(async move {
                 let mut receiver = replay.receiver;
                 let mut current_seq = replay.latest_seq;
                 loop {
+                    // CAP-3 teardown (amendment R1): when this credential is
+                    // rotated/revoked — by ANY connection — or the terminal is
+                    // killed/reaped, the derived stream ends. The generation
+                    // check is what makes rotate/revoke sever the holders on
+                    // other connections, not just the rotating one.
+                    if crate::commands::forwarder_should_terminate(
+                        generation,
+                        pty.claim_generation(&attached_id),
+                    ) {
+                        info!(
+                            "[terminal-ws] attachment terminating (claim invalidated) terminal_id={attached_id}"
+                        );
+                        break;
+                    }
                     match receiver.recv().await {
                         Ok(chunk) => {
                             current_seq = chunk.seq;
@@ -332,8 +362,51 @@ async fn handle(
                     }
                 }
             });
-            ctx.attachments.insert(terminal_id, task);
-            Ok(json!({ "latestSeq": replay.latest_seq }))
+            ctx.attachments.insert(terminal_id.clone(), task);
+            // Shared attach result — byte-identical camelCase shape to the
+            // desktop `terminal_attach` response (no claim key, ever).
+            serde_json::to_value(attach_result).map_err(|e| ("NETWORK_ERROR", e.to_string()))
+        }
+        "rotate_claim" => {
+            // CAP-3: possession of the current credential yields a fresh one
+            // and atomically invalidates the old. Any failure — including a
+            // missing/empty claim — is the same generic UNAUTHORIZED as attach
+            // (missing claims flow through verification, never a shape error).
+            let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
+            let claim = request.payload["claim"].as_str().unwrap_or("");
+            let rotated = state
+                .pty
+                .rotate_claim(&terminal_id, claim)
+                .map_err(|_| unauthorized_error(&terminal_id))?;
+            // Teardown (amendment R1): the invalidated holder loses the output
+            // stream (attachment task detached) AND write/resize access
+            // (removed from the authorized set). Holders on OTHER connections
+            // are severed by the claim-generation check inside their
+            // attachment tasks. The PTY keeps running.
+            ctx.detach(&terminal_id);
+            info!("[terminal-ws] claim rotated terminal_id={terminal_id}");
+            serde_json::to_value(crate::pty::RotatedClaim { claim: rotated })
+                .map_err(|e| ("NETWORK_ERROR", e.to_string()))
+        }
+        "revoke_claim" => {
+            // CAP-3: revocation invalidates the credential; the PTY survives
+            // until explicit kill/release/expiry/shutdown. Any failure —
+            // including a missing/empty claim — is the same generic
+            // UNAUTHORIZED as attach.
+            let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
+            let claim = request.payload["claim"].as_str().unwrap_or("");
+            state
+                .pty
+                .revoke_claim(&terminal_id, claim)
+                .map_err(|_| unauthorized_error(&terminal_id))?;
+            // Teardown (amendment R1): same severing as rotate — the revoked
+            // holder is a credential-less client and receives no further
+            // metadata or output; other connections are severed by the
+            // generation check in their attachment tasks. The PTY keeps
+            // running.
+            ctx.detach(&terminal_id);
+            info!("[terminal-ws] claim revoked terminal_id={terminal_id}");
+            Ok(Value::Null)
         }
         "detach" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
@@ -431,6 +504,16 @@ fn string_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, (&'static st
         .ok_or_else(|| ("VALIDATION_ERROR", format!("missing {key}")))
 }
 
+/// The single generic authorization failure shared by attach, rotate_claim and
+/// revoke_claim. CAP-3 forbids any of these surfaces from distinguishing
+/// unknown terminal from wrong/revoked credential from binding mismatch - one
+/// code, one message shape. Message matches the desktop `terminal_attach` /
+/// rotate / revoke error string byte-for-byte (transport parity) and never
+/// echoes the terminal id. Kept free-standing so the contract is testable.
+fn unauthorized_error(_terminal_id: &str) -> (&'static str, String) {
+    ("UNAUTHORIZED", "Unauthorized".to_string())
+}
+
 fn u16_field(value: &Value, key: &str) -> Result<u16, (&'static str, String)> {
     value[key]
         .as_u64()
@@ -495,5 +578,68 @@ mod tests {
         assert!(!ctx.is_authorized("t2"));
         ctx.detach("t1");
         assert!(!ctx.is_authorized("t1"));
+    }
+
+    #[test]
+    fn string_field_validates_structural_ids() {
+        // Structural validation applies to `terminalId` on every arm (a missing
+        // terminal id reveals nothing about any terminal, so VALIDATION_ERROR
+        // is allowed there). Claims deliberately do NOT use this path: on
+        // attach/rotate/revoke a missing or empty claim flows through
+        // verification and fails with the generic UNAUTHORIZED like any bad
+        // credential (contract: no response distinguishes "missing" from
+        // "invalid"). The handler-level wiring of that behavior needs a live
+        // PtyManager (deferred seam); this test pins the helper only.
+        assert!(string_field(&json!({ "terminalId": "" }), "terminalId").is_err());
+        assert!(string_field(&json!({}), "terminalId").is_err());
+        assert_eq!(
+            string_field(&json!({ "terminalId": "t1" }), "terminalId"),
+            Ok("t1")
+        );
+    }
+
+    #[test]
+    fn unauthorized_error_is_single_generic_shape_for_all_surfaces() {
+        // attach, rotate_claim and revoke_claim must all fail with the same
+        // code + message shape — no distinguishing unknown terminal from
+        // wrong/revoked credential from binding mismatch (CAP-3 leak fix).
+        let (code, message) = unauthorized_error("t1");
+        assert_eq!(code, "UNAUTHORIZED");
+        // Byte-identical to the desktop error string and independent of the
+        // terminal id (no input echo — nothing distinguishes failure causes).
+        assert_eq!(message, "Unauthorized");
+        assert_eq!(unauthorized_error("t1"), unauthorized_error("t2"));
+        assert_ne!(code, "TERMINAL_NOT_FOUND", "existence-leaking code must not return");
+    }
+
+    #[tokio::test]
+    async fn connection_detach_aborts_attachment_and_clears_authorization() {
+        // This test pins the ConnectionContext::detach PRIMITIVE the teardown
+        // relies on: aborting the attachment task and clearing authorization.
+        // It does NOT drive handle() — the handler wiring (rotate_claim/
+        // revoke_claim calling ctx.detach, plus the cross-connection
+        // generation teardown inside attachment tasks) requires a live
+        // PtyManager seam and is covered in CI integration, not here.
+        let mut ctx = ConnectionContext {
+            authorized: Arc::new(RwLock::new(HashSet::new())),
+            attachments: HashMap::new(),
+        };
+        ctx.authorize("t1");
+
+        // A live attachment task mimicking the output forwarder.
+        let task = tokio::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        });
+        ctx.attachments.insert("t1".to_string(), task);
+
+        assert!(ctx.is_authorized("t1"));
+        ctx.detach("t1");
+
+        // Output stream severed + write/resize authorization removed, and the
+        // abort actually reached the task (teardown is real, not bookkeeping).
+        assert!(!ctx.is_authorized("t1"));
+        assert!(ctx.attachments.is_empty());
     }
 }

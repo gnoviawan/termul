@@ -129,6 +129,11 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 # Cryptographic random generation for auth tokens
 getrandom = "0.2"
 
+# Terminal claim credentials (CAP-3 reclaimable terminal leases): SHA-256
+# digest-only storage of issued credentials + constant-time comparison.
+sha2 = "0.10"
+subtle = "2"
+
 # Structured logging for remote server
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

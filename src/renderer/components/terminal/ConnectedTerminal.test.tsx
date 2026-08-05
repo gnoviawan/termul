@@ -288,6 +288,7 @@ const mockTerminalStoreState = {
   reorderTerminals: vi.fn(),
   setTerminals: vi.fn(),
   setTerminalPtyId: vi.fn(),
+  setTerminalClaim: vi.fn(),
   findTerminalByPtyId: vi.fn(),
   updateTerminalCwd: vi.fn(),
   updateTerminalGitBranch: vi.fn(),
@@ -399,7 +400,13 @@ describe('ConnectedTerminal', () => {
 
     vi.mocked(terminalApi).spawn.mockResolvedValue({
       success: true,
-      data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
+      // CAP-3: spawn is the only claim issuance path — the fixture carries it.
+      data: {
+        id: 'terminal-123',
+        shell: 'bash',
+        cwd: '/home/user',
+        claim: 'lease-claim-connected'
+      }
     })
     vi.mocked(terminalApi).write.mockResolvedValue({ success: true, data: undefined })
     vi.mocked(terminalApi).resize.mockResolvedValue({ success: true, data: undefined })
@@ -430,6 +437,14 @@ describe('ConnectedTerminal', () => {
     // Wait for async spawn
     await vi.waitFor(() => {
       expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+    })
+
+    // CAP-3: the claim issued by the spawn response lands in the terminal store.
+    await vi.waitFor(() => {
+      expect(mockTerminalStoreState.setTerminalClaim).toHaveBeenCalledWith(
+        'terminal-123',
+        'lease-claim-connected'
+      )
     })
   })
 

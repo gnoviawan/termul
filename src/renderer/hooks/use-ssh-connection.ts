@@ -210,6 +210,10 @@ export function useSSHConnection(profile: SSHProfile | null) {
         spawnResult.data.cwd
       )
       terminalStore.setTerminalPtyId(terminal.id, ptyId)
+      // CAP-3: store the issued lease credential (in-memory only).
+      if (spawnResult.data.claim) {
+        terminalStore.setTerminalClaim(ptyId, spawnResult.data.claim)
+      }
 
       // Reflect the in-progress state honestly: 'connecting' until we have a
       // real success signal. The green 'connected' badge is no longer set just

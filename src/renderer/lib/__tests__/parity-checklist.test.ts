@@ -148,7 +148,19 @@ const P1_DOMAINS: DomainCheck[] = [
     priority: 'P1',
     tauriAdapterFile: 'tauri-terminal-api.ts',
     adapterExportName: 'createTauriTerminalApi',
-    methods: ['spawn', 'write', 'resize', 'kill', 'onData', 'onExit'],
+    methods: [
+      'spawn',
+      'write',
+      'resize',
+      'kill',
+      'onData',
+      'onExit',
+      // CAP-3 reclaimable leases: attach/rotate/revoke must exist on the
+      // Tauri adapter — pins desktop↔web terminal parity.
+      'attach',
+      'rotateClaim',
+      'revokeClaim'
+    ],
     apiBridgeExport: 'terminalApi',
     testFile: 'tauri-terminal-api.test.ts' // May not exist yet, check in test
   },
