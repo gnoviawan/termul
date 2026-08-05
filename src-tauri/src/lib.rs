@@ -1511,6 +1511,7 @@ pub fn run() {
             commands::remote_server_stop,
             commands::remote_server_status,
             commands::remote_sync_projects,
+            commands::set_host_default_project,
             commands::remote_sync_chat_history,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,

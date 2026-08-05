@@ -66,14 +66,35 @@ export const remoteServerApi: RemoteServerApi = {
  * `GET /projects`. No env-var values cross the wire — `ProjectSummary` redacts
  * by omission. Call on server-start success + on every project-store mutation
  * while the server runs (a no-op when the server is stopped just returns ok).
+ *
+ * In desktop-hosted mode the desktop's `activeProjectId` IS the host default
+ * (the desktop user is the host operator), so it is pushed as
+ * `defaultProjectId`. The web client seeds its initial `activeProjectId` from
+ * it on the first `GET /projects` but preserves its own selection on
+ * subsequent refetches.
  */
 export async function syncProjects(
   projects: ProjectSummary[],
-  activeProjectId: string | null
+  defaultProjectId: string | null
 ): Promise<IpcResult<void>> {
   return invokeIpc<void>('remote_sync_projects', {
-    payload: { projects, activeProjectId }
+    payload: { projects, defaultProjectId }
   })
+}
+
+/**
+ * Explicitly set the host's default project (Epic 7 — cross-client workspace
+ * continuity). Distinct from a per-connection `switch_project`: this changes
+ * the host default that new web clients start with. Validates the project is
+ * switchable, updates `registry.set_default_project`, and broadcasts
+ * `projects_changed` to all connected web clients. Mirrors the
+ * `set_default_project` WS request + the `POST /projects/default` HTTP route
+ * (transport parity). Lets the desktop set a default DIFFERENT from its own
+ * active project (the desktop's active IS pushed as the default via
+ * `syncProjects`, but this command is the explicit override).
+ */
+export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
+  return invokeIpc<void>('set_host_default_project', { projectId })
 }
 
 /**

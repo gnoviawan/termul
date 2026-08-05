@@ -5,8 +5,18 @@
 //! through `GET /projects` and resolves `switch_project` ids to private cwd/MCP
 //! context here. Public summaries remain redact-by-omission.
 //!
-//! The registry itself is not durable. VPS mode persists the active id through
+//! The registry itself is not durable. VPS mode persists the default id through
 //! the separately retained `FileProjectRegistry`; desktop mode remains file-free.
+//!
+//! # Host default vs per-client active (Epic 7 — cross-client continuity)
+//!
+//! The host owns a single `default_project_id` — the project NEW web clients
+//! start with on their initial `GET /projects`. It is NOT "whoever switched
+//! last": a per-client `switch_project` updates only the requesting
+//! connection's `current_project` (no broadcast, no persistence). The default
+//! changes only via `set_default_project` (explicit) or `remote_sync_projects`
+//! (desktop-hosted push — the desktop user IS the host operator, so their
+//! active selection IS the default for new clients).
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -34,8 +44,10 @@ pub struct ProjectSummary {
     pub path: Option<String>,
     /// `true` when the project is archived (rendered greyed, not clickable).
     pub is_archived: bool,
-    /// `true` when this is the desktop's active project.
-    pub is_active: bool,
+    /// `true` when this is the host's default project (set by the host based on
+    /// `default_project_id`). Distinct from a client's per-connection active
+    /// project — the host cannot know which project a specific client is on.
+    pub is_default: bool,
 }
 
 /// `GET /projects` response payload (wrapped in `IpcResult<T>` by the handler).
@@ -46,21 +58,25 @@ pub struct ProjectSummary {
 pub struct ProjectListPayload {
     /// Non-archived + archived summaries (the web list shows both, archived greyed).
     pub projects: Vec<ProjectSummary>,
-    /// The desktop's active project id, or `None` when none.
+    /// The host's default project id (seeds a new web client's initial
+    /// `activeProjectId`), or `None` when none is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_project_id: Option<String>,
+    pub default_project_id: Option<String>,
 }
 
 /// `projects_changed` WS event payload (agent-level: `sid: None`, `seq: 0`).
 ///
-/// Carries only the new `activeProjectId` — the web client refetches
-/// `GET /projects` for the full list rather than receiving it inline.
+/// Carries only the new `defaultProjectId` — the web client refetches
+/// `GET /projects` for the full list rather than receiving it inline. On the
+/// initial load the client seeds `activeProjectId` from `defaultProjectId`; on
+/// subsequent `projects_changed` events the client refetches the list but
+/// preserves its own `activeProjectId` (no silent retarget).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectsChangedPayload {
-    /// The desktop's new active project id, or `None` when none.
+    /// The host's new default project id, or `None` when none is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_project_id: Option<String>,
+    pub default_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,13 +84,12 @@ pub struct ProjectSwitchContext {
     pub project_id: String,
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
-    pub is_active: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RegistryData {
     projects: Vec<ProjectSummary>,
-    active_project_id: Option<String>,
+    default_project_id: Option<String>,
 }
 
 /// In-memory project registry shared by VPS and desktop-hosted web modes.
@@ -97,16 +112,18 @@ impl ProjectRegistry {
     }
 
     /// Replace the whole mirror atomically. Called by `remote_sync_projects`
-    /// (renderer push) with the desktop's current non-archived + archived
-    /// summaries + active id. The renderer is the source of truth — a fresh
-    /// `set` fully supersedes the prior snapshot.
-    pub fn set(&self, mut projects: Vec<ProjectSummary>, active_id: Option<String>) {
+    /// (renderer push — desktop-hosted mode, the desktop's active IS the default)
+    /// and `set_default_project` (explicit host-default change) with the
+    /// desktop's current non-archived + archived summaries + default id. The
+    /// renderer is the source of truth in desktop-hosted mode — a fresh `set`
+    /// fully supersedes the prior snapshot.
+    pub fn set(&self, mut projects: Vec<ProjectSummary>, default_id: Option<String>) {
         for project in &mut projects {
-            project.is_active = active_id.as_deref() == Some(project.id.as_str());
+            project.is_default = default_id.as_deref() == Some(project.id.as_str());
         }
         let mut g = self.inner.lock();
         g.projects = projects;
-        g.active_project_id = active_id;
+        g.default_project_id = default_id;
     }
 
     /// Snapshot the current mirror for `GET /projects`. Clones the vec under
@@ -116,13 +133,14 @@ impl ProjectRegistry {
         let g = self.inner.lock();
         ProjectListPayload {
             projects: g.projects.clone(),
-            active_project_id: g.active_project_id.clone(),
+            default_project_id: g.default_project_id.clone(),
         }
     }
 
     /// Resolve a complete switchable project context. Archived, unknown, and
     /// pathless projects are rejected. MCP configuration is kept private and
-    /// never enters `ProjectSummary`/`GET /projects`.
+    /// never enters `ProjectSummary`/`GET /projects`. Per-connection activity
+    /// is NOT computed here — the caller checks `current_project` itself.
     #[must_use]
     pub fn switch_context(&self, project_id: &str) -> Option<ProjectSwitchContext> {
         let g = self.inner.lock();
@@ -144,12 +162,14 @@ impl ProjectRegistry {
             project_id: project.id.clone(),
             cwd,
             mcp_servers,
-            is_active: g.active_project_id.as_deref() == Some(project_id),
         })
     }
 
-    /// Atomically update the active id and every summary flag.
-    pub fn set_active_project(&self, project_id: &str) -> bool {
+    /// Atomically update the default id and every summary's `is_default` flag.
+    /// Called by the explicit `set_default_project` operation (Tauri command +
+    /// WS request + HTTP route). Returns `false` when the target is unknown,
+    /// archived, or pathless (not switchable) — the caller replies `NOT_FOUND`.
+    pub fn set_default_project(&self, project_id: &str) -> bool {
         let mut g = self.inner.lock();
         if !g.projects.iter().any(|p| {
             p.id == project_id
@@ -160,9 +180,9 @@ impl ProjectRegistry {
         }) {
             return false;
         }
-        g.active_project_id = Some(project_id.to_string());
+        g.default_project_id = Some(project_id.to_string());
         for project in &mut g.projects {
-            project.is_active = project.id == project_id;
+            project.is_default = project.id == project_id;
         }
         true
     }
@@ -251,9 +271,9 @@ fn is_within_dir(candidate: &str, dir: &str) -> bool {
 ///
 /// The `web -> acp` direction is already established (`web` depends on
 /// `acp::AcpManager`), so this mapping lives here — NOT in `acp` (which must
-/// not import `web`, the no-cycle invariant). `is_active` is left `false`
-/// per-entry; the caller ([`seed_from_file`]) derives the active flag from
-/// `active_project_id` after the full list is built.
+/// not import `web`, the no-cycle invariant). `is_default` is left `false`
+/// per-entry; the caller ([`seed_from_file`]) derives the default flag from
+/// `default_project_id` after the full list is built.
 impl From<VfsRoot> for ProjectSummary {
     fn from(root: VfsRoot) -> Self {
         Self {
@@ -266,19 +286,19 @@ impl From<VfsRoot> for ProjectSummary {
             path: (!root.path.as_os_str().is_empty())
                 .then(|| root.path.to_string_lossy().into_owned()),
             is_archived: root.is_archived,
-            is_active: false,
+            is_default: false,
         }
     }
 }
 
 /// Seed an in-memory [`ProjectRegistry`] from a file-backed
 /// [`FileProjectRegistry`] (the VPS-mode load path). Maps each VFS root to a
-/// [`ProjectSummary`], marks the active one, and calls [`ProjectRegistry::set`].
+/// [`ProjectSummary`], marks the default one, and calls [`ProjectRegistry::set`].
 /// The standalone `termul-server` binary calls this after `load`; the
 /// desktop-hosted path seeds via `remote_sync_projects` instead (it never
 /// constructs a `FileProjectRegistry`).
 pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry) {
-    let active_id = file_reg.active_project_id().map(str::to_string);
+    let default_id = file_reg.default_project_id().map(str::to_string);
     let mcp_by_project = file_reg
         .roots()
         .iter()
@@ -289,14 +309,14 @@ pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry
         .iter()
         .map(|r| ProjectSummary::from(r.clone()))
         .collect();
-    if let Some(ref id) = active_id {
+    if let Some(ref id) = default_id {
         for s in &mut summaries {
             if s.id == *id {
-                s.is_active = true;
+                s.is_default = true;
             }
         }
     }
-    registry.set(summaries, active_id);
+    registry.set(summaries, default_id);
     *registry.mcp_servers.lock() = mcp_by_project;
 }
 
@@ -311,7 +331,7 @@ mod tests {
             color: "blue".to_string(),
             path: path.map(str::to_string),
             is_archived: archived,
-            is_active: false,
+            is_default: false,
         }
     }
 
@@ -321,7 +341,7 @@ mod tests {
         assert!(reg.is_empty());
         let snap = reg.snapshot();
         assert!(snap.projects.is_empty());
-        assert_eq!(snap.active_project_id, None);
+        assert_eq!(snap.default_project_id, None);
     }
 
     #[test]
@@ -333,7 +353,7 @@ mod tests {
         );
         assert_eq!(reg.len(), 2);
         let snap = reg.snapshot();
-        assert_eq!(snap.active_project_id.as_deref(), Some("p-1"));
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
         assert_eq!(snap.projects[0].id, "p-1");
         assert!(snap.projects[1].is_archived);
 
@@ -342,7 +362,7 @@ mod tests {
         assert_eq!(reg.len(), 1);
         let snap2 = reg.snapshot();
         assert_eq!(snap2.projects[0].id, "p-3");
-        assert_eq!(snap2.active_project_id, None);
+        assert_eq!(snap2.default_project_id, None);
     }
 
     #[test]
@@ -372,7 +392,7 @@ mod tests {
         assert!(!reg.is_empty());
         reg.clear();
         assert!(reg.is_empty());
-        assert_eq!(reg.snapshot().active_project_id, None);
+        assert_eq!(reg.snapshot().default_project_id, None);
         // Clear is idempotent.
         reg.clear();
         assert!(reg.is_empty());
@@ -387,7 +407,7 @@ mod tests {
         assert_eq!(v["color"], "blue");
         assert_eq!(v["path"], "/a");
         assert_eq!(v["isArchived"], false);
-        assert_eq!(v["isActive"], false);
+        assert_eq!(v["isDefault"], false);
 
         let no_path = sample("p-2", None, true);
         let v2 = serde_json::to_value(&no_path).unwrap();
@@ -397,17 +417,17 @@ mod tests {
     }
 
     #[test]
-    fn projects_changed_payload_omits_none_active() {
+    fn projects_changed_payload_omits_none_default() {
         let p = ProjectsChangedPayload {
-            active_project_id: None,
+            default_project_id: None,
         };
         let v = serde_json::to_value(&p).unwrap();
-        assert!(v.get("activeProjectId").is_none());
+        assert!(v.get("defaultProjectId").is_none());
         let p2 = ProjectsChangedPayload {
-            active_project_id: Some("p-3".to_string()),
+            default_project_id: Some("p-3".to_string()),
         };
         let v2 = serde_json::to_value(&p2).unwrap();
-        assert_eq!(v2["activeProjectId"], "p-3");
+        assert_eq!(v2["defaultProjectId"], "p-3");
     }
 
     // T5.8 — VfsRoot -> ProjectSummary mapping round-trips identity/display
@@ -431,8 +451,8 @@ mod tests {
         assert_eq!(summary.color, "blue");
         assert_eq!(summary.path.as_deref(), Some("/some/cwd"));
         assert!(!summary.is_archived);
-        // is_active is left false per-entry; seed_from_file derives it.
-        assert!(!summary.is_active);
+        // is_default is left false per-entry; seed_from_file derives it.
+        assert!(!summary.is_default);
 
         // Redact-by-omission: the wire shape carries NO env-var field.
         let v = serde_json::to_value(&summary).unwrap();
@@ -458,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn active_update_keeps_snapshot_flags_consistent() {
+    fn default_update_keeps_snapshot_flags_consistent() {
         let reg = ProjectRegistry::new();
         reg.set(
             vec![
@@ -467,11 +487,37 @@ mod tests {
             ],
             Some("p-1".to_string()),
         );
-        assert!(reg.set_active_project("p-2"));
+        assert!(reg.set_default_project("p-2"));
         let snap = reg.snapshot();
-        assert_eq!(snap.active_project_id.as_deref(), Some("p-2"));
-        assert!(!snap.projects[0].is_active);
-        assert!(snap.projects[1].is_active);
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-2"));
+        assert!(!snap.projects[0].is_default);
+        assert!(snap.projects[1].is_default);
+    }
+
+    #[test]
+    fn set_default_project_rejects_archived_and_pathless() {
+        let reg = ProjectRegistry::new();
+        reg.set(
+            vec![
+                sample("p-1", Some("/a"), false),
+                sample("p-archived", Some("/b"), true),
+                sample("p-pathless", None, false),
+            ],
+            None,
+        );
+        // Unknown id rejected.
+        assert!(!reg.set_default_project("missing"));
+        // Archived rejected.
+        assert!(!reg.set_default_project("p-archived"));
+        // Pathless rejected.
+        assert!(!reg.set_default_project("p-pathless"));
+        // Valid switchable accepted.
+        assert!(reg.set_default_project("p-1"));
+        let snap = reg.snapshot();
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
+        assert!(snap.projects[0].is_default);
+        assert!(!snap.projects[1].is_default);
+        assert!(!snap.projects[2].is_default);
     }
 
     #[test]
@@ -496,7 +542,6 @@ mod tests {
         assert!(reg.switch_context("old").is_none());
         let context = reg.switch_context("live").expect("live context");
         assert_eq!(context.cwd, "/a");
-        assert!(context.is_active);
         assert_eq!(context.mcp_servers.len(), 1);
         let public = serde_json::to_value(reg.snapshot()).expect("public snapshot");
         assert!(public["projects"][0].get("mcpServers").is_none());

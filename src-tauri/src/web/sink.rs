@@ -1006,23 +1006,26 @@ pub fn fan_out<P: Serialize>(
 
 /// Broadcast a `projects_changed` agent-level event to every connected client.
 ///
-/// Called by the `remote_sync_projects` command after it updates the
-/// [`crate::web::project_registry::ProjectRegistry`]. The event is
-/// agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`] fans it out to
-/// ALL connected clients (the wire `type` is `projects_changed` — the `acp:`
-/// prefix is stripped by `emit`). The payload carries only the new
-/// `activeProjectId`; the web client refetches `GET /projects` for the full
-/// list (the desktop is the source of truth).
+/// Called by the `remote_sync_projects` command (desktop-hosted push — the
+/// desktop's active IS the default) and the explicit `set_default_project`
+/// operation (Tauri command + WS request + HTTP route) after they update the
+/// [`crate::web::project_registry::ProjectRegistry`]. The event is agent-level
+/// (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`] fans it out to ALL connected
+/// clients (the wire `type` is `projects_changed` — the `acp:` prefix is
+/// stripped by `emit`). The payload carries only the new `defaultProjectId`;
+/// the web client refetches `GET /projects` for the full list. On the initial
+/// load a client seeds `activeProjectId` from `defaultProjectId`; on subsequent
+/// events it preserves its own `activeProjectId` (no silent retarget).
 ///
-/// `active_project_id` is `None` when the desktop has no active project.
-pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, active_project_id: Option<&str>) {
+/// `default_project_id` is `None` when the host has no default project.
+pub fn broadcast_projects_changed(relay: &Arc<WsRelaySink>, default_project_id: Option<&str>) {
     // Use the typed `ProjectsChangedPayload` (single source of truth for the
     // wire shape) rather than hand-rolled `json!` — its `skip_serializing_if`
-    // omits `activeProjectId` when `None` (the web client ignores the payload
+    // omits `defaultProjectId` when `None` (the web client ignores the payload
     // + refetches `GET /projects`, so omit-vs-null is cosmetic, but the
     // struct stays the canonical shape if fields are added later).
     let payload = ProjectsChangedPayload {
-        active_project_id: active_project_id.map(str::to_string),
+        default_project_id: default_project_id.map(str::to_string),
     };
     // Clone into a concrete `Arc<WsRelaySink>` first so `Arc::clone` infers
     // `T = WsRelaySink` (not `dyn EventSink`); the unsized coercion to
@@ -1616,14 +1619,14 @@ mod tests {
         assert_eq!(evt.type_, "projects_changed");
         assert!(evt.sid.is_none(), "agent-level event: sid must be null");
         assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
-        assert_eq!(evt.payload["activeProjectId"], "p-3");
+        assert_eq!(evt.payload["defaultProjectId"], "p-3");
     }
 
-    /// `broadcast_projects_changed` with no active project still fans out;
+    /// `broadcast_projects_changed` with no default project still fans out;
     /// the `ProjectsChangedPayload` struct's `skip_serializing_if` OMITS the
-    /// `activeProjectId` key entirely (not `null`).
+    /// `defaultProjectId` key entirely (not `null`).
     #[tokio::test]
-    async fn broadcast_projects_changed_null_active_id() {
+    async fn broadcast_projects_changed_null_default_id() {
         let relay = Arc::new(WsRelaySink::new());
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
@@ -1634,8 +1637,8 @@ mod tests {
         assert_eq!(drained[0].type_, "projects_changed");
         // `skip_serializing_if = "Option::is_none"` → the key is omitted, not null.
         assert!(
-            drained[0].payload.get("activeProjectId").is_none(),
-            "activeProjectId must be omitted (not null) when None"
+            drained[0].payload.get("defaultProjectId").is_none(),
+            "defaultProjectId must be omitted (not null) when None"
         );
     }
 

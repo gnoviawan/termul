@@ -38,6 +38,14 @@ export interface Project {
   color: ProjectColor
   path?: string
   isActive?: boolean
+  /**
+   * `true` when this is the host's default project (set by the host's
+   * `default_project_id`). Mirrors `ProjectSummary.isDefault` on the wire.
+   * Distinct from `isActive` (per-client, set locally by `selectProject`).
+   * Surfaced in the desktop-hosted shared-live bridge (`useProjectsAutoSave`
+   * maps `summary.isDefault` → `Project.isDefault`).
+   */
+  isDefault?: boolean
   isArchived?: boolean
   gitBranch?: string
   lastOpened?: Date

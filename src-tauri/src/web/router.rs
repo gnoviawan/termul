@@ -72,6 +72,10 @@ pub fn router(
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
         .route("/projects", get(projects_api::list))
+        // Explicit host-default change (Epic 7 — cross-client workspace
+        // continuity). Mirrors the `set_default_project` WS request + the
+        // `set_host_default_project` Tauri command (transport parity).
+        .route("/projects/default", post(projects_api::set_default_project))
         .route(
             "/mcp-servers",
             get(mcp_servers_api::get).put(mcp_servers_api::put),
@@ -185,6 +189,7 @@ pub fn router_with_static(
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
         .route("/projects", get(projects_api::list))
+        .route("/projects/default", post(projects_api::set_default_project))
         .route(
             "/mcp-servers",
             get(mcp_servers_api::get).put(mcp_servers_api::put),
