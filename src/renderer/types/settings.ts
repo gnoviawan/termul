@@ -65,14 +65,15 @@ export interface AppSettings {
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
   /** ACP turn hard-cap timeout in seconds, or null = use the Rust default
-   * (3h). Set via App Preferences; pushed to the Rust core. */
+   * (unlimited by default). Set via App Preferences; pushed to the Rust core. */
   acpTurnTimeoutSecs: number | null
   /** Automatically save dirty editor files after edits pause (GH-539). */
   editorAutoSave: boolean
   /** Idle delay in ms before a dirty editor file is auto-saved (GH-539). */
   editorAutoSaveDelayMs: number
   /** ACP per-turn idle timeout in seconds, or null = use the env var / Rust
-   * default (15min). Set via App Preferences; pushed to the Rust core. */
+   * default (unlimited by default). Set via App Preferences; pushed to the
+   * Rust core. */
   acpTurnIdleTimeoutSecs: number | null
   /** ACP session/new timeout in seconds, or null = use the env var / Rust
    * default (60s). Set via App Preferences; pushed to the Rust core. */
@@ -180,12 +181,13 @@ export const REMOTE_BIND_MODE_OPTIONS: Array<{
 ]
 
 // ACP turn (hard-cap) timeout options for the App Preferences UI. `null` =
-// follow the env var / Rust default (3h); a number is the override in seconds.
+// follow the env var / Rust default (unlimited); a number is the override in
+// seconds.
 export const ACP_TURN_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (3 hours)' },
+  { value: null, label: 'Environment/default (unlimited)' },
   { value: 3600, label: '1 hour' },
   { value: 7200, label: '2 hours' },
   { value: 21600, label: '6 hours' },
@@ -194,12 +196,12 @@ export const ACP_TURN_TIMEOUT_OPTIONS: Array<{
 ]
 
 // ACP turn idle-timeout options (the silent-turn window). `null` = follow the
-// env var / Rust default (15 minutes); a number is the override in seconds.
+// env var / Rust default (unlimited); a number is the override in seconds.
 export const ACP_TURN_IDLE_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (15 minutes)' },
+  { value: null, label: 'Environment/default (unlimited)' },
   { value: 300, label: '5 minutes' },
   { value: 600, label: '10 minutes' },
   { value: 900, label: '15 minutes' },

@@ -279,8 +279,8 @@ pub async fn acp_probe_mcp_server(
 }
 
 /// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or
-/// `None` to clear it (fall back to the env var / 3h default). Pushed from the
-/// App Preferences UI so the turn timeout is editable without a restart or
+/// `None` to clear it (fall back to the env var / unlimited default). Pushed from
+/// the App Preferences UI so the turn timeout is editable without a restart or
 /// env var. Desktop-only: the standalone `termul-server` has no settings
 /// surface and configures via `TERMUL_ACP_TURN_TIMEOUT_SECS`. The env var
 /// remains top-precedence (operator/diagnostic override).
@@ -291,7 +291,7 @@ pub fn acp_set_turn_timeout(secs: Option<u64>) -> Result<(), String> {
 }
 
 /// Set the in-process ACP turn *idle* timeout override, in seconds, or `None`
-/// to clear it (fall back to the env var / 15min default). Pushed from the
+/// to clear it (fall back to the env var / unlimited default). Pushed from the
 /// App Preferences UI. Desktop-only parity with `acp_set_turn_timeout`: the
 /// standalone `termul-server` configures via `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
 /// The env var remains top-precedence (operator/diagnostic override).

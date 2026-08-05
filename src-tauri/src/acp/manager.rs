@@ -91,23 +91,27 @@ const FIRST_PROMPT_WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
-/// Idle timeout for an agent turn: if the agent produces NO activity (no
-/// `session/update`/`tool_call` notification) for this long, the turn is
-/// considered wedged and is cancelled. 900s gives breathing room above the
-/// longest expected silent sub-tool (a ~600s shell command) so legitimate
-/// long-running tool calls don't race the idle deadline, while a truly wedged
-/// (silent) turn fails in ~15min instead of hours. Reset on every inbound
-/// notification via `DriverState::signal_idle`. Overridable via
-/// `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`.
-const TURN_IDLE_TIMEOUT: Duration = Duration::from_secs(900);
-/// Hard wall-clock cap for a single agent turn — the last-resort backstop so
-/// a chatty-but-non-completing agent (streaming forever) is still bounded. 3h
-/// accommodates very long agentic turns that stay active (the idle timer keeps
-/// resetting, so this only fires for an agent that never stops). On either idle
-/// or hard timeout → cancel + `CANCEL_GRACE` → `status: 'error'`. Distinct from
-/// 1.7's 60s permission sub-timeout (`permissions.rs:47`). Overridable via
-/// `TERMUL_ACP_TURN_TIMEOUT_SECS`.
-const TURN_TIMEOUT: Duration = Duration::from_secs(10800);
+// Idle timeout for an agent turn: if the agent produces NO activity (no
+// `session/update`/`tool_call` notification) for this long, the turn is
+// considered wedged and is cancelled. The default is **unlimited** (`None` —
+// see `turn_idle_timeout`): a silent/wedged turn is NOT killed by default;
+// only an explicit `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS` env var or an App
+// Preferences value imposes an idle bound. Reset on every inbound notification
+// via `DriverState::signal_idle`.
+//
+// The historical 900s (15min) default was retired in favour of unlimited — a
+// legitimate long-running silent sub-tool (a ~600s shell command) no longer
+// races an arbitrary idle deadline, and a truly wedged turn is left to the
+// operator/user to cancel (or to bound explicitly via the env var).
+// The default hard wall-clock cap for a single agent turn is **unlimited**
+// (`None` — see `resolved_turn_timeout`): no last-resort backstop is imposed
+// unless the operator sets `TERMUL_ACP_TURN_TIMEOUT_SECS` or the user picks a
+// bounded value in App Preferences. The per-turn *idle* timeout
+// (`turn_idle_timeout`) is also unlimited by default, so neither a chatty
+// nor a silent agent is killed by default — the hard cap is an opt-in
+// diagnostic backstop. On either idle or hard timeout → cancel +
+// `CANCEL_GRACE` → `status: 'error'`. Distinct from 1.7's 60s permission
+// sub-timeout (`permissions.rs:47`).
 
 /// `session/new` timeout. Precedence: `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS`
 /// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
@@ -179,9 +183,12 @@ fn session_reopen_timeout() -> Duration {
 
 /// Per-turn idle timeout. Precedence: `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`
 /// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
-/// ([`set_turn_idle_timeout_override`]) → [`TURN_IDLE_TIMEOUT`]. The window
-/// with no agent activity after which a turn is considered wedged.
-pub fn turn_idle_timeout() -> Duration {
+/// ([`set_turn_idle_timeout_override`]) → `None` (**unlimited** default). `None`
+/// means a silent/wedged turn is NOT killed by the idle timer — only completion,
+/// cancel, or an explicitly configured idle/hard bound ends it. The window, when
+/// set, is the duration with no agent activity after which a turn is considered
+/// wedged.
+pub fn turn_idle_timeout() -> Option<Duration> {
     std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -192,7 +199,6 @@ pub fn turn_idle_timeout() -> Duration {
                 .filter(|secs| *secs > 0)
                 .map(Duration::from_secs)
         })
-        .unwrap_or(TURN_IDLE_TIMEOUT)
 }
 
 /// In-process override for the hard wall-clock cap, set by the
@@ -287,69 +293,113 @@ fn first_prompt_warmup_timeout_override() -> Option<u64> {
 }
 
 /// Hard wall-clock cap per turn. Precedence: `TERMUL_ACP_TURN_TIMEOUT_SECS`
-/// (env, operator/diagnostic) → in-process UI override → [`TURN_TIMEOUT`]
-/// (3h default). The last-resort backstop so a streaming-but-non-completing
-/// agent is still bounded.
-pub fn resolved_turn_timeout() -> Duration {
+/// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
+/// ([`set_turn_timeout_override`]) → `None` (**unlimited** default). `None`
+/// means no hard backstop is imposed — the per-turn *idle* timeout
+/// ([`turn_idle_timeout`]) still bounds silent/wedged turns, so a chatty agent
+/// that stays active is not killed by default. An operator who wants a bounded
+/// hard cap sets the env var, or the user picks a value in App Preferences.
+pub fn resolved_turn_timeout() -> Option<Duration> {
     std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
-        .or_else(|| turn_timeout_override().map(Duration::from_secs))
-        .unwrap_or(TURN_TIMEOUT)
+        .or_else(|| {
+            turn_timeout_override()
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs)
+        })
 }
 
 /// Race an in-flight ACP prompt turn against completion, a cancel signal, an
-/// idle deadline (reset on agent activity via `idle_rx`), and a hard wall-clock
-/// cap. On idle/hard timeout, invoke `on_timeout_cancel` (the caller's cancel
-/// hook — updates DriverState cancel/timeout state so the in-flight turn winds
-/// down), await `CANCEL_GRACE`, then return a typed timeout error. Extracted
-/// so the deadline loop is unit-testable with mock futures. A pre-iteration
-/// deadline check bounds a continuously-ready activity arm (under `biased`) so
-/// a streaming-but-non-completing agent can't slip past the hard cap.
+/// optional idle deadline (reset on agent activity via `idle_rx`), and an
+/// optional hard wall-clock cap. On idle/hard timeout, invoke `on_timeout_cancel`
+/// (the caller's cancel hook — updates DriverState cancel/timeout state so the
+/// in-flight turn winds down), await `CANCEL_GRACE`, then return a typed timeout
+/// error. Extracted so the deadline loop is unit-testable with mock futures. A
+/// pre-iteration deadline check bounds a continuously-ready activity arm (under
+/// `biased`) so a streaming-but-non-completing agent can't slip past a cap. When
+/// a deadline is `None` (the unlimited default for idle and/or hard), it imposes
+/// no bound — a fully-unlimited turn (both `None`) is ended only by completion or
+/// cancel, so a wedged agent is NOT killed by default.
 async fn race_turn<P>(
     prompt: P,
     mut cancel_rx: oneshot::Receiver<()>,
     idle_rx: &mut watch::Receiver<()>,
     on_timeout_cancel: impl Fn(),
-    idle: Duration,
-    hard: Duration,
+    idle: Option<Duration>,
+    hard: Option<Duration>,
 ) -> Result<StopReason, String>
 where
     P: std::future::Future<Output = Result<StopReason, String>>,
 {
     tokio::pin!(prompt);
-    let hard_deadline = tokio::time::Instant::now() + hard;
-    let mut idle_deadline = tokio::time::Instant::now() + idle;
+    let hard_deadline = hard.map(|d| tokio::time::Instant::now() + d);
+    let mut idle_deadline = idle.map(|d| tokio::time::Instant::now() + d);
     loop {
-        let next_deadline = idle_deadline.min(hard_deadline);
+        // Next deadline: the earliest of the configured (Some) deadlines; `None`
+        // when neither idle nor hard is configured (fully unlimited).
+        let next_deadline = match (idle_deadline, hard_deadline) {
+            (Some(i), Some(h)) => Some(i.min(h)),
+            (Some(i), None) => Some(i),
+            (None, Some(h)) => Some(h),
+            (None, None) => None,
+        };
         // Pre-select check: under `biased`, a continuously-ready activity arm
         // would win every poll and `sleep_until` would never fire — silently
-        // defeating the hard cap for a streaming-but-non-completing agent.
-        if tokio::time::Instant::now() >= next_deadline {
-            on_timeout_cancel();
-            return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                Ok(result) => result,
-                Err(_) if next_deadline == idle_deadline => {
-                    Err(format!("turn idle timeout: no agent activity for {idle:?}"))
-                }
-                Err(_) => Err(format!("turn hard timeout: exceeded {hard:?}")),
-            };
-        }
-        tokio::select! {
-            biased;
-            result = &mut prompt => return result,
-            _ = &mut cancel_rx => {
+        // defeating the cap(s) for a streaming-but-non-completing agent.
+        if let Some(nd) = next_deadline {
+            if tokio::time::Instant::now() >= nd {
+                on_timeout_cancel();
                 return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
                     Ok(result) => result,
-                    Err(_) => Ok(StopReason::Cancelled),
+                    Err(_) if idle_deadline == Some(nd) => {
+                        let idle_dur = idle.unwrap_or(Duration::ZERO);
+                        Err(format!("turn idle timeout: no agent activity for {idle_dur:?}"))
+                    }
+                    Err(_) => {
+                        let hard_dur = hard.unwrap_or(Duration::ZERO);
+                        Err(format!("turn hard timeout: exceeded {hard_dur:?}"))
+                    }
                 };
             }
-            _ = idle_rx.changed() => {
-                idle_deadline = tokio::time::Instant::now() + idle;
+        }
+        match next_deadline {
+            Some(nd) => {
+                tokio::select! {
+                    biased;
+                    result = &mut prompt => return result,
+                    _ = &mut cancel_rx => {
+                        return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                            Ok(result) => result,
+                            Err(_) => Ok(StopReason::Cancelled),
+                        };
+                    }
+                    _ = idle_rx.changed() => {
+                        if let Some(d) = idle {
+                            idle_deadline = Some(tokio::time::Instant::now() + d);
+                        }
+                    }
+                    _ = tokio::time::sleep_until(nd) => {}
+                }
             }
-            _ = tokio::time::sleep_until(next_deadline) => {}
+            None => {
+                // No deadlines (fully unlimited): only completion or cancel can
+                // end the turn. `idle_rx.changed()` is still polled so activity
+                // stays drained, but it no longer resets any deadline.
+                tokio::select! {
+                    biased;
+                    result = &mut prompt => return result,
+                    _ = &mut cancel_rx => {
+                        return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                            Ok(result) => result,
+                            Err(_) => Ok(StopReason::Cancelled),
+                        };
+                    }
+                    _ = idle_rx.changed() => {}
+                }
+            }
         }
     }
 }
@@ -2463,11 +2513,13 @@ async fn run_command_loop(
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
                     // Race the turn against completion, a cancel signal, an
-                    // idle deadline (reset by agent `session/update` activity
-                    // via `DriverState::signal_idle`), and a hard wall-clock
-                    // cap. On idle/hard timeout → signal cancel + `CANCEL_GRACE`
-                    // + a typed error (`acp-store` sets `status: 'error'`). See
-                    // [`race_turn`].
+                    // optional idle deadline (reset by agent `session/update`
+                    // activity via `DriverState::signal_idle`), and an optional
+                    // hard wall-clock cap. Both default to `None` (unlimited):
+                    // a turn is bounded only if the operator/user configured a
+                    // value. On idle/hard timeout → signal cancel +
+                    // `CANCEL_GRACE` + a typed error (`acp-store` sets
+                    // `status: 'error'`). See [`race_turn`].
                     let idle = turn_idle_timeout();
                     let hard = resolved_turn_timeout();
                     let cancel_state = turn_state.clone();
@@ -3349,8 +3401,8 @@ mod tests {
             move || {
                 on_timeout_clone.fetch_add(1, Ordering::SeqCst);
             },
-            Duration::from_millis(50),
-            Duration::from_secs(10),
+            Some(Duration::from_millis(50)),
+            Some(Duration::from_secs(10)),
         )
         .await;
         let _ = activity.await;
@@ -3377,8 +3429,8 @@ mod tests {
             move || {
                 on_timeout_clone.fetch_add(1, Ordering::SeqCst);
             },
-            Duration::from_millis(100),
-            Duration::from_secs(10),
+            Some(Duration::from_millis(100)),
+            Some(Duration::from_secs(10)),
         )
         .await;
         let err = result.unwrap_err();
@@ -3408,8 +3460,8 @@ mod tests {
             move || {
                 on_timeout_clone.fetch_add(1, Ordering::SeqCst);
             },
-            Duration::from_millis(50),
-            Duration::from_millis(200),
+            Some(Duration::from_millis(50)),
+            Some(Duration::from_millis(200)),
         )
         .await;
         activity.abort();
@@ -3439,8 +3491,8 @@ mod tests {
             move || {
                 on_timeout_clone.fetch_add(1, Ordering::SeqCst);
             },
-            Duration::from_millis(100),
-            Duration::from_secs(10),
+            Some(Duration::from_millis(100)),
+            Some(Duration::from_secs(10)),
         )
         .await;
         let _ = canceller.await;
@@ -3451,8 +3503,92 @@ mod tests {
         assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
     }
 
+    /// Fully-unlimited default (`idle = None`, `hard = None`): a silent,
+    /// never-completing turn is bounded ONLY by an explicit cancel — no
+    /// timeout fires. This is the new default contract.
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_unlimited_silent_turn_only_ends_on_cancel() {
+        let (_idle_tx, mut idle_rx) = watch::channel(()); // no activity
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        let canceller = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = cancel_tx.send(());
+        });
+        let result = race_turn(
+            std::future::pending::<Result<StopReason, String>>(),
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            None,
+            None,
+        )
+        .await;
+        let _ = canceller.await;
+        assert!(
+            matches!(result, Ok(StopReason::Cancelled)),
+            "got {result:?}"
+        );
+        assert_eq!(
+            on_timeout.load(Ordering::SeqCst),
+            0,
+            "unlimited turn must not invoke on_timeout_cancel"
+        );
+    }
+
+    /// Unlimited hard cap (`hard = None`) with a bounded idle: a streaming,
+    /// never-completing turn that keeps activity alive never hits the idle
+    /// deadline and is bounded ONLY by cancel — the absent hard cap imposes no
+    /// bound, matching "unlimited hard cap".
+    #[tokio::test(start_paused = true)]
+    async fn race_turn_unlimited_hard_cap_active_turn_only_ends_on_cancel() {
+        let (idle_tx, mut idle_rx) = watch::channel(());
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let activity = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                let _ = idle_tx.send(());
+            }
+        });
+        let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let on_timeout_clone = on_timeout.clone();
+        let canceller = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let _ = cancel_tx.send(());
+        });
+        // idle 50ms (kept reset by activity), hard None (unlimited): an active
+        // turn never hits either, so only cancel ends it.
+        let result = race_turn(
+            std::future::pending::<Result<StopReason, String>>(),
+            cancel_rx,
+            &mut idle_rx,
+            move || {
+                on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Some(Duration::from_millis(50)),
+            None,
+        )
+        .await;
+        activity.abort();
+        let _ = activity.await;
+        let _ = canceller.await;
+        assert!(
+            matches!(result, Ok(StopReason::Cancelled)),
+            "got {result:?}"
+        );
+        assert_eq!(
+            on_timeout.load(Ordering::SeqCst),
+            0,
+            "unlimited hard cap must not invoke on_timeout_cancel for an active turn"
+        );
+    }
+
     /// `resolved_turn_timeout` precedence: env var > UI override > default.
-    /// The override replaces the default when no env var is set.
+    /// The override replaces the default when no env var is set; the default is
+    /// now `None` (unlimited).
     #[test]
     fn turn_timeout_override_takes_effect_when_no_env_var() {
         // The env var is usually absent in the test runner; when it IS set
@@ -3461,31 +3597,31 @@ mod tests {
             return;
         }
         set_turn_timeout_override(Some(42));
-        assert_eq!(resolved_turn_timeout(), Duration::from_secs(42));
+        assert_eq!(resolved_turn_timeout(), Some(Duration::from_secs(42)));
         set_turn_timeout_override(None);
-        assert_eq!(resolved_turn_timeout(), TURN_TIMEOUT);
+        assert_eq!(resolved_turn_timeout(), None);
     }
 
     /// `turn_idle_timeout` full precedence ladder, in ONE test so the shared
     /// override static and env var are never touched by concurrent tests:
-    /// env var absent → override wins over default; cleared → default; env
-    /// var present → env beats a simultaneous UI override (the operator
-    /// precedence the settings UI documents). When the env var is ALREADY
-    /// set on the host (operator machine), only the env-wins phase runs and
-    /// its original value is restored afterwards.
+    /// env var absent → override wins over default; cleared → default (`None`
+    /// / unlimited); env var present → env beats a simultaneous UI override
+    /// (the operator precedence the settings UI documents). When the env var is
+    /// ALREADY set on the host (operator machine), only the env-wins phase runs
+    /// and its original value is restored afterwards.
     #[test]
     fn turn_idle_timeout_precedence_env_beats_override_beats_default() {
         let preexisting = std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS").ok();
         if preexisting.is_none() {
             set_turn_idle_timeout_override(Some(42));
-            assert_eq!(turn_idle_timeout(), Duration::from_secs(42));
+            assert_eq!(turn_idle_timeout(), Some(Duration::from_secs(42)));
             set_turn_idle_timeout_override(None);
-            assert_eq!(turn_idle_timeout(), TURN_IDLE_TIMEOUT);
+            assert_eq!(turn_idle_timeout(), None);
         }
 
         std::env::set_var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS", "60");
         set_turn_idle_timeout_override(Some(1800));
-        assert_eq!(turn_idle_timeout(), Duration::from_secs(60));
+        assert_eq!(turn_idle_timeout(), Some(Duration::from_secs(60)));
 
         match preexisting {
             Some(v) => std::env::set_var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS", v),

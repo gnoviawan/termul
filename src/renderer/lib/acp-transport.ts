@@ -304,17 +304,17 @@ const REQUEST_TIMEOUT_MS = 60_000
 const SEND_PROMPT_GRACE_MS = 10_000
 /**
  * Fallback only until the authenticate reply publishes the authoritative policy.
- * Timeout for `send_prompt`, which awaits the full agent turn on the server.
- * Stays slightly above Rust `TURN_TIMEOUT` (600s / `TERMUL_ACP_TURN_TIMEOUT_SECS`)
- * plus {@link SEND_PROMPT_GRACE_MS} so the server's specific `turn timeout`
- * error reaches the client before this generic timeout fires. A 60s client
- * budget caused `AcpTransportError: Request send_prompt timed out` on
- * mobile/ngrok whenever a turn (tools, thinking, slow models) exceeded a
- * minute — even while streaming events were still arriving.
+ * Timeout for `send_prompt`, which awaits the full agent turn on the server. The
+ * server's default turn (hard-cap + idle) timeout is **unlimited** (the
+ * published `turnTimeoutMs` / `promptInactivityTimeoutMs` are `0` to signal
+ * unlimited), so once authenticated the client imposes no client-side timer.
+ * This fallback only covers the brief pre-auth window (send_prompt requires a
+ * session, so it normally never fires pre-auth) with a bounded, setTimeout-safe
+ * 1h budget.
  *
- * NOTE: if a deployment raises `TERMUL_ACP_TURN_TIMEOUT_SECS` above 600s,
- * this constant must be raised to match (ideally the server would publish its
- * turn budget to the client — tracked separately).
+ * NOTE: a deployment that sets `TERMUL_ACP_TURN_TIMEOUT_SECS` /
+ * `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS` publishes those bounded values, which the
+ * client honours instead of this fallback.
  */
 const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
 const RECONNECT_BASE_MS = 500
@@ -354,11 +354,14 @@ const HEARTBEAT_FAILURE_THRESHOLD = 2
 type Pending = {
   resolve: (value: unknown) => void
   reject: (err: unknown) => void
-  timer: ReturnType<typeof setTimeout>
+  /** Inactivity timer; `null` when the server policy is unlimited (no
+   * client-side inactivity timer is imposed). */
+  timer: ReturnType<typeof setTimeout> | null
   type: WsRequestType
   sessionId?: string
   /** Absolute deadline (epoch-ms) for send_prompt — the inactivity timer never
-   * extends past it. `undefined` for non-send_prompt requests. */
+   * extends past it. `undefined` when the server imposes no hard cap
+   * (unlimited) or for non-send_prompt requests. */
   deadline?: number
 }
 
@@ -486,7 +489,7 @@ export class WsAcpTransport implements AcpTransport {
       this.reconnectTimer = null
     }
     for (const [, p] of this.pending) {
-      clearTimeout(p.timer)
+      if (p.timer) clearTimeout(p.timer)
       p.reject(new AcpTransportError('closed', 'transport disposed'))
     }
     this.pending.clear()
@@ -869,7 +872,7 @@ export class WsAcpTransport implements AcpTransport {
 
   private rejectAllPending(code: string, message: string): void {
     for (const [, p] of this.pending) {
-      clearTimeout(p.timer)
+      if (p.timer) clearTimeout(p.timer)
       p.reject(new AcpTransportError(code, message))
     }
     this.pending.clear()
@@ -1092,7 +1095,7 @@ export class WsAcpTransport implements AcpTransport {
   private handleReply(reply: WsReply): void {
     const pending = this.pending.get(reply.id)
     if (!pending) return
-    clearTimeout(pending.timer)
+    if (pending.timer) clearTimeout(pending.timer)
     this.pending.delete(reply.id)
     if (reply.ok) {
       pending.resolve(reply.payload)
@@ -1200,21 +1203,38 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private refreshPromptActivity(sessionId: string): void {
-    const inactivityMs =
-      (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
-      SEND_PROMPT_GRACE_MS
-    const now = Date.now()
+    const serverInactivityMs =
+      this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS
+    // 0 = server-imposed unlimited inactivity: no inactivity budget is imposed.
+    const inactivityMs = serverInactivityMs > 0 ? serverInactivityMs + SEND_PROMPT_GRACE_MS : 0
     for (const [id, pending] of this.pending) {
       if (pending.type !== 'send_prompt' || pending.sessionId !== sessionId) continue
       // Reset the inactivity timer but never extend past the absolute deadline.
-      const remaining = pending.deadline != null ? pending.deadline - now : inactivityMs
-      const timerMs = Math.min(inactivityMs, Math.max(0, remaining))
-      clearTimeout(pending.timer)
-      pending.timer = setTimeout(() => {
-        this.pending.delete(id)
-        pending.reject(new AcpTransportError('timeout', 'Request send_prompt timed out'))
-      }, timerMs)
+      const timerMs = this.computeSendPromptTimerMs(inactivityMs, pending.deadline)
+      if (pending.timer) clearTimeout(pending.timer)
+      pending.timer =
+        timerMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id)
+              pending.reject(new AcpTransportError('timeout', 'Request send_prompt timed out'))
+            }, timerMs)
+          : null
     }
+  }
+
+  /**
+   * Compute the send_prompt inactivity timer, in ms, honouring the server's
+   * unlimited (0) sentinels. Returns 0 when both the inactivity budget and the
+   * hard-cap deadline are unlimited — the caller then sets no client-side
+   * timer (the request waits for a reply / cancel / socket close only).
+   */
+  private computeSendPromptTimerMs(inactivityMs: number, deadline: number | undefined): number {
+    if (inactivityMs > 0) {
+      const remaining = deadline != null ? deadline - Date.now() : inactivityMs
+      return Math.min(inactivityMs, Math.max(0, remaining))
+    }
+    if (deadline != null) return Math.max(0, deadline - Date.now())
+    return 0
   }
 
   private request<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
@@ -1237,22 +1257,30 @@ export class WsAcpTransport implements AcpTransport {
           ? payloadRecord.sessionId
           : undefined
       const isSendPrompt = type === 'send_prompt'
-      const inactivityMs = isSendPrompt
-        ? (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
-          SEND_PROMPT_GRACE_MS
-        : REQUEST_TIMEOUT_MS
+      const serverInactivityMs = isSendPrompt
+        ? (this.runtimePolicy?.promptInactivityTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS)
+        : 0
+      const serverHardCapMs = isSendPrompt
+        ? (this.runtimePolicy?.turnTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS)
+        : 0
+      // 0 = server-imposed unlimited; a non-zero value is the bounded budget
+      // plus the grace margin so the server's typed timeout wins the race.
+      const inactivityMs = serverInactivityMs > 0 ? serverInactivityMs + SEND_PROMPT_GRACE_MS : 0
       // Absolute ceiling: the inactivity refresh never extends past this
       // deadline so a long-stalled turn still times out despite intermittent
-      // activity.
-      const deadline = isSendPrompt
-        ? Date.now() +
-          (this.runtimePolicy?.turnTimeoutMs ?? FALLBACK_SEND_PROMPT_INACTIVITY_MS) +
-          SEND_PROMPT_GRACE_MS
-        : undefined
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new AcpTransportError('timeout', `Request ${type} timed out`))
-      }, inactivityMs)
+      // activity. `0` (unlimited hard cap) → no absolute deadline.
+      const deadline =
+        serverHardCapMs > 0 ? Date.now() + serverHardCapMs + SEND_PROMPT_GRACE_MS : undefined
+      const timerMs = isSendPrompt
+        ? this.computeSendPromptTimerMs(inactivityMs, deadline)
+        : REQUEST_TIMEOUT_MS
+      const timer =
+        timerMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id)
+              reject(new AcpTransportError('timeout', `Request ${type} timed out`))
+            }, timerMs)
+          : null
       this.pending.set(id, {
         resolve: (v) => resolve(v as T),
         reject,
@@ -1262,7 +1290,7 @@ export class WsAcpTransport implements AcpTransport {
         deadline
       })
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-        clearTimeout(timer)
+        if (timer) clearTimeout(timer)
         this.pending.delete(id)
         reject(new AcpTransportError('closed', 'WebSocket not open'))
         return

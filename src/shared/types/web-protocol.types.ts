@@ -224,9 +224,12 @@ export type HistoryMode = 'server' | 'live_only'
 
 /** Additive policy negotiated during the relay authenticate handshake. */
 export interface AcpRuntimePolicy {
-  /** Authoritative absolute server turn ceiling. */
+  /** Authoritative absolute server turn ceiling, in ms. `0` is the
+   *  unlimited sentinel — no hard cap is imposed (the default). */
   turnTimeoutMs: number
-  /** Matching session activity refreshes the renderer timer to this budget. */
+  /** Matching session activity refreshes the renderer timer to this budget,
+   *  in ms. `0` is the unlimited sentinel — no inactivity timer is imposed
+   *  (the default). */
   promptInactivityTimeoutMs: number
   /** Grace before a last-subscriber disconnect denies pending permissions. */
   permissionReconnectGraceMs: number
