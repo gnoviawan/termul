@@ -35,7 +35,8 @@ pub use chat_history_store::{
 pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]
 pub use history_import::import_chat_history;
-pub use manager::{AcpManager, SessionCreationContext};
+#[allow(unused_imports)]
+pub use manager::{AcpManager, SessionCreationContext, SpawnOutcome};
 pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{

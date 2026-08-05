@@ -296,6 +296,21 @@ export interface AgentSpawnedEvent {
    */
   authMethods?: AuthMethod[]
 }
+
+/**
+ * Authoritative spawn result returned by `acp_spawn_agent` (Tauri) and
+ * `spawn_agent` (WS) — the single contract for both transports (CAP-4: the
+ * spawn response — not the async `acp:agent_spawned` event — is the source of
+ * truth). The renderer populates `capabilities` + `authMethods` synchronously
+ * from this response, eliminating the former 250ms no-auth fallback.
+ */
+export interface SpawnAgentResult {
+  agentId: AgentId
+  capabilities: AgentCapabilities
+  /** Always present (as `[]` for a no-auth agent) so the renderer sees a stable field. */
+  authMethods: AuthMethod[]
+  stableNamespace?: string
+}
 export interface SessionCreatedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -520,7 +535,7 @@ export async function acpFetchRegistrySnapshot(forceRefresh = false): Promise<Ac
   return getAcpTransport().fetchRegistrySnapshot(forceRefresh)
 }
 
-export async function acpSpawnAgent(config: AgentConfig): Promise<AgentId> {
+export async function acpSpawnAgent(config: AgentConfig): Promise<SpawnAgentResult> {
   return getAcpTransport().spawnAgent(config)
 }
 

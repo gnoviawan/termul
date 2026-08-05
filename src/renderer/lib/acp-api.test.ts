@@ -32,12 +32,20 @@ describe('acp-api command wrappers (Tauri transport)', () => {
     _resetAcpTransportForTests(null)
   })
 
-  it('acpSpawnAgent passes the config arg', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('agent-1')
+  it('acpSpawnAgent passes the config arg and returns the full spawn result', async () => {
+    const spawnResult = {
+      agentId: 'agent-1',
+      capabilities: { loadSession: true },
+      authMethods: [{ id: 'cursor_login', name: 'Sign in with Cursor' }],
+      stableNamespace: 'config:cursor'
+    }
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(spawnResult)
     const config = { name: 'Gemini', command: 'gemini', args: [], env: {} }
-    const id = await acpSpawnAgent(config)
+    const result = await acpSpawnAgent(config)
     expect(invoke).toHaveBeenCalledWith('acp_spawn_agent', { config })
-    expect(id).toBe('agent-1')
+    expect(result).toEqual(spawnResult)
+    expect(result.agentId).toBe('agent-1')
+    expect(result.authMethods).toHaveLength(1)
   })
 
   it('acpNewSession passes agentId, cwd, mcpServers', async () => {

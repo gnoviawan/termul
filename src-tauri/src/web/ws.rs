@@ -1185,7 +1185,11 @@ fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsReply {
 // browser automatically — these handlers only own the request/reply half.
 
 /// `spawn_agent` → `AcpManager::spawn(config)`. Mirrors Tauri `acp_spawn_agent`
-/// invoke args `{ config }`. Reply payload = `AgentId` (JSON string).
+/// invoke args `{ config }`. Reply payload = the [`SpawnOutcome`] (camelCase:
+/// `agentId`/`capabilities`/`authMethods`/`stableNamespace?`) — the
+/// authoritative spawn metadata so the renderer populates the store
+/// synchronously from the response (CAP-4: the spawn response — not the async
+/// `agent_spawned` event — is the source of truth on both desktop and web).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpawnAgentPayload {
@@ -1226,11 +1230,11 @@ async fn handle_spawn_agent(
         );
     }
     match acp.spawn(parsed.config).await {
-        Ok(agent_id) => {
+        Ok(outcome) => {
             // Track the spawned agent so a later `switch_project` can reuse it
             // (Ask-First resolution: do NOT auto-spawn on switch).
-            *current_agent = Some(agent_id.clone());
-            ok_with_payload(id, &agent_id)
+            *current_agent = Some(outcome.agent_id.clone());
+            ok_with_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -2741,6 +2745,7 @@ async fn handle_answer_question(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use crate::acp::SpawnOutcome;
     use std::collections::HashSet;
 
     #[tokio::test]
@@ -3199,6 +3204,59 @@ mod tests {
         );
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// `spawn_agent` success path: `ok_with_payload` serializes the full
+    /// `SpawnOutcome` (camelCase: `agentId`/`capabilities`/`authMethods`/
+    /// `stableNamespace?`) — the same shape the desktop Tauri command returns,
+    /// so the renderer sees one authoritative payload on both transports (CAP-4).
+    #[test]
+    fn spawn_outcome_serializes_full_payload_as_ws_reply() {
+        let outcome = SpawnOutcome {
+            agent_id: AgentId("agn_test".to_string()),
+            capabilities: agent_client_protocol::schema::v1::AgentCapabilities::default(),
+            auth_methods: vec![crate::acp::events::AuthMethodInfo {
+                id: "cursor_login".to_string(),
+                name: "Sign in with Cursor".to_string(),
+                description: None,
+            }],
+            stable_namespace: Some("config:cursor".to_string()),
+        };
+        let reply = ok_with_payload("spawn-1".to_string(), &outcome);
+        assert!(reply.ok);
+        assert!(reply.err.is_none());
+        let payload = reply.payload.expect("payload present on success");
+        assert_eq!(payload["agentId"], "agn_test");
+        assert!(payload.get("capabilities").is_some(), "capabilities always serialized");
+        assert_eq!(payload["authMethods"][0]["id"], "cursor_login");
+        assert_eq!(payload["authMethods"][0]["name"], "Sign in with Cursor");
+        // `description` is `None` + skip_serializing_if → omitted from JSON.
+        assert!(
+            payload["authMethods"][0].get("description").is_none(),
+            "description omitted when absent"
+        );
+        assert_eq!(payload["stableNamespace"], "config:cursor");
+    }
+
+    /// `spawn_agent` success with no auth + no namespace: `authMethods` is `[]`
+    /// (always serialized) and `stableNamespace` is omitted (skip_if_none).
+    #[test]
+    fn spawn_outcome_serializes_no_auth_no_namespace() {
+        let outcome = SpawnOutcome {
+            agent_id: AgentId("agn_noauth".to_string()),
+            capabilities: agent_client_protocol::schema::v1::AgentCapabilities::default(),
+            auth_methods: vec![],
+            stable_namespace: None,
+        };
+        let reply = ok_with_payload("spawn-2".to_string(), &outcome);
+        assert!(reply.ok);
+        let payload = reply.payload.expect("payload");
+        assert_eq!(payload["agentId"], "agn_noauth");
+        assert_eq!(payload["authMethods"], json!([]), "authMethods always serialized as []");
+        assert!(
+            payload.get("stableNamespace").is_none(),
+            "stableNamespace omitted when None"
+        );
     }
 
     /// Story 1.8 review (EC4): `create_session` rejects an empty/whitespace

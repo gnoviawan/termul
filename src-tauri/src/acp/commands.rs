@@ -14,15 +14,19 @@ use tauri::State;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
-    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
+    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
+/// Returns the authoritative [`SpawnOutcome`] (capabilities + auth methods +
+/// stable namespace) so the renderer populates the store synchronously from
+/// the response (CAP-4: the spawn response — not the async event — is the
+/// source of truth). Mirrors the WS `spawn_agent` handler payload.
 #[tauri::command]
 pub async fn acp_spawn_agent(
     manager: State<'_, Arc<AcpManager>>,
     config: AgentConfig,
-) -> Result<AgentId, String> {
+) -> Result<SpawnOutcome, String> {
     manager.spawn(config).await
 }
 
