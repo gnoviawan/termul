@@ -47,6 +47,7 @@ import type {
   SessionConfigOption,
   SessionId,
   SessionReopenOutcome,
+  SpawnAgentResult,
   StopReason
 } from '@/lib/acp-api'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
@@ -86,7 +87,7 @@ export interface AcpTransport {
    * failures throw `AcpTransportError`.
    */
   probeMcpServer(server: McpServerConfig): Promise<ProbeResult>
-  spawnAgent(config: AgentConfig): Promise<AgentId>
+  spawnAgent(config: AgentConfig): Promise<SpawnAgentResult>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
   newSession(
@@ -195,7 +196,7 @@ function createTauriAcpTransport(): AcpTransport {
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
-    spawnAgent: (config) => invoke<AgentId>('acp_spawn_agent', { config }),
+    spawnAgent: (config) => invoke<SpawnAgentResult>('acp_spawn_agent', { config }),
     killAgent: async (agentId) => {
       await invoke('acp_kill_agent', { agentId })
     },
@@ -646,8 +647,8 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
-  async spawnAgent(config: AgentConfig): Promise<AgentId> {
-    return this.request<AgentId>('spawn_agent', { config })
+  async spawnAgent(config: AgentConfig): Promise<SpawnAgentResult> {
+    return this.request<SpawnAgentResult>('spawn_agent', { config })
   }
 
   async killAgent(agentId: AgentId): Promise<void> {

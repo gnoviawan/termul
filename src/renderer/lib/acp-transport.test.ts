@@ -200,7 +200,18 @@ class FakeWebSocket {
       }
       const agentId = 'agent-spawned-1'
       this.liveAgents.add(agentId)
-      this.emitReply({ id: req.id, ok: true, payload: agentId })
+      // CAP-4: the spawn response carries the full authoritative metadata
+      // (capabilities + authMethods + stableNamespace), not just the agentId.
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: {
+          agentId,
+          capabilities: { loadSession: true },
+          authMethods: [],
+          stableNamespace: 'config:test'
+        }
+      })
       return
     }
     if (req.type === 'list_agents') {
@@ -286,17 +297,23 @@ describe('WsAcpTransport', () => {
 
     expect(await transport.listAgents()).toEqual([])
 
-    const agentId = await transport.spawnAgent({
+    const spawnResult = await transport.spawnAgent({
       name: 'test',
       command: 'npx',
       args: ['-y', '@example/agent'],
       env: {},
       allowTerminal: false
     })
-    expect(agentId).toBe('agent-spawned-1')
+    // CAP-4: the WS spawn response carries the full authoritative payload
+    // (agentId + capabilities + authMethods + stableNamespace), matching the
+    // desktop Tauri command's return type — one contract for both transports.
+    expect(spawnResult.agentId).toBe('agent-spawned-1')
+    expect(spawnResult.capabilities).toEqual({ loadSession: true })
+    expect(spawnResult.authMethods).toEqual([])
+    expect(spawnResult.stableNamespace).toBe('config:test')
     expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
 
-    await transport.killAgent(agentId)
+    await transport.killAgent(spawnResult.agentId)
     expect(await transport.listAgents()).toEqual([])
 
     await expect(

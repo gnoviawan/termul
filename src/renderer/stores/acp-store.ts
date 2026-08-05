@@ -75,6 +75,7 @@ import {
   type SessionModeState,
   type SessionReopenOutcome,
   type SessionUsage,
+  type SpawnAgentResult,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
@@ -1187,16 +1188,6 @@ const authenticatedAgents = new Set<AgentId>()
  */
 const inFlightAuth = new Map<AgentId, Promise<void>>()
 
-/**
- * Cap on waiting for a freshly spawned agent's `initialize` details (advertised
- * auth methods) to arrive via `acp:agent_spawned`. `spawnAgent` seeds
- * `authMethods: []` and the event populates them asynchronously, so
- * `authenticateBeforeSession` briefly waits before deciding a no-auth agent.
- * The wait resolves early the instant the event lands; this is only the
- * fallback for an agent that never advertises details.
- */
-const SPAWN_DETAILS_WAIT_MS = 250
-
 /** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
 export function _resetAcpAuthForTesting(): void {
   authenticatedAgents.clear()
@@ -1705,49 +1696,10 @@ function ensureLiveAgent(
 }
 
 /**
- * Wait until a freshly spawned agent's `initialize` details are observable —
- * i.e. `acp:agent_spawned` has been reduced into the store (capabilities become
- * non-null) or advertised auth methods are present. `spawnAgent` seeds
- * `authMethods: []` synchronously and the event arrives async, so reading
- * `authMethods` immediately would misread a Cursor-style agent as no-auth.
- *
- * Mirrors `testConnection`'s capability wait: resolves the instant the event
- * lands (via subscribe) and otherwise caps at {@link SPAWN_DETAILS_WAIT_MS}.
- * Resolves immediately when the agent is unknown (nothing to wait for) or its
- * details are already present.
- */
-function waitForSpawnDetails(get: () => AcpState, agentId: AgentId): Promise<void> {
-  const hasDetails = (): boolean => {
-    const agent = get().agents[agentId]
-    // Unknown agent: nothing will arrive for it here — don't block.
-    if (!agent) return true
-    // `capabilities` and `authMethods` are set atomically by `_onAgentSpawned`
-    // in a single `set()`, so `capabilities !== null` ⟺ the spawn event has
-    // been observed ⟺ `authMethods` is the final advertised value (possibly
-    // `[]` for a genuine no-auth agent, which correctly skips authenticate).
-    // The `|| authMethods.length > 0` term is a defensive fallback for a
-    // record that somehow gained methods first.
-    return agent.capabilities !== null || (agent.authMethods?.length ?? 0) > 0
-  }
-  if (hasDetails()) return Promise.resolve()
-  return new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      unsubscribe()
-      resolve()
-    }, SPAWN_DETAILS_WAIT_MS)
-    const unsubscribe = useAcpStore.subscribe(() => {
-      if (hasDetails()) {
-        clearTimeout(timeout)
-        unsubscribe()
-        resolve()
-      }
-    })
-  })
-}
-
-/**
  * Run ACP `authenticate` before `session/new` when the agent advertises auth
- * methods (P1). Waits for spawn details, then:
+ * methods (P1). The spawn response populates `authMethods` synchronously
+ * (CAP-4: the response — not the async `acp:agent_spawned` event — is the
+ * source of truth), so this reads them directly with no timed fallback:
  *   - no valid method → resolve (no-auth agent; unchanged spawn→session flow),
  *   - exactly one valid method → `authenticate(methodId)`,
  *   - more than one → reject with {@link AmbiguousAuthError} (never silently
@@ -1764,7 +1716,6 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
 
   const task = (async (): Promise<void> => {
     try {
-      await waitForSpawnDetails(get, agentId)
       const methods = get().agents[agentId]?.authMethods ?? []
       // P5: ignore empty/whitespace ids — an unusable method must not be sent.
       const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
@@ -2021,9 +1972,13 @@ async function openHistorySessionInner(
     })
     if (ensured) liveAgentId = ensured
   }
-  // Capabilities arrive asynchronously via `acp:agent_spawned` for a freshly
-  // spawned agent. Wait briefly so `decideResume` sees them instead of racing
-  // to 'local'. A prewarmed agent already has them by this point.
+  // CAP-4: `spawnAgent` seeds capabilities synchronously from the spawn
+  // response, so a freshly spawned agent already has them by this point.
+  // This 3s subscribe+timeout is a defensive fallback for edge cases where
+  // capabilities aren't yet populated (e.g., a prewarmed agent whose spawn
+  // hasn't resolved, or a legacy entry seeded without the response), not the
+  // primary delivery mechanism. It resolves instantly when capabilities are
+  // already present.
   if (get().agentStatus[liveAgentId] === 'connected' && !get().agents[liveAgentId]?.capabilities) {
     await new Promise<void>((resolve) => {
       if (get().agents[liveAgentId]?.capabilities) {
@@ -2502,32 +2457,30 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const tempKey = config.name
     set((s) => ({ agentStatus: { ...s.agentStatus, [tempKey]: 'spawning' } }))
     try {
-      const agentId = await acpApi.spawnAgent(config)
+      const result = await acpApi.spawnAgent(config)
+      const agentId = result.agentId
       set((s) => {
         // Drop the transient name-keyed `spawning` marker now that we have the
         // real agent id; leaving it would strand a stale status forever.
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
         agentStatus[agentId] = 'connected'
-        // The backend emits `acp:agent_spawned` (carrying capabilities) BEFORE
-        // `acp_spawn_agent` returns, so `_onAgentSpawned` has usually already
-        // recorded them by the time this runs. Preserve that entry instead of
-        // resetting it to null: a clobbered `capabilities` makes the
-        // `openHistorySession` capability wait park on a `subscribe` that never
-        // fires again (the event is gone), time out, and fall back to read-only
-        // 'local' — which is why reopened chats could not be continued.
+        // The spawn response is the authoritative source of capabilities +
+        // authMethods (CAP-4: metadata delivery cannot depend on a session
+        // subscription that does not yet exist). If the `acp:agent_spawned`
+        // event already populated this entry (it can fire before the response
+        // resolves on desktop), preserve that — the event and response carry
+        // identical data. Otherwise, seed from the response. The event is
+        // observer-only; `_onAgentSpawned` likewise preserves response-set
+        // fields and never clobbers them.
         const existing = s.agents[agentId]
         return {
-          // Preserve any authMethods already recorded for this agent (a
-          // re-spawn after the spawn event landed keeps them available to
-          // `authenticateBeforeSession`); seed [] only when none exist yet.
-          // The `acp:agent_spawned` event (re)populates them asynchronously.
           agents: {
             ...s.agents,
             [agentId]: {
               id: agentId,
-              capabilities: existing?.capabilities ?? null,
-              authMethods: existing?.authMethods ?? []
+              capabilities: existing?.capabilities ?? result.capabilities,
+              authMethods: existing?.authMethods ?? result.authMethods
             }
           },
           agentStatus
@@ -3048,33 +3001,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   testConnection: async (config) => {
     let agentId: AgentId | null = null
     try {
-      agentId = await acpApi.spawnAgent(config)
-      // Capabilities arrive asynchronously via the `acp:agent_spawned` event
-      // (reduced into the store). Wait briefly for them to appear rather than
-      // reading the store synchronously (which would usually race and return
-      // null). A successful spawn resolving already implies `initialize`
-      // succeeded, so a short timeout returning null caps is still a pass.
-      const id = agentId
-      const caps = await new Promise<AgentCapabilities | null>((resolve) => {
-        const existing = get().agents[id]?.capabilities ?? null
-        if (existing) {
-          resolve(existing)
-          return
-        }
-        const timeout = setTimeout(() => {
-          unsubscribe()
-          resolve(get().agents[id]?.capabilities ?? null)
-        }, 3000)
-        const unsubscribe = useAcpStore.subscribe((state) => {
-          const c = state.agents[id]?.capabilities
-          if (c) {
-            clearTimeout(timeout)
-            unsubscribe()
-            resolve(c)
-          }
-        })
-      })
-      return caps
+      // The spawn response now carries the authoritative capabilities
+      // (CAP-4: the response — not the async event — is the source of truth),
+      // so the former 3s store-poll wait is unnecessary: capabilities are
+      // available synchronously from `result.capabilities`.
+      const result = await acpApi.spawnAgent(config)
+      agentId = result.agentId
+      return result.capabilities
     } finally {
       // Always clean up the test process.
       if (agentId) {
@@ -4392,22 +4325,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   // --- Event reducers ------------------------------------------------------
 
   _onAgentSpawned: (e) =>
-    set((s) => ({
-      agents: {
-        ...s.agents,
-        [e.agentId]: {
-          id: e.agentId,
-          capabilities: e.capabilities,
-          // Retain advertised auth methods so `authenticateBeforeSession` can
-          // authenticate a single unambiguous method before `session/new`.
-          authMethods: e.authMethods ?? []
+    set((s) => {
+      const existing = s.agents[e.agentId]
+      return {
+        agents: {
+          ...s.agents,
+          [e.agentId]: {
+            id: e.agentId,
+            // CAP-4: the spawn response is authoritative. The event is
+            // observer-only — it must not clobber fields already populated
+            // by the response. Use the event's value only as a fallback for
+            // entries the response hasn't set yet (e.g., event arrives before
+            // the response resolves on desktop).
+            capabilities: existing?.capabilities ?? e.capabilities,
+            // Retain advertised auth methods so `authenticateBeforeSession`
+            // can authenticate a single unambiguous method before
+            // `session/new`. Same preserve-then-fallback pattern.
+            authMethods: existing?.authMethods ?? e.authMethods ?? []
+          }
+        },
+        agentStatus: {
+          ...s.agentStatus,
+          [e.agentId]: 'connected'
         }
-      },
-      agentStatus: {
-        ...s.agentStatus,
-        [e.agentId]: 'connected'
       }
-    })),
+    }),
 
   _onSessionCreated: (e) => {
     set((s) => {

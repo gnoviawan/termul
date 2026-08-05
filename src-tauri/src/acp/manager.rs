@@ -680,6 +680,27 @@ struct InitOutcome {
     auth_methods: Vec<AuthMethodInfo>,
 }
 
+/// Authoritative spawn result returned by [`AcpManager::spawn`] and mirrored
+/// verbatim by both the Tauri `acp_spawn_agent` command and the WS
+/// `spawn_agent` handler (CAP-4: metadata delivery cannot depend on a session
+/// subscription that does not yet exist). Carries everything the renderer needs
+/// to populate the store synchronously: the negotiated capabilities, advertised
+/// auth methods, and stable namespace. The `acp:agent_spawned` event is still
+/// emitted for observers but is no longer the source of truth — the spawn
+/// response is. Serialized camelCase on the wire so desktop (Tauri `Result`)
+/// and web (`WsReply` payload) share one contract.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnOutcome {
+    pub agent_id: AgentId,
+    pub capabilities: AgentCapabilities,
+    /// Every authentication method the agent advertised at `initialize`. Always
+    /// serialized (as `[]` when empty) so the renderer sees a stable field.
+    pub auth_methods: Vec<AuthMethodInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_namespace: Option<String>,
+}
+
 /// Registry entry for a live agent.
 struct AgentEntry {
     command_tx: mpsc::UnboundedSender<AcpCommand>,
@@ -745,8 +766,12 @@ impl AcpManager {
     }
 
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
-    /// register the agent. Emits `acp:agent_spawned` on success.
-    pub async fn spawn(&self, config: AgentConfig) -> Result<AgentId, String> {
+    /// register the agent. Emits `acp:agent_spawned` on success. Returns a
+    /// [`SpawnOutcome`] carrying the authoritative capabilities, auth methods,
+    /// and stable namespace so the renderer can populate the store
+    /// synchronously from the response (CAP-4: the spawn response — not the
+    /// async event — is the source of truth).
+    pub async fn spawn(&self, config: AgentConfig) -> Result<SpawnOutcome, String> {
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
         let (init_tx, init_rx) = oneshot::channel::<Result<InitOutcome, String>>();
@@ -800,6 +825,7 @@ impl AcpManager {
                 // Initialize failed; the driver thread is exiting. Join it off
                 // the async runtime so we never block a Tauri worker.
                 join_thread_bounded(join_handle).await;
+                log::warn!("[acp] spawn failed: agent initialize failed: {e}");
                 return Err(format!("agent initialize failed: {e}"));
             }
             Err(_) => {
@@ -809,10 +835,12 @@ impl AcpManager {
                 // (e.g. "program not found") over the generic fallback.
                 join_thread_bounded(join_handle).await;
                 let reason = start_error.lock().take();
-                return Err(match reason {
+                let message = match reason {
                     Some(detail) => format!("agent failed to start: {detail}"),
                     None => "agent failed to start (process did not initialize)".to_string(),
-                });
+                };
+                log::warn!("[acp] spawn failed: {message}");
+                return Err(message);
             }
         };
 
@@ -824,14 +852,16 @@ impl AcpManager {
             if reaped.load(Ordering::Acquire) {
                 drop(agents);
                 join_thread_bounded(join_handle).await;
-                return Err("agent exited before it could be registered".to_string());
+                let reason = "agent exited before it could be registered";
+                log::warn!("[acp] spawn failed: {reason}");
+                return Err(reason.to_string());
             }
             agents.insert(
                 agent_id.clone(),
                 AgentEntry {
                     command_tx,
                     capabilities: capabilities.clone(),
-                    stable_namespace,
+                    stable_namespace: stable_namespace.clone(),
                     join_handle: Some(join_handle),
                     killed,
                 },
@@ -840,13 +870,29 @@ impl AcpManager {
 
         let event = AgentSpawnedEvent {
             agent_id: agent_id.clone(),
-            capabilities,
-            auth_methods,
+            capabilities: capabilities.clone(),
+            auth_methods: auth_methods.clone(),
         };
-        // `agent_spawned` is agent-level (no session yet) → sid = None.
+        // `agent_spawned` is agent-level (no session yet) → sid = None. The event
+        // stays for observers; the spawn response is now the authoritative source
+        // of capabilities + authMethods + stableNamespace.
         events::fan_out(&self.sinks, None, events::EVENT_AGENT_SPAWNED, &event);
 
-        Ok(agent_id)
+        // Log success at the host boundary with the agent id and auth-method ids
+        // (never credentials). One line per spawn so a missing method list or an
+        // unexpected auth-required agent is observable in the runtime log.
+        let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
+        log::info!(
+            "[acp] agent {agent_id} spawned (auth_methods={:?})",
+            auth_method_ids
+        );
+
+        Ok(SpawnOutcome {
+            agent_id,
+            capabilities,
+            auth_methods,
+            stable_namespace,
+        })
     }
 
     /// Return the ids of all currently registered agents.
