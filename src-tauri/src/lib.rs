@@ -123,8 +123,8 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 
 // Re-exports for commands
 pub use acp::{
-    AcpManager, ChatHistoryStore, FileProjectRegistry, SessionPersistence,
-    WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, FileProjectRegistry,
+    SessionPersistence, WorkspaceManifestService,
 };
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};

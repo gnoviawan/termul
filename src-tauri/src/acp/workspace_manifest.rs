@@ -364,7 +364,8 @@ impl WorkspaceManifestService {
         // scope).
         #[cfg(unix)]
         {
-            std::os::unix::fs::DirBuilder::new()
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
                 .mode(0o700)
                 .recursive(true)
                 .create(&root)?;
