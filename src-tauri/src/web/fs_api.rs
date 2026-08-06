@@ -615,10 +615,10 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
 /// `GET /fs/info?path=...` — return filesystem metadata for a file or
 /// directory (the web equivalent of the desktop `getFileInfo` facade). Returns
 /// `{ success: true, data: FileInfo }` or `{ success: false, error, code }`
-/// where code is `PATH_TRAVERSAL` (explicit `..` component) or `STAT_ERROR`
-/// (missing path / io). A read route: intentionally NOT loopback-guarded,
-/// matching `/fs/read` so desktop-hosted LAN clients can inspect file
-/// properties for the editor/explorer.
+/// where code is `FORBIDDEN` (non-loopback peer), `PATH_TRAVERSAL` (explicit
+/// `..` component), or `STAT_ERROR` (missing path / io). Loopback-only:
+/// guarded by `check_local_only` so non-loopback peers are rejected before
+/// any path resolution or filesystem access.
 ///
 /// `isBinary` is determined from a 512-byte sample (control bytes
 /// `0x00`-`0x08`) mirroring the renderer's `readBinarySample` +
@@ -629,6 +629,9 @@ pub async fn info(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let requested_path = q.path.clone();
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
@@ -636,9 +639,6 @@ pub async fn info(
             return (StatusCode::OK, Json(IpcBody::<FileInfoDto>::err(msg, code)));
         }
     };
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer) {
-        return (StatusCode::OK, Json(forbidden));
-    }
     let result = tokio::task::spawn_blocking(move || -> Result<FileInfoDto, (String, &'static str)> {
         let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "STAT_ERROR"))?;
         let modified_at = metadata

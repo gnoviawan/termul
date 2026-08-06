@@ -183,6 +183,15 @@ export function useWorktreeStatus(
 
   // Start/stop polling based on active worktree
   useEffect(() => {
+    // Web/remote mode: worktree dirty-status polling is desktop-only. Skip
+    // creating the 2s/10s intervals entirely — clear status and return.
+    if (!isTauriContext()) {
+      setCurrentStatus(null)
+      setIsPolling(false)
+      lastHealthRef.current = null
+      return
+    }
+
     if (!activeWorktreeId || !activeWorktreePath) {
       setCurrentStatus(null)
       setIsPolling(false)

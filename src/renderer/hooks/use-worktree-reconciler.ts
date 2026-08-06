@@ -112,6 +112,11 @@ export function useWorktreeReconciler(projectId: string) {
 
   // Run on mount and on interval
   useEffect(() => {
+    // Web/remote mode: worktree operations are desktop-only. Skip creating
+    // the reconciliation interval entirely — the reconcile callback would
+    // return early anyway, but this avoids a useless 60s timer firing.
+    if (!isTauriContext()) return
+
     // Initial reconciliation
     void reconcile()
 
