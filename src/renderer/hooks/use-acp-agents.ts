@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { getActiveAcpRegistry } from '@/hooks/use-acp-registry-catalog'
 import { acpApi } from '@/lib/acp-api'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
+import { isAntigravityAcpAgentId } from '@/lib/agents/antigravity-acp'
 import {
   buildSupportedAcpAgents,
   pickDefaultSupportedAgent
@@ -56,7 +57,7 @@ export function useAcpAgents(): void {
             )
           : null
       const entry = selected ?? pickDefaultSupportedAgent(supportedAgents)
-      if (!entry?.config) {
+      if (!entry?.config || isAntigravityAcpAgentId(entry.agent.id)) {
         setSelectedAgentConfigId(null)
         return
       }

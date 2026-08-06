@@ -75,6 +75,8 @@ export const PersistenceKeys = {
   // GH-289: value shape is `LastSelectedAgent` ({ agentId, mode }); legacy
   // records carrying only `{ agentId }` are read as `mode: 'cli'`.
   lastSelectedAgent: 'agents/last-selected',
+  // Versioned acknowledgement for the Antigravity ACP provider warning.
+  antigravityAcpAcknowledgement: 'agents/antigravity-acp-acknowledgement',
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`

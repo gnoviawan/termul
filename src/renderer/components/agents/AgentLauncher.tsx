@@ -3,6 +3,7 @@ import { PersistenceKeys } from '@shared/types/persistence.types'
 import { ArrowUp, Check, Download, FolderOpen, Loader2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { AntigravityAcpSetupPanel } from '@/components/agents/AntigravityAcpSetupPanel'
 import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
@@ -52,6 +53,7 @@ import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import { isAntigravityAcpAgentId } from '@/lib/agents/antigravity-acp'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   buildSupportedAcpAgents,
@@ -104,6 +106,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
   const [manualPath, setManualPath] = useState('')
   const [savingManualPath, setSavingManualPath] = useState(false)
+  const [antigravityAcknowledged, setAntigravityAcknowledged] = useState(false)
   const [manualInstallOverride, setManualInstallOverride] =
     useState<SupportedAcpAgentManualInstall | null>(null)
   const [pendingOptions, setPendingOptions] = useState<PendingLauncherOptions>(
@@ -139,10 +142,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     () =>
       supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
       pickDefaultSupportedAgent(supportedAgents) ??
-      supportedAgents[0] ??
       null,
     [supportedAgents, selectedConfigId]
   )
+  const isAntigravityEntry = isAntigravityAcpAgentId(selectedEntry?.agent.id)
+  useEffect(() => {
+    if (!isAntigravityEntry) setAntigravityAcknowledged(true)
+  }, [isAntigravityEntry])
   const manualInstallContext =
     selectedEntry?.manualInstall ??
     (selectedEntry?.status === 'install-required' ? manualInstallOverride : null)
@@ -428,13 +434,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
             ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        const next = restored ?? pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
+        const next = restored ?? pickDefaultSupportedAgent(supportedAgents)
         if (next) {
           setSelectedConfigId(next.configId)
           persistSelection(next.configId)
         }
       } catch {
-        const next = pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
+        const next = pickDefaultSupportedAgent(supportedAgents)
         if (next) setSelectedConfigId(next.configId)
       }
     })()
@@ -444,7 +450,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   }, [persistSelection, selectedConfigId, supportedAgents])
 
   useEffect(() => {
-    if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
+    if (
+      !activeConfigId ||
+      !projectRoot ||
+      selectedEntry?.status !== 'ready' ||
+      !selectedConfig ||
+      isAntigravityEntry
+    )
       return
     let cancelled = false
     void (async () => {
@@ -474,6 +486,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     saveAgentConfig,
     selectedConfig,
     selectedEntry?.status,
+    isAntigravityEntry,
     activeProjectId
   ])
 
@@ -483,7 +496,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       setManualInstallOverride(null)
       setPendingOptions(emptyPendingLauncherOptions())
       setSelectedConfigId(entry.configId)
+      setAntigravityAcknowledged(!isAntigravityAcpAgentId(entry.agent.id))
       persistSelection(entry.configId)
+      textareaRef.current?.focus()
+    },
+    [persistSelection]
+  )
+
+  const handleAntigravityConfigured = useCallback(
+    (config: StoredAgentConfig): void => {
+      setSelectedConfigId(config.id)
+      setAntigravityAcknowledged(true)
+      persistSelection(config.id)
       textareaRef.current?.focus()
     },
     [persistSelection]
@@ -811,6 +835,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
+    (!isAntigravityEntry || antigravityAcknowledged) &&
     (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null)
   // `hasSkillToken` comes from `useChatComposer` (destructured above) — the
   // transparent-textarea overlay is only needed when the value carries a skill
@@ -860,24 +885,35 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 : undefined
             }
           >
-            {selectedEntry?.status === 'install-required' && !manualInstallContext && (
-              <InstallRequiredBanner
-                entry={selectedEntry}
-                installing={installingConfigId === selectedEntry.configId}
-                onInstall={() => void handleInstallAgent(selectedEntry)}
-                onUseCustomPath={
-                  selectedEntry.install
-                    ? () =>
-                        setManualInstallOverride({
-                          cmd: selectedEntry.install!.cmd,
-                          args: selectedEntry.install!.args,
-                          env: selectedEntry.install!.env
-                        })
-                    : undefined
-                }
-              />
-            )}
-            {manualInstallContext && selectedEntry && (
+            {isAntigravityEntry &&
+              selectedEntry &&
+              (selectedEntry.status === 'manual-install' || selectedEntry.status === 'ready') && (
+                <AntigravityAcpSetupPanel
+                  entry={selectedEntry}
+                  onConfigured={handleAntigravityConfigured}
+                  onAcknowledgementChange={setAntigravityAcknowledged}
+                />
+              )}
+            {!isAntigravityEntry &&
+              selectedEntry?.status === 'install-required' &&
+              !manualInstallContext && (
+                <InstallRequiredBanner
+                  entry={selectedEntry}
+                  installing={installingConfigId === selectedEntry.configId}
+                  onInstall={() => void handleInstallAgent(selectedEntry)}
+                  onUseCustomPath={
+                    selectedEntry.install
+                      ? () =>
+                          setManualInstallOverride({
+                            cmd: selectedEntry.install!.cmd,
+                            args: selectedEntry.install!.args,
+                            env: selectedEntry.install!.env
+                          })
+                      : undefined
+                  }
+                />
+              )}
+            {!isAntigravityEntry && manualInstallContext && selectedEntry && (
               <ManualInstallBanner
                 entry={selectedEntry}
                 manual={manualInstallContext}

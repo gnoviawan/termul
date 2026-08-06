@@ -265,6 +265,38 @@ pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
     crate::acp::config::probe_registry_runtime()
 }
 
+/// Verify a user-selected ACP binary against a pinned SHA-256 digest.
+///
+/// This command is intentionally desktop-only. Remote web clients use the
+/// renderer's manual confirmation flow because the standalone server does not
+/// expose arbitrary filesystem hashing without an authenticated path policy.
+#[tauri::command]
+pub async fn acp_verify_binary(
+    path: String,
+    expected_sha256: String,
+) -> Result<crate::acp::binary_verification::BinaryVerification, String> {
+    let name = crate::acp::binary_verification::display_name(&path).to_string();
+    log::info!("[acp] verifying binary checksum for {name}");
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::acp::binary_verification::verify(&path, &expected_sha256)
+    })
+    .await
+    .map_err(|error| format!("binary checksum task failed: {error}"))?;
+
+    match &result {
+        Ok(verification) => {
+            log::info!(
+                "[acp] binary checksum completed for {name}: matches={}",
+                verification.matches
+            );
+        }
+        Err(error) => {
+            log::warn!("[acp] binary checksum failed for {name}: {error}");
+        }
+    }
+    result
+}
+
 /// On-demand MCP client probe. Takes a renderer-supplied `McpServerConfig`
 /// (stateless — no registry-store coupling), opens a fresh rmcp client
 /// connection, calls `initialize` + `tools/list`, then closes, and returns

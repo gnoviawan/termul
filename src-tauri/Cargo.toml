@@ -56,6 +56,7 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
+sha2 = "0.10"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
 # only). rustls-tls matches the backend already pulled in by the updater plugin.

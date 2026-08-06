@@ -33,6 +33,7 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
+  AcpBinaryVerification,
   AcpRegistrySnapshot,
   AgentConfig,
   AgentId,
@@ -68,6 +69,7 @@ export interface AcpTransport {
   installRegistryBinary(
     request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome>
+  verifyBinary(path: string, expectedSha256: string): Promise<AcpBinaryVerification>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
@@ -185,6 +187,8 @@ function createTauriAcpTransport(): AcpTransport {
   return {
     installRegistryBinary: (request) =>
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
+    verifyBinary: (path, expectedSha256) =>
+      invoke<AcpBinaryVerification>('acp_verify_binary', { path, expectedSha256 }),
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
     setTurnIdleTimeout: (secs) => invoke<void>('acp_set_turn_idle_timeout', { secs }),
@@ -564,6 +568,10 @@ export class WsAcpTransport implements AcpTransport {
     _request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome> {
     throw new AcpTransportError('unsupported', 'Registry binary install is desktop-only')
+  }
+
+  async verifyBinary(_path: string, _expectedSha256: string): Promise<AcpBinaryVerification> {
+    throw new AcpTransportError('unsupported', 'Binary checksum verification is desktop-only')
   }
 
   async probeRuntime(): Promise<AcpRuntimeAvailability> {

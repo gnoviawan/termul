@@ -1393,6 +1393,7 @@ pub fn run() {
             acp::commands::acp_set_session_reopen_timeout,
             acp::commands::acp_set_first_prompt_warmup_timeout,
             acp::commands::acp_probe_mcp_server,
+            acp::commands::acp_verify_binary,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Agent Skills (Zed-compatible SKILL.md packages)

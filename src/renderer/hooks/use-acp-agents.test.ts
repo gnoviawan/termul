@@ -141,6 +141,20 @@ describe('useAcpAgents', () => {
     expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
   })
 
+  it('does not prewarm a persisted Antigravity selection', async () => {
+    stateRef.current.agentConfigs = [config('acp-registry:antigravity-acp')]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:antigravity-acp', mode: 'acp' }
+    })
+
+    renderHook(() => useAcpAgents())
+
+    await waitFor(() => expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith(null))
+    expect(mockPrewarmAgent).not.toHaveBeenCalled()
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+  })
+
   it('prewarms nothing when no active project cwd is available', async () => {
     projectRef.current.activeProjectId = ''
     mockLoadAgentConfigs.mockImplementation(async () => {

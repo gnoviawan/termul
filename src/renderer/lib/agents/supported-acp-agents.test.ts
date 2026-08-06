@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
+import { ANTIGRAVITY_ACP_AGENT } from '@/lib/agents/antigravity-acp'
 import {
   buildSupportedAcpAgents,
   installedBinaryConfig,
   isSupportedAcpConfigId,
   manualBinaryConfig,
+  pickDefaultSupportedAgent,
   registryConfigId
 } from '@/lib/agents/supported-acp-agents'
 
@@ -142,6 +144,13 @@ describe('buildSupportedAcpAgents', () => {
       }
     })
   })
+
+  it('does not select Antigravity as an implicit default', () => {
+    const entries = buildSupportedAcpAgents([], 'windows-x86_64', [ANTIGRAVITY_ACP_AGENT])
+
+    expect(entries[0]?.status).toBe('manual-install')
+    expect(pickDefaultSupportedAgent(entries)).toBeNull()
+  })
 })
 
 describe('isSupportedAcpConfigId', () => {
@@ -149,6 +158,11 @@ describe('isSupportedAcpConfigId', () => {
     expect(isSupportedAcpConfigId('acp-registry:claude-acp')).toBe(true)
     expect(isSupportedAcpConfigId('claude-acp')).toBe(true)
     expect(isSupportedAcpConfigId('acp-registry:not-in-registry')).toBe(false)
+  })
+
+  it('accepts the app-owned Antigravity ACP id', () => {
+    expect(isSupportedAcpConfigId(ANTIGRAVITY_ACP_AGENT.id)).toBe(true)
+    expect(isSupportedAcpConfigId(`acp-registry:${ANTIGRAVITY_ACP_AGENT.id}`)).toBe(true)
   })
 })
 

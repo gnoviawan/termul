@@ -6,6 +6,7 @@ import {
   REGISTRY_AGENTS,
   type RegistryAgent
 } from '@/lib/agents/acp-registry'
+import { mergeAppOwnedAcpAgents } from '@/lib/agents/antigravity-acp'
 
 export interface RegistryUpdateSummary {
   updatedCount: number
@@ -27,12 +28,15 @@ let sharedActiveRemote = false
 let sharedAdvisorySummary: RegistryUpdateSummary | null = null
 let sharedLastCheckedAt: string | null = null
 const listeners = new Set<() => void>()
+const BUNDLED_ACTIVE_REGISTRY = mergeAppOwnedAcpAgents(REGISTRY_AGENTS)
 
 /** Active registry for non-React callers (e.g. mount-time prewarm). Returns the
  * bundled catalog unless the user has explicitly applied a fetched remote
  * snapshot, so remote `distribution` data stays advisory until promoted. */
 export function getActiveAcpRegistry(): readonly RegistryAgent[] {
-  return sharedActiveRemote && sharedAdvisoryAgents ? sharedAdvisoryAgents : REGISTRY_AGENTS
+  return sharedActiveRemote && sharedAdvisoryAgents
+    ? mergeAppOwnedAcpAgents(sharedAdvisoryAgents)
+    : BUNDLED_ACTIVE_REGISTRY
 }
 
 function notifyRegistryCatalogListeners(): void {

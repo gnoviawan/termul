@@ -1,6 +1,7 @@
 import { RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { AntigravityAcpSetupPanel } from '@/components/agents/AntigravityAcpSetupPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,6 +9,7 @@ import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
 import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
+import { isAntigravityAcpAgentId } from '@/lib/agents/antigravity-acp'
 import {
   buildSupportedAcpAgents,
   filterSupportedAcpAgents,
@@ -136,6 +138,7 @@ interface AgentRowProps {
 function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   const warmState = useConfigWarmState(entry.configId)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
+  const isAntigravity = isAntigravityAcpAgentId(entry.agent.id)
 
   const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
     ? { label: 'Session ready', tone: 'ready' }
@@ -192,7 +195,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
             {entry.agent.description}
           </p>
         )}
-        {entry.status !== 'ready' && (
+        {entry.status !== 'ready' && !isAntigravity && (
           <p className="mt-1 text-2xs text-amber-500">
             {entry.status === 'install-required'
               ? 'Open Agent Chat and choose Install before first use.'
@@ -201,11 +204,15 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
                 : entry.unavailableReason}
           </p>
         )}
+        {isAntigravity && (entry.status === 'manual-install' || entry.status === 'ready') && (
+          <AntigravityAcpSetupPanel entry={entry} />
+        )}
         {entry.status === 'ready' &&
+          !isAntigravity &&
           entry.config &&
           entry.config.command !== 'npx' &&
           entry.config.command !== 'uvx' && <AgentPathEditor entry={entry} />}
-        {entry.status === 'manual-install' && entry.manualInstall && (
+        {entry.status === 'manual-install' && entry.manualInstall && !isAntigravity && (
           <p className="mt-1 font-mono text-2xs text-muted-foreground">
             Expected: {entry.manualInstall.cmd}
             {entry.manualInstall.args.length > 0 ? ` ${entry.manualInstall.args.join(' ')}` : ''}

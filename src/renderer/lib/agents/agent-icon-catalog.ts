@@ -8,6 +8,7 @@
  * All picker icons render as white via `text-white` on `bg-muted` cells.
  */
 
+import antigravityIcon from '@/assets/agent-icons/acp/antigravity.svg?raw'
 import acpManifest from '@/assets/agent-icons/acp/manifest.json'
 import brainIcon from '@/assets/agent-icons/brain.svg?raw'
 import codeIcon from '@/assets/agent-icons/code.svg?raw'
@@ -63,12 +64,17 @@ const GENERIC_ICONS: readonly BundledIconEntry[] = [
   { key: 'generic:zap', label: 'Zap', svg: zapIcon as string }
 ] as const
 
+const APP_OWNED_ACP_ICONS: readonly BundledIconEntry[] = [
+  { key: 'acp:antigravity-acp', label: 'Antigravity', svg: antigravityIcon as string }
+]
+
 /**
  * All bundled icons available in the picker — fully offline, no network fetch.
  * ACP registry icons first, then generic category icons.
  */
 export const BUNDLED_ICON_CATALOG: readonly BundledIconEntry[] = [
   ...buildAcpEntries(),
+  ...APP_OWNED_ACP_ICONS,
   ...GENERIC_ICONS
 ]
 

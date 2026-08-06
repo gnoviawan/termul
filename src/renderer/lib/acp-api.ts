@@ -475,10 +475,24 @@ export interface InstallAcpRegistryBinaryOutcome {
   args: string[]
 }
 
+export interface AcpBinaryVerification {
+  expectedSha256: string
+  actualSha256: string
+  matches: boolean
+  size: number
+}
+
 export async function acpInstallRegistryBinary(
   request: InstallAcpRegistryBinaryRequest
 ): Promise<InstallAcpRegistryBinaryOutcome> {
   return getAcpTransport().installRegistryBinary(request)
+}
+
+export async function acpVerifyBinary(
+  path: string,
+  expectedSha256: string
+): Promise<AcpBinaryVerification> {
+  return getAcpTransport().verifyBinary(path, expectedSha256)
 }
 
 export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
@@ -718,6 +732,7 @@ export const acpApi = {
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
   setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
+  verifyBinary: acpVerifyBinary,
   probeRuntime: acpProbeRuntime,
   probeMcpServer,
   listMcpTools,

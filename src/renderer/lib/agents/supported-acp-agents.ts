@@ -5,8 +5,11 @@ import {
   type RegistryAgent,
   type RegistryBinaryTarget
 } from '@/lib/agents/acp-registry'
+import { APP_OWNED_ACP_AGENTS, isAntigravityAcpAgentId } from '@/lib/agents/antigravity-acp'
 
-const REGISTRY_AGENT_IDS = new Set(REGISTRY_AGENTS.map((agent) => agent.id))
+const REGISTRY_AGENT_IDS = new Set(
+  [...REGISTRY_AGENTS, ...APP_OWNED_ACP_AGENTS].map((agent) => agent.id)
+)
 
 /** Preferred default when no last-selected agent is persisted. */
 export const PREFERRED_DEFAULT_ACP_AGENT_IDS = [
@@ -21,11 +24,12 @@ export const PREFERRED_DEFAULT_ACP_AGENT_IDS = [
 export function pickDefaultSupportedAgent(
   entries: readonly SupportedAcpAgentEntry[]
 ): SupportedAcpAgentEntry | null {
+  const eligible = entries.filter((entry) => !isAntigravityAcpAgentId(entry.agent.id))
   for (const id of PREFERRED_DEFAULT_ACP_AGENT_IDS) {
-    const match = entries.find((entry) => entry.id === id && entry.status === 'ready')
+    const match = eligible.find((entry) => entry.id === id && entry.status === 'ready')
     if (match) return match
   }
-  return entries.find((entry) => entry.status === 'ready') ?? entries[0] ?? null
+  return eligible.find((entry) => entry.status === 'ready') ?? eligible[0] ?? null
 }
 
 export function filterSupportedAcpAgents(

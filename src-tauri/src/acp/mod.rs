@@ -9,6 +9,7 @@
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
 pub mod atomic_file;
+pub mod binary_verification;
 pub mod chat_history_store;
 pub mod client;
 pub mod commands;
