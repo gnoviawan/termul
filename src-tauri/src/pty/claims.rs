@@ -123,8 +123,8 @@ impl TerminalClaimRegistry {
     pub fn issue(&self, terminal_id: &str, project_id: Option<&str>) -> String {
         let mut raw = [0u8; 32];
         getrandom::getrandom(&mut raw).expect("OS CSPRNG is available");
-        let credential = hex_encode(&raw);
-        let digest = sha256_digest(&raw);
+    let credential = hex_encode(&raw);
+    let digest = sha256_digest(credential.as_bytes());
         // The random bytes are no longer needed — overwrite before drop.
         for byte in raw.iter_mut() {
             *byte = 0;
@@ -260,8 +260,8 @@ impl TerminalClaimRegistry {
 
         let mut raw = [0u8; 32];
         getrandom::getrandom(&mut raw).expect("OS CSPRNG is available");
-        let credential = hex_encode(&raw);
-        let digest = sha256_digest(&raw);
+    let credential = hex_encode(&raw);
+    let digest = sha256_digest(credential.as_bytes());
         for byte in raw.iter_mut() {
             *byte = 0;
         }

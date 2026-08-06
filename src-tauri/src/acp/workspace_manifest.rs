@@ -218,10 +218,12 @@ pub struct WorkspaceManifestFile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum WriteOutcome {
+    #[serde(rename_all = "camelCase")]
     Updated {
         revision: u64,
         updated_at: u64,
     },
+    #[serde(rename_all = "camelCase")]
     Conflict {
         current_revision: u64,
         current_updated_at: u64,

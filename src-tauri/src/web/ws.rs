@@ -5532,7 +5532,7 @@ mod tests {
             Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
 
         // Client A sends switch_project (cold-tab path).
-        let reply_a = block_on(handle_request(
+        let reply_a = handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
             &acp,
@@ -5547,9 +5547,10 @@ mod tests {
             &current_project_a,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
-        ));
+            None,
+            None,
+        )
+        .await;
         assert!(reply_a.ok, "client A switch succeeds: {:?}", reply_a.err);
 
         // Client A's current_project reflects the switch.
