@@ -341,6 +341,15 @@ export async function resolveSupportedAcpAgents(
     const binaryMapOs = catalog.host.os === 'macos' ? 'darwin' : catalog.host.os
     const derived = deriveAgentConfig(registryAgent, `${binaryMapOs}-${catalog.host.arch}`)
 
+    // The host's `compute_binary_status` is sha256-aware: a binary target with
+    // an HTTPS archive but NO `sha256` is `manual-install` (the host must reject
+    // the install with `INTEGRITY_METADATA_MISSING`). The renderer's
+    // `deriveAgentConfig` is NOT sha256-aware — it only checks for an
+    // `archiveUrl` — so without gating on `agent.status` it would set `install`
+    // for a no-sha256 agent the host reports as `manual-install` (status /
+    // install-field split-brain). Gate `install` on `install-required` and
+    // `manualInstall` on `manual-install` so the install info reflects the
+    // host's resolution (the host is the single source of truth).
     entries.push({
       id,
       configId,
@@ -348,7 +357,9 @@ export async function resolveSupportedAcpAgents(
       config: derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null,
       status: agent.status,
       install:
-        derived.kind === 'needs-install' && derived.archiveUrl
+        agent.status === 'install-required' &&
+        derived.kind === 'needs-install' &&
+        derived.archiveUrl
           ? {
               archiveUrl: derived.archiveUrl,
               cmd: derived.cmd,
@@ -357,7 +368,7 @@ export async function resolveSupportedAcpAgents(
             }
           : null,
       manualInstall:
-        derived.kind === 'needs-install' && !derived.archiveUrl
+        agent.status === 'manual-install' && derived.kind === 'needs-install'
           ? { cmd: derived.cmd, args: derived.args, env: derived.env }
           : null,
       runtimeLauncher:

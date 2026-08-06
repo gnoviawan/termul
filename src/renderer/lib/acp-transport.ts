@@ -610,21 +610,19 @@ export class WsAcpTransport implements AcpTransport {
 
   /**
    * CAP-6 / Story 9: host-owned verified-atomic install. The WS transport
-   * delegates to the `acpInstallApi` facade (resolves Tauri vs HTTP at runtime),
-   * so the web client gets the same verified install path as the desktop. The
-   * facade maps the `IpcResult<InstallOutcome>` success/failure into the
-   * transport's throw-on-error contract — a failure throws `AcpTransportError`
-   * carrying the install error code.
+   * routes the install through the authenticated WS connection
+   * (`install_acp_agent`), NOT a separate HTTP POST — the server's
+   * `handle_install_acp_agent` resolves the agent by id from the trusted
+   * catalog, downloads + verifies sha256 + atomically activates. `handleReply`
+   * maps the WS reply: success → resolve with the `InstallOutcome` payload
+   * `{ command, args }`; failure → reject with `AcpTransportError` carrying
+   * the install-specific SCREAMING_SNAKE_CASE code (via
+   * `WsReply::err_with_code`, byte-identical to the Tauri `IpcResult.code` +
+   * HTTP `IpcBody.code`). The request is `{ agentId }` only; the host resolves
+   * everything from the trusted catalog.
    */
   async installAcpAgent(agentId: string): Promise<InstallAcpRegistryBinaryOutcome> {
-    // Lazy import avoids a static cycle (acp-transport ↔ acp-install-api) at
-    // module load; the facade owns the `isTauriContext()` branching.
-    const { acpInstallApi } = await import('./acp-install-api')
-    const result = await acpInstallApi.installAgent(agentId)
-    if (result.success) {
-      return result.data
-    }
-    throw new AcpTransportError(result.code, result.error)
+    return this.request<InstallAcpRegistryBinaryOutcome>('install_acp_agent', { agentId })
   }
 
   /**
@@ -702,13 +700,21 @@ export class WsAcpTransport implements AcpTransport {
    * removed. Callers that need the full catalog (the registry-catalog hook)
    * switch to `acpCatalogApi.listCatalog()` instead.
    */
-  async fetchRegistrySnapshot(_forceRefresh = false): Promise<AcpRegistrySnapshot> {
+  async fetchRegistrySnapshot(forceRefresh = false): Promise<AcpRegistrySnapshot> {
     // Delegate to the host-resolved catalog. The host embeds the trusted
     // bundled `agents.json` + optionally augments with the CDN snapshot
     // (gated on the host-persisted opt-in). This replaces the fake
     // `{agents:[], source:'empty'}` hardcoded stub.
+    //
+    // The WS `list_acp_catalog` payload field is `refresh` (camelCase, matching
+    // the Rust `ListAcpCatalogPayload.refresh` + the HTTP `?refresh=true` query).
+    // Propagate `forceRefresh` so an explicit user refresh bypasses the host's
+    // 60s TTL — the previous `{}` left `refresh` defaulted to `false`, so a
+    // "check for updates" action could serve a stale cached catalog.
     try {
-      const catalog = await this.request<AcpCatalogFromHost>('list_acp_catalog', {})
+      const catalog = await this.request<AcpCatalogFromHost>('list_acp_catalog', {
+        refresh: forceRefresh
+      })
       return {
         agents: catalog.agents,
         source: 'network',

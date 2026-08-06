@@ -271,6 +271,108 @@ describe('resolveSupportedAcpAgents', () => {
     expect(entries[0]?.status).toBe('ready')
   })
 
+  it('sets install info only when the host reports install-required', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: true, uvx: false, node: true, bun: false, python3: true }
+        },
+        agents: [
+          {
+            id: 'opencode',
+            name: 'Opencode',
+            version: '1.0.0',
+            description: 'd',
+            source: 'bundled',
+            distribution: {
+              binary: {
+                'linux-x86_64': {
+                  cmd: './opencode',
+                  archive: 'https://example.com/opencode.zip',
+                  sha256: 'a'.repeat(64),
+                  args: ['acp'],
+                  env: { OPENCODE: '1' }
+                }
+              }
+            },
+            runtimeRequirements: [],
+            status: 'install-required',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]?.status).toBe('install-required')
+    expect(entries[0]?.install).toMatchObject({
+      archiveUrl: 'https://example.com/opencode.zip',
+      cmd: './opencode',
+      args: ['acp'],
+      env: { OPENCODE: '1' }
+    })
+    expect(entries[0]?.manualInstall).toBeNull()
+  })
+
+  it('sets manualInstall (not install) when the host reports manual-install for a no-sha256 archive', async () => {
+    // The host's `compute_binary_status` is sha256-aware: an HTTPS archive
+    // WITHOUT a `sha256` digest is `manual-install` (the host must reject the
+    // install with `INTEGRITY_METADATA_MISSING`). The renderer's
+    // `deriveAgentConfig` is NOT sha256-aware (it only checks for an
+    // `archiveUrl`), so it would naively set `install`. Verify the renderer
+    // gates on the host's status so install info reflects the host's resolution.
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: true, uvx: false, node: true, bun: false, python3: true }
+        },
+        agents: [
+          {
+            id: 'no-sha',
+            name: 'NoSha',
+            version: '1.0.0',
+            description: 'd',
+            source: 'bundled',
+            distribution: {
+              binary: {
+                'linux-x86_64': {
+                  cmd: './no-sha',
+                  archive: 'https://example.com/no-sha.zip',
+                  // NOTE: no `sha256` — the host reports `manual-install`.
+                  args: ['acp'],
+                  env: { NO_SHA: '1' }
+                }
+              }
+            },
+            runtimeRequirements: [],
+            status: 'manual-install',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]?.status).toBe('manual-install')
+    // `install` must be null (the host does not offer an install it must reject).
+    expect(entries[0]?.install).toBeNull()
+    // `manualInstall` carries the cmd/args/env (no archiveUrl — manual install
+    // does not download).
+    expect(entries[0]?.manualInstall).toMatchObject({
+      cmd: './no-sha',
+      args: ['acp'],
+      env: { NO_SHA: '1' }
+    })
+  })
+
   it('degrades to an empty list when the catalog is unavailable', async () => {
     listCatalogMock.mockResolvedValueOnce({
       success: false,

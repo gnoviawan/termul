@@ -60,7 +60,11 @@ struct CachedSnapshot {
 }
 
 pub fn is_safe_agent_id(id: &str) -> bool {
+    // Reject `.` and `..` outright: the per-character allow-list admits them
+    // (every char is `.`), but they denote the current/parent directory and
+    // would escape the install root via `root.join(&agent.id)` (CWE-22).
     !id.is_empty()
+        && !matches!(id, "." | "..")
         && id.len() <= 128
         && id
             .chars()
@@ -235,5 +239,16 @@ mod tests {
     fn skips_agents_without_distribution() {
         let body = r#"{ "agents": [ { "id": "broken" } ] }"#;
         assert!(parse_snapshot(body).unwrap().is_empty());
+    }
+
+    #[test]
+    fn is_safe_agent_id_rejects_dot_and_dotdot() {
+        // `.` / `..` denote the current/parent directory and would escape the
+        // install root via `root.join(&agent.id)` (CWE-22) — reject outright.
+        assert!(!is_safe_agent_id("."));
+        assert!(!is_safe_agent_id(".."));
+        // Dotted ids that are NOT bare `.`/`..` remain valid.
+        assert!(is_safe_agent_id("com.example.agent"));
+        assert!(is_safe_agent_id("claude-acp"));
     }
 }

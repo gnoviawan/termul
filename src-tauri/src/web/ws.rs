@@ -1416,28 +1416,32 @@ async fn handle_list_acp_catalog(
     payload: &Value,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
 ) -> WsReply {
+    // Distinct SCREAMING_SNAKE_CASE codes matching the HTTP route
+    // (`catalog_api::list`) byte-for-byte (the protocol-level `WsErrorCode`
+    // enum is snake_case and collapses these to `Unsupported`, masking the
+    // real failure for the renderer). `err_with_code` carries the raw string.
     let parsed: ListAcpCatalogPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
-            return WsReply::err(
+            return WsReply::err_with_code(
                 id,
-                WsErrorCode::Unsupported,
+                "VALIDATION_ERROR",
                 format!("malformed list_acp_catalog payload: {e}"),
             )
         }
     };
     let Some(service) = acp_catalog.cloned() else {
-        return WsReply::err(
+        return WsReply::err_with_code(
             id,
-            WsErrorCode::Unsupported,
+            "ACP_CATALOG_UNAVAILABLE",
             "acp catalog store is unavailable",
         );
     };
     match service.list_catalog(parsed.refresh.unwrap_or(false)).await {
         Ok(catalog) => ok_with_payload(id, &catalog),
-        Err(error) => WsReply::err(
+        Err(error) => WsReply::err_with_code(
             id,
-            WsErrorCode::Unsupported,
+            "CATALOG_LOAD_FAILED",
             format!("catalog load failed: {error}"),
         ),
     }
@@ -1456,28 +1460,34 @@ async fn handle_set_catalog_opt_in(
     payload: &Value,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
 ) -> WsReply {
+    // Distinct SCREAMING_SNAKE_CASE codes matching the HTTP route
+    // (`catalog_api::set_opt_in`) byte-for-byte. A malformed payload is
+    // `VALIDATION_ERROR`, a missing store is `ACP_CATALOG_UNAVAILABLE`, and a
+    // persistence failure is `ACP_CATALOG_OPT_IN_FAILED` (NOT collapsed to
+    // `Unsupported`, which the renderer could not distinguish from a genuine
+    // catalog-load failure).
     let parsed: SetCatalogOptInPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
-            return WsReply::err(
+            return WsReply::err_with_code(
                 id,
-                WsErrorCode::Unsupported,
+                "VALIDATION_ERROR",
                 format!("malformed set_catalog_opt_in payload (want enabled): {e}"),
             )
         }
     };
     let Some(service) = acp_catalog.cloned() else {
-        return WsReply::err(
+        return WsReply::err_with_code(
             id,
-            WsErrorCode::Unsupported,
+            "ACP_CATALOG_UNAVAILABLE",
             "acp catalog store is unavailable",
         );
     };
     match service.set_opt_in(parsed.enabled) {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
-        Err(error) => WsReply::err(
+        Err(error) => WsReply::err_with_code(
             id,
-            WsErrorCode::Unsupported,
+            "ACP_CATALOG_OPT_IN_FAILED",
             format!("opt-in persistence failed: {error}"),
         ),
     }
@@ -3212,6 +3222,91 @@ mod tests {
         assert!(reply.err.is_none(), "no err code on success");
         assert!(catalog.is_opt_in(), "opt-in persisted (host authority)");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ---- CAP-6 deferred 8.3: distinct catalog error codes (parity with HTTP) ----
+    //
+    // The catalog WS handlers previously collapsed ALL failures to
+    // `WsErrorCode::Unsupported`. These prove the handlers now emit the same
+    // SCREAMING_SNAKE_CASE codes as the HTTP routes (`catalog_api.rs`):
+    // `ACP_CATALOG_UNAVAILABLE` (degraded), `VALIDATION_ERROR` (malformed).
+
+    /// Like `handle_request_with_catalog` but with NO catalog store attached
+    /// (degraded mode — `acp_catalog: None`).
+    async fn handle_request_without_catalog(text: &str) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        handle_request(
+            text,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn list_acp_catalog_degraded_returns_unavailable() {
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"list_acp_catalog","payload":{}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "ACP_CATALOG_UNAVAILABLE");
+    }
+
+    #[tokio::test]
+    async fn set_catalog_opt_in_degraded_returns_unavailable() {
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"set_catalog_opt_in","payload":{"enabled":true}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "ACP_CATALOG_UNAVAILABLE");
+    }
+
+    #[tokio::test]
+    async fn list_acp_catalog_malformed_payload_returns_validation_error() {
+        // A non-bool `refresh` fails the `ListAcpCatalogPayload` serde.
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"list_acp_catalog","payload":{"refresh":"not-a-bool"}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
+    }
+
+    #[tokio::test]
+    async fn set_catalog_opt_in_malformed_payload_returns_validation_error() {
+        // Missing `enabled` fails `deny_unknown_fields`-less payload... actually
+        // `SetCatalogOptInPayload` has no `default`, so a missing `enabled`
+        // fails serde (the field is required).
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"set_catalog_opt_in","payload":{"notEnabled":true}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
     }
 
     // ---- Cross-client host-authority (Category C / Recovery Matrix: Browser A → Browser B) ----

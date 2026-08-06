@@ -80,12 +80,20 @@ export function createTauriAcpCatalogApi(): AcpCatalogApi {
     },
 
     async isCatalogOptedIn(): Promise<IpcResult<boolean>> {
-      // The opt-in state is host-persisted; the desktop resolves it through
-      // `listCatalog()` (the catalog response carries the resolved agents,
-      // and the opt-in is observable via whether CDN entries are present).
-      // A dedicated `acp_is_catalog_opt_in` command is deferred — the
-      // facade exposes the method so callers can probe, but the impl
-      // derives from `listCatalog()` for now.
+      // TODO(CAP-6 follow-up): `isCatalogOptedIn` currently INFERS the opt-in
+      // state from the catalog contents (any agent with `source: 'registry'`
+      // ⇒ opted-in). This is a heavy lift to do correctly: inferring from
+      // catalog contents conflates "opt-in is on" with "the CDN fetch
+      // succeeded AND returned agents" — a failed/empty CDN fetch reads as
+      // opted-out even when the host persisted `opt_in_cdn: true`. The correct
+      // fix is a dedicated host endpoint (`acp_is_catalog_opt_in` Tauri
+      // command + `GET /acp/catalog/opt-in` HTTP route + WS
+      // `is_catalog_opted_in`) that reads the persisted boolean directly, but
+      // that requires adding the endpoint across all three transports + the
+      // catalog service's persisted-config reader, plus parity tests. Deferred
+      // — tracked as a CAP-6 follow-up. Until then, this best-effort probe
+      // derives from `listCatalog()` so callers can surface an approximate
+      // state (the Settings UI disables the toggle based on it).
       if (!isTauriContext()) {
         return {
           success: false,

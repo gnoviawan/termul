@@ -23,15 +23,16 @@
 
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use std::net::SocketAddr;
 use tracing::{info, warn};
 
 use crate::acp::install::{code, InstallOutcome, InstallRequest};
-use crate::web::fs_api::IpcBody;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
 /// `POST /acp/install` — install a catalog agent.
@@ -43,10 +44,19 @@ use crate::web::ws::AppState;
 ///
 /// Degrade-mode (`acp_install: None`) returns
 /// `IpcBody::err(..., code::ACP_INSTALL_UNAVAILABLE)`.
+///
+/// Loopback-only guard (CWE-306): the install route mutates host state
+/// (downloads + verifies + atomically activates an agent binary + records the
+/// installed-agents manifest), so a LAN peer on a `0.0.0.0` bind must not
+/// reach it. Mirrors the fs/git/workspace write routes' `check_local_only`.
 pub async fn install(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> impl IntoResponse {
+    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let req: InstallRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(error) => {
@@ -109,10 +119,29 @@ mod tests {
     use crate::acp::install::AcpInstallService;
     use crate::web::ws::HistoryMode;
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    /// Loopback peer used by the `ConnectInfo<SocketAddr>` extractor in tests.
+    fn loopback_peer() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 54321))
+    }
+
+    /// Build a `POST /acp/install` request carrying the loopback
+    /// `ConnectInfo` extension the handler now requires.
+    fn install_request(body: &'static [u8]) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/acp/install")
+            .header("content-type", "application/json")
+            .extension(ConnectInfo(loopback_peer()))
+            .body(Body::from(body.to_vec()))
+            .expect("build request")
+    }
 
     /// Temp directory removed on drop (including panic paths).
     struct TempDir(std::path::PathBuf);
@@ -206,11 +235,29 @@ mod tests {
     async fn install_degraded_returns_unavailable() {
         let state = state_without_store().await;
         let resp = test_router(state)
+            .oneshot(install_request(br#"{"agentId":"opencode"}"#))
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
+        assert!(!body.success);
+        assert_eq!(body.code.as_deref(), Some(code::ACP_INSTALL_UNAVAILABLE));
+    }
+
+    // ---- Loopback guard (CWE-306) ----
+
+    #[tokio::test]
+    async fn install_rejects_non_loopback_peer() {
+        let dir = TempDir::new("install-remote-peer");
+        let state = state_with_store(dir.path()).await;
+        // A LAN peer on a `0.0.0.0` bind must not reach the install route.
+        let resp = test_router(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/acp/install")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
                     .body(Body::from(br#"{"agentId":"opencode"}"#.to_vec()))
                     .expect("build request"),
             )
@@ -219,7 +266,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
         assert!(!body.success);
-        assert_eq!(body.code.as_deref(), Some(code::ACP_INSTALL_UNAVAILABLE));
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
     }
 
     // ---- deny_unknown_fields rejection ----
@@ -229,14 +276,7 @@ mod tests {
         let dir = TempDir::new("install-reject");
         let state = state_with_store(dir.path()).await;
         let resp = test_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/acp/install")
-                    .header("content-type", "application/json")
-                    .body(Body::from(br#"{"agentId":"opencode","extra":"junk"}"#.to_vec()))
-                    .expect("build request"),
-            )
+            .oneshot(install_request(br#"{"agentId":"opencode","extra":"junk"}"#))
             .await
             .expect("router response");
         assert_eq!(
@@ -254,14 +294,7 @@ mod tests {
         let dir = TempDir::new("install-malformed");
         let state = state_with_store(dir.path()).await;
         let resp = test_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/acp/install")
-                    .header("content-type", "application/json")
-                    .body(Body::from(b"{ not valid json".to_vec()))
-                    .expect("build request"),
-            )
+            .oneshot(install_request(b"{ not valid json"))
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::OK);
@@ -277,14 +310,7 @@ mod tests {
         let dir = TempDir::new("install-empty-id");
         let state = state_with_store(dir.path()).await;
         let resp = test_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/acp/install")
-                    .header("content-type", "application/json")
-                    .body(Body::from(br#"{"agentId":""}"#.to_vec()))
-                    .expect("build request"),
-            )
+            .oneshot(install_request(br#"{"agentId":""}"#))
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::OK);
@@ -300,14 +326,7 @@ mod tests {
         let dir = TempDir::new("install-unknown");
         let state = state_with_store(dir.path()).await;
         let resp = test_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/acp/install")
-                    .header("content-type", "application/json")
-                    .body(Body::from(br#"{"agentId":"does-not-exist"}"#.to_vec()))
-                    .expect("build request"),
-            )
+            .oneshot(install_request(br#"{"agentId":"does-not-exist"}"#))
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::OK);

@@ -88,7 +88,16 @@ export function useAcpRegistryCatalog(): {
 
   const applyRemoteRegistry = useCallback(
     async () => {
-      if (!sharedAdvisoryAgents) return
+      if (!sharedAdvisoryAgents) {
+        // Throw (do NOT silently return): a silent return would let the caller's
+        // UI flip to a "using remote registry" state the host never opted into
+        // (UI/host split-brain). The Settings caller wraps this in a try/catch
+        // that surfaces the error as a toast, so the user is told to check for
+        // updates before applying.
+        throw new Error(
+          'No remote registry snapshot has been fetched. Check for updates before applying.'
+        )
+      }
       // CAP-6 / Story 8: the opt-in is now host-persisted. The renderer's
       // `applyRemoteRegistry()` becomes a call to `setCatalogOptIn(true)` so
       // the host gates CDN augmentation (the host enforces "trusted or

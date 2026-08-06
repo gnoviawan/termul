@@ -609,6 +609,20 @@ impl AcpInstallService {
                     "catalog binary target missing 'sha256' — cannot verify integrity",
                 )
             })?;
+        // Treat an empty or malformed sha256 as missing (mirrors the catalog's
+        // `compute_binary_status` tightening): the host cannot verify integrity
+        // against an invalid digest, so it must reject with
+        // `INTEGRITY_METADATA_MISSING` rather than relax the contract. Without
+        // this, an empty-string sha256 is "present" by the install path (the
+        // `.as_str()` above returns `Some("")`) but "absent" by the catalog's
+        // status computation — the launcher would offer an install the host
+        // must reject (split-brain).
+        if !is_valid_sha256_hex(sha256_hex) {
+            return Err(InstallError::new(
+                code::INTEGRITY_METADATA_MISSING,
+                "catalog binary target has an invalid 'sha256' — expected 64 hex chars",
+            ));
+        }
         let args: Vec<String> = target
             .get("args")
             .and_then(|a| a.as_array())
@@ -786,11 +800,39 @@ impl AcpInstallService {
             manifest.clone()
         };
         let root = self.root.clone();
-        if let Err(e) =
-            tokio::task::spawn_blocking(move || Self::persist_manifest_blocking(&root, &manifest_clone))
-                .await
+        // `spawn_blocking` returns `io::Result<()>` from the inner closure, so
+        // the outer `.await` is `Result<io::Result<()>, JoinError>` — handle
+        // BOTH layers. A manifest persist failure leaves a stale audit record
+        // (the binary is activated but the manifest does not reflect it), so
+        // surface it as an `INSTALL_FAILED` error rather than silently
+        // discarding it (the previous `if let Err(e)` only caught the
+        // `JoinError`, dropping the inner `io::Result` on the floor).
+        match tokio::task::spawn_blocking(move || {
+            Self::persist_manifest_blocking(&root, &manifest_clone)
+        })
+        .await
         {
-            log::error!("[acp-install] {} manifest persist task failed: {e}", crate::logging::session_id());
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                log::error!(
+                    "[acp-install] {} manifest persist failed (stale audit record): {e}",
+                    crate::logging::session_id()
+                );
+                return Err(InstallError::new(
+                    code::INSTALL_FAILED,
+                    format!("manifest persist failed: {e}"),
+                ));
+            }
+            Err(e) => {
+                log::error!(
+                    "[acp-install] {} manifest persist task failed: {e}",
+                    crate::logging::session_id()
+                );
+                return Err(InstallError::new(
+                    code::INSTALL_FAILED,
+                    format!("manifest persist task failed: {e}"),
+                ));
+            }
         }
 
         let elapsed = started.elapsed();
@@ -905,6 +947,14 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// but this is a single chokepoint).
 fn sanitize_agent_id_log(id: &str) -> &str {
     id
+}
+
+/// Validate a sha256 hex digest: exactly 64 ASCII hex chars (case-insensitive).
+/// Mirrors the catalog's `compute_binary_status` tightening so an empty or
+/// malformed digest is rejected as `INTEGRITY_METADATA_MISSING` (NOT relaxed)
+/// — the host must not promise an install it cannot verify.
+fn is_valid_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Extract the archive URL's host for logging — never the full URL with
@@ -1234,6 +1284,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    // ---- sha256 empty / malformed (treated as missing) ----
+
+    #[tokio::test]
+    async fn sha256_empty_string_rejects_before_download() {
+        let root = temp_dir("empty-sha");
+        let service = open_service(root.clone()).await;
+        let pa = platform_arch_for(&host());
+        let agent = sample_binary_agent(
+            "empty-sha",
+            &pa,
+            Some(""),
+            "./acp",
+            "https://example.com/empty-sha.zip",
+        );
+        let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
+            bytes: vec![],
+            filename: "archive.zip".to_string(),
+            fail: false,
+        });
+        let err = service
+            .install(&agent, &host(), Some(downloader), None)
+            .await
+            .expect_err("empty-sha must error");
+        assert_eq!(err.code(), code::INTEGRITY_METADATA_MISSING);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sha256_malformed_rejects_before_download() {
+        let root = temp_dir("bad-sha");
+        let service = open_service(root.clone()).await;
+        let pa = platform_arch_for(&host());
+        // Wrong length + non-hex — must NOT be treated as a valid digest.
+        let agent = sample_binary_agent(
+            "bad-sha",
+            &pa,
+            Some("not-a-real-digest"),
+            "./acp",
+            "https://example.com/bad-sha.zip",
+        );
+        let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
+            bytes: vec![],
+            filename: "archive.zip".to_string(),
+            fail: false,
+        });
+        let err = service
+            .install(&agent, &host(), Some(downloader), None)
+            .await
+            .expect_err("bad-sha must error");
+        assert_eq!(err.code(), code::INTEGRITY_METADATA_MISSING);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     // ---- unsupported platform ----
 
     #[tokio::test]
@@ -1287,10 +1390,15 @@ mod tests {
         let root = temp_dir("too-large");
         let service = open_service(root.clone()).await;
         let pa = platform_arch_for(&host());
+        // Use a VALID 64-hex sha256 so the integrity check passes and the
+        // download is actually attempted (the TooLargeDownloader then trips
+        // ARCHIVE_TOO_LARGE). A short/invalid sha would short-circuit at
+        // INTEGRITY_METADATA_MISSING before the download.
+        let valid_sha = "a".repeat(64);
         let agent = sample_binary_agent(
             "big",
             &pa,
-            Some("abc"),
+            Some(valid_sha.as_str()),
             "./acp",
             "https://example.com/big.zip",
         );
@@ -1623,10 +1731,15 @@ mod tests {
         let root = temp_dir("dl-fail");
         let service = open_service(root.clone()).await;
         let pa = platform_arch_for(&host());
+        // Use a VALID 64-hex sha256 so the integrity check passes and the
+        // download is actually attempted (the failing CannedDownloader then
+        // trips DOWNLOAD_FAILED). A short/invalid sha would short-circuit at
+        // INTEGRITY_METADATA_MISSING before the download.
+        let valid_sha = "a".repeat(64);
         let agent = sample_binary_agent(
             "dl-fail",
             &pa,
-            Some("abc"),
+            Some(valid_sha.as_str()),
             "./acp",
             "https://example.com/dl-fail.zip",
         );
@@ -1813,6 +1926,12 @@ mod tests {
         let err = service.install_by_id("").await.expect_err("empty id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
         let err = service.install_by_id("../escape").await.expect_err("bad id errors");
+        assert_eq!(err.code(), code::VALIDATION_ERROR);
+        // Bare `.` / `..` denote the current/parent directory and would escape
+        // the install root via `root.join(&agent.id)` (CWE-22) — reject.
+        let err = service.install_by_id(".").await.expect_err("dot id errors");
+        assert_eq!(err.code(), code::VALIDATION_ERROR);
+        let err = service.install_by_id("..").await.expect_err("dotdot id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
         let _ = std::fs::remove_dir_all(root);
     }
