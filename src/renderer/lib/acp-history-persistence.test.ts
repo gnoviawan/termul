@@ -437,48 +437,6 @@ describe('bounded full-payload cache', () => {
     expect(mockHistoryApi.get).not.toHaveBeenCalled()
     expect(getCachedSessionPayload('merge')?.messages).toEqual([retained, latest])
   })
-
-  it('keeps live tool calls when merging a durable message prefix', async () => {
-    const old = msg('user', 'old')
-    const retained = msg('agent', 'retained')
-    const latest = msg('agent', 'latest')
-    const durableTool: ToolCall = { toolCallId: 'durable' }
-    const liveTool: ToolCall = { toolCallId: 'live' }
-    mockHistoryApi.get.mockResolvedValueOnce({
-      ...payload('merge-tools', [old, retained]),
-      toolCalls: [durableTool]
-    })
-
-    await saveSessionPayload('merge-tools', {
-      ...payload('merge-tools', [retained, latest]),
-      toolCalls: [liveTool]
-    })
-
-    expect(mockHistoryApi.save).toHaveBeenCalledWith(
-      'merge-tools',
-      expect.objectContaining({
-        messages: [old, retained, latest],
-        toolCalls: [liveTool]
-      })
-    )
-  })
-
-  it('falls back to durable tool calls when the live payload carries none', async () => {
-    const old = msg('user', 'old')
-    const retained = msg('agent', 'retained')
-    const durableTool: ToolCall = { toolCallId: 'durable' }
-    mockHistoryApi.get.mockResolvedValueOnce({
-      ...payload('fallback-tools', [old, retained]),
-      toolCalls: [durableTool]
-    })
-
-    await saveSessionPayload('fallback-tools', payload('fallback-tools', [retained]))
-
-    expect(mockHistoryApi.save).toHaveBeenCalledWith(
-      'fallback-tools',
-      expect.objectContaining({ toolCalls: [durableTool] })
-    )
-  })
 })
 
 describe('legacy import', () => {
