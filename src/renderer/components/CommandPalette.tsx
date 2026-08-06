@@ -26,6 +26,7 @@ import {
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { getColorClasses } from '@/lib/colors'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import type { Project, ProjectColor } from '@/types/project'
 
@@ -264,7 +265,7 @@ export function CommandPalette({
             }
           ]
         : []),
-      ...(onSSHConnect && sshProfiles
+      ...(isTauriContext() && onSSHConnect && sshProfiles
         ? sshProfiles.map((profile) => ({
             id: `ssh-${profile.id}`,
             category: 'tools' as const,

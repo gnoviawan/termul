@@ -12,6 +12,7 @@
 import type { DirtyStatus } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { worktreeApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useProjectStore } from '@/stores/project-store'
 import type { WorktreeHealthStatus, WorktreeStatus } from '@/types/worktree-status'
 
@@ -65,6 +66,10 @@ async function pollWorktree(
   worktreeId: string,
   worktreePath: string
 ): Promise<WorktreeHealthStatus | null> {
+  // Web/remote mode: worktree dirty-status polling is desktop-only. Skip the
+  // facade call so the 2s/10s intervals do not produce `WEB_UNSUPPORTED`
+  // noise on every poll.
+  if (!isTauriContext()) return null
   try {
     const result = await worktreeApi.checkDirty(worktreePath)
     if (result.success && result.data) {

@@ -483,6 +483,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
         if (!watchResult.success) {
           useFileExplorerStore.getState().setRootPath(nextRootPath)
+          if (watchResult.code === 'WEB_UNSUPPORTED') {
+            // Web client: directory watching is unavailable. Treat as a soft
+            // no-op — the project switch still completes (file explorer
+            // works, just no live change events) without surfacing a load
+            // error to the user.
+            if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
+              filesystemApi.unwatchDirectory(previousWatchedRoot)
+            }
+            watchedRootPathRef.current = nextRootPath
+            prevProjectIdRef.current = activeProjectId
+            return
+          }
           useFileExplorerStore.getState().setRootLoadError({
             message: watchResult.error,
             code: watchResult.code
@@ -1569,15 +1581,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
               Create your first project to organize your terminals, snapshots, and commands
             </p>
-            {isTauriContext() && (
-              <button
-                type="button"
-                onClick={() => setIsNewProjectModalOpen(true)}
-                className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
-              >
-                Create Your First Project
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsNewProjectModalOpen(true)}
+              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+            >
+              Create Your First Project
+            </button>
           </motion.div>
         </div>
       ) : (
@@ -1780,6 +1790,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           canNewChat={Boolean(activeProject?.path)}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           onOpenGitChanges={() => setGitSheetOpen(true)}
+          onOpenGitHistory={() => handleAddGitHistoryTab()}
           onNewTerminal={() => handleAddTerminal(undefined)}
           onCloseTerminal={handleCloseTerminal}
           onRenameTerminal={renameTerminal}

@@ -28,6 +28,12 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+// Desktop test: pin isTauriContext() to true so the reconciler does not
+// early-return with WEB_UNSUPPORTED before reaching the worktree API.
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 // Shared reconciler (re-checks `git worktree list` and flips isGitRepo). Mocked so
 // tests can assert it is invoked and simulate the heal side-effect.
 vi.mock('@/hooks/use-projects-persistence', () => ({

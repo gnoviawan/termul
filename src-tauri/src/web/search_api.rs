@@ -15,9 +15,9 @@
 //! - logs at route boundaries via `tracing`.
 //!
 //! **Note:** the streaming search WS endpoint (`/search/ws`) is not yet
-//! implemented — the non-streaming `POST /search/content` covers the common
-//! case (Search panel uses it for one-shot queries). Streaming + cancellation
-//! via WS is tracked as a follow-up (bounded-scrollback + `Lossy` backpressure
+//! implemented. The non-streaming `POST /search/content` is wired but unused
+//! (the Search panel uses streaming, which returns `WEB_UNSUPPORTED` on web
+//! until the full transport lands — bounded-scrollback + `Lossy` backpressure
 //! per `terminal_ws.rs`).
 
 use std::collections::BTreeMap;

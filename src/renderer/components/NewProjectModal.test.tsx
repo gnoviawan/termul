@@ -269,4 +269,19 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
     })
     expect(onCreateProject.mock.calls[0][0]).toBe('GitProj')
   })
+
+  it('shows a session-scoped info note on web (persistence-gap truthfulness)', () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+    expect(
+      screen.getByText(/On the web client, this project is saved for this session only/i)
+    ).toBeInTheDocument()
+  })
+
+  it('hides the session-scoped note on desktop (isTauriContext true)', () => {
+    mockIsTauriContext.mockReturnValue(true)
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+    expect(
+      screen.queryByText(/On the web client, this project is saved for this session only/i)
+    ).not.toBeInTheDocument()
+  })
 })

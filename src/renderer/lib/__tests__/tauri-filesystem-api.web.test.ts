@@ -3,11 +3,13 @@
  *
  * The desktop path (`@tauri-apps/plugin-fs`) is covered by the sibling
  * `tauri-filesystem-api.test.ts` (which pins `isTauriContext()` to true).
- * This file pins it to FALSE and asserts the facade delegates the three
- * project-creation methods (`createDirectory`, `createFile`, `readDirectory`)
- * to `webServerFilesystem` — i.e. the fetch client that hits `/fs/*`. The
- * other fs methods (readFile, writeFile, deletePath, etc.) stay on their
- * desktop stubs and are intentionally out of scope (deferred to a later story).
+ * This file pins it to FALSE and asserts the facade delegates the
+ * server-backed methods (`createDirectory`, `createFile`, `writeFile`,
+ * `readDirectory`, `readFile`, `getFileInfo`, `deletePath`, `renameFile`,
+ * `copyFile`) to `webServerFilesystem` — i.e. the fetch client that hits
+ * `/fs/*`. Methods without a server transport (`watchDirectory`, streaming
+ * search start/cancel) return an explicit `WEB_UNSUPPORTED` result instead
+ * of false success or silent `invoke()` failure.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -169,6 +171,147 @@ describe('tauriFilesystemApi (web branch)', () => {
     expect(result.success).toBe(false)
     if (!result.success) {
       expect(result.code).toBe('NETWORK_ERROR')
+    }
+  })
+
+  it('getFileInfo delegates to webServerFilesystem (/fs/info) when !isTauriContext()', async () => {
+    const fileInfo = {
+      path: '/web/file.txt',
+      size: 100,
+      modifiedAt: 1234567890,
+      type: 'file',
+      isReadOnly: false,
+      isBinary: false
+    }
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: fileInfo }))
+
+    const result = await tauriFilesystemApi.getFileInfo('/web/file.txt')
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data).toEqual(fileInfo)
+    }
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/fs/info?path=${encodeURIComponent('/web/file.txt')}`,
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
+  it('getFileInfo returns directory metadata from /fs/info on web', async () => {
+    const fileInfo = {
+      path: '/web/dir',
+      size: 0,
+      modifiedAt: 1234567890,
+      type: 'directory',
+      isReadOnly: false,
+      isBinary: false
+    }
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: fileInfo }))
+
+    const result = await tauriFilesystemApi.getFileInfo('/web/dir')
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.type).toBe('directory')
+    }
+  })
+
+  it('getFileInfo propagates a missing-path failure (STAT_ERROR) on web', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ success: false, error: 'not found', code: 'STAT_ERROR' })
+    )
+
+    const result = await tauriFilesystemApi.getFileInfo('/web/missing')
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('STAT_ERROR')
+    }
+  })
+
+  it('writeFile delegates to webServerFilesystem (/fs/write) when !isTauriContext()', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }))
+
+    const result = await tauriFilesystemApi.writeFile('/web/existing.txt', 'new content')
+
+    expect(result.success).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/fs/write`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ path: '/web/existing.txt', content: 'new content' })
+      })
+    )
+  })
+
+  it('writeFile creates a new file via /fs/write on web', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }))
+
+    const result = await tauriFilesystemApi.writeFile('/web/new.txt', 'hello')
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data).toBeUndefined()
+    }
+  })
+
+  it('watchDirectory returns WEB_UNSUPPORTED on web (no false success)', async () => {
+    const result = await tauriFilesystemApi.watchDirectory('/web/proj')
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('WEB_UNSUPPORTED')
+      expect(result.error).toContain('not available')
+    }
+    // No fetch/invoke should be attempted.
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('searchContentStreamStart returns WEB_UNSUPPORTED on web (no invoke)', async () => {
+    const result = await tauriFilesystemApi.searchContentStreamStart(
+      'id1',
+      '/scope',
+      '/root',
+      'query'
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('WEB_UNSUPPORTED')
+    }
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('searchContentStreamCancel returns WEB_UNSUPPORTED on web', async () => {
+    const result = await tauriFilesystemApi.searchContentStreamCancel('id1')
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('WEB_UNSUPPORTED')
+    }
+  })
+
+  it('searchFileNamesStreamStart returns WEB_UNSUPPORTED on web (no invoke)', async () => {
+    const result = await tauriFilesystemApi.searchFileNamesStreamStart(
+      'id2',
+      '/scope',
+      '/root',
+      'query'
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('WEB_UNSUPPORTED')
+    }
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('searchFileNamesStreamCancel returns WEB_UNSUPPORTED on web', async () => {
+    const result = await tauriFilesystemApi.searchFileNamesStreamCancel('id2')
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.code).toBe('WEB_UNSUPPORTED')
     }
   })
 })

@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
@@ -406,6 +407,13 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   </div>
                 )}
               </div>
+
+              {!isTauriContext() && (
+                <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 leading-relaxed">
+                  On the web client, this project is saved for this session only. Host-side
+                  persistence requires a future update.
+                </p>
+              )}
             </div>
 
             {/* Footer */}

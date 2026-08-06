@@ -326,6 +326,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {
+      // Web/remote mode: route through the same-origin server (`GET /fs/info`).
+      if (!isTauriContext()) {
+        return webServerFilesystem.getFileInfo(filePath)
+      }
       try {
         const info = await stat(filePath)
         const modifiedAt = info.mtime?.getTime() ?? Date.now()
@@ -479,6 +483,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
       rootPath: string,
       query: string
     ) {
+      // Web/remote mode: streaming search transport (`/search/ws`) is not yet
+      // implemented — return an explicit unsupported result instead of
+      // invoking a Tauri-only command that silently fails.
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_content_stream',
@@ -498,6 +512,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async searchContentStreamCancel(searchId: string) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_content_cancel',
@@ -545,6 +566,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
       query: string,
       includeIgnored?: boolean
     ) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_stream',
@@ -576,6 +604,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async searchFileNamesStreamCancel(searchId: string) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_cancel',
@@ -657,6 +692,11 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async writeFile(filePath: string, content: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server (`POST /fs/write`,
+      // which truncates+overwrites — matches desktop `writeTextFile`).
+      if (!isTauriContext()) {
+        return webServerFilesystem.writeFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -735,11 +775,17 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async watchDirectory(dirPath: string): Promise<IpcResult<void>> {
-      // Web/remote mode: live file watchers are desktop-only (Tauri events).
-      // The mobile file explorer v1 re-fetches on action/refresh instead of
-      // subscribing to fs events, so watching is a no-op success on web.
+      // Web/remote mode: server-side directory watching (notify + WS/SSE event
+      // channel) is not yet implemented. Return an explicit unsupported result
+      // instead of false success — callers can branch on `code` and the
+      // mobile file explorer re-fetches on action/refresh instead of
+      // subscribing to fs events.
       if (!isTauriContext()) {
-        return { success: true, data: undefined }
+        return {
+          success: false,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Directory watching is not available in the web client'
+        }
       }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')

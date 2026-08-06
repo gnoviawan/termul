@@ -8,13 +8,14 @@ import { useThemePickerStore } from '@/stores/theme-picker-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
-const { platformState } = vi.hoisted(() => ({
-  platformState: { isMac: false }
+const { platformState, tauriRef } = vi.hoisted(() => ({
+  platformState: { isMac: false },
+  tauriRef: { current: true as boolean }
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
-  return { ...actual, isTauriContext: () => true }
+  return { ...actual, isTauriContext: () => tauriRef.current }
 })
 
 vi.mock('@/lib/platform', async () => {
@@ -503,6 +504,19 @@ describe('WorkspaceLayout - Empty States', () => {
       const button = screen.getByText('Create Your First Project')
       expect(button).toBeInTheDocument()
       expect(button.tagName).toBe('BUTTON')
+    })
+
+    it('shows the create-first-project CTA on web (isTauriContext false)', () => {
+      const prev = tauriRef.current
+      tauriRef.current = false
+      try {
+        renderWithRouter()
+        const button = screen.getByText('Create Your First Project')
+        expect(button).toBeInTheDocument()
+        expect(button.tagName).toBe('BUTTON')
+      } finally {
+        tauriRef.current = prev
+      }
     })
 
     it('should not show terminal-related elements when no projects', () => {
@@ -1141,6 +1155,43 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(syncCallsAfter).toBe(initialSyncCalls)
       consoleLogSpy.mockRestore()
+    })
+
+    it('treats watchDirectory WEB_UNSUPPORTED as a soft no-op on web (no rootLoadError)', async () => {
+      const prev = tauriRef.current
+      tauriRef.current = false
+      useFileExplorerStore.setState({ rootLoadError: null })
+      mockApi.filesystem.watchDirectory.mockResolvedValue({
+        success: false,
+        code: 'WEB_UNSUPPORTED',
+        error: 'Directory watching is not available in the web client'
+      })
+      try {
+        const projects = [createProject('a', '/workspace/a', 'blue')]
+        mockUseProjects.mockReturnValue(projects)
+        mockUseTerminals.mockReturnValue([])
+        mockUseAllTerminals.mockReturnValue([])
+        mockUseActiveTerminal.mockReturnValue(null)
+        mockUseActiveTerminalId.mockReturnValue('')
+        mockUseActiveProject.mockReturnValue(projects[0])
+        mockUseActiveProjectId.mockReturnValue('a')
+
+        renderWithRouter()
+
+        await waitFor(() => {
+          expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
+        })
+
+        // Give the async project-switch effect a tick to settle.
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // WEB_UNSUPPORTED must NOT set rootLoadError — the project switch
+        // completes (file explorer works, just no live change events).
+        expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
+      } finally {
+        tauriRef.current = prev
+        mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+      }
     })
   })
 })

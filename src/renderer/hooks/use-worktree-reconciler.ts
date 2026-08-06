@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { worktreeApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Worktree } from '@/types/project'
 
@@ -27,6 +28,10 @@ export function useWorktreeReconciler(projectId: string) {
   const { removeWorktree, updateProject } = useProjectActions()
 
   const reconcile = useCallback(async () => {
+    // Web/remote mode: worktree mutation/listing is desktop-only. Skip the
+    // facade calls so the 60s interval does not produce `WEB_UNSUPPORTED`
+    // noise on every project load.
+    if (!isTauriContext()) return
     const initial = useProjectStore.getState().projects.find((p) => p.id === projectId)
     if (!initial?.path) return
 

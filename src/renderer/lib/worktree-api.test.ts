@@ -6,6 +6,11 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args)
 }))
 
+// Desktop test: pin isTauriContext() to true so worktreeInvoke reaches invoke.
+vi.mock('./tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 // Import after mocking
 import { worktreeApi } from './worktree-api'
 

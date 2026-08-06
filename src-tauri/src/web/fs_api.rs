@@ -127,6 +127,23 @@ pub struct FileContentDto {
     pub modified_at: u64,
 }
 
+/// `GET /fs/info?path=...` response body. Mirrors the shared TS `FileInfo`
+/// contract (`{ path, size, modifiedAt, type, isReadOnly, isBinary }`) used by
+/// the renderer's `filesystemApi.getFileInfo`. `type` is `"file"` or
+/// `"directory"` (serialized as-is, matching the `r#type` field name). The
+/// desktop facade sets `isReadOnly: false` (Tauri plugin-fs does not expose
+/// it); the web route reports the real `metadata.permissions().readonly()`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileInfoDto {
+    pub path: String,
+    pub size: u64,
+    pub modified_at: u64,
+    pub r#type: String,
+    pub is_read_only: bool,
+    pub is_binary: bool,
+}
+
 /// `POST /fs/delete` body: `{ "path": "...", "recursive": true? }`.
 /// `recursive` defaults to `false`; directories require it to be `true`
 /// (mirrors `@tauri-apps/plugin-fs` `remove` semantics).
@@ -595,6 +612,87 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
     (StatusCode::OK, Json(body))
 }
 
+/// `GET /fs/info?path=...` — return filesystem metadata for a file or
+/// directory (the web equivalent of the desktop `getFileInfo` facade). Returns
+/// `{ success: true, data: FileInfo }` or `{ success: false, error, code }`
+/// where code is `PATH_TRAVERSAL` (explicit `..` component) or `STAT_ERROR`
+/// (missing path / io). A read route: intentionally NOT loopback-guarded,
+/// matching `/fs/read` so desktop-hosted LAN clients can inspect file
+/// properties for the editor/explorer.
+///
+/// `isBinary` is determined from a 512-byte sample (control bytes
+/// `0x00`-`0x08`) mirroring the renderer's `readBinarySample` +
+/// `isBinaryFile` regex and the `/fs/read` sample scan — so the web path
+/// agrees with desktop on which files the editor should refuse to open.
+pub async fn info(
+    State(_state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
+    let requested_path = q.path.clone();
+    let path = match resolve_request_path(Path::new(&q.path)) {
+        Ok(safe) => safe,
+        Err((msg, code)) => {
+            return (StatusCode::OK, Json(IpcBody::<FileInfoDto>::err(msg, code)));
+        }
+    };
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer) {
+        return (StatusCode::OK, Json(forbidden));
+    }
+    let result = tokio::task::spawn_blocking(move || -> Result<FileInfoDto, (String, &'static str)> {
+        let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "STAT_ERROR"))?;
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let is_dir = metadata.is_dir();
+        let size = metadata.len();
+        let is_read_only = metadata.permissions().readonly();
+        let is_binary = if is_dir {
+            false
+        } else {
+            // Binary detection: control bytes (0x00-0x08) in the first 512
+            // bytes — mirrors the renderer's `readBinarySample` +
+            // `isBinaryFile` regex and the `/fs/read` handler's sample scan.
+            // `take(512)` caps the read so large files are not fully loaded;
+            // `read_to_end` fills the buffer completely (no partial-read gap).
+            use std::io::Read;
+            match std::fs::File::open(&path) {
+                Ok(file) => {
+                    let mut buf = Vec::with_capacity(512);
+                    file.take(512)
+                        .read_to_end(&mut buf)
+                        .is_ok()
+                        && buf.iter().any(|&b| b <= 0x08)
+                }
+                Err(_) => false,
+            }
+        };
+        Ok(FileInfoDto {
+            path: requested_path,
+            size,
+            modified_at,
+            r#type: if is_dir {
+                "directory".to_string()
+            } else {
+                "file".to_string()
+            },
+            is_read_only,
+            is_binary,
+        })
+    })
+    .await
+    .map_err(|e| format!("info task failed: {e}"));
+    let body = match result {
+        Ok(Ok(info)) => IpcBody::ok(info),
+        Ok(Err((msg, code))) => IpcBody::<FileInfoDto>::err(msg, code),
+        Err(e) => IpcBody::<FileInfoDto>::err(format!("info task failed: {e}"), "STAT_ERROR"),
+    };
+    (StatusCode::OK, Json(body))
+}
+
 /// `POST /fs/delete` — delete a file or directory. `{ "path": "...",
 /// "recursive": true? }`. A non-recursive delete of a non-empty directory
 /// fails with `DELETE_ERROR` (mirrors `fs::remove_dir`). Loopback-guarded
@@ -926,6 +1024,7 @@ mod tests {
             .route("/fs/ls", axum::routing::get(ls))
             .route("/fs/browse", axum::routing::get(browse))
             .route("/fs/read", axum::routing::get(read))
+            .route("/fs/info", axum::routing::get(info))
             .route("/fs/delete", axum::routing::post(delete))
             .route("/fs/rename", axum::routing::post(rename))
             .route("/fs/copy", axum::routing::post(copy))
@@ -935,11 +1034,22 @@ mod tests {
     }
 
     async fn get_request(state: AppState, uri: &str) -> axum::http::Response<Body> {
+        get_request_from(state, uri, SocketAddr::from(([127, 0, 0, 1], 54321))).await
+    }
+
+    /// GET with an explicit peer address (for loopback-guard tests on read
+    /// routes like `/fs/info` that now apply `check_local_only`).
+    async fn get_request_from(
+        state: AppState,
+        uri: &str,
+        peer: SocketAddr,
+    ) -> axum::http::Response<Body> {
         test_router(state)
             .oneshot(
                 Request::builder()
                     .method("GET")
                     .uri(uri)
+                    .extension(ConnectInfo(peer))
                     .body(Body::empty())
                     .expect("build request"),
             )
@@ -1609,6 +1719,120 @@ mod tests {
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "oversized file must be refused before reading");
         assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
+    }
+
+    /// `/fs/info` returns metadata for an existing text file: size, modifiedAt,
+    /// `type:"file"`, `isBinary:false`.
+    #[tokio::test]
+    async fn info_returns_file_metadata() {
+        let root = TempDir::new("info-root");
+        let file = root.path().join("note.txt");
+        fs::write(&file, "hello world").expect("write file");
+        let uri = format!("/fs/info?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "info on existing file must succeed: {:?}", body.error);
+        let info = body.data.expect("FileInfo present");
+        assert_eq!(info.size, "hello world".len() as u64);
+        assert!(info.modified_at > 0, "modifiedAt must be populated");
+        assert_eq!(info.r#type, "file");
+        assert!(!info.is_binary, "text file must not be binary");
+    }
+
+    /// `/fs/info` returns metadata for a directory: `type:"directory"`,
+    /// `isBinary:false`, `size` from `fs::metadata`.
+    #[tokio::test]
+    async fn info_returns_directory_metadata() {
+        let root = TempDir::new("info-dir-root");
+        let dir_path = root.path().join("a-dir");
+        fs::create_dir_all(&dir_path).expect("mkdir");
+        let uri = format!("/fs/info?path={}", urlencoding(&dir_path.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "info on directory must succeed: {:?}", body.error);
+        let info = body.data.expect("FileInfo present");
+        assert_eq!(info.r#type, "directory");
+        assert!(!info.is_binary, "directory must not be binary");
+    }
+
+    /// `/fs/info` detects a binary file (control bytes 0x00-0x08 in the first
+    /// 512 bytes) — mirrors the renderer's `isBinaryFile` + the `/fs/read`
+    /// sample scan.
+    #[tokio::test]
+    async fn info_detects_binary_file() {
+        let root = TempDir::new("info-bin-root");
+        let file = root.path().join("blob.bin");
+        fs::write(&file, [0x00u8, 0x01, 0x02, 0x03]).expect("write binary");
+        let uri = format!("/fs/info?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "info on binary file must succeed");
+        assert!(body.data.expect("FileInfo").is_binary, "binary file must be flagged");
+    }
+
+    /// `/fs/info` rejects explicit `..` traversal components (defense-in-depth,
+    /// matches `/fs/read`).
+    #[tokio::test]
+    async fn info_rejects_traversal_sequence_in_path() {
+        let root = TempDir::new("info-trav-root");
+        let inside = root.path().join("sub");
+        fs::create_dir_all(&inside).expect("mkdir inside");
+        let traversal = inside.join("..").join("..").join("etc");
+        let uri = format!("/fs/info?path={}", urlencoding(&traversal.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal must be refused");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+    }
+
+    /// `/fs/info` returns a stable `STAT_ERROR` for a missing path (no throw
+    /// past the handler).
+    #[tokio::test]
+    async fn info_returns_stat_error_for_missing_path() {
+        let root = TempDir::new("info-missing-root");
+        let missing = root.path().join("does-not-exist");
+        let uri = format!("/fs/info?path={}", urlencoding(&missing.to_string_lossy()));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "missing path must fail");
+        assert_eq!(body.code.as_deref(), Some("STAT_ERROR"));
+    }
+
+    /// `/fs/info` echoes the requested path verbatim (not the resolved
+    /// absolute path) so the client receives the same `path` it sent —
+    /// matching desktop `getFileInfo` and avoiding host-path leakage.
+    #[tokio::test]
+    async fn info_echoes_requested_path_not_resolved() {
+        let root = TempDir::new("info-path-root");
+        let file = root.path().join("note.txt");
+        fs::write(&file, "hello").expect("write file");
+        let requested = file.to_string_lossy().to_string();
+        let uri = format!("/fs/info?path={}", urlencoding(&requested));
+        let resp = get_request(test_state_with_root(root.path()), &uri).await;
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(body.success);
+        assert_eq!(body.data.expect("FileInfo").path, requested);
+    }
+
+    /// `/fs/info` applies the loopback guard (defense-in-depth for reads).
+    #[tokio::test]
+    async fn info_refused_from_non_loopback_peer() {
+        let root = TempDir::new("info-loopback-root");
+        let file = root.path().join("note.txt");
+        fs::write(&file, "hello").expect("write file");
+        let uri = format!("/fs/info?path={}", urlencoding(&file.to_string_lossy()));
+        let resp = get_request_from(
+            test_state_with_root(root.path()),
+            &uri,
+            SocketAddr::from(([10, 0, 0, 5], 54321)),
+        )
+        .await;
+        let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback peer must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
     }
 
     /// `/fs/delete` removes a file inside the project root.

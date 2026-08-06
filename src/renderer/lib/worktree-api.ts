@@ -9,6 +9,7 @@ import type {
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import type { Worktree } from '@/types/project'
+import { isTauriContext } from './tauri-runtime'
 
 export interface MergePreviewInfo {
   direction: string
@@ -32,13 +33,34 @@ export interface MergePreviewInfo {
   hasAutoResolvable: boolean
 }
 
+/**
+ * Invoke a worktree Tauri command, returning the `IpcResult<T>` shape callers
+ * expect. On web/remote mode (`!isTauriContext()`), returns an explicit
+ * `WEB_UNSUPPORTED` result instead of letting the stubbed `invoke()` reject
+ * with `tauriUnavailable` — worktree mutation is desktop-only until a
+ * separate product/security decision.
+ */
+async function worktreeInvoke<T>(
+  command: string,
+  args?: Record<string, unknown>
+): Promise<IpcResult<T>> {
+  if (!isTauriContext()) {
+    return {
+      success: false,
+      error: 'Worktrees are not available in the web client',
+      code: 'WEB_UNSUPPORTED'
+    }
+  }
+  return invoke<IpcResult<T>>(command, args)
+}
+
 export const worktreeApi = {
   /**
    * List all worktrees for a git repo at the given path.
    * Filters out bare worktrees and detached-HEAD worktrees.
    */
   list: (projectPath: string): Promise<IpcResult<WorktreeInfo[]>> =>
-    invoke('worktree_list', { projectPath }),
+    worktreeInvoke<WorktreeInfo[]>('worktree_list', { projectPath }),
 
   /**
    * Create a new worktree.
@@ -53,7 +75,7 @@ export const worktreeApi = {
     isNewBranch: boolean
     startRef?: string
     targetPath?: string
-  }): Promise<IpcResult<WorktreeInfo>> => invoke('worktree_create', params),
+  }): Promise<IpcResult<WorktreeInfo>> => worktreeInvoke<WorktreeInfo>('worktree_create', params),
 
   /**
    * Remove a worktree. Uses --force if force=true.
@@ -62,20 +84,20 @@ export const worktreeApi = {
    * metadata can be located.
    */
   remove: (projectPath: string, worktreePath: string, force: boolean): Promise<IpcResult<void>> =>
-    invoke('worktree_remove', { projectPath, worktreePath, force }),
+    worktreeInvoke<void>('worktree_remove', { projectPath, worktreePath, force }),
 
   /**
    * List local and remote branches for a git repo.
    */
   branches: (projectPath: string): Promise<IpcResult<BranchInfo[]>> =>
-    invoke('worktree_branches', { projectPath }),
+    worktreeInvoke<BranchInfo[]>('worktree_branches', { projectPath }),
 
   /**
    * Check dirty status for a worktree checkout.
    * Returns summary of uncommitted changes.
    */
   checkDirty: (worktreePath: string): Promise<IpcResult<DirtyStatus>> =>
-    invoke('worktree_check_dirty', { worktreePath }),
+    worktreeInvoke<DirtyStatus>('worktree_check_dirty', { worktreePath }),
 
   /**
    * Remove all Termul-managed worktrees for a project.
@@ -86,7 +108,7 @@ export const worktreeApi = {
     projectPath: string,
     worktrees: Worktree[]
   ): Promise<IpcResult<RemoveResult[]>> =>
-    invoke('worktree_remove_all_managed', {
+    worktreeInvoke<RemoveResult[]>('worktree_remove_all_managed', {
       projectPath,
       worktreesJson: JSON.stringify(worktrees)
     }),
@@ -96,7 +118,7 @@ export const worktreeApi = {
    * Each entry includes whether the directory exists in the project root.
    */
   parseGitignore: (projectPath: string): Promise<IpcResult<GitignoreDir[]>> =>
-    invoke('worktree_parse_gitignore', { projectPath }),
+    worktreeInvoke<GitignoreDir[]>('worktree_parse_gitignore', { projectPath }),
 
   /**
    * Create symlinks from project root directories into a worktree.
@@ -107,7 +129,7 @@ export const worktreeApi = {
     worktreePath: string,
     symlinkDirs: string[]
   ): Promise<IpcResult<SymlinkResult[]>> =>
-    invoke('worktree_create_symlinks', {
+    worktreeInvoke<SymlinkResult[]>('worktree_create_symlinks', {
       projectPath,
       worktreePath,
       symlinkDirs: JSON.stringify(symlinkDirs)
@@ -122,7 +144,7 @@ export const worktreeApi = {
     worktreePath: string,
     symlinkDirs: string[]
   ): Promise<IpcResult<SymlinkResult[]>> =>
-    invoke('worktree_ensure_symlinks', {
+    worktreeInvoke<SymlinkResult[]>('worktree_ensure_symlinks', {
       projectPath,
       worktreePath,
       symlinkDirs: JSON.stringify(symlinkDirs)
@@ -133,13 +155,13 @@ export const worktreeApi = {
    * The worktree is recoverable until the 30-day retention expires.
    */
   archive: (projectPath: string, worktreePath: string): Promise<IpcResult<void>> =>
-    invoke('worktree_archive', { projectPath, worktreePath }),
+    worktreeInvoke<void>('worktree_archive', { projectPath, worktreePath }),
 
   /**
    * Restore an archived worktree back to its original location.
    */
   restore: (projectPath: string, archivePath: string): Promise<IpcResult<void>> =>
-    invoke('worktree_restore', { projectPath, archivePath }),
+    worktreeInvoke<void>('worktree_restore', { projectPath, archivePath }),
 
   /**
    * Generate a merge preview for a worktree against a target branch.
@@ -148,11 +170,11 @@ export const worktreeApi = {
     worktreePath: string,
     targetBranch: string
   ): Promise<IpcResult<MergePreviewInfo>> =>
-    invoke('worktree_merge_preview', { worktreePath, targetBranch }),
+    worktreeInvoke<MergePreviewInfo>('worktree_merge_preview', { worktreePath, targetBranch }),
 
   /**
    * Execute a merge from the worktree's current branch to target_branch.
    */
   mergeExecute: (worktreePath: string, targetBranch: string): Promise<IpcResult<string>> =>
-    invoke('worktree_merge_execute', { worktreePath, targetBranch })
+    worktreeInvoke<string>('worktree_merge_execute', { worktreePath, targetBranch })
 }

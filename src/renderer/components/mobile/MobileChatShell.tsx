@@ -3,6 +3,7 @@ import {
   FolderGit2,
   FolderTree,
   GitBranch,
+  History,
   Menu,
   MessageSquarePlus,
   Pencil,
@@ -44,6 +45,8 @@ interface MobileChatShellProps {
   onOpenCommandPalette?: () => void
   /** Opens the Git Changes sheet (mounted in WorkspaceLayout mobile branch). */
   onOpenGitChanges?: () => void
+  /** Opens a git history tab in the active pane (desktop entry mirrors this). */
+  onOpenGitHistory?: () => void
   onNewTerminal?: () => void
   onCloseTerminal?: (terminalId: string, tabId: string) => void
   onRenameTerminal?: (terminalId: string, name: string) => void
@@ -61,6 +64,7 @@ export function MobileChatShell({
   canNewChat = false,
   onOpenCommandPalette,
   onOpenGitChanges,
+  onOpenGitHistory,
   onNewTerminal,
   onCloseTerminal,
   onRenameTerminal,
@@ -325,6 +329,22 @@ export function MobileChatShell({
             >
               <Camera size={16} />
             </Button>
+            {!isTauriContext() && onOpenGitHistory && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0"
+                aria-label="Git history"
+                disabled={!activeProject?.path}
+                onClick={() => {
+                  closeDrawer()
+                  onOpenGitHistory()
+                }}
+              >
+                <History size={16} />
+              </Button>
+            )}
           </div>
 
           <div className="border-b border-border/60 p-2">

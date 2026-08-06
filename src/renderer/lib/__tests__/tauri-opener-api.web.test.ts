@@ -5,14 +5,14 @@
  * `@tauri-apps/plugin-opener`'s `openUrl(url)`; web/remote calls
  * `window.open(url, '_blank', 'noopener')`. The other two methods
  * (`openWithExternalApp`, `revealInFileManager`) have no browser equivalent
- * and stay desktop-only — they call the Tauri plugin in both modes (the web
- * build's stubbed plugin throws `tauriUnavailable`, which the methods wrap
- * into an `IpcResult` error).
+ * and return an explicit `WEB_UNSUPPORTED` result on web — they never reach
+ * the stubbed plugin (which would throw `tauriUnavailable`).
  *
  * This file asserts, per the `log-api.test.ts` dual-branch pattern, that:
  * - the WEB branch of `openUrlWithSystemBrowser` calls `window.open` and NOT `openUrl`
  * - the DESKTOP branch calls `openUrl` and NOT `window.open`
- * - `openWithExternalApp`/`revealInFileManager` call the Tauri plugin in both modes
+ * - `openWithExternalApp`/`revealInFileManager` return `WEB_UNSUPPORTED` on web
+ *   (no plugin call) and succeed on desktop (plugin call)
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -120,7 +120,7 @@ describe('openerApi.openUrlWithSystemBrowser (web vs desktop branch)', () => {
   })
 })
 
-describe('openWithExternalApp (no web branch — desktop-only)', () => {
+describe('openWithExternalApp (web branch: WEB_UNSUPPORTED)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockWindowOpen.mockReset()
@@ -131,18 +131,18 @@ describe('openWithExternalApp (no web branch — desktop-only)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('web: still calls the Tauri plugin (no web branch)', async () => {
+  it('web: returns WEB_UNSUPPORTED without calling the Tauri plugin', async () => {
     mockIsTauriContext.mockReturnValue(false)
-    mockOpenPath.mockRejectedValue(new Error('unavailable in web build'))
 
     const result = await openerApi.openWithExternalApp(PATH)
 
-    expect(mockOpenPath).toHaveBeenCalledWith(PATH)
     expect(result.success).toBe(false)
     if (!result.success) {
-      expect(result.code).toBe('OPEN_ERROR')
+      expect(result.code).toBe('WEB_UNSUPPORTED')
     }
-    // Must NOT use window.open — no browser equivalent for "open with external app".
+    // Must NOT call the stubbed plugin (which would throw tauriUnavailable).
+    expect(mockOpenPath).not.toHaveBeenCalled()
+    // Must NOT use window.open — no browser equivalent.
     expect(mockWindowOpen).not.toHaveBeenCalled()
   })
 
@@ -157,7 +157,7 @@ describe('openWithExternalApp (no web branch — desktop-only)', () => {
   })
 })
 
-describe('revealInFileManager (no web branch — desktop-only)', () => {
+describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockWindowOpen.mockReset()
@@ -168,17 +168,16 @@ describe('revealInFileManager (no web branch — desktop-only)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('web: still calls the Tauri plugin (no web branch)', async () => {
+  it('web: returns WEB_UNSUPPORTED without calling the Tauri plugin', async () => {
     mockIsTauriContext.mockReturnValue(false)
-    mockRevealItemInDir.mockRejectedValue(new Error('unavailable in web build'))
 
     const result = await openerApi.revealInFileManager(PATH)
 
-    expect(mockRevealItemInDir).toHaveBeenCalledWith(PATH)
     expect(result.success).toBe(false)
     if (!result.success) {
-      expect(result.code).toBe('REVEAL_ERROR')
+      expect(result.code).toBe('WEB_UNSUPPORTED')
     }
+    expect(mockRevealItemInDir).not.toHaveBeenCalled()
     expect(mockWindowOpen).not.toHaveBeenCalled()
   })
 

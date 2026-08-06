@@ -9,8 +9,8 @@
  * `window.open(url, '_blank', 'noopener')` so the "View on GitHub" button in
  * `WhatsNewModal` works in a browser. The other two methods
  * (`openWithExternalApp`, `revealInFileManager`) have no browser equivalent
- * and stay desktop-only — they reject when called on web (the stubbed plugin
- * throws `tauriUnavailable`).
+ * and return an explicit `WEB_UNSUPPORTED` result when called on web — they
+ * never reach the stubbed plugin (which would throw `tauriUnavailable`).
  */
 
 import type { IpcResult } from '@shared/types/ipc.types'
@@ -27,6 +27,13 @@ export interface OpenerApi {
 function createTauriOpenerApi(): OpenerApi {
   return {
     async openWithExternalApp(path: string): Promise<IpcResult<void>> {
+      if (!isTauriContext()) {
+        return {
+          success: false,
+          error: 'Opening with external apps is not available in the web client',
+          code: 'WEB_UNSUPPORTED'
+        }
+      }
       try {
         await openPath(path)
         return { success: true, data: undefined }
@@ -73,6 +80,13 @@ function createTauriOpenerApi(): OpenerApi {
     },
 
     async revealInFileManager(path: string): Promise<IpcResult<void>> {
+      if (!isTauriContext()) {
+        return {
+          success: false,
+          error: 'Revealing in file manager is not available in the web client',
+          code: 'WEB_UNSUPPORTED'
+        }
+      }
       try {
         await revealItemInDir(path)
         return { success: true, data: undefined }

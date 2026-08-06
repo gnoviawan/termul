@@ -18,6 +18,7 @@ import type {
   DetectedShells,
   DirectoryEntry,
   FileContent,
+  FileInfo,
   GitCommit,
   GitCommitContext,
   GitStashInfo,
@@ -108,9 +109,11 @@ async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
 }
 
 /**
- * Filesystem ops routed to `termul-server` (`/fs/*`). Only the methods project
- * creation touches are implemented; other `FilesystemApi` methods stay on their
- * desktop-only stubs in web mode (deferred to a later story).
+ * Filesystem ops routed to `termul-server` (`/fs/*`). The methods project
+ * creation, file editing, and file inspection touch are implemented. Streaming
+ * search (`/search/ws`) and directory watching (server-side `notify` + event
+ * channel) are not yet implemented on the server; the renderer facade returns
+ * `WEB_UNSUPPORTED` for those (see `tauri-filesystem-api.ts`).
  */
 export const webServerFilesystem = {
   async createDirectory(dirPath: string): Promise<IpcResult<void>> {
@@ -118,6 +121,10 @@ export const webServerFilesystem = {
   },
 
   async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
+    return postJson<void>('/fs/write', { path: filePath, content })
+  },
+
+  async writeFile(filePath: string, content: string): Promise<IpcResult<void>> {
     return postJson<void>('/fs/write', { path: filePath, content })
   },
 
@@ -129,6 +136,11 @@ export const webServerFilesystem = {
   async readFile(filePath: string): Promise<IpcResult<FileContent>> {
     const encoded = encodeURIComponent(filePath)
     return getJson<FileContent>(`/fs/read?path=${encoded}`)
+  },
+
+  async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {
+    const encoded = encodeURIComponent(filePath)
+    return getJson<FileInfo>(`/fs/info?path=${encoded}`)
   },
 
   async deletePath(path: string, options?: { recursive?: boolean }): Promise<IpcResult<void>> {

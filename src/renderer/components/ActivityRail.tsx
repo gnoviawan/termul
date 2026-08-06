@@ -13,6 +13,7 @@ import { TermulMark } from '@/components/TermulMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 
 const railButtonClass =
@@ -171,13 +172,20 @@ export function ActivityRail({
           void handleToggleSSHPanel(e)
         }}
         className={railButtonClass}
-        title="Toggle SSH panel"
+        title={isTauriContext() ? 'Toggle SSH panel' : 'SSH is desktop-only'}
         aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
         aria-pressed={isSSHPanelVisible}
+        disabled={!isTauriContext()}
       >
         <Network
           size={18}
-          className={isSSHPanelVisible ? 'text-foreground' : 'text-muted-foreground'}
+          className={
+            isSSHPanelVisible
+              ? 'text-foreground'
+              : isTauriContext()
+                ? 'text-muted-foreground'
+                : 'text-muted-foreground/40'
+          }
         />
       </button>
 

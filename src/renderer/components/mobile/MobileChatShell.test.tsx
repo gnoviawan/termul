@@ -323,4 +323,54 @@ describe('MobileChatShell', () => {
     // The drawer closes after navigating.
     expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
   })
+
+  it('hides the Git history button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+    // Desktop never shows the mobile Git History entry (the ActivityRail owns
+    // it there). The drawer button must not leak into the mobile shell.
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    expect(screen.queryByLabelText('Git history')).not.toBeInTheDocument()
+  })
+
+  it('mounts the Git history trigger in web mode and invokes onOpenGitHistory', () => {
+    tauriRef.current = false
+    const onOpenGitHistory = vi.fn()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={onOpenGitHistory}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    const btn = screen.getByLabelText('Git history')
+    expect(btn).not.toBeDisabled()
+    fireEvent.click(btn)
+    expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
+    // The drawer closes after invoking the handler.
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('disables the Git history button when no active project path', () => {
+    tauriRef.current = false
+    projectRef.current = { id: 'p1', name: 'Demo' }
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    expect(screen.getByLabelText('Git history')).toBeDisabled()
+  })
 })

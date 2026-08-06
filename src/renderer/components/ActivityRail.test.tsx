@@ -26,6 +26,14 @@ vi.mock('@/lib/platform', () => ({
   }
 }))
 
+// Mutable: defaults to desktop so existing tests pass. Web-mode tests set
+// this to false to verify the SSH rail button's disabled-with-reason gate.
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return {
@@ -202,5 +210,18 @@ describe('ActivityRail', () => {
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith('persist failed')
     })
+  })
+
+  it('disables the SSH rail button with a desktop-only reason on web', () => {
+    const prev = tauriRef.current
+    tauriRef.current = false
+    try {
+      renderRail()
+      const sshButton = screen.getByRole('button', { name: /SSH/i })
+      expect(sshButton).toBeDisabled()
+      expect(sshButton).toHaveAttribute('title', 'SSH is desktop-only')
+    } finally {
+      tauriRef.current = prev
+    }
   })
 })
