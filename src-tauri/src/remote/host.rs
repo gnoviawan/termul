@@ -296,12 +296,11 @@ impl RemoteServerState {
             // file-backed `acp::project_registry` is VPS-mode-only.
             projects_file: None,
             sessions_dir: None,
-            // CAP-5 / Story 5: the desktop shared-live host threads its own
-            // `WorkspaceManifestService` (opened under
-            // `<app_data_dir>/workspace-manifests` in `lib.rs`) through to
-            // `serve_router` so the web/remote client can read/write a
-            // project's manifest through the three `/workspace/*` routes.
-            // `None` degrades to fresh-only mode (no host store attached).
+            // CAP-5 / Story 5: this path-override field is standalone-only.
+            // The desktop shared-live host passes its already-opened
+            // `WorkspaceManifestService` directly to `serve_router` (see the
+            // `workspace_manifest` argument below), so no path is resolved
+            // from the config here — `None` degrades nothing on this path.
             workspace_manifests_dir: None,
         };
 

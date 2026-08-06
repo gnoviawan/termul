@@ -219,7 +219,16 @@ beforeEach(() => {
   mockGetManifest.mockReset()
   mockGetManifest.mockResolvedValue({ success: true, data: null })
   mockWriteManifest.mockReset()
+  // Re-arm: Vitest 4 `mockReset` clears `mockResolvedValue`, leaving the mock
+  // returning `undefined` — tests that exercise the manifest-write path would
+  // otherwise see a silent failure. Restore the default success payload
+  // (mirrors the hoisted definition above).
+  mockWriteManifest.mockResolvedValue({
+    success: true,
+    data: { status: 'updated', revision: 1, updatedAt: 1 }
+  })
   mockDeleteManifest.mockReset()
+  mockDeleteManifest.mockResolvedValue({ success: true, data: undefined })
   mockLogFrontendError.mockReset()
   mockSetManifestRestoreInProgress.mockReset()
 

@@ -1803,6 +1803,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
         >
           <PaneDndProvider>
             <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+              {/* Conflict banner parity with the desktop shell (Epic 7): a
+               * mobile client with a pending manifest conflict must be able to
+               * reload/overwrite/dismiss it, not just desktop. */}
+              <WorkspaceConflictBanner />
               {workspaceMain}
             </main>
           </PaneDndProvider>

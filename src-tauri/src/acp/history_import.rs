@@ -33,10 +33,17 @@ fn load_imported(persistence: &SessionPersistence) -> HashSet<String> {
         Ok(bytes) => bytes,
         Err(_) => return HashSet::new(),
     };
-    serde_json::from_slice::<Vec<String>>(&bytes)
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    match serde_json::from_slice::<Vec<String>>(&bytes) {
+        Ok(ids) => ids.into_iter().collect(),
+        Err(error) => {
+            // A corrupt/truncated ledger is indistinguishable from a missing
+            // file (empty set), which loses deletion finality for imported
+            // sessions (the next import resurrects deleted ones). Surface the
+            // loss so it is visible rather than silent.
+            log::warn!("[acp-history] legacy-import ledger unreadable: {error}");
+            HashSet::new()
+        }
+    }
 }
 
 fn persist_imported(persistence: &SessionPersistence, imported: &HashSet<String>) {
@@ -156,15 +163,6 @@ async fn import_session(
         .await
         .map_err(|error| error.to_string())?;
 
-    for record in synthesize_records(session_id, &agent_id, &messages) {
-        persistence
-            .enqueue_event(record)
-            .map_err(|error| error.to_string())?;
-    }
-    persistence
-        .flush_session(session_id)
-        .await
-        .map_err(|error| error.to_string())?;
     // Imported sessions are archives: the live agent (if any died with the old
     // renderer) is not attached. `Error` survives; every other historical
     // status settles to `Closed` (restart semantics).
@@ -173,10 +171,31 @@ async fn import_session(
     } else {
         PersistedSessionStatus::Closed
     };
-    persistence
-        .finalize_session(session_id, final_status)
-        .await
-        .map_err(|error| error.to_string())
+    let written = async {
+        for record in synthesize_records(session_id, &agent_id, &messages) {
+            persistence
+                .enqueue_event(record)
+                .map_err(|error| error.to_string())?;
+        }
+        persistence
+            .flush_session(session_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        persistence
+            .finalize_session(session_id, final_status)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    if written.is_err() {
+        // Roll back the registration: a half-written session would otherwise
+        // satisfy the catalog-membership guard (`persistence.metadata(&id)
+        // .is_ok()`) on every later startup and be skipped forever, leaving a
+        // truncated, never-finalized transcript that no retry can repair.
+        // Dropping it lets the next startup retry the import cleanly.
+        let _ = persistence.delete_session(session_id).await;
+    }
+    written
 }
 
 /// Fold a legacy renderer `ChatMessage[]` into synthetic durable records.

@@ -398,13 +398,23 @@ export function toProjectSummaries(
   projects: Project[],
   defaultProjectId: string
 ): ProjectSummary[] {
+  // Derive the host default from each project's stored `isDefault` flag — NOT
+  // from `defaultProjectId`. At the autosave call site `defaultProjectId` is
+  // `state.activeProjectId`, but the active (per-connection) project and the
+  // host default are distinct: `handleSetDefault` flips the stored flags while
+  // `activeProjectId` still points at the switch target. Deriving from
+  // `activeProjectId` here would re-broadcast the active project as the host
+  // default and clobber an explicit `set_default_project`. Fall back to
+  // `defaultProjectId` only when no project carries a stored flag (legacy
+  // snapshots / initial load where the flag was never set).
+  const hasStoredDefault = projects.some((p) => p.isDefault === true)
   return projects.map((p) => ({
     id: p.id,
     name: p.name,
     color: p.color,
     path: p.path ?? null,
     isArchived: p.isArchived ?? false,
-    isDefault: p.id === defaultProjectId
+    isDefault: hasStoredDefault ? p.isDefault === true : p.id === defaultProjectId
   }))
 }
 

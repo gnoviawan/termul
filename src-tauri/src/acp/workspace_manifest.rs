@@ -445,10 +445,10 @@ impl WorkspaceManifestService {
                     reason: "project_id contains ':' (Windows reserved)".to_string(),
                 });
             }
-            // DOS device name check (case-insensitive, exact match —
-            // `CON.txt` is also reserved on Windows, but we already reject
-            // `.txt`-suffixed ids via the manifest-file-name collision check
-            // below; the bare device name is the dangerous case).
+            // DOS device name check (case-insensitive, exact match). `CON.txt`
+            // is also reserved on Windows, but every id is suffixed with
+            // `.json` here (see the `format!` below), so only the bare device
+            // name is the dangerous case this guard must reject.
             let upper = project_id.to_ascii_uppercase();
             let reserved = [
                 "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
@@ -743,10 +743,29 @@ impl WorkspaceManifestService {
                     "delete task panicked: {error}"
                 )))
             })??;
-        // Patch 3: evict the lock entry on a successful delete so the map
-        // does not grow unboundedly. A failed delete (e.g. permission error)
-        // does NOT evict — the lock stays so a retry still serializes.
-        self.locks.lock().remove(project_id);
+        // Evict the lock entry on a successful delete so the map does not grow
+        // unboundedly. A failed delete (e.g. permission error) does NOT evict —
+        // the lock stays so a retry still serializes.
+        //
+        // Evict ONLY when this guard holds the last reference besides the map
+        // entry itself. A waiter that already cloned the `Arc` (via
+        // `project_lock`) would otherwise keep using the removed lock while a
+        // fresh caller creates a second `Arc<TokioMutex>`, allowing two
+        // concurrent writers on the same project (both read revision N, both
+        // write N+1, one update silently lost). `<= 2` = the map entry +
+        // `delete`'s local `lock` binding; any cloned waiter makes it >= 3.
+        // The check+remove run under `self.locks` (the std mutex that gates
+        // every `project_lock` clone), so the count is stable across the
+        // check — no TOCTOU window.
+        {
+            let mut locks = self.locks.lock();
+            if locks
+                .get(project_id)
+                .is_some_and(|entry| Arc::strong_count(entry) <= 2)
+            {
+                locks.remove(project_id);
+            }
+        }
         log::info!("[workspace-manifest] delete project_id={}", project_id);
         Ok(())
     }

@@ -11,7 +11,9 @@
 //! Carries NO env-var values — [`ProjectSummary`] redacts-by-omission (frozen
 //! constraint). Only the identity/display fields a project switcher needs.
 
-use axum::extract::State;
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -97,8 +99,19 @@ pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
 /// Body: `{ "projectId": "<id>" }`.
 pub async fn set_default_project(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SetDefaultProjectRequest>,
 ) -> impl IntoResponse {
+    // Loopback-only guard — this route mutates host state (persists the default
+    // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
+    // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
+    // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
+    if !peer.ip().is_loopback() {
+        return Json(IpcBody::<()>::err(
+            format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
+            "FORBIDDEN",
+        ));
+    }
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).
     if state.registry.switch_context(&project_id).is_none() {
@@ -197,7 +210,9 @@ mod tests {
     use crate::web::sink::WsRelaySink;
     use crate::web::test_pty_manager;
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -503,6 +518,7 @@ mod tests {
                     .method("POST")
                     .uri("/projects/default")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::from(
                         serde_json::json!({ "projectId": "p-2" }).to_string(),
                     ))
@@ -547,6 +563,7 @@ mod tests {
                         .method("POST")
                         .uri("/projects/default")
                         .header("content-type", "application/json")
+                        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                         .body(Body::from(
                             serde_json::json!({ "projectId": bad }).to_string(),
                         ))
@@ -626,6 +643,7 @@ mod tests {
                     .method("POST")
                     .uri("/projects/default")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::from(
                         serde_json::json!({ "projectId": "p-2" }).to_string(),
                     ))
@@ -671,6 +689,7 @@ mod tests {
                     .method("POST")
                     .uri("/projects/default")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::from(
                         serde_json::json!({ "projectId": "missing" }).to_string(),
                     ))
@@ -688,5 +707,49 @@ mod tests {
         assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
 
         cleanup(&dir);
+    }
+
+    /// `POST /projects/default` from a non-loopback peer → `FORBIDDEN`. The
+    /// route mutates host state (persists + broadcasts), so a LAN client on a
+    /// `0.0.0.0` bind must be rejected before any mutation (security parity
+    /// with the fs/git/workspace write routes).
+    #[tokio::test]
+    async fn set_default_project_rejects_non_loopback_peer() {
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![summary("p-1", Some("/a"), false, true)],
+            Some("p-1".to_string()),
+        );
+        let app = axum::Router::new()
+            .route("/projects/default", axum::routing::post(set_default_project))
+            .with_state(state_with(Arc::clone(&registry)));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects/default")
+                    .header("content-type", "application/json")
+                    // A LAN peer (10.0.0.5), not loopback.
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({ "projectId": "p-1" }).to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
+        assert!(!parsed.success, "non-loopback peer must be rejected");
+        assert_eq!(parsed.code.as_deref(), Some("FORBIDDEN"));
+        // The host default is untouched.
+        assert_eq!(
+            registry.snapshot().default_project_id.as_deref(),
+            Some("p-1")
+        );
     }
 }

@@ -153,6 +153,14 @@ export class WebTerminalClient {
             tracker.disconnected = true
             continue
           }
+          // CAP-3: capture the credential this re-attach is presenting. A
+          // rotate (`severClaim`) that completes while this request is in
+          // flight installs a FRESH claim; the in-flight attach then resolves
+          // with the generic UNAUTHORIZED for the OLD claim. Clearing
+          // unconditionally would discard the fresh claim and strand the
+          // terminal (valid lease held but unattachable). Only clear when the
+          // tracker still holds the SAME credential this attach presented.
+          const presentedClaim = tracker.claim
           void this.request('attach', {
             terminalId,
             claim: tracker.claim,
@@ -166,9 +174,12 @@ export class WebTerminalClient {
               // Server rejection (single generic UNAUTHORIZED — the host never
               // distinguishes terminal-gone from credential-gone): the lease is
               // invalid/rotated/revoked or the terminal no longer exists. Drop
-              // the credential and stop re-presenting it.
-              tracker.claim = undefined
-              tracker.disconnected = true
+              // the credential and stop re-presenting it — but ONLY when a
+              // newer claim has not superseded it in the meantime.
+              if (tracker.claim === presentedClaim) {
+                tracker.claim = undefined
+                tracker.disconnected = true
+              }
             }
             // NETWORK_ERROR keeps the claim for the next reconnect attempt.
           })
@@ -214,6 +225,14 @@ export class WebTerminalClient {
       tracker.disconnected = true
       return { success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }
     }
+    // Snapshot the claim held at request time. A rotate (`severClaim`) that
+    // completes while this request is in flight installs a FRESH claim; the
+    // in-flight attach then resolves with the generic UNAUTHORIZED for the
+    // OLD credential. Clearing unconditionally would discard the fresh claim
+    // and strand the terminal (valid lease held but unattachable). On
+    // rejection, clear ONLY when `tracker.claim` is unchanged since the
+    // snapshot — a newer claim installed by `severClaim` is preserved.
+    const claimAtRequest = tracker.claim
     const result = await this.request<TerminalAttachResult>('attach', {
       terminalId,
       claim: credential,
@@ -226,9 +245,12 @@ export class WebTerminalClient {
       tracker.disconnected = false
     } else if (result.code !== 'NETWORK_ERROR') {
       // Server rejection (generic UNAUTHORIZED): drop the adopted claim and
-      // stop re-presenting it on reconnect.
-      tracker.claim = undefined
-      tracker.disconnected = true
+      // stop re-presenting it on reconnect — but ONLY when no newer claim was
+      // installed while this request was in flight.
+      if (tracker.claim === claimAtRequest) {
+        tracker.claim = undefined
+        tracker.disconnected = true
+      }
     }
     return result
   }

@@ -213,7 +213,14 @@ impl ProjectRegistry {
             return None;
         }
         let g = self.inner.lock();
-        let mut ancestor: Option<String> = None;
+        // Track the LONGEST matching ancestor dir, not the first one. When two
+        // registered projects nest (e.g. `/dev` and `/dev/app`), a cwd of
+        // `/dev/app/sub` must attribute to the child (`/dev/app`), not to
+        // whichever parent happened to be iterated first. Path length is a
+        // sufficient specificity proxy: a deeper ancestor is always more
+        // specific (and `is_within_dir` already enforces a separator
+        // boundary, so `/dev` cannot spuriously shadow `/devapp`).
+        let mut ancestor: Option<(usize, String)> = None;
         for project in g.projects.iter().filter(|p| !p.is_archived) {
             let Some(path) = project.path.as_deref() else {
                 continue;
@@ -222,11 +229,15 @@ impl ProjectRegistry {
             if path == target {
                 return Some(project.id.clone());
             }
-            if ancestor.is_none() && is_within_dir(target, path) {
-                ancestor = Some(project.id.clone());
+            if is_within_dir(target, path)
+                && ancestor
+                    .as_ref()
+                    .is_none_or(|(len, _)| path.len() > *len)
+            {
+                ancestor = Some((path.len(), project.id.clone()));
             }
         }
-        ancestor
+        ancestor.map(|(_, id)| id)
     }
 
     /// Clear the mirror (called on `remote_server_stop` so a stale list does
@@ -576,5 +587,42 @@ mod tests {
         // Unrelated path / empty input.
         assert_eq!(reg.find_by_path("/elsewhere"), None);
         assert_eq!(reg.find_by_path("   "), None);
+    }
+
+    /// `find_by_path` resolves the MOST SPECIFIC ancestor, not the first
+    /// match. With nested projects `/dev` and `/dev/app`, a cwd inside the
+    /// child must attribute to the child regardless of iteration order.
+    #[test]
+    fn find_by_path_picks_longest_ancestor_for_nested_projects() {
+        let reg = ProjectRegistry::new();
+        // Parent registered FIRST, then the child — both non-archived.
+        reg.set(
+            vec![
+                sample("p-dev", Some("/dev"), false),
+                sample("p-app", Some("/dev/app"), false),
+            ],
+            None,
+        );
+        assert_eq!(
+            reg.find_by_path("/dev/app/sub").as_deref(),
+            Some("p-app"),
+            "child `/dev/app` must win over parent `/dev`"
+        );
+        // The parent itself still resolves to the parent (exact match).
+        assert_eq!(reg.find_by_path("/dev/other").as_deref(), Some("p-dev"));
+
+        // Reverse the iteration order — the child must STILL win.
+        reg.set(
+            vec![
+                sample("p-app", Some("/dev/app"), false),
+                sample("p-dev", Some("/dev"), false),
+            ],
+            None,
+        );
+        assert_eq!(
+            reg.find_by_path("/dev/app/sub").as_deref(),
+            Some("p-app"),
+            "child must win regardless of registration order"
+        );
     }
 }

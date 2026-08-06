@@ -198,8 +198,10 @@ export function ProjectSwitcherDrawer({
                      * per-connection switch. Hidden when already the host
                      * default (no-op), archived, or pathless (P5: a
                      * pathless project can't be a default — the host would
-                     * reject it with NOT_FOUND). */}
-                    {!isHostDefault && !isArchived && project.path !== undefined && (
+                     * reject it with NOT_FOUND). A truthy `project.path`
+                     * also hides the control for an empty-string path, which
+                     * the host would equally reject. */}
+                    {!isHostDefault && !isArchived && !!project.path && (
                       <button
                         type="button"
                         disabled={isSettingDefault || defaultingId !== null}

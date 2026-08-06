@@ -1086,14 +1086,22 @@ pub fn run() {
                 };
             // Idempotent incremental import of legacy renderer-authored
             // history so existing desktop sessions survive the ownership
-            // transfer. Runs at every startup; per-entry fail-open inside.
+            // transfer. Per-entry fail-open inside; `acp_history_list`
+            // tolerates a partially converged store. Spawned as a background
+            // task so it does NOT block `setup` (the main window is created
+            // immediately) — the import is documented idempotent and safe to
+            // run after setup returns. `app.manage` below takes ownership of
+            // the store; the task holds its own `Arc` clones.
             if let Some(persistence) = &session_persistence {
-                let imported = tauri::async_runtime::block_on(
-                    crate::acp::import_chat_history(persistence, &chat_history_store),
-                );
-                if imported > 0 {
-                    log::info!("[acp-history] legacy store imported sessions={imported}");
-                }
+                let persistence = std::sync::Arc::clone(persistence);
+                let chat_history = std::sync::Arc::clone(&chat_history_store);
+                tauri::async_runtime::spawn(async move {
+                    let imported =
+                        crate::acp::import_chat_history(&persistence, &chat_history).await;
+                    if imported > 0 {
+                        log::info!("[acp-history] legacy store imported sessions={imported}");
+                    }
+                });
             }
             app.manage(chat_history_store);
             app.manage(commands::HostHistoryStore(session_persistence.clone()));

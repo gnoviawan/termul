@@ -647,6 +647,13 @@ export function useEditorPersistence(projectId: string): void {
         if (restoreRunIdRef.current === restoreRunId) {
           isRestoringRef.current = false
           setManifestRestoreInProgress(projectId, false)
+        } else if (prevProjectIdRef.current !== projectId) {
+          // Superseded by a run for a DIFFERENT project: that run owns its own
+          // guard key, so this project's key would otherwise stay `true`
+          // forever (blocking manifest writes for it until the user returns).
+          // The same-project supersession is still owned by the newer run
+          // (handled by the branch above when it completes).
+          setManifestRestoreInProgress(projectId, false)
         }
       }
     }

@@ -2467,20 +2467,22 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus[agentId] = 'connected'
         // The spawn response is the authoritative source of capabilities +
         // authMethods (CAP-4: metadata delivery cannot depend on a session
-        // subscription that does not yet exist). If the `acp:agent_spawned`
-        // event already populated this entry (it can fire before the response
-        // resolves on desktop), preserve that — the event and response carry
-        // identical data. Otherwise, seed from the response. The event is
-        // observer-only; `_onAgentSpawned` likewise preserves response-set
-        // fields and never clobbers them.
+        // subscription that does not yet exist). The `acp:agent_spawned` event
+        // MAY have pre-seeded this entry (it can fire before the response
+        // resolves on desktop), but it is observer-only and may omit fields
+        // (e.g. `authMethods ?? []` seeds an empty array, which is not nullish
+        // and would otherwise shadow the response's real methods). So prefer
+        // the RESPONSE first and use the event-seeded entry only as a fallback.
+        // The response and event carry identical data in the common case, so
+        // this precedence is safe.
         const existing = s.agents[agentId]
         return {
           agents: {
             ...s.agents,
             [agentId]: {
               id: agentId,
-              capabilities: existing?.capabilities ?? result.capabilities,
-              authMethods: existing?.authMethods ?? result.authMethods
+              capabilities: result.capabilities ?? existing?.capabilities,
+              authMethods: result.authMethods ?? existing?.authMethods ?? []
             }
           },
           agentStatus
