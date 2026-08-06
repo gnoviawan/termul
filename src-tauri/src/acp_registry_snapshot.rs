@@ -59,7 +59,7 @@ struct CachedSnapshot {
     fetched_at: String,
 }
 
-fn is_safe_agent_id(id: &str) -> bool {
+pub fn is_safe_agent_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
@@ -67,7 +67,7 @@ fn is_safe_agent_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
-fn sanitize_distribution(value: &serde_json::Value) -> Option<serde_json::Value> {
+pub fn sanitize_distribution(value: &serde_json::Value) -> Option<serde_json::Value> {
     value.as_object().cloned().map(serde_json::Value::Object)
 }
 
@@ -99,24 +99,12 @@ fn parse_snapshot(body: &str) -> Result<Vec<AcpRegistrySnapshotAgent>, String> {
     Ok(agents)
 }
 
-fn cache_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("Failed to resolve cache dir: {}", e))?;
-    Ok(dir.join(CACHE_FILE))
-}
-
-fn read_cache(app: &AppHandle) -> Option<CachedSnapshot> {
-    let path = cache_path(app).ok()?;
+fn read_cache_at(path: &std::path::Path) -> Option<CachedSnapshot> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<CachedSnapshot>(&contents).ok()
 }
 
-fn write_cache(app: &AppHandle, agents: &[AcpRegistrySnapshotAgent], fetched_at: &str) {
-    let Ok(path) = cache_path(app) else {
-        return;
-    };
+fn write_cache_at(path: &std::path::Path, agents: &[AcpRegistrySnapshotAgent], fetched_at: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -129,12 +117,16 @@ fn write_cache(app: &AppHandle, agents: &[AcpRegistrySnapshotAgent], fetched_at:
     }
 }
 
-pub async fn fetch_acp_registry_snapshot(
-    app: &AppHandle,
+/// Core fetch+parse+cache logic parameterized by an explicit cache file path.
+/// Both the desktop `AppHandle`-based entry point and the standalone
+/// `AcpCatalogService` path delegate here so the fetch logic is NOT duplicated
+/// (CAP-6 / Story 8 reuses this for the catalog's CDN augmentation).
+pub async fn fetch_acp_registry_snapshot_with_cache_path(
+    cache_path: &std::path::Path,
     force_refresh: bool,
 ) -> Result<AcpRegistrySnapshot, String> {
     if !force_refresh {
-        if let Some(cached) = read_cache(app) {
+        if let Some(cached) = read_cache_at(cache_path) {
             return Ok(AcpRegistrySnapshot {
                 agents: cached.agents,
                 source: "cache".to_string(),
@@ -168,7 +160,7 @@ pub async fn fetch_acp_registry_snapshot(
     match fetch_result {
         Ok(agents) => {
             let fetched_at = chrono::Utc::now().to_rfc3339();
-            write_cache(app, &agents, &fetched_at);
+            write_cache_at(cache_path, &agents, &fetched_at);
             Ok(AcpRegistrySnapshot {
                 agents,
                 source: "network".to_string(),
@@ -176,7 +168,7 @@ pub async fn fetch_acp_registry_snapshot(
             })
         }
         Err(network_err) => {
-            if let Some(cached) = read_cache(app) {
+            if let Some(cached) = read_cache_at(cache_path) {
                 log::warn!(
                     "ACP registry snapshot fetch failed ({}); serving cached snapshot",
                     network_err
@@ -190,6 +182,22 @@ pub async fn fetch_acp_registry_snapshot(
             Err(network_err)
         }
     }
+}
+
+fn cache_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve cache dir: {}", e))?;
+    Ok(dir.join(CACHE_FILE))
+}
+
+pub async fn fetch_acp_registry_snapshot(
+    app: &AppHandle,
+    force_refresh: bool,
+) -> Result<AcpRegistrySnapshot, String> {
+    let path = cache_path(app)?;
+    fetch_acp_registry_snapshot_with_cache_path(&path, force_refresh).await
 }
 
 #[tauri::command]

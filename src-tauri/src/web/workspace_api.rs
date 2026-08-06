@@ -332,6 +332,7 @@ mod tests {
             history_mode: HistoryMode::LiveOnly,
             project_root: Arc::new(std::env::temp_dir()),
             workspace_manifest: Some(store),
+            acp_catalog: None,
         }
     }
 
@@ -355,6 +356,7 @@ mod tests {
             history_mode: HistoryMode::LiveOnly,
             project_root: Arc::new(std::env::temp_dir()),
             workspace_manifest: None,
+            acp_catalog: None,
         }
     }
 

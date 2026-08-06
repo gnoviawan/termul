@@ -119,7 +119,7 @@ fn resolve_executable_in_path(command: &str, path: &str) -> Option<String> {
     None
 }
 
-fn is_registry_launcher_on_path(command: &str) -> bool {
+pub(crate) fn is_registry_launcher_on_path(command: &str) -> bool {
     let mut env_map = HashMap::new();
     crate::pty::env_refresh::apply_fresh_path(&mut env_map);
 

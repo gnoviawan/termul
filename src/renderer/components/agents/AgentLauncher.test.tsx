@@ -3,7 +3,6 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import * as supportedAcpAgents from '@/lib/agents/supported-acp-agents'
 import {
   buildSupportedAcpAgents,
   pickDefaultSupportedAgent,
@@ -110,7 +109,7 @@ const {
   }
 }))
 
-const { mockSkills, mockToastError } = vi.hoisted(() => ({
+const { mockSkills, mockToastError, mockResolvedAgentsOverride } = vi.hoisted(() => ({
   // Override-able skills list (defaults to [] — web/no-skills parity). Skill
   // tests push entries here so useAgentSkills surfaces them in the slash menu.
   // `path` is required so the launch wire prompt can cite it.
@@ -122,7 +121,13 @@ const { mockSkills, mockToastError } = vi.hoisted(() => ({
       path: string
     }>
   },
-  mockToastError: vi.fn()
+  mockToastError: vi.fn(),
+  // CAP-6 / Story 8: the launcher resolves supported agents from the host
+  // catalog via `useResolvedSupportedAcpAgents`. Component tests mock the hook
+  // to the synchronous offline-first derivation so they can exercise launch
+  // behavior without the async catalog fetch. Set this to inject a specific
+  // entry list (e.g. the manual-install agent).
+  mockResolvedAgentsOverride: { current: null as SupportedAcpAgentEntry[] | null }
 }))
 
 vi.mock('sonner', () => ({
@@ -167,6 +172,17 @@ vi.mock('@/lib/dialog-api', () => ({
 vi.mock('@/hooks/use-acp-runtime-probe', () => ({
   useAcpRuntimeProbe: () => ({ npx: true, uvx: true })
 }))
+
+vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
+    '@/lib/agents/supported-acp-agents'
+  )
+  return {
+    useResolvedSupportedAcpAgents: (configs: readonly StoredAgentConfig[]) =>
+      mockResolvedAgentsOverride.current ??
+      actual.buildSupportedAcpAgents(configs, 'windows-x86_64')
+  }
+})
 
 vi.mock('@/lib/acp-api', () => ({
   acpApi: {
@@ -370,6 +386,9 @@ beforeEach(() => {
   // Start each test from a clean skill slate (web/no-skills default). Skill
   // tests override mockSkills.current.
   mockSkills.current = []
+  // Reset the supported-agents override (default: delegate to the offline-first
+  // derivation).
+  mockResolvedAgentsOverride.current = null
   acpStateRef.current = {
     agentConfigs: [],
     preparedSessions: {},
@@ -886,7 +905,7 @@ describe('AgentLauncher ACP new thread', () => {
       runtimeLauncher: null,
       unavailableReason: 'Install Legacy Agent from the vendor.'
     }
-    vi.spyOn(supportedAcpAgents, 'buildSupportedAcpAgents').mockReturnValue([manualEntry])
+    mockResolvedAgentsOverride.current = [manualEntry]
     mockPersistRead.mockResolvedValue({
       success: true,
       data: { agentId: 'acp-registry:legacy', mode: 'acp' }

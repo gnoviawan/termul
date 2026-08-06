@@ -31,6 +31,16 @@ vi.mock('@/hooks/use-acp-runtime-probe', () => ({
   useAcpRuntimeProbe: () => ({ npx: true, uvx: true })
 }))
 
+vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
+    '@/lib/agents/supported-acp-agents'
+  )
+  return {
+    useResolvedSupportedAcpAgents: (configs: readonly StoredAgentConfig[]) =>
+      actual.buildSupportedAcpAgents(configs, 'windows-x86_64')
+  }
+})
+
 describe('AcpAgentsSettings', () => {
   beforeEach(() => {
     stateRef.current.agentConfigs = []

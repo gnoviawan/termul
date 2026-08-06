@@ -34,7 +34,7 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::acp::{AcpManager, WorkspaceManifestService};
+use crate::acp::{AcpCatalogService, AcpManager, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::web::sink::WsRelaySink;
 use crate::web::{serve_router, ProjectRegistry, ServerConfig};
@@ -228,6 +228,13 @@ impl RemoteServerState {
     /// Threaded through to `serve_router` so the web/remote client can
     /// read/write a project's manifest through `/workspace/*`. `None`
     /// degrades to fresh-only mode.
+    ///
+    /// `acp_catalog` is the desktop's own `AcpCatalogService` (opened under
+    /// `<app_data_dir>/acp-catalog` in `lib.rs`). Threaded through to
+    /// `serve_router` so the web/remote client can resolve the catalog through
+    /// `GET /acp/catalog` + WS `list_acp_catalog`. `None` degrades to
+    /// `ACP_CATALOG_UNAVAILABLE`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         acp: Arc<AcpManager>,
@@ -236,6 +243,7 @@ impl RemoteServerState {
         registry: Arc<ProjectRegistry>,
         _bind_mode: RemoteBindMode,
         workspace_manifest: Option<Arc<WorkspaceManifestService>>,
+        acp_catalog: Option<Arc<AcpCatalogService>>,
     ) -> Result<RemoteStatus, String> {
         // The built-in cloudflared quick-tunnel forwards to localhost, so the
         // desktop-hosted server always binds localhost regardless of the
@@ -302,6 +310,7 @@ impl RemoteServerState {
             // `workspace_manifest` argument below), so no path is resolved
             // from the config here — `None` degrades nothing on this path.
             workspace_manifests_dir: None,
+            acp_catalog_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -324,6 +333,7 @@ impl RemoteServerState {
             cfg,
             shutdown,
             workspace_manifest,
+            acp_catalog,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
@@ -616,7 +626,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await
             .expect("start on localhost binds an OS-assigned port");
         assert!(status.running, "start returns a running status");
@@ -647,7 +658,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await
             .expect("restart after stop succeeds");
         assert!(again.running);
@@ -669,7 +681,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await
             .expect("first start succeeds");
 
@@ -681,7 +694,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await;
         assert!(
             second.is_err(),
@@ -711,7 +725,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await
             .expect("start succeeds");
         // The serve task holds `Arc::clone(&acp)`; stop drains it. The desktop
@@ -740,7 +755,8 @@ mod tests {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 None,
-            )
+                None,
+                )
             .await
             .expect("start");
 

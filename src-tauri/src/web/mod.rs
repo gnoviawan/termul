@@ -15,6 +15,7 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
 pub mod git_api;
@@ -88,6 +89,12 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// its own under `<app_data_dir>/workspace-manifests` (never shared across
 /// processes — `Never`-clause). `None` degrades to fresh-only mode.
 ///
+/// `acp_catalog` is the host-owned [`AcpCatalogService`] for CAP-6 / Story 8 —
+/// resolves the trusted ACP catalog (OS/arch/runtime + per-agent status). The
+/// standalone binary opens it under `<service_account_state_dir>/acp-catalog`;
+/// the desktop host opens its own under `<app_data_dir>/acp-catalog`. `None`
+/// degrades to `ACP_CATALOG_UNAVAILABLE`.
+///
 /// The standalone binary owns its agent lifetime end-to-end, so it kills agents
 /// on exit. The desktop-hosted shared-live path calls [`serve_router`] directly
 /// and must NOT kill the desktop's live agents — see [`serve_router`].
@@ -105,6 +112,7 @@ pub async fn serve(
     projects_file: Option<PathBuf>,
     cfg: ServerConfig,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
+    acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
@@ -120,6 +128,7 @@ pub async fn serve(
         cfg,
         shutdown_signal_future(),
         workspace_manifest,
+        acp_catalog,
     )
     .await?;
 
@@ -187,6 +196,7 @@ pub async fn serve_router(
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
+    acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -230,6 +240,7 @@ pub async fn serve_router(
         cfg.project_root.clone(),
         history_mode,
         workspace_manifest,
+        acp_catalog,
     );
 
     let handle = tokio::spawn(async move {

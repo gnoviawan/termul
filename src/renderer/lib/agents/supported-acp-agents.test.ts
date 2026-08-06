@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import {
@@ -6,8 +6,17 @@ import {
   installedBinaryConfig,
   isSupportedAcpConfigId,
   manualBinaryConfig,
-  registryConfigId
+  registryConfigId,
+  resolveSupportedAcpAgents
 } from '@/lib/agents/supported-acp-agents'
+
+// CAP-6 / Story 8: `resolveSupportedAcpAgents` calls `acpCatalogApi.listCatalog()`
+// (the host-resolved catalog). Mock the facade so the wrapper is unit-tested in
+// isolation. The mock is hoisted + file-scoped; the existing
+// `buildSupportedAcpAgents` tests don't touch `acpCatalogApi`, so they're
+// unaffected.
+const { listCatalogMock } = vi.hoisted(() => ({ listCatalogMock: vi.fn() }))
+vi.mock('@/lib/api', () => ({ acpCatalogApi: { listCatalog: listCatalogMock } }))
 
 function agent(id: string, distribution: RegistryAgent['distribution'], name = id): RegistryAgent {
   return { id, name, version: '1.0.0', description: `${name} desc`, distribution }
@@ -189,5 +198,87 @@ describe('installedBinaryConfig', () => {
       env: { OPENCODE: '1' },
       allowTerminal: false
     })
+  })
+})
+
+// CAP-6 / Story 8: the host-resolved catalog wrapper. `resolveSupportedAcpAgents`
+// calls `acpCatalogApi.listCatalog()` and maps `CatalogAgent` →
+// `SupportedAcpAgentEntry`, consuming the host's `host.os`/`host.arch` (NOT the
+// renderer's `currentPlatformArch()` / `@tauri-apps/plugin-os`).
+describe('resolveSupportedAcpAgents', () => {
+  it('maps a host-resolved catalog agent to a supported entry', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: true, uvx: false, node: true, bun: false, python3: true }
+        },
+        agents: [
+          {
+            id: 'test',
+            name: 'Test',
+            version: '1.0.0',
+            description: 'test agent',
+            source: 'bundled',
+            distribution: { npx: { package: 'test@1.0.0' } },
+            runtimeRequirements: ['npx'],
+            status: 'ready',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(listCatalogMock).toHaveBeenCalledTimes(1)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      id: 'test',
+      configId: 'acp-registry:test',
+      status: 'ready'
+    })
+  })
+
+  it('prefers a persisted config and marks it ready', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+        agents: [
+          {
+            id: 'claude-acp',
+            name: 'Claude',
+            version: '1.0.0',
+            description: 'd',
+            source: 'bundled',
+            distribution: { npx: { package: 'claude' } },
+            runtimeRequirements: ['npx'],
+            status: 'needs-runtime',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+    const saved = persisted('claude-acp', 'Claude Override')
+
+    const entries = await resolveSupportedAcpAgents([saved])
+
+    expect(entries[0]?.config).toBe(saved)
+    // Persisted configs are always 'ready' regardless of the host's status.
+    expect(entries[0]?.status).toBe('ready')
+  })
+
+  it('degrades to an empty list when the catalog is unavailable', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: false,
+      error: 'store unavailable',
+      code: 'ACP_CATALOG_UNAVAILABLE'
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+    expect(entries).toEqual([])
   })
 })

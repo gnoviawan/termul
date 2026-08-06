@@ -272,6 +272,78 @@ pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
     crate::acp::config::probe_registry_runtime()
 }
 
+/// `acp_list_catalog(refresh?: bool)` — resolve the host-owned ACP catalog
+/// (CAP-6 / Story 8). Returns the host's OS/arch/runtime availability + the
+/// per-agent resolved `SupportedAcpAgentStatus` (ready / install-required /
+/// needs-runtime / manual-install / unavailable). The catalog is
+/// credential-free, path-free, read-only host introspection — never carries
+/// `AgentConfig.env` (API keys) or resolved absolute executable paths.
+/// Mirrors `GET /acp/catalog` + WS `list_acp_catalog` byte-for-byte.
+#[tauri::command]
+pub async fn acp_list_catalog(
+    refresh: Option<bool>,
+    store: State<'_, crate::commands::HostAcpCatalogStore>,
+) -> Result<crate::commands::IpcResult<crate::acp::AcpCatalog>, String> {
+    let refresh = refresh.unwrap_or(false);
+    log::info!("[acp-catalog] list start refresh={refresh}");
+    let Some(service) = store.store().map(std::sync::Arc::clone) else {
+        log::warn!("[acp-catalog] list unavailable (no host store)");
+        return Ok(crate::commands::IpcResult::error(
+            "acp catalog store is unavailable",
+            "ACP_CATALOG_UNAVAILABLE",
+        ));
+    };
+    match service.list_catalog(refresh).await {
+        Ok(catalog) => {
+            log::info!(
+                "[acp-catalog] list success agents={}",
+                catalog.agents.len()
+            );
+            Ok(crate::commands::IpcResult::success(catalog))
+        }
+        Err(error) => {
+            log::error!("[acp-catalog] list failure error={error}");
+            Ok(crate::commands::IpcResult::error(
+                error.to_string(),
+                "CATALOG_LOAD_FAILED",
+            ))
+        }
+    }
+}
+
+/// `acp_set_catalog_opt_in(enabled: bool)` — persist the host opt-in flag that
+/// gates the CDN registry augmentation (CAP-6 / Story 8). When enabled, the
+/// next `list_catalog` includes CDN entries tagged `source: 'registry'` (if
+/// the fetch succeeds); when disabled, only bundled entries are served.
+/// Mirrors `POST /acp/catalog/opt-in` + WS `set_catalog_opt_in` byte-for-byte.
+#[tauri::command]
+pub async fn acp_set_catalog_opt_in(
+    enabled: bool,
+    store: State<'_, crate::commands::HostAcpCatalogStore>,
+) -> Result<crate::commands::IpcResult<()>, String> {
+    log::info!("[acp-catalog] set_opt_in start enabled={enabled}");
+    let Some(service) = store.store().map(std::sync::Arc::clone) else {
+        log::warn!("[acp-catalog] set_opt_in unavailable (no host store)");
+        return Ok(crate::commands::IpcResult::error(
+            "acp catalog store is unavailable",
+            "ACP_CATALOG_UNAVAILABLE",
+        ));
+    };
+    match service.set_opt_in(enabled) {
+        Ok(()) => {
+            log::info!("[acp-catalog] set_opt_in success enabled={enabled}");
+            Ok(crate::commands::IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!("[acp-catalog] set_opt_in failure error={error}");
+            Ok(crate::commands::IpcResult::error(
+                error.to_string(),
+                "ACP_CATALOG_OPT_IN_FAILED",
+            ))
+        }
+    }
+}
+
 /// On-demand MCP client probe. Takes a renderer-supplied `McpServerConfig`
 /// (stateless — no registry-store coupling), opens a fresh rmcp client
 /// connection, calls `initialize` + `tools/list`, then closes, and returns

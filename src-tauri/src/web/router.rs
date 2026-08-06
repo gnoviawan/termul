@@ -16,9 +16,10 @@ use axum::{
     Router,
 };
 
-use crate::acp::{AcpManager, FileProjectRegistry, WorkspaceManifestService};
+use crate::acp::{AcpCatalogService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::catalog_api;
 use crate::web::fs_api;
 use crate::web::git_api;
 use crate::web::log_api;
@@ -63,6 +64,7 @@ pub fn router(
     project_root: PathBuf,
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
+    acp_catalog: Option<Arc<AcpCatalogService>>,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -138,7 +140,16 @@ pub fn router(
         // loopback-guarded inside the handler.
         .route("/workspace/{projectId}", get(workspace_api::get))
         .route("/workspace/{projectId}/write", post(workspace_api::write))
-        .route("/workspace/{projectId}/delete", post(workspace_api::delete));
+        .route("/workspace/{projectId}/delete", post(workspace_api::delete))
+        // ACP catalog web routes (CAP-6: Web & Mobile 1:1 Parity). Each
+        // mirrors a desktop `#[tauri::command] acp_*_catalog` handler; see
+        // `web/catalog_api.rs`. Registered AHEAD of the static fallback so
+        // the SPA mount cannot shadow them. The read `GET` is open (read-only
+        // host introspection, mirrors `GET /projects`); the `POST` opt-in
+        // mirrors `set_default_project` posture (any connected client until
+        // Epic 2).
+        .route("/acp/catalog", get(catalog_api::list))
+        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -160,6 +171,7 @@ pub fn router(
         projects_file: projects_file.map(Arc::new),
         history_mode,
         workspace_manifest,
+        acp_catalog,
         project_root: Arc::new(project_root),
     })
 }
@@ -233,6 +245,8 @@ pub fn router_with_static(
         .route("/workspace/{projectId}", get(workspace_api::get))
         .route("/workspace/{projectId}/write", post(workspace_api::write))
         .route("/workspace/{projectId}/delete", post(workspace_api::delete))
+        .route("/acp/catalog", get(catalog_api::list))
+        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .fallback_service(assets::static_service_from(static_dir))
         .with_state(AppState {
             acp,
@@ -247,6 +261,7 @@ pub fn router_with_static(
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             workspace_manifest: None,
+            acp_catalog: None,
             project_root: Arc::new(project_root),
         })
 }

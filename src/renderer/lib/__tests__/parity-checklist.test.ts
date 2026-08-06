@@ -504,6 +504,105 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // CAP-6 / Story 8: ACP Catalog parity. Mirrors the Workspace Manifest block:
+  // the host-resolved catalog ships on THREE transports (Tauri command
+  // `acp_list_catalog` / `acp_set_catalog_opt_in`, HTTP `GET /acp/catalog` /
+  // `POST /acp/catalog/opt-in`, WS `list_acp_catalog` / `set_catalog_opt_in`).
+  // This block pins the TS-side parity (the Rust-side parity — router route +
+  // ws handler + Tauri command registration — is covered by the Rust test
+  // suite).
+  describe('ACP Catalog parity (CAP-6)', () => {
+    const TauriAdapter = join(LIB_DIR, 'tauri-acp-catalog-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-acp-catalog-api.ts')
+
+    it('tauri-acp-catalog-api.ts exists and exports the factory', () => {
+      expect(existsSync(TauriAdapter), 'tauri-acp-catalog-api.ts should exist').toBe(true)
+      expect(
+        fileContains(
+          'tauri-acp-catalog-api.ts',
+          /export\s+(const|function)\s+\bcreateTauriAcpCatalogApi\b/
+        ),
+        'should export createTauriAcpCatalogApi'
+      ).toBe(true)
+    })
+
+    it('web-acp-catalog-api.ts exists and exports the singleton', () => {
+      expect(existsSync(WebAdapter), 'web-acp-catalog-api.ts should exist').toBe(true)
+      expect(
+        fileContains('web-acp-catalog-api.ts', /export\s+const\s+\bwebAcpCatalogApi\b/),
+        'should export webAcpCatalogApi'
+      ).toBe(true)
+    })
+
+    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
+      const facade = join(LIB_DIR, 'acp-catalog-api.ts')
+      expect(existsSync(facade), 'acp-catalog-api.ts should exist').toBe(true)
+      const content = readFileSync(facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/createTauriAcpCatalogApi/)
+      expect(content).toMatch(/webAcpCatalogApi/)
+    })
+
+    it('api.ts exports the acpCatalogApi singleton', () => {
+      const apiPath = join(LIB_DIR, 'api.ts')
+      const content = readFileSync(apiPath, 'utf-8')
+      expect(content).toMatch(/export\s*\{[^}]*\bacpCatalogApi\b[^}]*\}/)
+    })
+
+    it('Tauri adapter invokes the catalog commands (list_catalog + set_catalog_opt_in)', () => {
+      const content = readFileSync(TauriAdapter, 'utf-8')
+      expect(content).toMatch(/acp_list_catalog/)
+      expect(content).toMatch(/acp_set_catalog_opt_in/)
+    })
+
+    it('Web adapter hits the catalog routes (GET /acp/catalog + POST /acp/catalog/opt-in)', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/\/acp\/catalog/)
+      expect(content).toMatch(/\/acp\/catalog\/opt-in/)
+      // Network/parse failures must map to `NETWORK_ERROR`.
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('both adapters expose listCatalog + setCatalogOptIn + isCatalogOptedIn on the typed facade', () => {
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      for (const method of ['listCatalog', 'setCatalogOptIn', 'isCatalogOptedIn']) {
+        expect(tauri, `tauri-acp-catalog-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+        expect(web, `web-acp-catalog-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+      }
+    })
+
+    it('shared types file exists with expected exports', () => {
+      const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'acp-catalog.types.ts')
+      expect(existsSync(typesPath), 'acp-catalog.types.ts should exist').toBe(true)
+      const content = readFileSync(typesPath, 'utf-8')
+      expect(content).toMatch(/export\s+interface\s+AcpCatalog\b/)
+      expect(content).toMatch(/export\s+interface\s+CatalogAgent\b/)
+      expect(content).toMatch(/export\s+type\s+SupportedAcpAgentStatus\b/)
+      expect(content).toMatch(/export\s+type\s+CatalogSource\b/)
+      expect(content).toMatch(/export\s+interface\s+SetCatalogOptInRequest\b/)
+    })
+
+    it('ipc.types.ts declares the AcpCatalogIpcChannels map', () => {
+      const ipcPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'ipc.types.ts')
+      const content = readFileSync(ipcPath, 'utf-8')
+      expect(content).toMatch(/AcpCatalogIpcChannels\b/)
+      expect(content).toMatch(/'acp:catalog:list'/)
+      expect(content).toMatch(/'acp:catalog:set_opt_in'/)
+    })
+
+    it('web-protocol.types.ts declares the WS request types for catalog', () => {
+      const protoPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
+      const content = readFileSync(protoPath, 'utf-8')
+      expect(content).toMatch(/'list_acp_catalog'/)
+      expect(content).toMatch(/'set_catalog_opt_in'/)
+    })
+  })
+
   // Epic 7 — cross-client workspace continuity: the explicit host-default
   // change ships on THREE transports (Tauri command `set_host_default_project`,
   // HTTP `POST /projects/default`, WS `set_default_project` request). This

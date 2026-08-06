@@ -92,6 +92,20 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        // CAP-6 / Story 8: open the host-owned ACP catalog root. The
+        // standalone binary owns its own root — NEVER shared with a desktop
+        // host on the same machine. Defaults to `<state dir>/acp-catalog`.
+        let acp_catalog_dir = cfg
+            .acp_catalog_dir
+            .clone()
+            .unwrap_or_else(|| cfg.service_account_state_dir().join("acp-catalog"));
+        let acp_catalog = match crate::acp::AcpCatalogService::open(acp_catalog_dir).await {
+            Ok(service) => Some(service),
+            Err(error) => {
+                eprintln!("termul-server: failed to open acp-catalog store: {error}");
+                return ExitCode::from(1);
+            }
+        };
         let ws_relay = Arc::new(WsRelaySink::with_persistence(
             cfg.event_log_capacity,
             Arc::clone(&persistence),
@@ -185,6 +199,7 @@ fn main() -> ExitCode {
             projects_file,
             cfg,
             workspace_manifest,
+            acp_catalog,
         )
         .await
         {
@@ -198,16 +213,17 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH]\n\n\
      Options:\n\
-       --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
-       --port PORT                 Bind port (default: 8080)\n\
-       --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
-       --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
-       --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
-       --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
-       --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
-       --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
-       --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
-       -h, --help                  Show this help"
+        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
+        --port PORT                 Bind port (default: 8080)\n\
+        --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
+        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
+        --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
+        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
+        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
+        --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
+        --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
+        --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
+        -h, --help                  Show this help"
 }

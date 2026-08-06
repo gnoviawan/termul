@@ -1,12 +1,9 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect } from 'react'
-import { getActiveAcpRegistry } from '@/hooks/use-acp-registry-catalog'
-import { acpApi } from '@/lib/acp-api'
-import { currentPlatformArch } from '@/lib/agents/acp-registry'
 import {
-  buildSupportedAcpAgents,
-  pickDefaultSupportedAgent
+  pickDefaultSupportedAgent,
+  resolveSupportedAcpAgents
 } from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
@@ -32,20 +29,13 @@ export function useAcpAgents(): void {
     void (async () => {
       await loadAgentConfigs()
       if (cancelled) return
-      const runtime = await acpApi.probeRuntime()
-      if (cancelled) return
       const { agentConfigs, prewarmAgent } = useAcpStore.getState()
       const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
       if (cwd.trim().length === 0) {
         setSelectedAgentConfigId(null)
         return
       }
-      const supportedAgents = buildSupportedAcpAgents(
-        agentConfigs,
-        currentPlatformArch(),
-        getActiveAcpRegistry(),
-        runtime
-      )
+      const supportedAgents = await resolveSupportedAcpAgents(agentConfigs)
       const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
       if (cancelled) return
       const saved = persisted.success ? (persisted.data as Partial<LastSelectedAgent> | null) : null
