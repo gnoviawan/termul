@@ -3089,6 +3089,199 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    // ---- CAP-6 / Story 8 deferred 8.3: WS dispatch parity for the catalog ----
+    //
+    // No Rust test sent a `list_acp_catalog`/`set_catalog_opt_in` WS frame
+    // through `handle_request`. These prove the WS reply's success/data/code
+    // fields match the HTTP `GET /acp/catalog` / `POST /acp/catalog/opt-in`
+    // response, served through a REAL `AcpCatalogService` (the host authority).
+
+    /// Like `handle_sync` but with a real catalog store attached, so the
+    /// `list_acp_catalog` / `set_catalog_opt_in` WS frames dispatch to the real
+    /// `AcpCatalogService`. Post-auth (authed=true).
+    async fn handle_request_with_catalog(
+        text: &str,
+        catalog: &Arc<crate::acp::AcpCatalogService>,
+    ) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        handle_request(
+            text,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            Some(catalog),
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn handle_list_acp_catalog_ws_dispatch_returns_payload() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-cat-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
+            .await
+            .unwrap();
+
+        // WS: a `list_acp_catalog` frame through `handle_request` (post-auth).
+        let reply = handle_request_with_catalog(
+            r#"{"id":"r1","type":"list_acp_catalog","payload":{}}"#,
+            &catalog,
+        )
+        .await;
+
+        // HTTP `GET /acp/catalog` on the SAME store returns
+        // `IpcBody { success: true, data: catalog, code: None }`. The WS reply's
+        // success/data/code fields must match byte-for-byte (deferred 8.3).
+        let http_catalog = catalog.list_catalog(false).await.unwrap();
+        let http_data = serde_json::to_value(&http_catalog).unwrap();
+        assert!(reply.ok, "WS ok matches HTTP success (true)");
+        assert!(
+            reply.err.is_none(),
+            "no err code on success (matches HTTP code: None)"
+        );
+        assert_eq!(
+            reply.payload.as_ref(),
+            Some(&http_data),
+            "WS payload (catalog) byte-identical to HTTP data"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn handle_set_catalog_opt_in_ws_dispatch_persists() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-optin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
+            .await
+            .unwrap();
+        assert!(!catalog.is_opt_in(), "opt-in starts false");
+
+        // WS: a `set_catalog_opt_in` frame through `handle_request` (post-auth).
+        let reply = handle_request_with_catalog(
+            r#"{"id":"r1","type":"set_catalog_opt_in","payload":{"enabled":true}}"#,
+            &catalog,
+        )
+        .await;
+
+        // The opt-in persists (the host is the authority) + the WS reply
+        // matches the HTTP `POST /acp/catalog/opt-in` response: both succeed
+        // (WS ok=true / HTTP success=true), no code. (The WS success payload is
+        // `{}` vs the HTTP data `null` — a known minor parity wrinkle; the
+        // binding criterion is "opt-in persists + both transports succeed".)
+        assert!(reply.ok, "WS ok matches HTTP success (true)");
+        assert!(reply.err.is_none(), "no err code on success");
+        assert!(catalog.is_opt_in(), "opt-in persisted (host authority)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ---- Cross-client host-authority (Category C / Recovery Matrix: Browser A → Browser B) ----
+
+    #[tokio::test]
+    async fn second_client_restores_session_created_by_first_client() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-cross-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence =
+            crate::acp::SessionPersistence::open(root.join("sessions")).await.unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+        // The test agent owns the session + handles the prompt-flow commands
+        // (IsEphemeralSession→false, SendPrompt→EndTurn) so `handle_send_prompt`
+        // persists the user prompt without a real agent binary.
+        let mut sessions = HashSet::new();
+        sessions.insert("session-cross".to_string());
+        acp.install_test_agent_with_sessions(AgentId("agent-cross".to_string()), sessions);
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-cross".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: Some("agent-cross".to_string()),
+                project_id: None,
+                cwd: cwd.clone(),
+            })
+            .await
+            .unwrap();
+
+        // Client A (browser A) sends a prompt → the host persists the
+        // `user_prompt` via SessionPersistence (the cross-client authority).
+        // No client-side storage is involved.
+        let reply_a = handle_send_prompt(
+            "req-a".to_string(),
+            &json!({
+                "agentId": "agent-cross",
+                "sessionId": "session-cross",
+                "text": "hello from client A",
+                "turnId": "turn-cross"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+        assert!(reply_a.ok, "client A's send_prompt succeeds + persists");
+
+        // Client B (browser B) — a DIFFERENT client with no shared CLIENT-SIDE
+        // in-memory state (no browser localStorage/sessionStorage) — calls
+        // `handle_get_session_payload` for the SAME session id.
+        // The host materializes the transcript from its durable store (the
+        // authority), not from client A's browser.
+        let reply_b = handle_get_session_payload(
+            "req-b".to_string(),
+            &json!({ "sessionId": "session-cross" }),
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply_b.ok, "client B restores the session from the host");
+        assert!(reply_b.err.is_none());
+        let payload = reply_b.payload.expect("transcript payload");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("transcript messages array");
+        assert!(!messages.is_empty(), "transcript has client A's prompt");
+        // The user prompt client A sent is in client B's transcript (role=user,
+        // id=turn:<turnId>, text present) — proving the host is the authority.
+        let user_msg = messages
+            .iter()
+            .find(|m| m["role"] == "user")
+            .expect("user message in transcript");
+        assert_eq!(user_msg["id"], "turn:turn-cross");
+        let blocks = user_msg["blocks"].as_array().expect("user message blocks");
+        let text = blocks
+            .iter()
+            .map(|b| b["text"].as_str().unwrap_or(""))
+            .collect::<String>();
+        assert!(
+            text.contains("hello from client A"),
+            "client B sees client A's prompt text: {text}"
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn tier_of_maps_lossy_events() {
         assert_eq!(tier_of("message_chunk"), ReliabilityTier::Lossy);

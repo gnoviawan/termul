@@ -665,6 +665,52 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('reload simulates cursor-replay-then-continue (fresh transport + fresh socket)', async () => {
+    // Category B/E: simulate a page reload by creating a FRESH transport
+    // whose `lastSeq` cursor is restored from the HOST (the cross-client
+    // authority — not the old transport's in-memory state, which a reload
+    // discards). The existing reconnect tests reuse the SAME transport
+    // instance; this creates a NEW one to model a true page reload where
+    // `seenTurnIds` + `lastSeq` are re-seeded from the host (e.g.
+    // `get_session_cursor`), then a NEW socket replays the tail.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
+    // Cursor pre-seeded to 5 (simulating the result of a host restore —
+    // the 5 events the previous page saw). The block comment above explains
+    // this models a host-driven cursor restore; this test does NOT call the
+    // host directly (it pre-seeds the cursor the host would have returned).
+    lastSeq.set('sess-reload', 5)
+
+    const calls: unknown[] = []
+    transport.onEvent('acp:tool_call', (p) => calls.push(p))
+    const chunks: unknown[] = []
+    transport.onEvent('acp:message_chunk', (p) => chunks.push(p))
+
+    // The NEW socket replays seqs <= 5 (already seen before the reload) — the
+    // fresh transport dedups them (never re-delivered).
+    sock.emit({ sid: 'sess-reload', seq: 4, type: 'tool_call', payload: { n: 4 } })
+    sock.emit({ sid: 'sess-reload', seq: 5, type: 'tool_call', payload: { n: 5 } })
+    expect(calls).toEqual([])
+
+    // Reliable seqs 6-10 are delivered in order, advancing the cursor.
+    for (let i = 6; i <= 10; i++) {
+      sock.emit({ sid: 'sess-reload', seq: i, type: 'tool_call', payload: { n: i } })
+    }
+    expect(calls).toEqual([6, 7, 8, 9, 10].map((n) => ({ n })))
+
+    // A lossy seq 11 is also delivered + the cursor advances to 11.
+    sock.emit({ sid: 'sess-reload', seq: 11, type: 'message_chunk', payload: { n: 11 } })
+    await Promise.resolve() // flush the lossy delivery path
+    expect(chunks).toEqual([{ n: 11 }])
+    expect(lastSeq.get('sess-reload')).toBe(11)
+    transport.dispose()
+  })
+
   it('on stale subscribe installs an atomic server-history snapshot', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
