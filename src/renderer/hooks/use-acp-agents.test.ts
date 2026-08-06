@@ -46,6 +46,24 @@ vi.mock('@/lib/acp-api', () => ({
   }
 }))
 
+vi.mock('@/lib/agents/supported-acp-agents', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
+    '@/lib/agents/supported-acp-agents'
+  )
+  return {
+    ...actual,
+    // CAP-6 / Story 8: `useAcpAgents` resolves supported agents from the host
+    // catalog via `resolveSupportedAcpAgents`. Component tests delegate to the
+    // synchronous offline-first derivation so the prewarm selection assertions
+    // match the previous `buildSupportedAcpAgents(...)` behavior exactly.
+    resolveSupportedAcpAgents: async (configs: readonly StoredAgentConfig[]) =>
+      actual.buildSupportedAcpAgents(configs, 'windows-x86_64', undefined, {
+        npx: true,
+        uvx: true
+      })
+  }
+})
+
 vi.mock('@/stores/project-store', () => {
   const getState = () => ({ activeProjectId: projectRef.current.activeProjectId })
   const useProjectStore = (sel?: (s: ReturnType<typeof getState>) => unknown) =>

@@ -1,4 +1,5 @@
 // IPC Result pattern from architecture.md
+import type { AcpCatalog } from './acp-catalog.types'
 import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
 
 export type IpcResult<T> =
@@ -117,6 +118,17 @@ export type WorkspaceManifestIpcChannels = {
     manifest: WorkspaceManifest
   ) => IpcResult<WriteOutcome>
   'workspace:manifest:delete': (projectId: string) => IpcResult<void>
+}
+
+// CAP-6 / Story 8: ACP catalog IPC channels. Mirrors the two Tauri commands
+// (`acp_list_catalog` / `acp_set_catalog_opt_in`) and the two HTTP routes
+// (`GET /acp/catalog` / `POST /acp/catalog/opt-in`) — both transports return
+// the SAME `IpcResult<...>` shape byte-for-byte. The catalog is
+// credential-free, path-free, read-only host introspection. The opt-in is a
+// single boolean that gates CDN registry augmentation.
+export type AcpCatalogIpcChannels = {
+  'acp:catalog:list': (refresh?: boolean) => IpcResult<AcpCatalog>
+  'acp:catalog:set_opt_in': (enabled: boolean) => IpcResult<void>
 }
 
 // Event types for main -> renderer communication

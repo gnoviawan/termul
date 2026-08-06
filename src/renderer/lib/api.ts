@@ -9,6 +9,7 @@
  */
 
 export { acpApi } from './acp-api'
+export { acpCatalogApi } from './acp-catalog-api'
 export { clipboardApi } from './clipboard-api'
 export { dialogApi } from './dialog-api'
 export { filesystemApi } from './filesystem-api'

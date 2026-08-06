@@ -180,6 +180,12 @@ pub struct ServerConfig {
     /// it constructs its own `WorkspaceManifestService` under
     /// `<app_data_dir>/workspace-manifests`).
     pub workspace_manifests_dir: Option<PathBuf>,
+    /// CAP-6 / Story 8: acp-catalog root override. `None` means "use
+    /// `<service_account_state_dir>/acp-catalog`" — the standalone binary
+    /// resolves this in `server_main.rs`. The desktop shared-live path never
+    /// reads this field; it constructs its own `AcpCatalogService` under
+    /// `<app_data_dir>/acp-catalog`.
+    pub acp_catalog_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -277,6 +283,9 @@ impl ServerConfig {
         // here (the service creates the directory if missing; a present
         // non-directory fails loudly at `WorkspaceManifestService::open`).
         let mut workspace_manifests_dir: Option<PathBuf> = None;
+        // CAP-6 / Story 8: acp-catalog root override. Same pattern as
+        // `workspace_manifests_dir` — `None` means resolve at startup.
+        let mut acp_catalog_dir: Option<PathBuf> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -411,6 +420,20 @@ impl ServerConfig {
                     }
                     workspace_manifests_dir = Some(PathBuf::from(trimmed));
                 }
+                "--acp-catalog-dir" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message(
+                            "missing value for --acp-catalog-dir".into(),
+                        )
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --acp-catalog-dir '': must be a non-empty path".into(),
+                        ));
+                    }
+                    acp_catalog_dir = Some(PathBuf::from(trimmed));
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -494,6 +517,7 @@ impl ServerConfig {
             projects_file,
             sessions_dir: Some(sessions_dir),
             workspace_manifests_dir,
+            acp_catalog_dir,
         })
     }
 }
@@ -618,6 +642,7 @@ mod tests {
             projects_file: None,
             sessions_dir: None,
             workspace_manifests_dir: None,
+            acp_catalog_dir: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -634,6 +659,7 @@ mod tests {
             projects_file: None,
             sessions_dir: None,
             workspace_manifests_dir: None,
+            acp_catalog_dir: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -844,6 +870,7 @@ mod tests {
             projects_file: None,
             sessions_dir: None,
             workspace_manifests_dir: None,
+            acp_catalog_dir: None,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved

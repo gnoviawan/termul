@@ -35,6 +35,10 @@ class FakeWebSocket {
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
   switchProjectReply: unknown = null
+  /** CAP-6 / Story 8: when set, `list_acp_catalog` replies with this catalog
+   * payload; unset → falls through to the `not_implemented` fallback (so
+   * `probeRuntime`/`fetchRegistrySnapshot` degrade gracefully). */
+  catalogReply: unknown = null
   historyMode: 'server' | 'live_only' = 'server'
   runtimePolicy = {
     turnTimeoutMs: 3_600_000,
@@ -120,6 +124,14 @@ class FakeWebSocket {
     }
     if (req.type === 'switch_project' && this.switchProjectReply) {
       this.emitReply({ id: req.id, ok: true, payload: this.switchProjectReply })
+      return
+    }
+    // CAP-6 / Story 8: the WS transport resolves the ACP catalog through
+    // `list_acp_catalog` (the host's OS/arch/runtime + per-agent status). When
+    // `catalogReply` is set, reply with it; otherwise fall through to the
+    // `not_implemented` stub so `probeRuntime`/`fetchRegistrySnapshot` degrade.
+    if (req.type === 'list_acp_catalog' && this.catalogReply) {
+      this.emitReply({ id: req.id, ok: true, payload: this.catalogReply })
       return
     }
     if (req.type === 'create_session') {
@@ -326,6 +338,69 @@ describe('WsAcpTransport', () => {
       })
     ).rejects.toBeInstanceOf(AcpTransportError)
 
+    transport.dispose()
+  })
+
+  // CAP-6 / Story 8: the fake `probeRuntime`/`fetchRegistrySnapshot` stubs
+  // (hardcoded `{npx:true,uvx:true}` / `{agents:[]}`) are replaced by a real
+  // `list_acp_catalog` WS request — the host probes npx/uvx/node/bun/python3
+  // and returns the resolved catalog. These tests pin the request shape + the
+  // reply mapping + the graceful degradation when the host is unavailable.
+  it('probeRuntime sends list_acp_catalog and maps host.runtimes', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.catalogReply = {
+      host: {
+        os: 'linux',
+        arch: 'x86_64',
+        runtimes: { npx: true, uvx: false, node: true, bun: false, python3: true }
+      },
+      agents: []
+    }
+
+    const runtime = await transport.probeRuntime()
+    expect(runtime).toEqual({ npx: true, uvx: false })
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    expect(sent.some((r) => r.type === 'list_acp_catalog')).toBe(true)
+    transport.dispose()
+  })
+
+  it('fetchRegistrySnapshot sends list_acp_catalog and maps agents', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.catalogReply = {
+      host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+      agents: [{ id: 'a', name: 'A', source: 'bundled', distribution: {} }]
+    }
+
+    const snapshot = await transport.fetchRegistrySnapshot()
+    expect(snapshot.agents).toHaveLength(1)
+    expect(snapshot.source).toBe('network')
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string })
+    expect(sent.some((r) => r.type === 'list_acp_catalog')).toBe(true)
+    transport.dispose()
+  })
+
+  it('probeRuntime degrades to no-runtimes when the catalog is unavailable', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    // catalogReply unset → `list_acp_catalog` hits the not_implemented fallback;
+    // the transport catches and degrades gracefully.
+    const runtime = await transport.probeRuntime()
+    expect(runtime).toEqual({ npx: false, uvx: false })
     transport.dispose()
   })
 

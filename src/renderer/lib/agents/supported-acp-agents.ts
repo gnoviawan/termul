@@ -5,6 +5,7 @@ import {
   type RegistryAgent,
   type RegistryBinaryTarget
 } from '@/lib/agents/acp-registry'
+import { acpCatalogApi } from '@/lib/api'
 
 const REGISTRY_AGENT_IDS = new Set(REGISTRY_AGENTS.map((agent) => agent.id))
 
@@ -269,4 +270,113 @@ export function isSupportedAcpConfigId(configId: string): boolean {
     ? configId.slice('acp-registry:'.length)
     : configId
   return REGISTRY_AGENT_IDS.has(id)
+}
+
+/**
+ * CAP-6 / Story 8: resolve supported ACP agents from the host-resolved
+ * catalog. Replaces the renderer-side `buildSupportedAcpAgents(...)` derivation
+ * (which used `@tauri-apps/plugin-os` — a desktop-only API) with a call to
+ * `acpCatalogApi.listCatalog()`. The host resolves OS/arch/runtime + per-agent
+ * `SupportedAcpAgentStatus`; the renderer maps `CatalogAgent` →
+ * `SupportedAcpAgentEntry` (preserving the existing export shape so callers
+ * like `useAcpAgents` don't change their consumption shape).
+ *
+ * The existing `buildSupportedAcpAgents(...)` is kept for backward compat
+ * (tests + existing callers that pass a platform arch directly); the call
+ * sites (`useAcpAgents`, `AgentLauncher`, `AcpAgentsSettings`) switch to this
+ * async wrapper.
+ */
+export async function resolveSupportedAcpAgents(
+  persistedConfigs: readonly StoredAgentConfig[]
+): Promise<SupportedAcpAgentEntry[]> {
+  const result = await acpCatalogApi.listCatalog()
+  if (!result.success) {
+    // Degrade gracefully: return an empty list (callers fall back to the
+    // default-agent selection which handles empty lists).
+    return []
+  }
+  const catalog = result.data
+  const persistedById = new Map(persistedConfigs.map((config) => [config.id, config]))
+  const entries: SupportedAcpAgentEntry[] = []
+
+  for (const agent of catalog.agents) {
+    const id = agent.id
+    const configId = registryConfigId(id)
+    const persisted = persistedById.get(configId)
+
+    // Map the host-resolved status to the existing SupportedAcpAgentEntry shape.
+    // The host already computed the status (ready / install-required /
+    // needs-runtime / manual-install / unavailable); we just project it.
+    const registryAgent: RegistryAgent = {
+      id: agent.id,
+      name: agent.name,
+      version: agent.version,
+      description: agent.description,
+      distribution: agent.distribution as RegistryAgent['distribution']
+    }
+
+    if (persisted) {
+      entries.push({
+        id,
+        configId,
+        agent: registryAgent,
+        config: persisted,
+        status: 'ready',
+        install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
+        unavailableReason: null
+      })
+      continue
+    }
+
+    // Derive the install/manualInstall info from the distribution (for
+    // binary-distributed agents) — the host reports the status but the
+    // renderer still needs the archive URL + cmd for the install UI.
+    // The host keeps `host.os` as the raw `std::env::consts::OS` value
+    // ("macos" on macOS) for display, but the bundled catalog's binary map
+    // keys use "darwin-*". Map "macos" -> "darwin" for the binary-target
+    // lookup (mirrors the host's `host_platform_arch()` helper); without this
+    // the install/manualInstall cmd would miss every "darwin-*" entry on macOS.
+    const binaryMapOs = catalog.host.os === 'macos' ? 'darwin' : catalog.host.os
+    const derived = deriveAgentConfig(registryAgent, `${binaryMapOs}-${catalog.host.arch}`)
+
+    entries.push({
+      id,
+      configId,
+      agent: registryAgent,
+      config: derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null,
+      status: agent.status,
+      install:
+        derived.kind === 'needs-install' && derived.archiveUrl
+          ? {
+              archiveUrl: derived.archiveUrl,
+              cmd: derived.cmd,
+              args: derived.args,
+              env: derived.env
+            }
+          : null,
+      manualInstall:
+        derived.kind === 'needs-install' && !derived.archiveUrl
+          ? { cmd: derived.cmd, args: derived.args, env: derived.env }
+          : null,
+      runtimeLauncher:
+        derived.kind === 'runnable' &&
+        (derived.config.command === 'npx' || derived.config.command === 'uvx')
+          ? (derived.config.command as 'npx' | 'uvx')
+          : null,
+      unavailableReason:
+        agent.status === 'unavailable'
+          ? 'This agent is not available for your platform.'
+          : agent.status === 'needs-runtime'
+            ? runtimeUnavailableReason(
+                derived.kind === 'runnable' && derived.config.command === 'uvx' ? 'uvx' : 'npx'
+              )
+            : agent.status === 'manual-install' && derived.kind === 'needs-install'
+              ? manualInstallReason(registryAgent, derived.cmd, derived.args)
+              : null
+    })
+  }
+
+  return entries
 }

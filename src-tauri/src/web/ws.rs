@@ -302,6 +302,14 @@ pub struct AppState {
     /// `workspace_api.rs`; the desktop renderer uses the `workspace_manifest_*`
     /// Tauri commands (same `IpcResult<T>` shape byte-for-byte).
     pub workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
+    /// Host-owned ACP catalog service (CAP-6 / Story 8). `None` when the
+    /// desktop could not open `AcpCatalogService` at startup (degraded mode —
+    /// routes return `ACP_CATALOG_UNAVAILABLE`). The web/remote client reads
+    /// the resolved catalog through `GET /acp/catalog` + WS
+    /// `list_acp_catalog`; the desktop renderer uses the `acp_list_catalog` +
+    /// `acp_set_catalog_opt_in` Tauri commands (same `IpcResult<T>` shape
+    /// byte-for-byte).
+    pub acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
     /// canonicalized target path resolves outside this root are refused with
     /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
@@ -439,6 +447,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     let registry_persistence = state.registry_persistence.clone();
     let projects_file = state.projects_file.clone();
     let history_mode = state.history_mode;
+    // CAP-6 / Story 8: the host-owned ACP catalog service for the
+    // `list_acp_catalog` + `set_catalog_opt_in` WS requests.
+    let acp_catalog = state.acp_catalog.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
     // Per-connection tracking for `switch_project` (Ask-First resolution): the
@@ -563,6 +574,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                         &current_project,
                         &switch_queue,
                         history_mode,
+                        acp_catalog.as_ref(),
                     )
                     .await;
                     if write_tx.send(Outbound::Reply(handled)).is_err() {
@@ -680,6 +692,7 @@ async fn handle_request(
     current_project: &Arc<parking_lot::Mutex<Option<String>>>,
     switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
     history_mode: HistoryMode,
+    acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
 ) -> WsReply {
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
@@ -864,6 +877,17 @@ async fn handle_request(
             .await
         }
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
+        // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
+        // carries the host's OS/arch/runtime availability + per-agent
+        // resolved `SupportedAcpAgentStatus`. The web client never probes
+        // `@tauri-apps/plugin-os` or PATH locally — the host is the single
+        // source of truth.
+        "list_acp_catalog" => {
+            handle_list_acp_catalog(id, &req.payload, acp_catalog).await
+        }
+        "set_catalog_opt_in" => {
+            handle_set_catalog_opt_in(id, &req.payload, acp_catalog).await
+        }
         "kill_agent" => {
             handle_kill_agent(
                 id,
@@ -1310,6 +1334,88 @@ async fn handle_kill_agent(
 /// `list_agents` → `AcpManager::list_agents()`. Reply = `AgentId[]` (JSON array).
 fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
     ok_with_payload(id, &acp.list_agents())
+}
+
+// --- CAP-6 / Story 8: ACP catalog WS handlers ------------------------------
+
+/// `list_acp_catalog` WS request payload. `refresh` is optional (defaults to
+/// false — serve the cached catalog if fresh within the TTL).
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct ListAcpCatalogPayload {
+    refresh: Option<bool>,
+}
+
+async fn handle_list_acp_catalog(
+    id: String,
+    payload: &Value,
+    acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+) -> WsReply {
+    let parsed: ListAcpCatalogPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed list_acp_catalog payload: {e}"),
+            )
+        }
+    };
+    let Some(service) = acp_catalog.cloned() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "acp catalog store is unavailable",
+        );
+    };
+    match service.list_catalog(parsed.refresh.unwrap_or(false)).await {
+        Ok(catalog) => ok_with_payload(id, &catalog),
+        Err(error) => WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            format!("catalog load failed: {error}"),
+        ),
+    }
+}
+
+/// `set_catalog_opt_in` WS request payload. `deny_unknown_fields` rejects an
+/// over-serialized payload loudly at the host boundary.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetCatalogOptInPayload {
+    enabled: bool,
+}
+
+async fn handle_set_catalog_opt_in(
+    id: String,
+    payload: &Value,
+    acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+) -> WsReply {
+    let parsed: SetCatalogOptInPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed set_catalog_opt_in payload (want enabled): {e}"),
+            )
+        }
+    };
+    let Some(service) = acp_catalog.cloned() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "acp catalog store is unavailable",
+        );
+    };
+    match service.set_opt_in(parsed.enabled) {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(error) => WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            format!("opt-in persistence failed: {error}"),
+        ),
+    }
 }
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
@@ -3124,6 +3230,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ))
     }
 
@@ -3469,6 +3576,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -3552,6 +3660,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -3601,6 +3710,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -3636,6 +3746,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
         // Second frame for the same requestId → stale (ticket evicted).
@@ -3654,6 +3765,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -3688,6 +3800,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -3775,6 +3888,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -3808,6 +3922,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -3855,6 +3970,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -3889,6 +4005,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(ok_reply.ok, "first answer wins: {:?}", ok_reply.err);
         let stale_reply = block_on(handle_request(
@@ -3906,6 +4023,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -3939,6 +4057,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -3994,6 +4113,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "stale");
@@ -4019,6 +4139,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ));
         assert!(reply_ok.ok, "{:?}", reply_ok.err);
         assert_eq!(subs2.len(), 1);
@@ -4043,6 +4164,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ));
         assert!(reply_resub.ok, "{:?}", reply_resub.err);
         assert_eq!(subs2.len(), 1);
@@ -4068,6 +4190,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             ));
         assert!(reply_live.ok, "{:?}", reply_live.err);
 
@@ -4120,6 +4243,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(reply.ok, "{:?}", reply.err);
         let payload = reply.payload.expect("selected payload");
@@ -4177,6 +4301,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -4291,6 +4416,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -4998,6 +5124,7 @@ mod tests {
             &current_project_a,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         ));
         assert!(reply_a.ok, "client A switch succeeds: {:?}", reply_a.err);
 

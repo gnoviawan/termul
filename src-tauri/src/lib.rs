@@ -1135,6 +1135,43 @@ pub fn run() {
                 workspace_manifest_service.clone(),
             ));
 
+            // CAP-6 / Story 8: open the host-owned ACP catalog root under
+            // `<app_data_dir>/acp-catalog`. The desktop owns its own root —
+            // NEVER shared with a standalone `termul-server` on the same
+            // machine. The catalog embeds the trusted `agents.json` at build
+            // time, optionally augments with the explicitly-approved CDN
+            // registry snapshot, probes real runtime availability, and
+            // computes the 5-state `SupportedAcpAgentStatus` per agent.
+            // `None` degrades to `ACP_CATALOG_UNAVAILABLE` (the catalog
+            // commands/routes return the error code; the app must still boot).
+            let acp_catalog_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("acp-catalog");
+            let acp_catalog_service =
+                match tauri::async_runtime::block_on(
+                    crate::acp::AcpCatalogService::open(acp_catalog_root.clone()),
+                ) {
+                    Ok(service) => {
+                        log::info!(
+                            "[acp-catalog] host service ready path={}",
+                            service.root().display()
+                        );
+                        Some(service)
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "[acp-catalog] host service unavailable path={} error={error}",
+                            acp_catalog_root.display()
+                        );
+                        None
+                    }
+                };
+            app.manage(commands::HostAcpCatalogStore::new(
+                acp_catalog_service.clone(),
+            ));
+
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
             // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
@@ -1501,6 +1538,9 @@ pub fn run() {
             acp::commands::acp_probe_runtime,
             acp::commands::acp_set_turn_timeout,
             acp::commands::acp_probe_mcp_server,
+            // CAP-6 / Story 8: ACP catalog (host-owned resolution).
+            acp::commands::acp_list_catalog,
+            acp::commands::acp_set_catalog_opt_in,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Agent Skills (Zed-compatible SKILL.md packages)

@@ -5,11 +5,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
-import { useAcpRuntimeProbe } from '@/hooks/use-acp-runtime-probe'
-import { currentPlatformArch } from '@/lib/agents/acp-registry'
+import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
 import {
-  buildSupportedAcpAgents,
   filterSupportedAcpAgents,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
@@ -222,10 +220,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
  */
 export function AcpAgentsSettings(): React.JSX.Element {
   const [filter, setFilter] = useState('')
-  const platformArch = useMemo(() => currentPlatformArch(), [])
-  const runtime = useAcpRuntimeProbe()
   const {
-    activeRegistry,
     usingRemoteRegistry,
     remoteAvailable,
     advisorySummary,
@@ -233,13 +228,10 @@ export function AcpAgentsSettings(): React.JSX.Element {
     lastCheckedAt,
     checkForUpdates,
     applyRemoteRegistry,
-    useBundledRegistry
+    useBundledRegistry: switchToBundledRegistry
   } = useAcpRegistryCatalog()
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
-  const supportedAgents = useMemo(
-    () => buildSupportedAcpAgents(agentConfigs, platformArch, activeRegistry, runtime),
-    [agentConfigs, platformArch, activeRegistry, runtime]
-  )
+  const supportedAgents = useResolvedSupportedAcpAgents(agentConfigs)
 
   const visible = useMemo(
     () => filterSupportedAcpAgents(supportedAgents, filter),
@@ -267,14 +259,26 @@ export function AcpAgentsSettings(): React.JSX.Element {
     })()
   }
 
-  const handleApplyRemote = (): void => {
-    applyRemoteRegistry()
-    const count = advisorySummary?.updatedCount ?? 0
-    toast.success(
-      count > 0
-        ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
-        : 'Using remote registry.'
-    )
+  const handleApplyRemote = async (): Promise<void> => {
+    try {
+      await applyRemoteRegistry()
+      const count = advisorySummary?.updatedCount ?? 0
+      toast.success(
+        count > 0
+          ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
+          : 'Using remote registry.'
+      )
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  const handleUseBundled = async (): Promise<void> => {
+    try {
+      await switchToBundledRegistry()
+    } catch (err) {
+      toast.error(String(err))
+    }
   }
 
   return (
@@ -300,7 +304,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
           </Button>
         )}
         {usingRemoteRegistry && (
-          <Button type="button" size="sm" variant="ghost" onClick={useBundledRegistry}>
+          <Button type="button" size="sm" variant="ghost" onClick={handleUseBundled}>
             Use bundled registry
           </Button>
         )}

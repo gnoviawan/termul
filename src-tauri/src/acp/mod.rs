@@ -9,6 +9,7 @@
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
 pub mod atomic_file;
+pub mod catalog;
 pub mod chat_history_store;
 pub mod client;
 pub mod commands;
@@ -34,6 +35,12 @@ pub use chat_history_store::{
 };
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
+#[allow(unused_imports)]
+pub use catalog::{
+    AcpCatalog, AcpCatalogService, CatalogAgent, CatalogConfigFile, CatalogError,
+    CatalogRuntimeAvailability, CatalogSource, HostCapability, PlatformTarget,
+    SetCatalogOptInRequest, SupportedAcpAgentStatus,
+};
 #[allow(unused_imports)]
 pub use history_import::import_chat_history;
 #[allow(unused_imports)]
