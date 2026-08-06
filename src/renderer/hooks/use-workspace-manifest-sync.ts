@@ -59,9 +59,7 @@ const MANIFEST_WRITE_DEBOUNCE_MS = 500
 let updateIdentityCache: string | null = null
 function getUpdateIdentity(): string {
   if (updateIdentityCache === null) {
-    updateIdentityCache = `renderer-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`
+    updateIdentityCache = `renderer-${crypto.randomUUID()}`
   }
   return updateIdentityCache
 }
@@ -74,7 +72,11 @@ function generateLeafId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
-  return `leaf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  // Fallback for non-HTTPS contexts where crypto.randomUUID is undefined.
+  // crypto.getRandomValues is available in all browser contexts (HTTP + HTTPS).
+  const bytes = new Uint8Array(8)
+  crypto.getRandomValues(bytes)
+  return `leaf-${Date.now()}-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
 }
 
 function collectLeafIds(node: PaneNode): string[] {
