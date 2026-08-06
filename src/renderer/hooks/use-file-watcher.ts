@@ -89,6 +89,12 @@ export function useFileWatcher(): void {
       const parentDir = getDirname(event.path)
       scheduleRefresh(parentDir)
 
+      // Defense in depth (GH-539): only a genuine unlink may close an open
+      // tab. The facade now dispatches unlink-only events here, but guard at
+      // this level too so a save-generated 'change' event can never race the
+      // saving→saved transition and drop the user back to the terminal.
+      if (event.type !== 'unlink') return
+
       // Close editor tab immediately if the deleted file is open
       const editorState = useEditorStore.getState()
       if (editorState.openFiles.has(event.path)) {

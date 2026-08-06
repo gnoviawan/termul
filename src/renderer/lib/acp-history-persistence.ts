@@ -1,9 +1,11 @@
 /** Desktop ACP history persistence boundary. */
 
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
+import type { ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
 export const SESSION_INDEX_KEY = 'acp/sessions/index'
@@ -37,6 +39,161 @@ export interface SessionIndexEntry {
 export interface SessionPayload {
   metadata: SessionIndexEntry
   messages: ChatMessage[]
+  /**
+   * Durable tool calls mirrored alongside the transcript so history reopens
+   * and post-reload resumes restore the tool cards in the timeline. Written
+   * through `sanitizeToolCallsForPersistence` (no `rawOutput`, per-call size
+   * bound). Absent on payloads persisted before this field existed.
+   */
+  toolCalls?: ToolCall[]
+}
+
+/**
+ * Maximum serialized UTF-8 size of a single durable tool call. Calls exceeding
+ * the budget degrade to the structural subset so a giant diff or tool input
+ * cannot balloon the on-disk payload.
+ */
+export const PERSISTED_TOOL_CALL_BYTE_BUDGET = 32 * 1024
+
+/**
+ * Maximum number of tool calls persisted per session. Tool calls are never
+ * trimmed in the live window (messages have `MAX_LIVE_WINDOW_MESSAGES`), so the
+ * durable mirror keeps only the most recent calls — the same recency window a
+ * reader browses — bounding payload growth on very long sessions.
+ */
+export const PERSISTED_TOOL_CALLS_LIMIT = 500
+
+/** Agent-controlled titles are bounded so the degraded subset stays bounded. */
+const PERSISTED_TOOL_CALL_TITLE_LIMIT = 200
+
+const persistedTextEncoder = new TextEncoder()
+
+function boundedTitle(title: unknown): string | undefined {
+  if (typeof title !== 'string' || title.length === 0) return undefined
+  return title.length > PERSISTED_TOOL_CALL_TITLE_LIMIT
+    ? `${title.slice(0, PERSISTED_TOOL_CALL_TITLE_LIMIT)}…`
+    : title
+}
+
+/**
+ * Structural subset of a durable tool call: routing/status fields + timeline
+ * stamps only. Mid-flight statuses are persisted as `failed` — the turn that
+ * owned them has ended, and restoring `pending`/`in_progress` would reopen the
+ * card spinning forever.
+ */
+function structuralToolCall(toolCall: ToolCall): ToolCall {
+  const reduced: ToolCall = { toolCallId: toolCall.toolCallId }
+  const title = boundedTitle(toolCall.title)
+  if (title !== undefined) reduced.title = title
+  if (toolCall.kind !== undefined) reduced.kind = toolCall.kind
+  const status =
+    toolCall.status === 'pending' || toolCall.status === 'in_progress' ? 'failed' : toolCall.status
+  if (status !== undefined) reduced.status = status
+  if (typeof toolCall.timestamp === 'number') reduced.timestamp = toolCall.timestamp
+  if (typeof toolCall.seq === 'number') reduced.seq = toolCall.seq
+  return reduced
+}
+
+/**
+ * Mirror-ready tool calls for durable history. `rawOutput` (unbounded tool
+ * results) is never persisted, and only the known summary/render fields
+ * (`rawInput`, structured `content`) ride along — unknown agent fields are
+ * dropped at the boundary. Over-budget calls degrade to the structural subset
+ * instead of ballooning the payload; non-serializable calls degrade the same
+ * way (and the degradation is logged, never silent).
+ */
+export function sanitizeToolCallsForPersistence(
+  toolCalls: ToolCall[] | undefined
+): ToolCall[] | undefined {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return undefined
+  const degraded: string[] = []
+  const dropped: string[] = []
+  const sanitized: ToolCall[] = []
+  for (const toolCall of toolCalls.slice(-PERSISTED_TOOL_CALLS_LIMIT)) {
+    const candidate = structuralToolCall(toolCall)
+    if (toolCall.rawInput !== undefined) candidate.rawInput = toolCall.rawInput
+    if (toolCall.content !== undefined) candidate.content = toolCall.content
+    let persisted: ToolCall | undefined
+    try {
+      const bytes = persistedTextEncoder.encode(JSON.stringify(candidate)).byteLength
+      if (bytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) persisted = candidate
+    } catch {
+      // Non-serializable fields: fall through to the structural subset.
+    }
+    if (!persisted) {
+      // Over budget or non-serializable: degrade to the structural subset, then
+      // re-measure it. `toolCallId` is agent-sourced and unbounded, so even the
+      // subset can exceed the cap — omit the call entirely in that case so the
+      // per-call budget actually holds.
+      const structural = structuralToolCall(toolCall)
+      const structuralBytes = persistedTextEncoder.encode(JSON.stringify(structural)).byteLength
+      if (structuralBytes <= PERSISTED_TOOL_CALL_BYTE_BUDGET) {
+        degraded.push(toolCall.toolCallId)
+        persisted = structural
+      } else {
+        dropped.push(toolCall.toolCallId)
+      }
+    }
+    if (persisted) sanitized.push(persisted)
+  }
+  if (degraded.length > 0 || dropped.length > 0) {
+    const parts: string[] = []
+    if (degraded.length > 0) {
+      parts.push(`degraded ${degraded.length}: ${degraded.slice(0, 3).join(', ')}`)
+    }
+    if (dropped.length > 0) {
+      parts.push(`dropped ${dropped.length} over-size: ${dropped.slice(0, 3).join(', ')}`)
+    }
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.historyPersistence',
+      message: `Tool-call persistence budget enforced — ${parts.join('; ')}`
+    })
+  }
+  return sanitized.length > 0 ? sanitized : undefined
+}
+
+/** True for a restorable tool-call record: a non-null object with a string id. */
+function isRestorableToolCall(value: unknown): value is ToolCall {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as ToolCall
+  return typeof candidate.toolCallId === 'string' && candidate.toolCallId.length > 0
+}
+
+/** Filter a raw payload array down to restorable tool-call records. */
+function normalizedToolCalls(toolCalls: unknown): ToolCall[] {
+  if (!Array.isArray(toolCalls)) return []
+  return toolCalls.filter(isRestorableToolCall)
+}
+
+/**
+ * Highest `seq` across a payload's messages and tool calls (they share one
+ * timeline counter). Corrupt/partial payloads degrade to the fields present —
+ * a non-array `toolCalls`, or one containing non-record entries (`null`,
+ * scalar, missing id), never throws on the reopen hot path.
+ */
+export function maxPayloadSeq(payload: Pick<SessionPayload, 'messages' | 'toolCalls'>): number {
+  let maxSeq = 0
+  for (const message of payload.messages) {
+    if (typeof message.seq === 'number' && Number.isFinite(message.seq) && message.seq > maxSeq) {
+      maxSeq = message.seq
+    }
+  }
+  for (const toolCall of normalizedToolCalls(payload.toolCalls)) {
+    if (
+      typeof toolCall.seq === 'number' &&
+      Number.isFinite(toolCall.seq) &&
+      toolCall.seq > maxSeq
+    ) {
+      maxSeq = toolCall.seq
+    }
+  }
+  return maxSeq
+}
+
+/** Restored tool calls for a payload, tolerant of legacy/corrupt shapes. */
+export function restoredToolCalls(payload: Pick<SessionPayload, 'toolCalls'>): ToolCall[] {
+  return normalizedToolCalls(payload.toolCalls)
 }
 
 function stablePayload(payload: SessionPayload): string {

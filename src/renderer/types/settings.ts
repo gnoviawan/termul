@@ -1,4 +1,4 @@
-// Context bar visibility settings
+﻿// Context bar visibility settings
 export interface ContextBarSettings {
   showGitBranch: boolean
   showGitStatus: boolean
@@ -64,12 +64,32 @@ export interface AppSettings {
   appearanceMode: 'light' | 'dark'
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
-  /** ACP turn hard-cap timeout in seconds, or null = use the Rust default
-   * (3h). Set via App Preferences; pushed to the Rust core. */
+  /** ACP turn hard-cap timeout in seconds, or null = use the env var / Rust
+   * default (unlimited by default). Set via App Preferences; pushed to the
+   * Rust core. */
   acpTurnTimeoutSecs: number | null
+  /** Automatically save dirty editor files after edits pause (GH-539). */
+  editorAutoSave: boolean
+  /** Idle delay in ms before a dirty editor file is auto-saved (GH-539). */
+  editorAutoSaveDelayMs: number
+  /** ACP per-turn idle timeout in seconds, or null = use the env var / Rust
+   * default (unlimited by default). Set via App Preferences; pushed to the
+   * Rust core. */
+  acpTurnIdleTimeoutSecs: number | null
+  /** ACP session/new timeout in seconds, or null = use the env var / Rust
+   * default (60s). Set via App Preferences; pushed to the Rust core. */
+  acpSessionNewTimeoutSecs: number | null
+  /** ACP session reopen (load/resume) timeout in seconds, or null = use the
+   * env var / Rust default (60s). Set via App Preferences; pushed to the
+   * Rust core. */
+  acpSessionReopenTimeoutSecs: number | null
+  /** ACP first-prompt warmup timeout in seconds, or null = use the env var /
+   * Rust default (45s); 0 disables the warmup entirely. Set via App
+   * Preferences; pushed to the Rust core. */
+  acpFirstPromptWarmupSecs: number | null
 }
 
-/** Whole-UI zoom bounds — match the native View menu semantics (0.5x–3.0x, 10% steps). */
+/** Whole-UI zoom bounds â€” match the native View menu semantics (0.5xâ€“3.0x, 10% steps). */
 export const UI_ZOOM_DEFAULT = 1.0
 export const UI_ZOOM_MIN = 0.5
 export const UI_ZOOM_MAX = 3.0
@@ -120,6 +140,14 @@ export const ORPHAN_TIMEOUT_OPTIONS = [
   { value: 3600000, label: '1 hour' }
 ]
 
+// Editor auto-save delay options (GH-539)
+export const EDITOR_AUTO_SAVE_DELAY_OPTIONS = [
+  { value: 500, label: '0.5 seconds' },
+  { value: 1000, label: '1 second' },
+  { value: 2000, label: '2 seconds' },
+  { value: 5000, label: '5 seconds' }
+]
+
 // Terminal renderer strategy options
 export const TERMINAL_RENDERER_OPTIONS = [
   { value: 'auto', label: 'Auto (Prefer WebGL, DOM fallback)' },
@@ -154,17 +182,72 @@ export const REMOTE_BIND_MODE_OPTIONS: Array<{
 ]
 
 // ACP turn (hard-cap) timeout options for the App Preferences UI. `null` =
-// follow the env var / Rust default (3h); a number is the override in seconds.
+// follow the env var / Rust default (unlimited); a number is the override in
+// seconds.
 export const ACP_TURN_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (3 hours)' },
+  { value: null, label: 'Environment/default (unlimited)' },
   { value: 3600, label: '1 hour' },
   { value: 7200, label: '2 hours' },
   { value: 21600, label: '6 hours' },
   { value: 86400, label: '24 hours' },
   { value: 31536000, label: '1 year' }
+]
+
+// ACP turn idle-timeout options (the silent-turn window). `null` = follow the
+// env var / Rust default (unlimited); a number is the override in seconds.
+export const ACP_TURN_IDLE_TIMEOUT_OPTIONS: Array<{
+  value: number | null
+  label: string
+}> = [
+  { value: null, label: 'Environment/default (unlimited)' },
+  { value: 300, label: '5 minutes' },
+  { value: 600, label: '10 minutes' },
+  { value: 900, label: '15 minutes' },
+  { value: 1800, label: '30 minutes' },
+  { value: 3600, label: '1 hour' }
+]
+
+// ACP session/new timeout options. `null` = follow the env var / Rust default
+// (60 seconds); a number is the override in seconds.
+export const ACP_SESSION_NEW_TIMEOUT_OPTIONS: Array<{
+  value: number | null
+  label: string
+}> = [
+  { value: null, label: 'Environment/default (60 seconds)' },
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '1 minute' },
+  { value: 120, label: '2 minutes' },
+  { value: 300, label: '5 minutes' }
+]
+
+// ACP session reopen (load/resume) timeout options. `null` = follow the env
+// var / Rust default (60 seconds); a number is the override in seconds.
+export const ACP_SESSION_REOPEN_TIMEOUT_OPTIONS: Array<{
+  value: number | null
+  label: string
+}> = [
+  { value: null, label: 'Environment/default (60 seconds)' },
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '1 minute' },
+  { value: 120, label: '2 minutes' },
+  { value: 300, label: '5 minutes' }
+]
+
+// ACP first-prompt warmup timeout options. `null` = follow the env var / Rust
+// default (45 seconds); 0 disables the warmup entirely; a positive number is
+// the override in seconds.
+export const ACP_FIRST_PROMPT_WARMUP_OPTIONS: Array<{
+  value: number | null
+  label: string
+}> = [
+  { value: null, label: 'Environment/default (45 seconds)' },
+  { value: 0, label: 'Disabled' },
+  { value: 15, label: '15 seconds' },
+  { value: 45, label: '45 seconds' },
+  { value: 120, label: '2 minutes' }
 ]
 
 // Default application settings
@@ -187,7 +270,13 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   colorTheme: 'termul',
   appearanceMode: 'dark',
   uiZoomLevel: UI_ZOOM_DEFAULT,
-  acpTurnTimeoutSecs: null
+  acpTurnTimeoutSecs: null,
+  editorAutoSave: false,
+  editorAutoSaveDelayMs: 1000,
+  acpTurnIdleTimeoutSecs: null,
+  acpSessionNewTimeoutSecs: null,
+  acpSessionReopenTimeoutSecs: null,
+  acpFirstPromptWarmupSecs: null
 }
 
 // Persistence key for app settings

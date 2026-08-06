@@ -1587,6 +1587,10 @@ pub fn run() {
             acp::commands::acp_authenticate,
             acp::commands::acp_probe_runtime,
             acp::commands::acp_set_turn_timeout,
+            acp::commands::acp_set_turn_idle_timeout,
+            acp::commands::acp_set_session_new_timeout,
+            acp::commands::acp_set_session_reopen_timeout,
+            acp::commands::acp_set_first_prompt_warmup_timeout,
             acp::commands::acp_probe_mcp_server,
             // CAP-6 / Story 8: ACP catalog (host-owned resolution).
             acp::commands::acp_list_catalog,

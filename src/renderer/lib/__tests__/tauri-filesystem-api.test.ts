@@ -587,4 +587,145 @@ describe('tauriFilesystemApi', () => {
       cleanup()
     })
   })
+
+  describe('watch event dispatch (typed subscriptions, GH-539)', () => {
+    // Captures the single callback handed to watchImmediate so tests can emit
+    // raw notify-style events exactly as the Tauri plugin would.
+    async function watchAndCapture(): Promise<(event: unknown) => void> {
+      let captured: WatchCallback | null = null
+      vi.mocked(watchImmediate).mockImplementation(async (_paths, callback) => {
+        captured = callback as WatchCallback
+        return vi.fn()
+      })
+
+      const result = await tauriFilesystemApi.watchDirectory('/test')
+      expect(result.success).toBe(true)
+      expect(captured).not.toBeNull()
+
+      return (event: unknown) => {
+        captured?.(event)
+      }
+    }
+
+    function emitEvent(kindType: string, path: string): unknown {
+      return { type: { type: kindType }, paths: [path] }
+    }
+
+    it('routes create events only to onFileCreated subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('create', '/test/new.txt'))
+
+      expect(onCreated).toHaveBeenCalledTimes(1)
+      expect(onCreated).toHaveBeenCalledWith({ type: 'add', path: '/test/new.txt' })
+      expect(onChanged).not.toHaveBeenCalled()
+      expect(onDeleted).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('routes modify events only to onFileChanged subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('modify', '/test/saved.txt'))
+
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      expect(onChanged).toHaveBeenCalledWith({ type: 'change', path: '/test/saved.txt' })
+      expect(onCreated).not.toHaveBeenCalled()
+      expect(onDeleted).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('routes remove events only to onFileDeleted subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('remove', '/test/gone.txt'))
+
+      expect(onDeleted).toHaveBeenCalledTimes(1)
+      expect(onDeleted).toHaveBeenCalledWith({ type: 'unlink', path: '/test/gone.txt' })
+      expect(onChanged).not.toHaveBeenCalled()
+      expect(onCreated).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('fires a callback subscribed for all types exactly once per event', async () => {
+      // Mirrors callers that pass one function to all three subscriptions
+      // (e.g. use-composer-mentions cache invalidation).
+      const emit = await watchAndCapture()
+      const invalidate = vi.fn()
+      const cleanups = [
+        tauriFilesystemApi.onFileChanged(invalidate),
+        tauriFilesystemApi.onFileCreated(invalidate),
+        tauriFilesystemApi.onFileDeleted(invalidate)
+      ]
+
+      emit(emitEvent('create', '/test/a.txt'))
+      emit(emitEvent('modify', '/test/a.txt'))
+      emit(emitEvent('remove', '/test/a.txt'))
+
+      expect(invalidate).toHaveBeenCalledTimes(3)
+      expect(invalidate.mock.calls.map((call) => call[0].type)).toEqual(['add', 'change', 'unlink'])
+
+      for (const cleanup of cleanups) cleanup()
+    })
+
+    it('stops dispatching to a callback after its subscription cleanup runs', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+
+      emit(emitEvent('modify', '/test/one.txt'))
+      expect(onChanged).toHaveBeenCalledTimes(1)
+
+      cleanupChanged()
+      emit(emitEvent('modify', '/test/one.txt'))
+      emit(emitEvent('create', '/test/two.txt'))
+      emit(emitEvent('remove', '/test/one.txt'))
+
+      expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps other event types when only one subscription is cleaned up', async () => {
+      const emit = await watchAndCapture()
+      const shared = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(shared)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(shared)
+
+      cleanupChanged()
+
+      emit(emitEvent('modify', '/test/a.txt'))
+      emit(emitEvent('create', '/test/b.txt'))
+
+      expect(shared).toHaveBeenCalledTimes(1)
+      expect(shared).toHaveBeenCalledWith({ type: 'add', path: '/test/b.txt' })
+
+      cleanupCreated()
+    })
+  })
 })

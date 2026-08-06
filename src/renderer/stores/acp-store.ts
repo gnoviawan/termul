@@ -90,8 +90,11 @@ import {
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
   markSessionPayloadPinned,
+  maxPayloadSeq,
   queueSessionPayloadDelete,
+  restoredToolCalls,
   type SessionIndexEntry,
+  type SessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
 import {
@@ -516,6 +519,13 @@ interface AcpState {
   // Actions — MCP server registry (P6)
   loadMcpServers: () => Promise<void>
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
+  /**
+   * Append multiple new registry entries atomically: one optimistic state
+   * update, one disk write, rollback on failure. Used by the Settings JSON add
+   * flow so a multi-server import persists as a single batch — no per-entry
+   * writes, no partial prefix left behind to duplicate on retry.
+   */
+  importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
 
@@ -1094,6 +1104,7 @@ function persistSession(
   state: {
     sessions: Record<SessionId, AcpSession>
     messages: Record<SessionId, ChatMessage[]>
+    toolCalls: Record<SessionId, ToolCall[]>
     sessionIndex: SessionIndexEntry[]
     configToLiveAgent: Record<string, AgentId>
   },
@@ -1889,11 +1900,7 @@ async function openHistorySessionInner(
 
   // Rebase the process-wide seq counter so live events appended after the
   // restored transcript sort after it (nextSeq() returns > max restored seq).
-  let maxRestoredSeq = 0
-  for (const m of payload.messages) {
-    if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
-  }
-  rebaseSeqCounter(maxRestoredSeq)
+  rebaseSeqCounter(maxPayloadSeq(payload))
 
   // Preserve controls already held by a cached closed session. Persisted
   // history does not contain them, and optional reopen fields may be omitted.
@@ -1923,7 +1930,10 @@ async function openHistorySessionInner(
         replaying: null
       }
     },
-    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
+    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+    // Restore the mirrored tool calls so the timeline shows the tool cards
+    // again — without this only thoughts + replies survive a reopen.
+    toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
   }))
   onTranscriptInstalled()
 
@@ -2057,6 +2067,7 @@ async function openHistorySessionInner(
       // history (a partial replay may have replaced it).
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -2386,6 +2397,22 @@ function coalesceSet(sessionId: SessionId, apply: (s: AcpState) => Partial<AcpSt
   coalescedBuffer.push({ sessionId, apply })
   scheduleCoalesceFlush()
 }
+
+// MCP registry mutations (save/import/toggle/delete) are serialized through a
+// single promise queue. Without this, two overlapping mutations each snapshot
+// `mcpServers` before their async disk write; the slower one would persist a
+// stale snapshot AFTER the newer mutation (clobbering it), and its rollback on
+// failure would restore that stale snapshot — dropping the intervening change.
+// The queue guarantees each mutation reads, writes, and (on failure) rolls back
+// against the registry state as of its own turn.
+let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
+async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
+  const run = mcpRegistryQueue.then(mutation)
+  // Swallow for the chain only — the returned promise still rejects to callers.
+  mcpRegistryQueue = run.catch(() => undefined)
+  await run
+}
+
 export const useAcpStore = create<AcpState>((set, get) => ({
   agents: {},
   agentStatus: {},
@@ -3533,11 +3560,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const payload = await loadSessionPayload(id)
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
-    let maxRestoredSeq = 0
-    for (const m of payload.messages) {
-      if (typeof m.seq === 'number' && m.seq > maxRestoredSeq) maxRestoredSeq = m.seq
-    }
-    rebaseSeqCounter(maxRestoredSeq)
+    rebaseSeqCounter(maxPayloadSeq(payload))
     set((s) => ({
       sessions: {
         ...s.sessions,
@@ -3565,7 +3588,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           replaying: 'streaming'
         }
       },
-      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) }
+      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+      // Restore the mirrored tool calls alongside the transcript so the
+      // resumed session's timeline keeps its tool cards.
+      toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
     }))
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -3587,6 +3613,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // throws on the bootstrap path.
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -3997,58 +4024,80 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  saveMcpServer: async (server) => {
-    const list = get().mcpServers
-    const idx = list.findIndex((item) => item.id === server.id)
-    const nextServer = { ...server, enabled: server.enabled ?? true }
-    const next =
-      idx === -1
-        ? [...list, nextServer]
-        : list.map((item) => (item.id === server.id ? nextServer : item))
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.saveMcpServer',
-        message: `Failed to persist MCP registry (${String(err)})`
-      })
-      throw err
-    }
+  saveMcpServer: (server) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const idx = list.findIndex((item) => item.id === server.id)
+      const nextServer = { ...server, enabled: server.enabled ?? true }
+      const next =
+        idx === -1
+          ? [...list, nextServer]
+          : list.map((item) => (item.id === server.id ? nextServer : item))
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.saveMcpServer',
+          message: `Failed to persist MCP registry (${String(err)})`
+        })
+        throw err
+      }
+    }),
+
+  importMcpServers: async (servers) => {
+    if (servers.length === 0) return
+    await runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = [...list, ...servers]
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.importMcpServers',
+          message: `Failed to persist MCP registry import (${String(err)})`
+        })
+        throw err
+      }
+    })
   },
 
-  setMcpServerEnabled: async (id, enabled) => {
-    const list = get().mcpServers
-    const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.setMcpServerEnabled',
-        message: `Failed to persist MCP registry toggle (${String(err)})`
-      })
-      throw err
-    }
-  },
+  setMcpServerEnabled: (id, enabled) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.setMcpServerEnabled',
+          message: `Failed to persist MCP registry toggle (${String(err)})`
+        })
+        throw err
+      }
+    }),
 
-  deleteMcpServer: async (id) => {
-    const list = get().mcpServers
-    const next = list.filter((server) => server.id !== id)
-    set({ mcpServers: next })
-    try {
-      await saveMcpServersToDisk(next)
-    } catch (err) {
-      set({ mcpServers: list })
-      void logFrontendError({
-        source: 'acp-store.deleteMcpServer',
-        message: `Failed to persist MCP registry deletion (${String(err)})`
-      })
-      throw err
-    }
-  },
+  deleteMcpServer: (id) =>
+    runSerializedMcpRegistryMutation(async () => {
+      const list = get().mcpServers
+      const next = list.filter((server) => server.id !== id)
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.deleteMcpServer',
+          message: `Failed to persist MCP registry deletion (${String(err)})`
+        })
+        throw err
+      }
+    }),
 
   // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
   // concurrent probes per server id via `mcpProbing`.

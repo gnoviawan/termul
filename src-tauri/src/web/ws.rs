@@ -358,7 +358,14 @@ pub enum HistoryMode {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimePolicy {
+    /// Authoritative absolute server turn ceiling, in ms. `0` is the
+    /// **unlimited** sentinel — no hard cap is imposed (the default). A
+    /// non-zero value is the bounded hard-cap deadline the client should not
+    /// let its inactivity refresh extend past.
     pub turn_timeout_ms: u64,
+    /// Inactivity budget, in ms, refreshed on matching-session activity. `0`
+    /// is the **unlimited** sentinel — the client imposes no inactivity timer
+    /// (the default). A non-zero value is the bounded inactivity window.
     pub prompt_inactivity_timeout_ms: u64,
     pub permission_reconnect_grace_ms: u64,
     pub ping_interval_ms: u64,
@@ -368,14 +375,25 @@ pub struct RuntimePolicy {
 impl RuntimePolicy {
     #[must_use]
     pub fn resolved(permission_reconnect_grace: Duration) -> Self {
-        let turn_timeout = crate::acp::manager::resolved_turn_timeout();
+        let turn_timeout = crate::acp::manager::resolved_turn_timeout(); // Option
+        let turn_idle = crate::acp::manager::turn_idle_timeout();         // Option
+        // `turn_timeout_ms`: 0 = unlimited (no hard cap) sentinel; otherwise
+        // the bounded hard cap in ms.
+        let turn_timeout_ms = turn_timeout.map(|d| d.as_millis() as u64).unwrap_or(0);
+        // Inactivity budget published to the client. Preserve the original
+        // `hard/2` derivation when a hard cap is configured (bounded, strictly
+        // shorter than the ceiling); otherwise use the idle timeout when it is
+        // configured (bounded); otherwise 0 (unlimited — no client-side
+        // inactivity timer). 0 keeps the client's `setTimeout` well under the
+        // browser 32-bit ceiling and defers entirely to the server.
+        let prompt_inactivity_timeout_ms = match (turn_timeout, turn_idle) {
+            (Some(hard), _) => (hard.as_millis() as u64 / 2).max(1),
+            (None, Some(idle)) => idle.as_millis() as u64,
+            (None, None) => 0,
+        };
         Self {
-            turn_timeout_ms: turn_timeout.as_millis() as u64,
-            // The inactivity budget — refreshed on matching-session activity but
-            // strictly shorter than the absolute turn ceiling so a stalled turn
-            // still times out even with intermittent activity. Half the turn
-            // timeout keeps the inactivity budget proportional to the ceiling.
-            prompt_inactivity_timeout_ms: (turn_timeout.as_millis() as u64 / 2).max(1),
+            turn_timeout_ms,
+            prompt_inactivity_timeout_ms,
             permission_reconnect_grace_ms: permission_reconnect_grace.as_millis() as u64,
             ping_interval_ms: PING_INTERVAL.as_millis() as u64,
             pong_timeout_ms: PONG_TIMEOUT.as_millis() as u64,

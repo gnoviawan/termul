@@ -36,15 +36,22 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
+import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
 import {
+  useAcpFirstPromptWarmup,
+  useAcpSessionNewTimeout,
+  useAcpSessionReopenTimeout,
+  useAcpTurnIdleTimeout,
   useAcpTurnTimeout,
   useConfirmTerminalClose,
   useDefaultProjectColor,
   useDefaultShell,
+  useEditorAutoSave,
+  useEditorAutoSaveDelayMs,
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
@@ -59,8 +66,14 @@ import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
+  ACP_FIRST_PROMPT_WARMUP_OPTIONS,
+  ACP_SESSION_NEW_TIMEOUT_OPTIONS,
+  ACP_SESSION_REOPEN_TIMEOUT_OPTIONS,
+  ACP_TURN_IDLE_TIMEOUT_OPTIONS,
   ACP_TURN_TIMEOUT_OPTIONS,
   BUFFER_SIZE_OPTIONS,
+  DEFAULT_APP_SETTINGS,
+  EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
   MAX_TERMINALS_OPTIONS,
   ORPHAN_TIMEOUT_OPTIONS,
@@ -76,7 +89,7 @@ import {
 const APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'appearance', label: 'Terminal Appearance', icon: <Palette size={16} /> },
   { id: 'shell', label: 'Default Shell', icon: <Terminal size={16} /> },
-  { id: 'behavior', label: 'Terminal Behavior', icon: <Sliders size={16} /> },
+  { id: 'behavior', label: 'Behavior', icon: <Sliders size={16} /> },
   { id: 'project-defaults', label: 'New Project Defaults', icon: <Monitor size={16} /> },
   { id: 'ai-agents', label: 'AI Agents', icon: <Bot size={16} /> },
   { id: 'mcp-servers', label: 'MCP Servers', icon: <Network size={16} /> },
@@ -146,6 +159,18 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Timeout Before Cleanup',
     description: 'Duration before inactive terminals are cleaned up.',
     keywords: ['orphan', 'inactive']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Auto Save',
+    description: 'Automatically save editor files after you stop typing.',
+    keywords: ['editor', 'autosave', 'auto save', 'save']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Auto Save Delay',
+    description: 'Idle time before editor files are saved automatically.',
+    keywords: ['editor', 'autosave', 'delay', 'timeout']
   },
   {
     categoryId: 'project-defaults',
@@ -219,6 +244,12 @@ export default function AppPreferences(): React.JSX.Element {
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
+  const editorAutoSave = useEditorAutoSave()
+  const editorAutoSaveDelayMs = useEditorAutoSaveDelayMs()
+  const acpTurnIdleTimeoutSecs = useAcpTurnIdleTimeout()
+  const acpSessionNewTimeoutSecs = useAcpSessionNewTimeout()
+  const acpSessionReopenTimeoutSecs = useAcpSessionReopenTimeout()
+  const acpFirstPromptWarmupSecs = useAcpFirstPromptWarmup()
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -340,6 +371,59 @@ export default function AppPreferences(): React.JSX.Element {
       await acpApi.setTurnTimeout(value)
     } catch (error) {
       console.error('Failed to apply ACP turn timeout:', error)
+    }
+  }
+
+  const handleEditorAutoSaveToggle = async (enabled: boolean) => {
+    await updateSetting('editorAutoSave', enabled)
+    // Cover buffers that were already dirty when the setting was turned on.
+    if (enabled) {
+      scheduleAllDirtyAutoSaves()
+    }
+  }
+
+  const handleEditorAutoSaveDelayChange = async (value: number) => {
+    await updateSetting('editorAutoSaveDelayMs', value)
+  }
+
+  const handleAcpTurnIdleTimeoutChange = async (value: number | null) => {
+    await updateSetting('acpTurnIdleTimeoutSecs', value)
+    // Push to the Rust core so the next turn picks up the new idle window.
+    try {
+      await acpApi.setTurnIdleTimeout(value)
+    } catch (error) {
+      console.error('Failed to apply ACP turn idle timeout:', error)
+    }
+  }
+
+  const handleAcpSessionNewTimeoutChange = async (value: number | null) => {
+    await updateSetting('acpSessionNewTimeoutSecs', value)
+    // Push to the Rust core so the next session/new picks up the new budget.
+    try {
+      await acpApi.setSessionNewTimeout(value)
+    } catch (error) {
+      console.error('Failed to apply ACP session/new timeout:', error)
+    }
+  }
+
+  const handleAcpSessionReopenTimeoutChange = async (value: number | null) => {
+    await updateSetting('acpSessionReopenTimeoutSecs', value)
+    // Push to the Rust core so the next session/load|resume uses the new budget.
+    try {
+      await acpApi.setSessionReopenTimeout(value)
+    } catch (error) {
+      console.error('Failed to apply ACP session reopen timeout:', error)
+    }
+  }
+
+  const handleAcpFirstPromptWarmupChange = async (value: number | null) => {
+    await updateSetting('acpFirstPromptWarmupSecs', value)
+    // Push to the Rust core so the next session creation uses the new warmup
+    // budget (0 disables the warmup entirely).
+    try {
+      await acpApi.setFirstPromptWarmupTimeout(value)
+    } catch (error) {
+      console.error('Failed to apply ACP first-prompt warmup timeout:', error)
     }
   }
 
@@ -620,9 +704,9 @@ export default function AppPreferences(): React.JSX.Element {
           <SettingsSection id="behavior">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Terminal Behavior</h2>
+                <h2 className="text-lg font-medium text-foreground">Behavior</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Configure how inactive terminals are managed.
+                  Configure terminal cleanup and editor auto-save behavior.
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
@@ -699,6 +783,68 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Terminals inactive for this duration will be cleaned up (only if not displayed).
+                  </p>
+                </div>
+
+                {/* Editor Auto Save Toggle (GH-539) */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Editor Auto Save
+                  </label>
+                  <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-foreground">Enable auto save</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Automatically save editor files after you stop typing
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={editorAutoSave}
+                      aria-label="Enable auto save"
+                      onClick={() => handleEditorAutoSaveToggle(!editorAutoSave)}
+                      className={cn(
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        editorAutoSave ? 'bg-primary' : 'bg-input'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          editorAutoSave ? 'translate-x-6' : 'translate-x-1'
+                        )}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Auto Save Delay Dropdown (GH-539) */}
+                <div>
+                  <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                    Auto Save Delay
+                  </label>
+                  <select
+                    value={
+                      EDITOR_AUTO_SAVE_DELAY_OPTIONS.some(
+                        (option) => option.value === editorAutoSaveDelayMs
+                      )
+                        ? editorAutoSaveDelayMs
+                        : DEFAULT_APP_SETTINGS.editorAutoSaveDelayMs
+                    }
+                    onChange={(e) => handleEditorAutoSaveDelayChange(parseInt(e.target.value, 10))}
+                    disabled={!editorAutoSave}
+                    aria-label="Auto save delay"
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {EDITOR_AUTO_SAVE_DELAY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Time to wait after your last edit before saving automatically.
                   </p>
                 </div>
               </div>
@@ -786,9 +932,154 @@ export default function AppPreferences(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Maximum wall-clock duration for a single agent turn. Active turns that stream
-                    continuously run until this cap; a silent (wedged) turn errors after ~15min
-                    regardless. The TERMUL_ACP_TURN_TIMEOUT_SECS env var still overrides this
+                    continuously run until this cap; a silent (wedged) turn errors per the Turn Idle
+                    Timeout below. The TERMUL_ACP_TURN_TIMEOUT_SECS env var still overrides this
                     (operator/diagnostic). Desktop only — the standalone server uses the env var.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="acp-turn-idle-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    Turn Idle Timeout
+                  </label>
+                  <select
+                    id="acp-turn-idle-timeout"
+                    value={
+                      acpTurnIdleTimeoutSecs === null ? 'null' : String(acpTurnIdleTimeoutSecs)
+                    }
+                    onChange={(e) =>
+                      handleAcpTurnIdleTimeoutChange(
+                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
+                      )
+                    }
+                    disabled={!isTauriContext()}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ACP_TURN_IDLE_TIMEOUT_OPTIONS.map((option) => (
+                      <option
+                        key={option.value === null ? 'null' : String(option.value)}
+                        value={option.value === null ? 'null' : String(option.value)}
+                      >
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Window with no agent activity after which a turn is treated as wedged and
+                    cancelled. The TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS env var still overrides this
+                    (operator/diagnostic). Desktop only — the standalone server uses the env var.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="acp-session-new-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    Session/New Timeout
+                  </label>
+                  <select
+                    id="acp-session-new-timeout"
+                    value={
+                      acpSessionNewTimeoutSecs === null ? 'null' : String(acpSessionNewTimeoutSecs)
+                    }
+                    onChange={(e) =>
+                      handleAcpSessionNewTimeoutChange(
+                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
+                      )
+                    }
+                    disabled={!isTauriContext()}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ACP_SESSION_NEW_TIMEOUT_OPTIONS.map((option) => (
+                      <option
+                        key={option.value === null ? 'null' : String(option.value)}
+                        value={option.value === null ? 'null' : String(option.value)}
+                      >
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    How long to wait for an agent to answer session/new before the spawn fails
+                    (cold-start model fetches may need more). The
+                    TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS env var still overrides this
+                    (operator/diagnostic). Desktop only — the standalone server uses the env var.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="acp-session-reopen-timeout"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    Session Reopen Timeout
+                  </label>
+                  <select
+                    id="acp-session-reopen-timeout"
+                    value={
+                      acpSessionReopenTimeoutSecs === null
+                        ? 'null'
+                        : String(acpSessionReopenTimeoutSecs)
+                    }
+                    onChange={(e) =>
+                      handleAcpSessionReopenTimeoutChange(
+                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
+                      )
+                    }
+                    disabled={!isTauriContext()}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ACP_SESSION_REOPEN_TIMEOUT_OPTIONS.map((option) => (
+                      <option
+                        key={option.value === null ? 'null' : String(option.value)}
+                        value={option.value === null ? 'null' : String(option.value)}
+                      >
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    How long to wait for session/load / session/resume (large histories replay
+                    before responding; they may need more). The
+                    TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS env var still overrides this
+                    (operator/diagnostic). Desktop only — the standalone server uses the env var.
+                  </p>
+                </div>
+                <div>
+                  <label
+                    htmlFor="acp-first-prompt-warmup"
+                    className="block text-sm font-medium text-secondary-foreground mb-2"
+                  >
+                    First-Prompt Warmup Timeout
+                  </label>
+                  <select
+                    id="acp-first-prompt-warmup"
+                    value={
+                      acpFirstPromptWarmupSecs === null ? 'null' : String(acpFirstPromptWarmupSecs)
+                    }
+                    onChange={(e) =>
+                      handleAcpFirstPromptWarmupChange(
+                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
+                      )
+                    }
+                    disabled={!isTauriContext()}
+                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {ACP_FIRST_PROMPT_WARMUP_OPTIONS.map((option) => (
+                      <option
+                        key={option.value === null ? 'null' : String(option.value)}
+                        value={option.value === null ? 'null' : String(option.value)}
+                      >
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Warmup prompt budget after session/new to absorb agent cold-start stalls; choose
+                    Disabled to skip the warmup entirely. The TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS
+                    env var still overrides this (operator/diagnostic). Desktop only — the
+                    standalone server uses the env var.
                   </p>
                 </div>
               </div>

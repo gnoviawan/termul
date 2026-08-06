@@ -683,6 +683,35 @@ export async function acpSetTurnTimeout(secs: number | null): Promise<void> {
   await getAcpTransport().setTurnTimeout(secs)
 }
 
+// Push the ACP turn idle-timeout override to the backend, in seconds, or
+// `null` to clear (fall back to the env var / default). Desktop-only: the WS
+// transport no-ops on the standalone server.
+export async function acpSetTurnIdleTimeout(secs: number | null): Promise<void> {
+  await getAcpTransport().setTurnIdleTimeout(secs)
+}
+
+// Push the ACP session/new timeout override to the backend, in seconds, or
+// `null` to clear (fall back to the env var / default). Desktop-only: the WS
+// transport no-ops on the standalone server.
+export async function acpSetSessionNewTimeout(secs: number | null): Promise<void> {
+  await getAcpTransport().setSessionNewTimeout(secs)
+}
+
+// Push the ACP session reopen (load/resume) timeout override to the backend,
+// in seconds, or `null` to clear (fall back to the env var / default).
+// Desktop-only: the WS transport no-ops on the standalone server.
+export async function acpSetSessionReopenTimeout(secs: number | null): Promise<void> {
+  await getAcpTransport().setSessionReopenTimeout(secs)
+}
+
+// Push the ACP first-prompt warmup timeout override to the backend, in
+// seconds, or `null` to clear (fall back to the env var / default); 0 disables
+// the warmup entirely. Desktop-only: the WS transport no-ops on the standalone
+// server.
+export async function acpSetFirstPromptWarmupTimeout(secs: number | null): Promise<void> {
+  await getAcpTransport().setFirstPromptWarmupTimeout(secs)
+}
+
 // --- Event subscription ----------------------------------------------------
 
 /**
@@ -713,6 +742,10 @@ export const acpApi = {
   answerQuestion: acpAnswerQuestion,
   authenticate: acpAuthenticate,
   setTurnTimeout: acpSetTurnTimeout,
+  setTurnIdleTimeout: acpSetTurnIdleTimeout,
+  setSessionNewTimeout: acpSetSessionNewTimeout,
+  setSessionReopenTimeout: acpSetSessionReopenTimeout,
+  setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
   installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,

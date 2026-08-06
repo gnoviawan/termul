@@ -92,9 +92,57 @@ async function searchWithRipgrep(
   }
 }
 
+/**
+ * Watch event types dispatched by the Tauri watcher (mapped from notify kinds).
+ * Type filtering is an internal facade detail — the shared `FilesystemApi`
+ * contract keeps one `FileChangeCallback` signature per subscription method.
+ */
+type FileWatchEventType = 'change' | 'add' | 'unlink'
+
+/** Registry of callbacks keyed by the event types they subscribed for. */
+type TypedCallbackRegistry = Map<FileChangeCallback, Set<FileWatchEventType>>
+
+function registerTypedCallback(
+  registry: TypedCallbackRegistry,
+  callback: FileChangeCallback,
+  eventType: FileWatchEventType
+): void {
+  const types = registry.get(callback)
+  if (types) {
+    types.add(eventType)
+  } else {
+    registry.set(callback, new Set([eventType]))
+  }
+}
+
+function unregisterTypedCallback(
+  registry: TypedCallbackRegistry,
+  callback: FileChangeCallback,
+  eventType: FileWatchEventType
+): void {
+  const types = registry.get(callback)
+  if (!types) return
+  types.delete(eventType)
+  if (types.size === 0) {
+    registry.delete(callback)
+  }
+}
+
+function dispatchTypedEvent(
+  registry: TypedCallbackRegistry,
+  eventType: FileWatchEventType,
+  event: FileChangeEvent
+): void {
+  registry.forEach((types, callback) => {
+    if (types.has(eventType)) {
+      callback(event)
+    }
+  })
+}
+
 const activeWatchers = new Map<string, () => void>()
-const activeCallbacks = new Map<string, Set<FileChangeCallback>>()
-const globalCallbacks = new Set<FileChangeCallback>()
+const activeCallbacks = new Map<string, TypedCallbackRegistry>()
+const globalCallbacks: TypedCallbackRegistry = new Map()
 
 function shouldIgnore(name: string): boolean {
   return ALWAYS_IGNORE.includes(name)
@@ -711,7 +759,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
             // The kind object has a 'type' property: 'create' | 'modify' | 'remove' | 'access' | 'other' | 'any'
             const kindType = (event.type as { type?: string })?.type ?? 'other'
 
-            let changeType: FileChangeEvent['type'] = 'change'
+            let changeType: FileWatchEventType = 'change'
             if (kindType === 'create') changeType = 'add'
             else if (kindType === 'remove') changeType = 'unlink'
 
@@ -722,18 +770,18 @@ export function createTauriFilesystemApi(): FilesystemApi {
               path: changedPath
             }
 
-            callbacks.forEach((cb) => {
-              cb(changeEvent)
-            })
-            globalCallbacks.forEach((cb) => {
-              cb(changeEvent)
-            })
+            // Dispatch by event type: notify fires every kind (a save's modify
+            // events included) and fanning all of them to every subscriber let
+            // delete-handlers run on change events (#539). Route each event
+            // only to callbacks subscribed for its type.
+            dispatchTypedEvent(callbacks, changeType, changeEvent)
+            dispatchTypedEvent(globalCallbacks, changeType, changeEvent)
           }
         )
 
         activeWatchers.set(normalizedDirPath, unlisten)
         if (!activeCallbacks.has(normalizedDirPath)) {
-          activeCallbacks.set(normalizedDirPath, new Set())
+          activeCallbacks.set(normalizedDirPath, new Map())
         }
         return { success: true, data: undefined }
       } catch (err) {
@@ -761,25 +809,39 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onFileChanged(callback: FileChangeCallback): () => void {
-      globalCallbacks.add(callback)
+      registerTypedCallback(globalCallbacks, callback, 'change')
 
-      // Return cleanup function
+      // Return cleanup function — removes only the 'change' subscription so
+      // callers that registered the same callback for several event types
+      // (e.g. onFileChanged + onFileCreated + onFileDeleted) keep the others.
       return () => {
-        globalCallbacks.delete(callback)
+        unregisterTypedCallback(globalCallbacks, callback, 'change')
         for (const callbacks of activeCallbacks.values()) {
-          callbacks.delete(callback)
+          unregisterTypedCallback(callbacks, callback, 'change')
         }
       }
     },
 
     onFileCreated(callback: FileChangeCallback): () => void {
-      // Same implementation as onFileChanged for plugin-fs
-      return this.onFileChanged(callback)
+      registerTypedCallback(globalCallbacks, callback, 'add')
+
+      return () => {
+        unregisterTypedCallback(globalCallbacks, callback, 'add')
+        for (const callbacks of activeCallbacks.values()) {
+          unregisterTypedCallback(callbacks, callback, 'add')
+        }
+      }
     },
 
     onFileDeleted(callback: FileChangeCallback): () => void {
-      // Same implementation as onFileChanged for plugin-fs
-      return this.onFileChanged(callback)
+      registerTypedCallback(globalCallbacks, callback, 'unlink')
+
+      return () => {
+        unregisterTypedCallback(globalCallbacks, callback, 'unlink')
+        for (const callbacks of activeCallbacks.values()) {
+          unregisterTypedCallback(callbacks, callback, 'unlink')
+        }
+      }
     }
   }
 }

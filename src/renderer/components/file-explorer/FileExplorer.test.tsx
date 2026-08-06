@@ -33,6 +33,11 @@ const mockUpdateCursorPosition = vi.fn()
 const mockAddEditorTab = vi.fn()
 const mockRemoveTab = vi.fn()
 
+const mockCreateFile = vi.fn()
+const mockCreateDirectory = vi.fn()
+const mockRenameFile = vi.fn()
+const mockRefreshTree = vi.fn().mockResolvedValue(undefined)
+
 const mockExplorerState = {
   rootPath: null as string | null,
   directoryContents: new Map<
@@ -57,10 +62,20 @@ const mockExplorerState = {
   searchLastCompletedQuery: ''
 }
 
+/** Live object returned by the mocked useFileExplorerStore.getState(). */
+const mockStoreGetState = {
+  expandedDirs: new Set<string>(),
+  selectedPaths: new Set<string>(),
+  loadingDirs: new Set<string>(),
+  lastClickedPath: null as string | null,
+  rootPath: null as string | null,
+  clearSelection: mockClearSelection
+}
+
 vi.mock('@/stores/file-explorer-store', () => ({
   useFileExplorer: () => mockExplorerState,
   useFileExplorerActions: () => ({
-    toggleDirectory: mockToggleDirectory,
+    toggleDirectory: (...args: unknown[]) => mockToggleDirectory(...args),
     selectPath: mockSelectPath,
     togglePathSelection: mockTogglePathSelection,
     selectPathRange: mockSelectPathRange,
@@ -72,19 +87,14 @@ vi.mock('@/stores/file-explorer-store', () => ({
     duplicateSelected: mockDuplicateSelected,
     collapseAll: mockCollapseAll,
     refreshDirectory: mockRefreshDirectory,
+    refreshTree: mockRefreshTree,
     setRootLoadError: mockSetRootLoadError,
     setSearchQuery: mockSetSearchQuery,
     searchInRoot: mockSearchInRoot,
     resetSearch: mockResetSearch
   }),
   useFileExplorerStore: {
-    getState: vi.fn(() => ({
-      expandedDirs: new Set<string>(),
-      selectedPaths: new Set<string>(),
-      loadingDirs: new Set<string>(),
-      lastClickedPath: null,
-      clearSelection: mockClearSelection
-    })),
+    getState: vi.fn(() => mockStoreGetState),
     setState: vi.fn()
   }
 }))
@@ -92,7 +102,10 @@ vi.mock('@/stores/file-explorer-store', () => ({
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
     searchFileNamesStreamCancel: (...args: unknown[]) => mockSearchFileNamesStreamCancel(...args),
-    searchContentStreamCancel: (...args: unknown[]) => mockSearchContentStreamCancel(...args)
+    searchContentStreamCancel: (...args: unknown[]) => mockSearchContentStreamCancel(...args),
+    createFile: (...args: unknown[]) => mockCreateFile(...args),
+    createDirectory: (...args: unknown[]) => mockCreateDirectory(...args),
+    renameFile: (...args: unknown[]) => mockRenameFile(...args)
   }
 }))
 
@@ -131,7 +144,24 @@ vi.mock('./FileTreeContextMenu', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // clearAllMocks keeps per-test mockReturnValue overrides; restore the
+  // default store-state implementation for every test.
+  vi.mocked(useFileExplorerStore.getState).mockImplementation(() => mockStoreGetState)
   mockOpenFile.mockResolvedValue(undefined)
+  mockCreateFile.mockResolvedValue({ success: true, data: undefined })
+  mockCreateDirectory.mockResolvedValue({ success: true, data: undefined })
+  mockRenameFile.mockResolvedValue({ success: true, data: undefined })
+  mockRefreshTree.mockResolvedValue(undefined)
+  // Expanding a directory marks it expanded in the mocked store state so
+  // expand-chain guards (GH-539/GH-540) observe the toggle's effect.
+  mockToggleDirectory.mockImplementation(async (dirPath: string) => {
+    mockStoreGetState.expandedDirs.add(dirPath)
+  })
+  mockStoreGetState.expandedDirs = new Set<string>()
+  mockStoreGetState.selectedPaths = new Set<string>()
+  mockStoreGetState.loadingDirs = new Set<string>()
+  mockStoreGetState.lastClickedPath = null
+  mockStoreGetState.rootPath = null
   mockExplorerState.rootPath = null
   mockExplorerState.directoryContents = new Map()
   mockExplorerState.isVisible = true
@@ -557,5 +587,369 @@ describe('FileExplorer', () => {
 
     expect(mockSearchFileNamesStreamCancel).not.toHaveBeenCalled()
     expect(mockSearchContentStreamCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('FileExplorer header toolbar (GH-540)', () => {
+  function setExpandedDirs(expandedDirs: Set<string>): void {
+    mockStoreGetState.expandedDirs = expandedDirs
+  }
+
+  function setProjectRoot(rootPath: string | null): void {
+    mockExplorerState.rootPath = rootPath
+    mockStoreGetState.rootPath = rootPath
+  }
+
+  function openProjectWithRootEntries(
+    entries: Array<{ path: string; name: string; type: 'file' | 'directory' }>
+  ): void {
+    setProjectRoot('/project')
+    mockExplorerState.directoryContents = new Map([['/project', entries]])
+  }
+
+  beforeEach(() => {
+    setExpandedDirs(new Set(['/project']))
+  })
+
+  it('renders all four actions with tooltips and accessible labels', () => {
+    openProjectWithRootEntries([])
+
+    render(<FileExplorer />)
+
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeEnabled()
+      expect(button).toHaveAttribute('title', name)
+    }
+  })
+
+  it('disables every action when no project is open', () => {
+    setProjectRoot(null)
+
+    render(<FileExplorer />)
+
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    }
+  })
+
+  it('starts creation in the project root when nothing is selected', async () => {
+    openProjectWithRootEntries([])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'notes.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/notes.txt'))
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/project'))
+    await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/notes.txt'))
+  })
+
+  it('creates a folder in the project root when nothing is selected', async () => {
+    openProjectWithRootEntries([])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    const input = await screen.findByPlaceholderText('Folder name...')
+    fireEvent.change(input, { target: { value: 'docs' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateDirectory).toHaveBeenCalledWith('/project/docs'))
+    await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/docs'))
+  })
+
+  it('targets the selected directory', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'main.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/main.ts'))
+    await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/src/main.ts'))
+  })
+
+  it('targets the parent directory of the selected file', async () => {
+    setProjectRoot('/project')
+    mockExplorerState.directoryContents = new Map([
+      ['/project', []],
+      ['/project/src', [{ path: '/project/src/app.ts', name: 'app.ts', type: 'file' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/project/src/app.ts'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'util.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/util.ts'))
+  })
+
+  it('falls back to the project root when multiple entries are selected', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src', '/project/README.md'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'top.md' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/top.md'))
+  })
+
+  it('auto-expands unexpanded ancestor directories of the target before creating', async () => {
+    setProjectRoot('/project')
+    mockExplorerState.directoryContents = new Map([
+      ['/project', [{ path: '/project/src', name: 'src', type: 'directory' as const }]],
+      ['/project/src', [{ path: '/project/src/deep', name: 'deep', type: 'directory' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/project/src/deep'])
+    setExpandedDirs(new Set(['/project']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src')
+    expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src/deep')
+    expect(mockToggleDirectory).not.toHaveBeenCalledWith('/project')
+
+    fireEvent.change(input, { target: { value: 'leaf.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/src/deep/leaf.ts'))
+  })
+
+  it('keeps the inline input open when creation fails', async () => {
+    openProjectWithRootEntries([])
+    mockCreateFile.mockResolvedValueOnce({ success: false, error: 'PERMISSION_DENIED' })
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'blocked.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/blocked.txt'))
+    expect(screen.getByPlaceholderText('File name...')).toBeInTheDocument()
+    expect(mockSelectPath).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the project root when the selected path cannot be resolved', async () => {
+    openProjectWithRootEntries([])
+    mockExplorerState.selectedPaths = new Set(['/project/stale-entry'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'fresh.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/fresh.txt'))
+  })
+
+  it('does not clobber an active inline input when a header action is clicked again', async () => {
+    openProjectWithRootEntries([])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'half-typed' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    // The original create input (and its typed value) must survive.
+    const stillOpen = await screen.findByPlaceholderText('File name...')
+    expect(stillOpen).toHaveValue('half-typed')
+    expect(screen.queryByPlaceholderText('Folder name...')).not.toBeInTheDocument()
+  })
+
+  it('rejects invalid names, then accepts a valid name (submission lock released)', async () => {
+    openProjectWithRootEntries([])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: '../evil.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).not.toHaveBeenCalled())
+    expect(screen.getByPlaceholderText('File name...')).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: 'nested/file.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).not.toHaveBeenCalled())
+
+    // After the rejections the input must still submit successfully.
+    fireEvent.change(input, { target: { value: 'ok.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/ok.txt'))
+  })
+
+  it('serializes concurrent header creates while expansion is in flight', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src'])
+    setExpandedDirs(new Set(['/project']))
+
+    // Hold the expansion open until the test releases it.
+    let releaseToggle: (() => void) | undefined
+    mockToggleDirectory.mockImplementationOnce(
+      (dirPath: string) =>
+        new Promise<void>((resolve) => {
+          releaseToggle = () => {
+            mockStoreGetState.expandedDirs.add(dirPath)
+            resolve()
+          }
+        })
+    )
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+    // Second click lands while the first chain is still awaiting — must be ignored.
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    releaseToggle?.()
+
+    const input = await screen.findByPlaceholderText('File name...')
+    expect(input).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Folder name...')).not.toBeInTheDocument()
+  })
+
+  it('clamps an out-of-root resolved target to the active project root', async () => {
+    setProjectRoot('/project')
+    mockExplorerState.directoryContents = new Map([
+      ['/project', []],
+      ['/elsewhere', [{ path: '/elsewhere/file.ts', name: 'file.ts', type: 'file' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/elsewhere/file.ts'])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'safe.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // Creation must land inside the active root, never '/elsewhere'.
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/safe.txt'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('/elsewhere/safe.txt')
+  })
+
+  it('creates inside a child of a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([
+      ['/', [{ path: '/src', name: 'src', type: 'directory' as const }]]
+    ])
+    mockExplorerState.selectedPaths = new Set(['/src'])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'app.ts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/src/app.ts'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('//src/app.ts')
+  })
+
+  it('creates a file directly under a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([['/', []]])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    fireEvent.change(input, { target: { value: 'notes.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/notes.txt'))
+    expect(mockCreateFile).not.toHaveBeenCalledWith('//notes.txt')
+  })
+
+  it('creates a folder directly under a filesystem-root project without a double slash', async () => {
+    setProjectRoot('/')
+    mockExplorerState.directoryContents = new Map([['/', []]])
+    setExpandedDirs(new Set(['/']))
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
+
+    const input = await screen.findByPlaceholderText('Folder name...')
+    fireEvent.change(input, { target: { value: 'docs' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateDirectory).toHaveBeenCalledWith('/docs'))
+    expect(mockCreateDirectory).not.toHaveBeenCalledWith('//docs')
+  })
+
+  it('aborts creation when the target directory cannot be expanded', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+    mockExplorerState.selectedPaths = new Set(['/project/src'])
+    // Expansion fails (e.g. load error): the toggle never marks the dir expanded.
+    mockToggleDirectory.mockImplementationOnce(async () => {})
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src'))
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+    expect(mockCreateFile).not.toHaveBeenCalled()
+    expect(mockCreateDirectory).not.toHaveBeenCalled()
+  })
+
+  it('refresh re-reads the tree without touching inline state', async () => {
+    openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => expect(mockRefreshTree).toHaveBeenCalledTimes(1))
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+  })
+
+  it('disables header actions while the root failed to load', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+    render(<FileExplorer />)
+
+    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    }
+  })
+
+  it('does not start a collapse or create action when disabled without a project', () => {
+    setProjectRoot(null)
+
+    render(<FileExplorer />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse All' }))
+
+    expect(mockCollapseAll).not.toHaveBeenCalled()
+    expect(mockToggleDirectory).not.toHaveBeenCalled()
+    expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
   })
 })
