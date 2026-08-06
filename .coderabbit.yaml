@@ -1,0 +1,12 @@
+# CodeRabbit Configuration
+# https://docs.coderabbit.ai/configuration/
+
+reviews:
+  # Exclude test files from review — they are verified by the test suite
+  # (bun run test / cargo test) and do not need AI review. This also keeps
+  # the PR file count under the 100-file review limit.
+  path_filters:
+    - "!**/*.test.ts"
+    - "!**/*.test.tsx"
+    - "!**/*.test.js"
+    - "!**/*.test.jsx"
