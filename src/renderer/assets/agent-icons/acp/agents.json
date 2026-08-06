@@ -605,19 +605,19 @@
       "binary": {
         "darwin-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-darwin-aarch64-2.23.3.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-darwin-aarch64-2.23.3.tar.gz"
         },
         "darwin-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-darwin-x86_64-2.23.3.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-darwin-x86_64-2.23.3.tar.gz"
         },
         "linux-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-linux-aarch64-2.23.3.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-linux-aarch64-2.23.3.tar.gz"
         },
         "linux-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-linux-x86_64-2.23.3.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.23.3/vibe-acp-linux-x86_64-2.23.3.tar.gz"
         },
         "windows-x86_64": {
           "cmd": "./vibe-acp.exe",
