@@ -603,6 +603,95 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // CAP-6 / Story 9: ACP Install parity. The host-owned verified-atomic
+  // install ships on THREE transports (Tauri command `acp_install_agent`,
+  // HTTP `POST /acp/install`, WS `install_acp_agent`). This block pins the
+  // TS-side parity (the Rust-side parity — router route + ws handler + Tauri
+  // command registration — is covered by the Rust test suite).
+  describe('ACP Install parity (CAP-6)', () => {
+    const TauriAdapter = join(LIB_DIR, 'tauri-acp-install-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-acp-install-api.ts')
+
+    it('tauri-acp-install-api.ts exists and exports the factory', () => {
+      expect(existsSync(TauriAdapter), 'tauri-acp-install-api.ts should exist').toBe(true)
+      expect(
+        fileContains(
+          'tauri-acp-install-api.ts',
+          /export\s+(const|function)\s+\bcreateTauriAcpInstallApi\b/
+        ),
+        'should export createTauriAcpInstallApi'
+      ).toBe(true)
+    })
+
+    it('web-acp-install-api.ts exists and exports the singleton', () => {
+      expect(existsSync(WebAdapter), 'web-acp-install-api.ts should exist').toBe(true)
+      expect(
+        fileContains('web-acp-install-api.ts', /export\s+const\s+\bwebAcpInstallApi\b/),
+        'should export webAcpInstallApi'
+      ).toBe(true)
+    })
+
+    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
+      const facade = join(LIB_DIR, 'acp-install-api.ts')
+      expect(existsSync(facade), 'acp-install-api.ts should exist').toBe(true)
+      const content = readFileSync(facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/createTauriAcpInstallApi/)
+      expect(content).toMatch(/webAcpInstallApi/)
+    })
+
+    it('api.ts exports the acpInstallApi singleton', () => {
+      const apiPath = join(LIB_DIR, 'api.ts')
+      const content = readFileSync(apiPath, 'utf-8')
+      expect(content).toMatch(/export\s*\{[^}]*\bacpInstallApi\b[^}]*\}/)
+    })
+
+    it('Tauri adapter invokes the install command (acp_install_agent)', () => {
+      const content = readFileSync(TauriAdapter, 'utf-8')
+      expect(content).toMatch(/acp_install_agent/)
+    })
+
+    it('Web adapter hits the install route (POST /acp/install)', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/\/acp\/install/)
+      // Network/parse failures must map to `NETWORK_ERROR`.
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('both adapters expose installAgent on the typed facade', () => {
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      expect(tauri, 'tauri-acp-install-api.ts should implement installAgent').toMatch(
+        /\binstallAgent\s*\(/
+      )
+      expect(web, 'web-acp-install-api.ts should implement installAgent').toMatch(
+        /\binstallAgent\s*\(/
+      )
+    })
+
+    it('shared types file exists with expected exports', () => {
+      const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'acp-install.types.ts')
+      expect(existsSync(typesPath), 'acp-install.types.ts should exist').toBe(true)
+      const content = readFileSync(typesPath, 'utf-8')
+      expect(content).toMatch(/export\s+interface\s+InstallRequest\b/)
+      expect(content).toMatch(/export\s+interface\s+InstallOutcome\b/)
+      expect(content).toMatch(/export\s+type\s+InstallErrorCode\b/)
+    })
+
+    it('ipc.types.ts declares the AcpInstallIpcChannels map', () => {
+      const ipcPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'ipc.types.ts')
+      const content = readFileSync(ipcPath, 'utf-8')
+      expect(content).toMatch(/AcpInstallIpcChannels\b/)
+      expect(content).toMatch(/'acp:install:install_agent'/)
+    })
+
+    it('web-protocol.types.ts declares the WS request type for install', () => {
+      const protoPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
+      const content = readFileSync(protoPath, 'utf-8')
+      expect(content).toMatch(/'install_acp_agent'/)
+    })
+  })
+
   // Epic 7 — cross-client workspace continuity: the explicit host-default
   // change ships on THREE transports (Tauri command `set_host_default_project`,
   // HTTP `POST /projects/default`, WS `set_default_project` request). This

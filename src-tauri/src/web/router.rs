@@ -16,12 +16,13 @@ use axum::{
     Router,
 };
 
-use crate::acp::{AcpCatalogService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
+use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
 use crate::web::fs_api;
 use crate::web::git_api;
+use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
@@ -65,6 +66,7 @@ pub fn router(
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
+    acp_install: Option<Arc<AcpInstallService>>,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -149,7 +151,13 @@ pub fn router(
         // mirrors `set_default_project` posture (any connected client until
         // Epic 2).
         .route("/acp/catalog", get(catalog_api::list))
-        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in));
+        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        // ACP install web route (CAP-6 / Story 9: verified-atomic install).
+        // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
+        // see `web/install_api.rs`. Registered AHEAD of the static fallback so
+        // the SPA mount cannot shadow it. The request is `{ agentId }` only;
+        // the host resolves everything from the trusted catalog.
+        .route("/acp/install", post(install_api::install));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -172,6 +180,7 @@ pub fn router(
         history_mode,
         workspace_manifest,
         acp_catalog,
+        acp_install,
         project_root: Arc::new(project_root),
     })
 }
@@ -247,6 +256,7 @@ pub fn router_with_static(
         .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        .route("/acp/install", post(install_api::install))
         .fallback_service(assets::static_service_from(static_dir))
         .with_state(AppState {
             acp,
@@ -262,6 +272,7 @@ pub fn router_with_static(
             history_mode: HistoryMode::LiveOnly,
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
             project_root: Arc::new(project_root),
         })
 }

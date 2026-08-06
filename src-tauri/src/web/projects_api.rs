@@ -233,6 +233,7 @@ mod tests {
             project_root: Arc::new(std::path::PathBuf::new()),
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
         }
     }
 
@@ -260,6 +261,7 @@ mod tests {
             project_root: Arc::new(std::path::PathBuf::new()),
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
         }
     }
 

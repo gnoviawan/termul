@@ -139,6 +139,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
 
+# async trait support (CAP-6 / Story 9: install service Downloader/Extractor
+# injection seams). Already in the dep tree transitively; declared here so
+# the install service can use the macro directly.
+async-trait = "0.1"
+
 # Embed the Vite web bundle (dist-web/) into the binary so the standalone
 # termul-server AND the desktop's in-process shared-live server serve the web
 # client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile

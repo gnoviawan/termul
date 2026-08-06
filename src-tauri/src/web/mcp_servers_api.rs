@@ -131,6 +131,7 @@ mod tests {
             project_root: Arc::new(dir),
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
         };
         axum::Router::new()
             .route("/mcp-servers", get(super::get).put(super::put))

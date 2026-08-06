@@ -43,6 +43,7 @@ const {
   mockSetModel,
   mockAuthenticateAgent,
   mockInstallRegistryBinary,
+  mockInstallAcpAgent,
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
@@ -72,6 +73,7 @@ const {
   mockSetModel: vi.fn(),
   mockAuthenticateAgent: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
+  mockInstallAcpAgent: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
@@ -187,6 +189,7 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
 vi.mock('@/lib/acp-api', () => ({
   acpApi: {
     installRegistryBinary: mockInstallRegistryBinary,
+    installAcpAgent: mockInstallAcpAgent,
     probeRuntime: vi.fn(async () => ({ npx: true, uvx: true }))
   }
 }))
@@ -435,6 +438,7 @@ beforeEach(() => {
   mockSetMode.mockResolvedValue(undefined)
   mockSetModel.mockResolvedValue(undefined)
   mockInstallRegistryBinary.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
+  mockInstallAcpAgent.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
 })
 
 describe('AgentLauncher ACP new thread', () => {
@@ -867,14 +871,14 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     expect(await screen.findByText('Install required')).toBeInTheDocument()
-    expect(mockInstallRegistryBinary).not.toHaveBeenCalled()
+    expect(mockInstallAcpAgent).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByText('Install'))
 
-    await waitFor(() => expect(mockInstallRegistryBinary).toHaveBeenCalledTimes(1))
-    expect(mockInstallRegistryBinary).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: 'opencode', cmd: './opencode.exe', args: ['acp'] })
-    )
+    await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledTimes(1))
+    // CAP-6 / Story 9: the request is `{ agentId }` only; the host resolves
+    // everything from the trusted catalog.
+    expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode')
     await waitFor(() =>
       expect(mockSaveAgentConfig).toHaveBeenCalledWith(
         expect.objectContaining({

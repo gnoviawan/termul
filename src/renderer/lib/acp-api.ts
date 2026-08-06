@@ -496,6 +496,20 @@ export async function acpInstallRegistryBinary(
   return getAcpTransport().installRegistryBinary(request)
 }
 
+/**
+ * CAP-6 / Story 9: host-owned verified-atomic install. The request is
+ * `{ agentId }` only; the host resolves everything (archive URL, cmd, args,
+ * sha256) from the trusted catalog. The outcome `{ command, args }` flows
+ * through `installedBinaryConfig` → `saveAgentConfig` unchanged. Mirrors the
+ * `acp_install_agent` Tauri command + `POST /acp/install` + WS
+ * `install_acp_agent` byte-for-byte.
+ */
+export async function acpInstallAcpAgent(
+  agentId: string
+): Promise<InstallAcpRegistryBinaryOutcome> {
+  return getAcpTransport().installAcpAgent(agentId)
+}
+
 export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
   return getAcpTransport().probeRuntime()
 }
@@ -733,6 +747,7 @@ export const acpApi = {
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
   setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
+  installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,
   probeMcpServer,
   listMcpTools,

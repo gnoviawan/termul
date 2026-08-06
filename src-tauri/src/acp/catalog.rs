@@ -665,7 +665,11 @@ fn parse_binary_platform_targets(dist: &serde_json::Value) -> Vec<PlatformTarget
 
 /// Compute the status for a binary-distributed agent.
 /// - Binary on PATH (bare name) → `ready`
-/// - Binary not on PATH + HTTPS archive → `install-required`
+/// - Binary not on PATH + HTTPS archive + `sha256` present → `install-required`
+/// - Binary not on PATH + HTTPS archive but NO `sha256` → `manual-install`
+///   (Story 9 tightening: the catalog does not promise an install the host
+///   must reject — `INTEGRITY_METADATA_MISSING`. The launcher shows
+///   manual-install until the maintainer publishes a digest.)
 /// - Binary not on PATH + no archive → `manual-install`
 /// - No platform target → `unavailable`
 ///
@@ -680,6 +684,15 @@ fn compute_binary_status(
     };
     let cmd = target.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
     let archive = target.get("archive").and_then(|a| a.as_str());
+    // Treat an empty-string sha256 as absent (Story 9 tightening): the host
+    // cannot verify integrity against an empty digest, so the catalog must
+    // not offer the install. `sha256.map(|s| !s.is_empty())` collapses `""`
+    // and missing both to `false`.
+    let has_sha256 = target
+        .get("sha256")
+        .and_then(|s| s.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
 
     // If the command is a bare name (not a relative path), probe it on PATH.
     let is_relative = cmd.starts_with("./") || cmd.starts_with(".\\");
@@ -688,11 +701,16 @@ fn compute_binary_status(
     }
 
     // Binary not on PATH. Check for an installable archive (HTTPS + allowed
-    // format). This is Story 9's install path concern; the catalog only
-    // reports the status, it does not perform the install.
+    // format). Story 9 tightening: an archive without a non-empty `sha256`
+    // digest is `manual-install` (not `install-required`) — the host cannot
+    // verify integrity without the catalog digest, so it must not offer the
+    // install.
     if let Some(url) = archive {
         if is_https_archive_url(url) {
-            return SupportedAcpAgentStatus::InstallRequired;
+            if has_sha256 {
+                return SupportedAcpAgentStatus::InstallRequired;
+            }
+            return SupportedAcpAgentStatus::ManualInstall;
         }
     }
     SupportedAcpAgentStatus::ManualInstall
@@ -839,10 +857,39 @@ mod tests {
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::NeedsRuntime);
     }
 
-    // ---- I/O matrix: binary with archive → install-required ----
+    // ---- I/O matrix: binary with archive + sha256 → install-required ----
 
     #[test]
-    fn binary_agent_with_https_archive_is_install_required() {
+    fn binary_agent_with_https_archive_and_sha256_is_install_required() {
+        // Story 9 tightening: `install-required` only when the catalog target
+        // carries BOTH an HTTPS archive AND a `sha256` digest. Without the
+        // digest, the host cannot verify integrity, so the status is
+        // `manual-install` (a separate test pins that).
+        let agent = sample_agent(
+            "test-binary",
+            serde_json::json!({
+                "binary": {
+                    "linux-x86_64": {
+                        "cmd": "./test-agent",
+                        "archive": "https://example.com/test-agent-linux-x86_64.tar.gz",
+                        "sha256": "abcdef0123456789"
+                    }
+                }
+            }),
+        );
+        let host = host_with_runtimes(false, false);
+        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
+        assert!(!catalog_agent.platform_targets.is_empty());
+    }
+
+    // ---- I/O matrix: binary with archive but NO sha256 → manual-install (Story 9) ----
+
+    #[test]
+    fn binary_agent_with_archive_but_no_sha256_is_manual_install() {
+        // Story 9 tightening: an HTTPS archive without a `sha256` digest is
+        // `manual-install` (not `install-required`) — the host cannot verify
+        // integrity, so the catalog must not promise an install it must reject.
         let agent = sample_agent(
             "test-binary",
             serde_json::json!({
@@ -856,8 +903,31 @@ mod tests {
         );
         let host = host_with_runtimes(false, false);
         let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
-        assert!(!catalog_agent.platform_targets.is_empty());
+        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::ManualInstall);
+    }
+
+    // ---- I/O matrix: binary with archive + EMPTY-string sha256 → manual-install ----
+
+    #[test]
+    fn binary_agent_with_archive_but_empty_sha256_is_manual_install() {
+        // Story 9 tightening (patch): an empty-string `sha256` is treated as
+        // absent — the host cannot verify integrity against an empty digest,
+        // so the catalog must not offer the install.
+        let agent = sample_agent(
+            "test-binary",
+            serde_json::json!({
+                "binary": {
+                    "linux-x86_64": {
+                        "cmd": "./test-agent",
+                        "archive": "https://example.com/test-agent-linux-x86_64.tar.gz",
+                        "sha256": ""
+                    }
+                }
+            }),
+        );
+        let host = host_with_runtimes(false, false);
+        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::ManualInstall);
     }
 
     // ---- I/O matrix: binary without archive → manual-install ----
@@ -903,13 +973,15 @@ mod tests {
 
     #[test]
     fn binary_agent_bare_name_on_path_is_ready() {
-        // A bare-name (non-relative) cmd with an installable archive. When the
-        // injected probe reports the binary is on PATH, the status is `ready`
-        // (the archive is not used). When the probe reports it is NOT on PATH,
-        // the status falls through to `install-required` (HTTPS archive).
+        // A bare-name (non-relative) cmd with an installable archive + sha256.
+        // When the injected probe reports the binary is on PATH, the status is
+        // `ready` (the archive is not used). When the probe reports it is NOT
+        // on PATH, the status falls through to `install-required` (HTTPS
+        // archive + sha256 present — Story 9 tightening).
         let target: serde_json::Map<String, serde_json::Value> = serde_json::json!({
             "cmd": "test-agent",
-            "archive": "https://example.com/test-agent.zip"
+            "archive": "https://example.com/test-agent.zip",
+            "sha256": "abcdef"
         })
         .as_object()
         .unwrap()
@@ -921,7 +993,7 @@ mod tests {
         );
 
         // When the probe reports it is NOT on PATH, the status falls through
-        // to `install-required` (HTTPS archive).
+        // to `install-required` (HTTPS archive + sha256 present).
         assert_eq!(
             compute_binary_status(Some(&target), |_| false),
             SupportedAcpAgentStatus::InstallRequired
