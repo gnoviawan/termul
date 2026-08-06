@@ -21,8 +21,9 @@ use termul_manager_lib::web::{
     WsRelaySink,
 };
 use termul_manager_lib::{
-    AcpManager, CwdTracker, ExitCodeTracker, FileProjectRegistry, GitTracker, PtyManager,
-    SessionPersistence, TerminalEventHub, WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
+    FileProjectRegistry, GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
+    WorkspaceManifestService,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -99,7 +100,7 @@ fn main() -> ExitCode {
             .acp_catalog_dir
             .clone()
             .unwrap_or_else(|| cfg.service_account_state_dir().join("acp-catalog"));
-        let acp_catalog = match crate::acp::AcpCatalogService::open(acp_catalog_dir).await {
+        let acp_catalog = match AcpCatalogService::open(acp_catalog_dir).await {
             Ok(service) => Some(service),
             Err(error) => {
                 eprintln!("termul-server: failed to open acp-catalog store: {error}");
@@ -114,7 +115,7 @@ fn main() -> ExitCode {
         let acp_install_dir = cfg
             .service_account_state_dir()
             .join("acp-registry-binaries");
-        let acp_install = match crate::acp::install::AcpInstallService::open(
+        let acp_install = match AcpInstallService::open(
             acp_install_dir,
             std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
         )
