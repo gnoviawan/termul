@@ -140,7 +140,12 @@ export const WS_REQUEST_TYPES = [
   // web client never probes `@tauri-apps/plugin-os` or PATH locally — the
   // host is the single source of truth.
   'list_acp_catalog',
-  'set_catalog_opt_in'
+  'set_catalog_opt_in',
+  // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
+  // installs a catalog agent through `install_acp_agent` (the host downloads +
+  // verifies sha256 + extracts + atomically activates). The request is
+  // `{ agentId }` only; the host resolves everything from the trusted catalog.
+  'install_acp_agent'
 ] as const
 
 /** Union of all WS request `type` strings. */

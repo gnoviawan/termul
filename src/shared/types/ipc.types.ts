@@ -131,6 +131,18 @@ export type AcpCatalogIpcChannels = {
   'acp:catalog:set_opt_in': (enabled: boolean) => IpcResult<void>
 }
 
+// CAP-6 / Story 9: ACP install IPC channel. Mirrors the Tauri command
+// `acp_install_agent` and the HTTP route `POST /acp/install` — both transports
+// return the SAME `IpcResult<InstallOutcome>` shape byte-for-byte. The request
+// is `{ agentId }` only; the host resolves everything from the trusted catalog.
+// The declared channel type is honest about the actual invoke payload shape:
+// the Tauri adapter wraps `agentId` in a `request` object (Tauri's convention
+// for single-struct-arg commands), so the channel signature reflects that.
+import type { InstallOutcome } from './acp-install.types'
+export type AcpInstallIpcChannels = {
+  'acp:install:install_agent': (request: { agentId: string }) => IpcResult<InstallOutcome>
+}
+
 // Event types for main -> renderer communication
 // Terminal data callback — receives binary data as Uint8Array (via Tauri Channel)
 // Previously received string via event emitter; migrated to binary Channel API in ADR-002.2

@@ -24,6 +24,7 @@ export function ErrorFallback({
         {error.message || 'An unexpected error occurred.'}
       </p>
       <button
+        type="button"
         onClick={onRetry}
         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
       >

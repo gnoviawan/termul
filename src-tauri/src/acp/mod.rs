@@ -9,6 +9,7 @@
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
 pub mod atomic_file;
+pub mod archive;
 pub mod catalog;
 pub mod chat_history_store;
 pub mod client;
@@ -16,6 +17,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod history_import;
+pub mod install;
 pub mod manager;
 pub mod mcp_probe;
 pub mod project_registry;
@@ -40,6 +42,11 @@ pub use catalog::{
     AcpCatalog, AcpCatalogService, CatalogAgent, CatalogConfigFile, CatalogError,
     CatalogRuntimeAvailability, CatalogSource, HostCapability, PlatformTarget,
     SetCatalogOptInRequest, SupportedAcpAgentStatus,
+};
+#[allow(unused_imports)]
+pub use install::{
+    AcpInstallService, DownloadedArchive, Downloader, Extractor, InstallError, InstallOutcome,
+    InstallRequest, InstalledAgent, InstalledManifestFile,
 };
 #[allow(unused_imports)]
 pub use history_import::import_chat_history;

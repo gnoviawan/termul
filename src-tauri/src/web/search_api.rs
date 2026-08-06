@@ -339,6 +339,7 @@ mod tests {
             ),
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
         }
     }
 

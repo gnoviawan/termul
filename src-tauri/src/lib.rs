@@ -1172,6 +1172,56 @@ pub fn run() {
                 acp_catalog_service.clone(),
             ));
 
+            // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
+            // root. The desktop owns its own root under
+            // `<app_data_dir>/acp-registry-binaries` (NEVER shared with a
+            // standalone `termul-server` on the same machine). The install
+            // service downloads + verifies (sha256) + extracts + atomically
+            // activates ACP agent archives resolved from the catalog, records
+            // an installed-agents manifest, and exposes `install_agent(agentId)`
+            // across all three transports. `None` degrades to
+            // `ACP_INSTALL_UNAVAILABLE`.
+            let acp_install_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("acp-registry-binaries");
+            let acp_install_service =
+                match acp_catalog_service.as_ref().zip(Some(acp_install_root.clone())) {
+                    Some((catalog, root)) => {
+                        match tauri::async_runtime::block_on(
+                            crate::acp::install::AcpInstallService::open(
+                                root.clone(),
+                                std::sync::Arc::clone(catalog),
+                            ),
+                        ) {
+                            Ok(service) => {
+                                log::info!(
+                                    "[acp-install] host service ready path={}",
+                                    service.root().display()
+                                );
+                                Some(service)
+                            }
+                            Err(error) => {
+                                log::error!(
+                                    "[acp-install] host service unavailable path={} error={error}",
+                                    root.display()
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        log::warn!(
+                            "[acp-install] host service unavailable (catalog store is None)"
+                        );
+                        None
+                    }
+                };
+            app.manage(commands::HostAcpInstallStore::new(
+                acp_install_service.clone(),
+            ));
+
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
             // Desktop mode fans ACP events out to TWO sinks: `TauriEventSink`
@@ -1541,6 +1591,8 @@ pub fn run() {
             // CAP-6 / Story 8: ACP catalog (host-owned resolution).
             acp::commands::acp_list_catalog,
             acp::commands::acp_set_catalog_opt_in,
+            // CAP-6 / Story 9: ACP install (host-owned verified-atomic install).
+            acp::commands::acp_install_agent,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Agent Skills (Zed-compatible SKILL.md packages)

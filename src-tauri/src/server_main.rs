@@ -106,6 +106,26 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
+        // root. The standalone binary owns its own root — NEVER shared with a
+        // desktop host on the same machine. Defaults to
+        // `<state dir>/acp-registry-binaries`. The install service holds the
+        // catalog `Arc` for the convenience `install_by_id` path.
+        let acp_install_dir = cfg
+            .service_account_state_dir()
+            .join("acp-registry-binaries");
+        let acp_install = match crate::acp::install::AcpInstallService::open(
+            acp_install_dir,
+            std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
+        )
+        .await
+        {
+            Ok(service) => Some(service),
+            Err(error) => {
+                eprintln!("termul-server: failed to open acp-install store: {error}");
+                return ExitCode::from(1);
+            }
+        };
         let ws_relay = Arc::new(WsRelaySink::with_persistence(
             cfg.event_log_capacity,
             Arc::clone(&persistence),
@@ -200,6 +220,7 @@ fn main() -> ExitCode {
             cfg,
             workspace_manifest,
             acp_catalog,
+            acp_install,
         )
         .await
         {

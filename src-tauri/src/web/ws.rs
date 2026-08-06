@@ -174,6 +174,28 @@ impl WsReply {
             }),
         }
     }
+
+    /// Build a failure reply with a raw (SCREAMING_SNAKE_CASE) code string.
+    ///
+    /// CAP-6 / Story 9: the install handler carries transport-identical codes
+    /// (`INTEGRITY_MISMATCH`, `INTEGRITY_METADATA_MISSING`, …) matching the
+    /// Tauri `IpcResult.code` + HTTP `IpcBody.code` byte-for-byte. The
+    /// protocol-level `WsErrorCode` enum is snake_case (e.g. `unsupported`),
+    /// so the install codes cannot be expressed as enum variants without
+    /// breaking the wire contract. This constructor accepts a raw string so
+    /// the install handler's `err.code` is byte-identical across transports.
+    #[must_use]
+    pub fn err_with_code(id: impl Into<String>, code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            ok: false,
+            payload: None,
+            err: Some(WsError {
+                code: code.into(),
+                message: message.into(),
+            }),
+        }
+    }
 }
 
 /// The `err` object inside a failing [`WsReply`].
@@ -310,6 +332,14 @@ pub struct AppState {
     /// `acp_set_catalog_opt_in` Tauri commands (same `IpcResult<T>` shape
     /// byte-for-byte).
     pub acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
+    /// Host-owned verified-atomic ACP install service (CAP-6 / Story 9). `None`
+    /// when the desktop could not open `AcpInstallService` at startup (degraded
+    /// mode — the `install_acp_agent` handler returns
+    /// `ACP_INSTALL_UNAVAILABLE`). The web/remote client installs a catalog
+    /// agent through `POST /acp/install` (catalog_api sibling) + WS
+    /// `install_acp_agent`; the desktop renderer uses the `acp_install_agent`
+    /// Tauri command (same `IpcResult<T>` shape byte-for-byte).
+    pub acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
     /// canonicalized target path resolves outside this root are refused with
     /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
@@ -450,6 +480,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // CAP-6 / Story 8: the host-owned ACP catalog service for the
     // `list_acp_catalog` + `set_catalog_opt_in` WS requests.
     let acp_catalog = state.acp_catalog.clone();
+    // CAP-6 / Story 9: the host-owned verified-atomic ACP install service for
+    // the `install_acp_agent` WS request.
+    let acp_install = state.acp_install.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
     // Per-connection tracking for `switch_project` (Ask-First resolution): the
@@ -575,6 +608,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                         &switch_queue,
                         history_mode,
                         acp_catalog.as_ref(),
+                        acp_install.as_ref(),
                     )
                     .await;
                     if write_tx.send(Outbound::Reply(handled)).is_err() {
@@ -693,6 +727,7 @@ async fn handle_request(
     switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
     history_mode: HistoryMode,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+    acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
 ) -> WsReply {
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
@@ -887,6 +922,18 @@ async fn handle_request(
         }
         "set_catalog_opt_in" => {
             handle_set_catalog_opt_in(id, &req.payload, acp_catalog).await
+        }
+        // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
+        // client installs a catalog agent through `install_acp_agent`; the
+        // host resolves the agent by id from the catalog, downloads the HTTPS
+        // archive, verifies sha256, extracts safely, atomically activates,
+        // serializes per-agent, records the manifest, and returns
+        // `{ command, args }`. The request is `{ agentId }` only; the host
+        // never accepts browser-supplied URLs/commands/paths/args. Errors
+        // carry SCREAMING_SNAKE_CASE codes byte-identical to the Tauri +
+        // HTTP transports (via `WsReply::err_with_code`).
+        "install_acp_agent" => {
+            handle_install_acp_agent(id, &req.payload, acp_install).await
         }
         "kill_agent" => {
             handle_kill_agent(
@@ -1415,6 +1462,53 @@ async fn handle_set_catalog_opt_in(
             WsErrorCode::Unsupported,
             format!("opt-in persistence failed: {error}"),
         ),
+    }
+}
+
+// --- CAP-6 / Story 9: ACP install WS handler --------------------------------
+
+/// `install_acp_agent` WS request payload. `deny_unknown_fields` rejects an
+/// over-serialized payload loudly at the host boundary (the request is
+/// `{ agentId }` only — never carries archive URLs, commands, executable
+/// paths, or args; the host resolves everything from the trusted catalog).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstallAcpAgentPayload {
+    agent_id: String,
+}
+
+/// `install_acp_agent` WS request handler. Mirrors the desktop
+/// `#[tauri::command] acp_install_agent` + HTTP `POST /acp/install` handlers.
+/// Degrade-mode (`acp_install: None`) returns `ACP_INSTALL_UNAVAILABLE`. All
+/// errors carry SCREAMING_SNAKE_CASE codes byte-identical to the other
+/// transports via `WsReply::err_with_code` (the protocol-level `WsErrorCode`
+/// enum is snake_case, so the install codes use the raw-string constructor).
+async fn handle_install_acp_agent(
+    id: String,
+    payload: &Value,
+    acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
+) -> WsReply {
+    use crate::acp::install::code;
+    let parsed: InstallAcpAgentPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err_with_code(
+                id,
+                code::VALIDATION_ERROR,
+                format!("malformed install_acp_agent payload (want agentId): {e}"),
+            )
+        }
+    };
+    let Some(service) = acp_install.cloned() else {
+        return WsReply::err_with_code(
+            id,
+            code::ACP_INSTALL_UNAVAILABLE,
+            "acp install store is unavailable",
+        );
+    };
+    match service.install_by_id(&parsed.agent_id).await {
+        Ok(outcome) => ok_with_payload(id, &outcome),
+        Err(error) => WsReply::err_with_code(id, error.code(), error.message),
     }
 }
 
@@ -3231,6 +3325,7 @@ mod tests {
                 &switch_queue,
                 HistoryMode::LiveOnly,
             None,
+            None,
             ))
     }
 
@@ -3396,6 +3491,104 @@ mod tests {
         );
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    // --- CAP-6 / Story 9: install_acp_agent WS handler tests ----------------
+    // Mirrors install_api.rs's set: degrade-mode → ACP_INSTALL_UNAVAILABLE,
+    // extra-field payload → VALIDATION_ERROR, unknown-agent (with a real
+    // store) → CATALOG_AGENT_NOT_FOUND. Threaded through the same
+    // `handle_request(...)` entry the other WS tests use.
+
+    #[test]
+    fn install_acp_agent_degraded_returns_unavailable() {
+        // handle_sync passes acp_install: None → degrade-mode.
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"opencode"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok, "install_acp_agent degraded must fail");
+        assert_eq!(reply.err.unwrap().code, "ACP_INSTALL_UNAVAILABLE");
+    }
+
+    #[test]
+    fn install_acp_agent_rejects_extra_field_as_validation_error() {
+        // deny_unknown_fields on InstallAcpAgentPayload rejects extra fields
+        // loudly → VALIDATION_ERROR (NOT unsupported — the install handler
+        // parses the payload itself, not the envelope).
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"x","extra":"junk"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok, "extra-field must fail");
+        assert_eq!(reply.err.unwrap().code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn install_acp_agent_rejects_missing_agent_id_as_validation_error() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"install_acp_agent","payload":{}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok, "missing agentId must fail");
+        assert_eq!(reply.err.unwrap().code, "VALIDATION_ERROR");
+    }
+
+    #[tokio::test]
+    async fn install_acp_agent_unknown_agent_returns_catalog_agent_not_found() {
+        // Open a real install store (with a fresh catalog — no agents wired
+        // to a sha256/digest) + call handle_request directly with
+        // acp_install: Some(...). An unknown agent id resolves to
+        // CATALOG_AGENT_NOT_FOUND (the catalog has no such agent).
+        let tmp = std::env::temp_dir().join(format!(
+            "termul-ws-install-unknown-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let catalog = crate::acp::AcpCatalogService::open(tmp.join("catalog"))
+            .await
+            .unwrap();
+        let store = crate::acp::install::AcpInstallService::open(tmp.join("installs"), catalog)
+            .await
+            .unwrap();
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        let reply = handle_request(
+            r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
+            &mut authed,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            Some(&store),
+        )
+        .await;
+        assert!(!reply.ok, "unknown agent must fail");
+        assert_eq!(reply.err.unwrap().code, "CATALOG_AGENT_NOT_FOUND");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `spawn_agent` success path: `ok_with_payload` serializes the full
@@ -3577,6 +3770,7 @@ mod tests {
                 &switch_queue,
                 HistoryMode::LiveOnly,
             None,
+            None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -3661,6 +3855,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -3711,6 +3906,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -3747,6 +3943,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
         // Second frame for the same requestId → stale (ticket evicted).
@@ -3765,6 +3962,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!stale_reply.ok);
@@ -3800,6 +3998,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!reply.ok);
@@ -3889,6 +4088,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -3922,6 +4122,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!reply.ok);
@@ -3971,6 +4172,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -4006,6 +4208,7 @@ mod tests {
             &switch_queue,
             HistoryMode::LiveOnly,
         None,
+        None,
         ));
         assert!(ok_reply.ok, "first answer wins: {:?}", ok_reply.err);
         let stale_reply = block_on(handle_request(
@@ -4023,6 +4226,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!stale_reply.ok);
@@ -4057,6 +4261,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!reply.ok);
@@ -4114,6 +4319,7 @@ mod tests {
                 &switch_queue,
                 HistoryMode::LiveOnly,
             None,
+            None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "stale");
@@ -4140,6 +4346,7 @@ mod tests {
                 &switch_queue,
                 HistoryMode::LiveOnly,
             None,
+            None,
             ));
         assert!(reply_ok.ok, "{:?}", reply_ok.err);
         assert_eq!(subs2.len(), 1);
@@ -4164,6 +4371,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             None,
             ));
         assert!(reply_resub.ok, "{:?}", reply_resub.err);
@@ -4190,6 +4398,7 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
+            None,
             None,
             ));
         assert!(reply_live.ok, "{:?}", reply_live.err);
@@ -4243,6 +4452,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(reply.ok, "{:?}", reply.err);
@@ -4301,6 +4511,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!reply.ok);
@@ -4416,6 +4627,7 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(!reply.ok);
@@ -5124,6 +5336,7 @@ mod tests {
             &current_project_a,
             &switch_queue,
             HistoryMode::LiveOnly,
+        None,
         None,
         ));
         assert!(reply_a.ok, "client A switch succeeds: {:?}", reply_a.err);

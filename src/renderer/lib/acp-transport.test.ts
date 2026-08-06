@@ -1573,6 +1573,7 @@ describe('createAcpTransport selection', () => {
   it('accepts an injected transport via test helper', async () => {
     const mock = {
       installRegistryBinary: vi.fn(),
+      installAcpAgent: vi.fn(),
       probeRuntime: vi.fn().mockResolvedValue({ npx: true, uvx: true }),
       fetchRegistrySnapshot: vi.fn(),
       spawnAgent: vi.fn(),

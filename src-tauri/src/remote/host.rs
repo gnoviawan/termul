@@ -34,7 +34,7 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::acp::{AcpCatalogService, AcpManager, WorkspaceManifestService};
+use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, WorkspaceManifestService};
 use crate::pty::PtyManager;
 use crate::web::sink::WsRelaySink;
 use crate::web::{serve_router, ProjectRegistry, ServerConfig};
@@ -234,6 +234,12 @@ impl RemoteServerState {
     /// `serve_router` so the web/remote client can resolve the catalog through
     /// `GET /acp/catalog` + WS `list_acp_catalog`. `None` degrades to
     /// `ACP_CATALOG_UNAVAILABLE`.
+    ///
+    /// `acp_install` is the desktop's own `AcpInstallService` (opened under
+    /// `<app_data_dir>/acp-registry-binaries` in `lib.rs`). Threaded through
+    /// to `serve_router` so the web/remote client can install through
+    /// `POST /acp/install` + WS `install_acp_agent`. `None` degrades to
+    /// `ACP_INSTALL_UNAVAILABLE`.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
@@ -244,6 +250,7 @@ impl RemoteServerState {
         _bind_mode: RemoteBindMode,
         workspace_manifest: Option<Arc<WorkspaceManifestService>>,
         acp_catalog: Option<Arc<AcpCatalogService>>,
+        acp_install: Option<Arc<AcpInstallService>>,
     ) -> Result<RemoteStatus, String> {
         // The built-in cloudflared quick-tunnel forwards to localhost, so the
         // desktop-hosted server always binds localhost regardless of the
@@ -335,6 +342,7 @@ impl RemoteServerState {
             shutdown,
             workspace_manifest,
             acp_catalog,
+            acp_install,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
@@ -628,6 +636,7 @@ mod tests {
                 RemoteBindMode::Localhost,
                 None,
                 None,
+                None,
                 )
             .await
             .expect("start on localhost binds an OS-assigned port");
@@ -660,6 +669,7 @@ mod tests {
                 RemoteBindMode::Localhost,
                 None,
                 None,
+                None,
                 )
             .await
             .expect("restart after stop succeeds");
@@ -683,6 +693,7 @@ mod tests {
                 RemoteBindMode::Localhost,
                 None,
                 None,
+                None,
                 )
             .await
             .expect("first start succeeds");
@@ -694,6 +705,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 )
@@ -727,6 +739,7 @@ mod tests {
                 RemoteBindMode::Localhost,
                 None,
                 None,
+                None,
                 )
             .await
             .expect("start succeeds");
@@ -755,6 +768,7 @@ mod tests {
                 relay.clone(),
                 registry.clone(),
                 RemoteBindMode::Localhost,
+                None,
                 None,
                 None,
                 )

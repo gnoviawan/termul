@@ -13,6 +13,7 @@
  * (`.message` is the human string callers already toast).
  */
 
+import type { IpcResult } from '@shared/types/ipc.types'
 import type {
   ProjectSwitchCompletedEvent,
   SwitchProjectReply
@@ -84,6 +85,14 @@ export interface AcpTransport {
   installRegistryBinary(
     request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome>
+  /**
+   * CAP-6 / Story 9: host-owned verified-atomic install. The web/remote
+   * transport falls back to the `acpInstallApi` facade (Tauri vs HTTP
+   * resolved at runtime); the desktop transport delegates to the new
+   * `acp_install_agent` Tauri command. The request is `{ agentId }` only; the
+   * host resolves everything from the trusted catalog.
+   */
+  installAcpAgent(agentId: string): Promise<InstallAcpRegistryBinaryOutcome>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
@@ -197,6 +206,22 @@ function createTauriAcpTransport(): AcpTransport {
   return {
     installRegistryBinary: (request) =>
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
+    // CAP-6 / Story 9: the host-owned verified-atomic install. The Tauri
+    // adapter invokes the new `acp_install_agent` command (the host resolves
+    // the agent by id from the catalog — no browser-supplied URLs/args). The
+    // command returns `IpcResult<InstallOutcome>`; this adapter unwraps the
+    // envelope so the launcher's `installedBinaryConfig(installed, ...)` gets
+    // the bare `{ command, args }` (mirrors the web/WS transport). A failure
+    // throws `AcpTransportError` carrying the install error code.
+    installAcpAgent: async (agentId) => {
+      const result = await invoke<IpcResult<InstallAcpRegistryBinaryOutcome>>('acp_install_agent', {
+        request: { agentId }
+      })
+      if (result.success) {
+        return result.data
+      }
+      throw new AcpTransportError(result.code, result.error)
+    },
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
@@ -569,6 +594,25 @@ export class WsAcpTransport implements AcpTransport {
     _request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome> {
     throw new AcpTransportError('unsupported', 'Registry binary install is desktop-only')
+  }
+
+  /**
+   * CAP-6 / Story 9: host-owned verified-atomic install. The WS transport
+   * delegates to the `acpInstallApi` facade (resolves Tauri vs HTTP at runtime),
+   * so the web client gets the same verified install path as the desktop. The
+   * facade maps the `IpcResult<InstallOutcome>` success/failure into the
+   * transport's throw-on-error contract — a failure throws `AcpTransportError`
+   * carrying the install error code.
+   */
+  async installAcpAgent(agentId: string): Promise<InstallAcpRegistryBinaryOutcome> {
+    // Lazy import avoids a static cycle (acp-transport ↔ acp-install-api) at
+    // module load; the facade owns the `isTauriContext()` branching.
+    const { acpInstallApi } = await import('./acp-install-api')
+    const result = await acpInstallApi.installAgent(agentId)
+    if (result.success) {
+      return result.data
+    }
+    throw new AcpTransportError(result.code, result.error)
   }
 
   /**

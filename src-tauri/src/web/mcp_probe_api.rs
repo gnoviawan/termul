@@ -71,6 +71,7 @@ mod tests {
             project_root: Arc::new(std::env::temp_dir()),
             workspace_manifest: None,
             acp_catalog: None,
+            acp_install: None,
         };
         axum::Router::new()
             .route("/mcp-servers/probe", post(super::probe))
