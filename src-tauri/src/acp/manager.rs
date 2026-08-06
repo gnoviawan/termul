@@ -1317,8 +1317,30 @@ impl AcpManager {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
-                if let AcpCommand::OwnsSession { session_id, reply } = command {
-                    let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                match command {
+                    AcpCommand::OwnsSession { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                    }
+                    // Story 10 (cross-client continuity): handle the prompt-flow
+                    // commands so `handle_send_prompt` reaches persistence
+                    // without a real agent binary. `IsEphemeralSession` → false
+                    // (so `persist_user_prompt` runs + the user prompt is the
+                    // durable transcript); `SendPrompt` → `EndTurn` (so the turn
+                    // completes + the watermark advances). No streaming events
+                    // are emitted — the persisted `user_prompt` IS the transcript
+                    // the cross-client restore test reads back via
+                    // `handle_get_session_payload`.
+                    AcpCommand::IsEphemeralSession { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
+                    AcpCommand::SendPrompt { reply, .. } => {
+                        let _ = reply.send(Ok(StopReason::EndTurn));
+                    }
+                    // Unhandled commands are silently dropped (same behavior
+                    // as the prior `if let`). A reply-bearing variant dropped
+                    // here will cause the caller to hang — future tests that
+                    // add new commands should add a dedicated match arm.
+                    _ => {}
                 }
             }
         });

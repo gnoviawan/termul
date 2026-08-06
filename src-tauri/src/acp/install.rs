@@ -1333,6 +1333,288 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    // ---- real-archive traversal + quota (Category D) ----
+    //
+    // The existing `extraction_failure_propagates_code` mocks the extractor
+    // returning a string. These tests feed REAL hostile zip/tar archives
+    // (crafted with the `zip`/`tar`/`flate2` crates already in Cargo.toml)
+    // through the production `ArchiveExtractor` — proving the traversal/quota
+    // guards fire on real archive contents, not just mocked error returns.
+
+    /// Craft a zip containing a single `../evil` traversal entry. The `zip`
+    /// crate accepts the raw name on WRITE (`start_file`); the production
+    /// `extract_zip` guard rejects it on READ via `enclosed_name()` (returns
+    /// `None` → the entry is skipped, so no file is written outside the
+    /// extraction dir). Returns the archive bytes + their sha256 hex.
+    fn slip_zip() -> (Vec<u8>, String) {
+        use std::io::Write;
+        let tmp = std::env::temp_dir()
+            .join(format!("termul-acp-install-slip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let zip_path = tmp.join("evil.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("../evil", opts)
+                .expect("zip start_file accepts a traversal name on write");
+            zip.write_all(b"pwned").unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = std::fs::read(&zip_path).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hex = hex_encode(&hasher.finalize());
+        let _ = std::fs::remove_dir_all(&tmp);
+        (bytes, hex)
+    }
+
+    /// Craft a tar.gz containing a single `../../evil` traversal entry. The
+    /// `tar` crate's `Header::set_path` rejects `..` on WRITE, so a hostile
+    /// tar (the kind a non-Rust packager or attacker produces — the tar format
+    /// stores the name verbatim) must be crafted by writing the raw header
+    /// name bytes directly + recomputing the checksum. The production
+    /// `extract_tar_gz` guard then rejects it on READ (`entry.path()` returns
+    /// the raw `..` components → "tar entry has unsafe path"). Returns the
+    /// archive bytes + their sha256 hex.
+    fn slip_tar_gz() -> (Vec<u8>, String) {
+        use std::io::Write;
+        let tmp = std::env::temp_dir()
+            .join(format!("termul-acp-install-tarslip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let tar_gz_path = tmp.join("evil.tar.gz");
+        {
+            let file = std::fs::File::create(&tar_gz_path).unwrap();
+            let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            // Build a regular-file header with a benign name (sets size/mode/
+            // magic), then overwrite the name field with the traversal path +
+            // set the typeflag + recompute the checksum. `Builder::append` takes
+            // `&Header` (immutable) so it cannot re-validate or re-set the path —
+            // the raw bytes are written verbatim.
+            let mut header = tar::Header::new_gnu();
+            header.set_path("evil").unwrap();
+            header.set_size(5);
+            header.set_mode(0o644);
+            let name = b"../../evil";
+            let bytes = header.as_mut_bytes();
+            bytes[..name.len()].copy_from_slice(name);
+            for slot in &mut bytes[name.len()..100] {
+                *slot = 0;
+            }
+            bytes[156] = b'0'; // typeflag = regular file
+            header.set_cksum();
+            tar.append(&header, &b"pwned"[..]).unwrap();
+            tar.finish().unwrap();
+            let gz = tar.into_inner().unwrap();
+            let mut file = gz.finish().unwrap();
+            file.flush().unwrap();
+        }
+        let bytes = std::fs::read(&tar_gz_path).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hex = hex_encode(&hasher.finalize());
+        let _ = std::fs::remove_dir_all(&tmp);
+        (bytes, hex)
+    }
+
+    /// Craft a zip with `n` single-byte file entries (used to exceed
+    /// `MAX_EXTRACTED_FILES`). Each entry is a flat, traversal-safe name so
+    /// the production `extract_zip` file counter (not `enclosed_name`) is what
+    /// trips. Returns the archive bytes + their sha256 hex.
+    fn overfull_zip(n: usize) -> (Vec<u8>, String) {
+        use std::io::Write;
+        let tmp = std::env::temp_dir()
+            .join(format!("termul-acp-install-overfull-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let zip_path = tmp.join("overfull.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            for i in 0..n {
+                zip.start_file(format!("f{i}"), opts)
+                    .expect("start_file for overfull entry");
+                zip.write_all(b"x").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = std::fs::read(&zip_path).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hex = hex_encode(&hasher.finalize());
+        let _ = std::fs::remove_dir_all(&tmp);
+        (bytes, hex)
+    }
+
+    #[tokio::test]
+    async fn real_zip_slip_entry_rejected_before_extraction() {
+        let root = temp_dir("zip-slip");
+        let (bytes, sha) = slip_zip();
+        let pa = platform_arch_for(&host());
+
+        // Phase 1: the REAL `ArchiveExtractor` (not the `FailingExtractor`
+        // mock) on the hostile zip in isolation. `enclosed_name()` skips the
+        // `../evil` entry → extraction Ok, dest left empty, and NO file
+        // escapes the dest dir (the slip target `dest/../evil` = `root/evil`
+        // does not exist). Proves the production `enclosed_name` guard fires
+        // on a real hostile archive.
+        {
+            let dest = root.join("direct");
+            std::fs::create_dir_all(&dest).unwrap();
+            let archive_path = root.join("evil.zip");
+            std::fs::write(&archive_path, &bytes).unwrap();
+            let extractor = ArchiveExtractor;
+            let result = extractor.extract(&archive_path, &dest).await;
+            assert!(
+                result.is_ok(),
+                "enclosed_name skips the slip entry (Ok, no write): {:?}",
+                result.err()
+            );
+            assert!(!root.join("evil").exists(), "no file escaped the dest dir");
+            assert!(
+                std::fs::read_dir(&dest).unwrap().next().is_none(),
+                "dest empty — the slip entry was skipped"
+            );
+        }
+
+        // Phase 2: the full install flow with `CannedDownloader` + the REAL
+        // `ArchiveExtractor`. The catalog `cmd` is the slip path so the
+        // production `resolve_cmd_in_root` ALSO fires (the install returns
+        // `PATH_TRAVERSAL_DETECTED` from cmd resolution — proving extraction
+        // succeeded, i.e. `enclosed_name` skipped the entry, then the cmd
+        // guard rejected it). No staging dir lingers + no activation.
+        let service = open_service(root.clone()).await;
+        let agent = sample_binary_agent(
+            "slip-agent",
+            &pa,
+            Some(&sha),
+            "../evil",
+            "https://example.com/evil.zip",
+        );
+        let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
+            bytes: bytes.clone(),
+            filename: "archive.zip".to_string(),
+            fail: false,
+        });
+        let err = service
+            .install(&agent, &host(), Some(downloader), None)
+            .await
+            .expect_err("zip slip must be rejected before extraction");
+        assert_eq!(err.code(), code::PATH_TRAVERSAL_DETECTED);
+        assert!(
+            err.message.contains("cmd"),
+            "rejection must come from resolve_cmd_in_root: {}",
+            err.message
+        );
+        assert!(!service.root().join("evil").exists());
+        assert!(
+            !service.root().join("slip-agent").exists(),
+            "no activation on rejection"
+        );
+        for entry in std::fs::read_dir(service.root()).unwrap().flatten() {
+            let name = entry.file_name();
+            assert!(
+                !name.to_string_lossy().contains(".staging-"),
+                "staging dir must be cleaned up: {}",
+                name.to_string_lossy()
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn real_tar_traversal_rejected_before_extraction() {
+        let root = temp_dir("tar-slip");
+        let (bytes, sha) = slip_tar_gz();
+        let pa = platform_arch_for(&host());
+        let service = open_service(root.clone()).await;
+        // `cmd` is benign here — the production `extract_tar_gz` guard rejects
+        // the `../../evil` entry DURING extraction (before cmd resolution), so
+        // the install returns `PATH_TRAVERSAL_DETECTED` from the extractor
+        // itself (mapped from "tar entry has unsafe path").
+        let agent = sample_binary_agent(
+            "tar-slip-agent",
+            &pa,
+            Some(&sha),
+            "./acp",
+            "https://example.com/evil.tar.gz",
+        );
+        let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
+            bytes,
+            filename: "evil.tar.gz".to_string(),
+            fail: false,
+        });
+        let err = service
+            .install(&agent, &host(), Some(downloader), None)
+            .await
+            .expect_err("tar traversal must be rejected before extraction");
+        assert_eq!(err.code(), code::PATH_TRAVERSAL_DETECTED);
+        assert!(
+            err.message.contains("unsafe path"),
+            "rejection must come from the tar traversal guard: {}",
+            err.message
+        );
+        assert!(
+            !service.root().join("tar-slip-agent").exists(),
+            "no activation on rejection"
+        );
+        for entry in std::fs::read_dir(service.root()).unwrap().flatten() {
+            let name = entry.file_name();
+            assert!(
+                !name.to_string_lossy().contains(".staging-"),
+                "staging dir must be cleaned up: {}",
+                name.to_string_lossy()
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn extracted_file_count_quota_enforced_on_real_archive() {
+        // Craft a zip with one more entry than `MAX_EXTRACTED_FILES`. The
+        // production `extract_zip` counter trips on the (N+1)th non-dir entry
+        // → `EXTRACTION_QUOTA_EXCEEDED` + the staging dir is cleaned up.
+        // NOTE: this writes MAX_EXTRACTED_FILES files to disk during extraction
+        // before tripping (the production guard checks AFTER incrementing) —
+        // correct per the spec, but the slowest test in the module.
+        let n = crate::acp::archive::MAX_EXTRACTED_FILES + 1;
+        let (bytes, sha) = overfull_zip(n);
+        let root = temp_dir("quota");
+        let pa = platform_arch_for(&host());
+        let service = open_service(root.clone()).await;
+        let agent = sample_binary_agent(
+            "quota-agent",
+            &pa,
+            Some(&sha),
+            "./acp",
+            "https://example.com/overfull.zip",
+        );
+        let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
+            bytes,
+            filename: "archive.zip".to_string(),
+            fail: false,
+        });
+        let err = service
+            .install(&agent, &host(), Some(downloader), None)
+            .await
+            .expect_err("file-count quota must be exceeded");
+        assert_eq!(err.code(), code::EXTRACTION_QUOTA_EXCEEDED);
+        assert!(
+            !service.root().join("quota-agent").exists(),
+            "no activation on quota failure"
+        );
+        for entry in std::fs::read_dir(service.root()).unwrap().flatten() {
+            let name = entry.file_name();
+            assert!(
+                !name.to_string_lossy().contains(".staging-"),
+                "staging dir must be cleaned up: {}",
+                name.to_string_lossy()
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     // ---- download failure ----
 
     #[tokio::test]
