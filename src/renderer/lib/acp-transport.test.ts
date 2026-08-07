@@ -27,6 +27,8 @@ class FakeWebSocket {
   authFail = false
   /** When set, `respond_permission` replies with this err (default: not_implemented). */
   respondPermissionErr: { code: string; message: string } | null = null
+  /** When set, `authenticate_agent` replies with this err (default: ok). */
+  authenticateAgentErr: { code: string; message: string } | null = null
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
@@ -244,6 +246,27 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
+    // `pi_terminal_login`). Reply ok by default; tests set `authenticateAgentErr`
+    // to simulate a provider auth failure. Distinct from the `authenticate`
+    // token-gate handshake.
+    if (req.type === 'authenticate_agent') {
+      const payload = req.payload as { agentId?: string; methodId?: string }
+      if (!payload.agentId || !payload.methodId) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed authenticate_agent' }
+        })
+        return
+      }
+      if (this.authenticateAgentErr) {
+        this.emitReply({ id: req.id, ok: false, err: this.authenticateAgentErr })
+        return
+      }
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'get_session_payload') {
       // Standalone history: serve the registered renderer-shaped payload, or
       // the server's `not_found` reply for absent ids.
@@ -337,6 +360,49 @@ describe('WsAcpTransport', () => {
         allowTerminal: false
       })
     ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('authenticate routes the agent `authenticate` method over WS (authenticate_agent)', async () => {
+    // The web client must run the ACP agent-advertised `authenticate` method
+    // (e.g. `pi_terminal_login`) on the host — NOT throw "is not available
+    // over WS yet". The WS transport sends an `authenticate_agent` request
+    // (distinct from the `authenticate` token-gate handshake) and resolves on
+    // the host's ok reply.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // Must NOT throw — resolves on the host's ok reply.
+    await expect(transport.authenticate('agent-1', 'pi_terminal_login')).resolves.toBeUndefined()
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const authReq = sent.find((r) => r.type === 'authenticate_agent')
+    expect(authReq).toBeTruthy()
+    expect(authReq?.payload).toEqual({
+      agentId: 'agent-1',
+      methodId: 'pi_terminal_login'
+    })
+
+    transport.dispose()
+  })
+
+  it('authenticate rejects with AcpTransportError when the host reports failure', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.authenticateAgentErr = { code: 'AUTHENTICATE_FAILED', message: 'provider denied' }
+
+    await expect(transport.authenticate('agent-1', 'pi_terminal_login')).rejects.toBeInstanceOf(
+      AcpTransportError
+    )
 
     transport.dispose()
   })

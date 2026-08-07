@@ -66,6 +66,13 @@ export interface CatalogAgent {
   status: SupportedAcpAgentStatus
   /** Platform targets for binary-distributed agents; empty for npx/uvx. */
   platformTargets: PlatformTarget[]
+  /**
+   * Host-installed binary info (present only when the agent is installed on
+   * the host — status `ready`). Carries the host-resolved absolute
+   * `command`/`args` so the web client (no renderer persistence) can build a
+   * spawn config from the host install. Omitted/null otherwise.
+   */
+  installed?: { command: string; args: string[] } | null
 }
 
 /** The resolved catalog payload served across all three transports. */

@@ -318,13 +318,12 @@ describe('resolveSupportedAcpAgents', () => {
     expect(entries[0]?.manualInstall).toBeNull()
   })
 
-  it('sets manualInstall (not install) when the host reports manual-install for a no-sha256 archive', async () => {
-    // The host's `compute_binary_status` is sha256-aware: an HTTPS archive
-    // WITHOUT a `sha256` digest is `manual-install` (the host must reject the
-    // install with `INTEGRITY_METADATA_MISSING`). The renderer's
-    // `deriveAgentConfig` is NOT sha256-aware (it only checks for an
-    // `archiveUrl`), so it would naively set `install`. Verify the renderer
-    // gates on the host's status so install info reflects the host's resolution.
+  it('sets manualInstall (not install) when the host reports manual-install for a no-archive binary', async () => {
+    // The host reports `manual-install` only for a binary target WITHOUT an
+    // HTTPS archive (a no-sha256 archive is `install-required` now — the
+    // trusted Zed catalog makes the install available without verification).
+    // The renderer gates on the host's status so the install info reflects the
+    // host's resolution: `manualInstall` carries cmd/args/env (no download).
     listCatalogMock.mockResolvedValueOnce({
       success: true,
       data: {
@@ -335,19 +334,18 @@ describe('resolveSupportedAcpAgents', () => {
         },
         agents: [
           {
-            id: 'no-sha',
-            name: 'NoSha',
+            id: 'no-archive',
+            name: 'NoArchive',
             version: '1.0.0',
             description: 'd',
             source: 'bundled',
             distribution: {
               binary: {
                 'linux-x86_64': {
-                  cmd: './no-sha',
-                  archive: 'https://example.com/no-sha.zip',
-                  // NOTE: no `sha256` — the host reports `manual-install`.
+                  cmd: './no-archive',
+                  // NOTE: no `archive` — the host reports `manual-install`.
                   args: ['acp'],
-                  env: { NO_SHA: '1' }
+                  env: { NO_ARCHIVE: '1' }
                 }
               }
             },
@@ -362,15 +360,72 @@ describe('resolveSupportedAcpAgents', () => {
     const entries = await resolveSupportedAcpAgents([])
 
     expect(entries[0]?.status).toBe('manual-install')
-    // `install` must be null (the host does not offer an install it must reject).
+    // `install` must be null (the host offers no download).
     expect(entries[0]?.install).toBeNull()
     // `manualInstall` carries the cmd/args/env (no archiveUrl — manual install
     // does not download).
     expect(entries[0]?.manualInstall).toMatchObject({
-      cmd: './no-sha',
+      cmd: './no-archive',
       args: ['acp'],
-      env: { NO_SHA: '1' }
+      env: { NO_ARCHIVE: '1' }
     })
+  })
+
+  it('builds a spawn config from host `installed` when a host-installed agent is ready (no renderer persistence)', async () => {
+    // The host overlays installed state: a host-installed binary agent is
+    // reported `ready` with an `installed` block carrying the host-resolved
+    // absolute `command`/`args`. The web client (no renderer persistence)
+    // must build a spawn config from that `installed` block — without it, the
+    // web could not reuse a host install.
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: true, uvx: false, node: true, bun: false, python3: true }
+        },
+        agents: [
+          {
+            id: 'host-installed',
+            name: 'HostInstalled',
+            version: '1.0.0',
+            description: 'd',
+            source: 'bundled',
+            distribution: {
+              binary: {
+                'linux-x86_64': {
+                  cmd: './host-installed',
+                  archive: 'https://example.com/host-installed.zip',
+                  args: ['acp'],
+                  env: { HOST: '1' }
+                }
+              }
+            },
+            runtimeRequirements: [],
+            status: 'ready',
+            platformTargets: [],
+            installed: {
+              command: '/abs/acp-registry-binaries/host-installed/host-installed',
+              args: ['acp']
+            }
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]?.status).toBe('ready')
+    // The config is built from the host's installed command/args (NOT the
+    // distribution cmd), so the web can spawn the host-installed binary.
+    expect(entries[0]?.config).toMatchObject({
+      command: '/abs/acp-registry-binaries/host-installed/host-installed',
+      args: ['acp'],
+      env: { HOST: '1' }
+    })
+    expect(entries[0]?.install).toBeNull()
+    expect(entries[0]?.manualInstall).toBeNull()
   })
 
   it('degrades to an empty list when the catalog is unavailable', async () => {

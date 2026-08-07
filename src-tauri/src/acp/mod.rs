@@ -40,8 +40,8 @@ pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]
 pub use catalog::{
     AcpCatalog, AcpCatalogService, CatalogAgent, CatalogConfigFile, CatalogError,
-    CatalogRuntimeAvailability, CatalogSource, HostCapability, PlatformTarget,
-    SetCatalogOptInRequest, SupportedAcpAgentStatus,
+    CatalogRuntimeAvailability, CatalogSource, HostCapability, InstalledCatalogInfo,
+    PlatformTarget, SetCatalogOptInRequest, SupportedAcpAgentStatus, overlay_installed,
 };
 #[allow(unused_imports)]
 pub use install::{

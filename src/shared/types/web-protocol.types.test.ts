@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 28 request types including ephemeral disposal, ping, catalog, and install', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(28)
+  it('exports exactly 29 request types including ephemeral disposal, ping, catalog, install, and agent auth', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(29)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -79,6 +79,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_agents',
       'switch_project',
       'authenticate',
+      // ACP agent `authenticate` method (agent-advertised auth, e.g.
+      // `pi_terminal_login`) — distinct from the `authenticate` token gate.
+      'authenticate_agent',
       'subscribe',
       'ping',
       'list_persisted_sessions',

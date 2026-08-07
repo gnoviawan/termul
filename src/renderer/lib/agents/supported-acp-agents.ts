@@ -341,20 +341,30 @@ export async function resolveSupportedAcpAgents(
     const binaryMapOs = catalog.host.os === 'macos' ? 'darwin' : catalog.host.os
     const derived = deriveAgentConfig(registryAgent, `${binaryMapOs}-${catalog.host.arch}`)
 
-    // The host's `compute_binary_status` is sha256-aware: a binary target with
-    // an HTTPS archive but NO `sha256` is `manual-install` (the host must reject
-    // the install with `INTEGRITY_METADATA_MISSING`). The renderer's
-    // `deriveAgentConfig` is NOT sha256-aware — it only checks for an
-    // `archiveUrl` — so without gating on `agent.status` it would set `install`
-    // for a no-sha256 agent the host reports as `manual-install` (status /
-    // install-field split-brain). Gate `install` on `install-required` and
-    // `manualInstall` on `manual-install` so the install info reflects the
-    // host's resolution (the host is the single source of truth).
+    // The host catalog no longer gates on `sha256` — any HTTPS archive is
+    // `install-required` (the trusted Zed registry). The host also overlays
+    // installed state: an installed agent is reported `ready` with an
+    // `installed` block carrying the host-resolved absolute `command`/`args`.
+    // Build the spawn config from that `installed` block so the web client
+    // (which has no renderer persistence) can spawn a host-installed agent
+    // without a persisted `StoredAgentConfig`. Desktop `persisted` (handled
+    // above) still wins when present.
+    const hostInstalledConfig =
+      agent.status === 'ready' && agent.installed
+        ? installedBinaryConfig(
+            registryAgent,
+            { command: agent.installed.command, args: agent.installed.args },
+            { env: derived.kind === 'needs-install' ? derived.env : {} }
+          )
+        : null
+
     entries.push({
       id,
       configId,
       agent: registryAgent,
-      config: derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null,
+      config:
+        hostInstalledConfig ??
+        (derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null),
       status: agent.status,
       install:
         agent.status === 'install-required' &&

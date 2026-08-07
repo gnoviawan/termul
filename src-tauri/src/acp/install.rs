@@ -1,8 +1,7 @@
-//! Host-owned verified-atomic ACP install service (CAP-6 / Story 9).
+//! Host-owned atomic ACP install service (CAP-6 / Story 9).
 //!
 //! Builds the host-owned install flow on top of the catalog (Story 8's
-//! `AcpCatalogService`): downloads the catalog-resolved HTTPS archive, verifies
-//! `sha256` (read from the catalog's `binary.{os-arch}.sha256` field),
+//! `AcpCatalogService`): downloads the catalog-resolved HTTPS archive,
 //! extracts safely, atomically activates, serializes per-agent, records an
 //! installed-agents manifest, and exposes `install_agent(agentId)` across all
 //! three transports (Tauri `acp_install_agent`, HTTP `POST /acp/install`, WS
@@ -10,17 +9,13 @@
 //!
 //! # Integrity source
 //!
-//! The trusted catalog metadata is the single source of both the archive URL
-//! and its expected digest. The install service reads an optional `sha256`
-//! (hex string) from the `binary.{os-arch}` target of the catalog's
-//! `distribution` (opaque JSON — additive, no schema break). Present → verify
-//! the downloaded archive's sha256 **before extraction**; mismatch → abort,
-//! leave the previous install intact, return `INTEGRITY_MISMATCH`. Absent →
-//! reject with `INTEGRITY_METADATA_MISSING` (do NOT relax the contract; do NOT
-//! fall back to "HTTPS-only"). The catalog's `compute_binary_status` is
-//! tightened (Story 9) so a binary target without `sha256` returns
-//! `ManualInstall` (not `InstallRequired`), so the launcher does not offer an
-//! install the host must reject.
+//! The catalog is the trusted Zed ACP registry, so the install service does
+//! NOT verify a `sha256` digest: it downloads + extracts + activates without
+//! integrity verification. A `sha256` field, if present in the catalog's
+//! `binary.{os-arch}` target, is recorded in the manifest as a best-effort
+//! audit value (not validated, not used to gate the install). The catalog's
+//! `compute_binary_status` reports any HTTPS archive as `install-required`
+//! (clickable) regardless of a digest.
 //!
 //! # Per-agent serialization
 //!
@@ -61,6 +56,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -227,13 +223,23 @@ impl Downloader for HttpDownloader {
                 "archive URL must be https",
             ));
         }
-        // Redirects: archives are direct download URLs. Reject ANY redirect
-        // (a 302 → `http://` would download over plaintext, leaking the URL
-        // path/query). `Policy::none()` makes reqwest surface a 3xx as an
-        // error → DOWNLOAD_FAILED.
+        // Redirects: follow HTTPS→HTTPS redirects (GitHub releases 302 to
+        // `objects.githubusercontent.com`, still HTTPS — a no-redirect policy
+        // breaks every CDN-fronted archive), but REFUSE an https→http
+        // downgrade (would download over plaintext, leaking the URL
+        // path/query). The custom policy follows only https redirect
+        // targets; an http target stops → the 3xx surfaces below as
+        // "redirected — refused".
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(crate::acp::archive::FETCH_TIMEOUT_SECS))
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let is_https = attempt.url().scheme() == "https";
+                if is_https {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
             .build()
             .map_err(|e| InstallError::new(code::DOWNLOAD_FAILED, format!("http client: {e}")))?;
         let response = client
@@ -242,8 +248,8 @@ impl Downloader for HttpDownloader {
             .await
             .map_err(|e| InstallError::new(code::DOWNLOAD_FAILED, format!("download failed: {e}")))?;
         if response.status().is_redirection() {
-            // Belt-and-suspenders: `Policy::none()` already turned the 3xx
-            // into an error above, but defend against a future policy change.
+            // An https→http downgrade was refused by the redirect policy
+            // (it stopped following). Surface it as a download failure.
             return Err(InstallError::new(
                 code::DOWNLOAD_FAILED,
                 format!("download redirected (HTTP {}) — refused", response.status()),
@@ -540,10 +546,10 @@ impl AcpInstallService {
     /// This is the core of the install flow:
     /// 1. Validate the catalog status is `install-required`.
     /// 2. Resolve the host's `binary.{os-arch}` target.
-    /// 3. Reject if no `sha256` (`INTEGRITY_METADATA_MISSING`) or no archive
-    ///    (`UNSUPPORTED_PLATFORM`).
+    /// 3. Best-effort read the catalog-declared `sha256` (audit only — NOT
+    ///    verified; the catalog is trusted).
     /// 4. Acquire the per-`agent_id` mutex (serialize same-agent installs).
-    /// 5. Download → verify sha256 → extract into staging → atomic swap.
+    /// 5. Download → extract into staging → atomic swap.
     /// 6. Update the manifest.
     pub async fn install(
         self: &Arc<Self>,
@@ -600,29 +606,16 @@ impl AcpInstallService {
             .ok_or_else(|| {
                 InstallError::new(code::UNSUPPORTED_PLATFORM, "catalog binary target missing 'archive'")
             })?;
+        // No sha256 verification: the catalog is the trusted Zed ACP registry,
+        // so the host downloads + extracts + activates without integrity
+        // verification. Keep a best-effort read of the catalog-declared digest
+        // for the manifest audit field (may be empty/absent — not validated,
+        // not used to gate the install).
         let sha256_hex = target
             .get("sha256")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| {
-                InstallError::new(
-                    code::INTEGRITY_METADATA_MISSING,
-                    "catalog binary target missing 'sha256' — cannot verify integrity",
-                )
-            })?;
-        // Treat an empty or malformed sha256 as missing (mirrors the catalog's
-        // `compute_binary_status` tightening): the host cannot verify integrity
-        // against an invalid digest, so it must reject with
-        // `INTEGRITY_METADATA_MISSING` rather than relax the contract. Without
-        // this, an empty-string sha256 is "present" by the install path (the
-        // `.as_str()` above returns `Some("")`) but "absent" by the catalog's
-        // status computation — the launcher would offer an install the host
-        // must reject (split-brain).
-        if !is_valid_sha256_hex(sha256_hex) {
-            return Err(InstallError::new(
-                code::INTEGRITY_METADATA_MISSING,
-                "catalog binary target has an invalid 'sha256' — expected 64 hex chars",
-            ));
-        }
+            .unwrap_or("")
+            .to_string();
         let args: Vec<String> = target
             .get("args")
             .and_then(|a| a.as_array())
@@ -687,37 +680,6 @@ impl AcpInstallService {
         };
         let bytes_len = downloaded.size;
         let archive_path = downloaded.path;
-
-        // sha256 verify BEFORE extraction. Read the temp file in chunks so a
-        // 256 MiB archive never materializes in RAM for the hash either.
-        let actual_hex = match sha256_file(&archive_path) {
-            Ok(hex) => hex,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                log::error!(
-                    "[acp-install] {} sha256 read failure agent={} msg={}",
-                    crate::logging::session_id(),
-                    agent_id_log,
-                    e
-                );
-                return Err(InstallError::new(
-                    code::INSTALL_FAILED,
-                    format!("sha256 read failed: {e}"),
-                ));
-            }
-        };
-        if !actual_hex.eq_ignore_ascii_case(sha256_hex) {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
-            log::error!(
-                "[acp-install] {} integrity mismatch agent={} — aborting before extraction",
-                crate::logging::session_id(),
-                agent_id_log
-            );
-            return Err(InstallError::new(
-                code::INTEGRITY_MISMATCH,
-                "downloaded archive sha256 does not match the catalog digest",
-            ));
-        }
 
         if let Err(e) = extractor.extract(&archive_path, &staging).await {
             let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -789,7 +751,7 @@ impl AcpInstallService {
             agent_id: agent.id.clone(),
             version: agent.version.clone(),
             platform_target: platform_arch,
-            sha256: actual_hex,
+            sha256: sha256_hex.clone(),
             command: program.to_string_lossy().to_string(),
             args: args.clone(),
             installed_at,
@@ -933,6 +895,10 @@ fn now_millis() -> u64 {
 }
 
 /// Hex-encode a byte slice (lowercase). Avoids pulling a `hex` crate dep.
+/// Test-only: used by `tiny_zip` to compute a reference sha256 (the install
+/// service no longer verifies digests, so `sha256_file` + this helper are
+/// test-only after the integrity-check removal).
+#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -949,14 +915,6 @@ fn sanitize_agent_id_log(id: &str) -> &str {
     id
 }
 
-/// Validate a sha256 hex digest: exactly 64 ASCII hex chars (case-insensitive).
-/// Mirrors the catalog's `compute_binary_status` tightening so an empty or
-/// malformed digest is rejected as `INTEGRITY_METADATA_MISSING` (NOT relaxed)
-/// — the host must not promise an install it cannot verify.
-fn is_valid_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
-}
-
 /// Extract the archive URL's host for logging — never the full URL with
 /// path/query (may carry tokens in some registries), never env/args. The
 /// `http://` branch is intentionally absent: the `HttpDownloader` rejects
@@ -971,23 +929,6 @@ fn archive_host_for_log(url: &str) -> &str {
         .unwrap_or("")
 }
 
-/// Compute the sha256 hex digest of a file by streaming it in chunks (64 KiB
-/// buffer) so a 256 MiB archive never materializes in RAM for the hash.
-/// Mirrors the `copy_bounded` streaming pattern in `archive.rs`.
-fn sha256_file(path: &Path) -> io::Result<String> {
-    use std::io::{BufReader, Read};
-    let mut file = BufReader::with_capacity(64 * 1024, std::fs::File::open(path)?);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex_encode(&hasher.finalize_reset()))
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1058,6 +999,7 @@ mod tests {
                 os: host().os,
                 arch: host().arch,
             }],
+            installed: None,
         }
     }
 
@@ -1165,7 +1107,7 @@ mod tests {
     // ---- Happy-path install ----
 
     #[tokio::test]
-    async fn happy_path_install_verifies_sha256_and_activates() {
+    async fn happy_path_install_activates() {
         let root = temp_dir("happy");
         let service = open_service(root.clone()).await;
         let (bytes, sha) = tiny_zip("acp payload");
@@ -1204,8 +1146,11 @@ mod tests {
     // ---- sha256 mismatch (tampered) ----
 
     #[tokio::test]
-    async fn sha256_mismatch_aborts_before_extraction() {
-        let root = temp_dir("mismatch");
+    async fn install_proceeds_without_integrity_check() {
+        // No sha256 verification: a mismatched declared digest does NOT abort
+        // the install. The catalog is trusted (Zed ACP registry); the host
+        // downloads + extracts + activates regardless of the declared digest.
+        let root = temp_dir("no-verify");
         let service = open_service(root.clone()).await;
         let (bytes, _sha) = tiny_zip("real payload");
         let host = host();
@@ -1226,13 +1171,13 @@ mod tests {
         let extractor_calls = Arc::new(AtomicUsize::new(0));
         let counting_extractor: Arc<dyn Extractor> =
             Arc::new(CountingExtractor::new(extractor_calls.clone()));
-        let err = service
+        let outcome = service
             .install(&agent, &host, Some(downloader), Some(counting_extractor))
             .await
-            .expect_err("mismatch must error");
-        assert_eq!(err.code(), code::INTEGRITY_MISMATCH);
-        // Extraction must NOT have run.
-        assert_eq!(extractor_calls.load(Ordering::SeqCst), 0);
+            .expect("install proceeds without integrity check");
+        assert!(outcome.command.contains("acp"));
+        // Extraction MUST have run — no abort-before-extraction.
+        assert!(extractor_calls.load(Ordering::SeqCst) >= 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1257,12 +1202,15 @@ mod tests {
         }
     }
 
-    // ---- sha256 absent ----
+    // ---- sha256 absent (proceeds — no verification) ----
 
     #[tokio::test]
-    async fn sha256_absent_rejects_before_download() {
+    async fn sha256_absent_proceeds_without_verification() {
+        // No sha256 gate: an agent whose catalog target has NO `sha256` still
+        // installs — the host does not verify integrity.
         let root = temp_dir("no-sha");
         let service = open_service(root.clone()).await;
+        let (bytes, _sha) = tiny_zip("acp payload");
         let pa = platform_arch_for(&host());
         let agent = sample_binary_agent(
             "no-sha",
@@ -1272,24 +1220,26 @@ mod tests {
             "https://example.com/no-sha.zip",
         );
         let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
-            bytes: vec![],
+            bytes: bytes.clone(),
             filename: "archive.zip".to_string(),
             fail: false,
         });
-        let err = service
+        let outcome = service
             .install(&agent, &host(), Some(downloader), None)
             .await
-            .expect_err("no-sha must error");
-        assert_eq!(err.code(), code::INTEGRITY_METADATA_MISSING);
+            .expect("install proceeds without sha256");
+        assert!(outcome.command.contains("acp"));
         let _ = std::fs::remove_dir_all(root);
     }
 
-    // ---- sha256 empty / malformed (treated as missing) ----
+    // ---- sha256 empty / malformed (proceeds — not validated) ----
 
     #[tokio::test]
-    async fn sha256_empty_string_rejects_before_download() {
+    async fn sha256_empty_string_proceeds() {
+        // An empty-string `sha256` is not validated — the install proceeds.
         let root = temp_dir("empty-sha");
         let service = open_service(root.clone()).await;
+        let (bytes, _sha) = tiny_zip("acp payload");
         let pa = platform_arch_for(&host());
         let agent = sample_binary_agent(
             "empty-sha",
@@ -1299,24 +1249,25 @@ mod tests {
             "https://example.com/empty-sha.zip",
         );
         let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
-            bytes: vec![],
+            bytes: bytes.clone(),
             filename: "archive.zip".to_string(),
             fail: false,
         });
-        let err = service
+        let outcome = service
             .install(&agent, &host(), Some(downloader), None)
             .await
-            .expect_err("empty-sha must error");
-        assert_eq!(err.code(), code::INTEGRITY_METADATA_MISSING);
+            .expect("install proceeds with empty sha256");
+        assert!(outcome.command.contains("acp"));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
-    async fn sha256_malformed_rejects_before_download() {
+    async fn sha256_malformed_proceeds() {
+        // A malformed `sha256` is not validated — the install proceeds.
         let root = temp_dir("bad-sha");
         let service = open_service(root.clone()).await;
+        let (bytes, _sha) = tiny_zip("acp payload");
         let pa = platform_arch_for(&host());
-        // Wrong length + non-hex — must NOT be treated as a valid digest.
         let agent = sample_binary_agent(
             "bad-sha",
             &pa,
@@ -1325,15 +1276,15 @@ mod tests {
             "https://example.com/bad-sha.zip",
         );
         let downloader: Arc<dyn Downloader> = Arc::new(CannedDownloader {
-            bytes: vec![],
+            bytes: bytes.clone(),
             filename: "archive.zip".to_string(),
             fail: false,
         });
-        let err = service
+        let outcome = service
             .install(&agent, &host(), Some(downloader), None)
             .await
-            .expect_err("bad-sha must error");
-        assert_eq!(err.code(), code::INTEGRITY_METADATA_MISSING);
+            .expect("install proceeds with malformed sha256");
+        assert!(outcome.command.contains("acp"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1390,15 +1341,12 @@ mod tests {
         let root = temp_dir("too-large");
         let service = open_service(root.clone()).await;
         let pa = platform_arch_for(&host());
-        // Use a VALID 64-hex sha256 so the integrity check passes and the
-        // download is actually attempted (the TooLargeDownloader then trips
-        // ARCHIVE_TOO_LARGE). A short/invalid sha would short-circuit at
-        // INTEGRITY_METADATA_MISSING before the download.
-        let valid_sha = "a".repeat(64);
+        // No integrity check — the download is attempted regardless of the
+        // `sha256` field. The TooLargeDownloader then trips ARCHIVE_TOO_LARGE.
         let agent = sample_binary_agent(
             "big",
             &pa,
-            Some(valid_sha.as_str()),
+            None,
             "./acp",
             "https://example.com/big.zip",
         );
@@ -1731,15 +1679,13 @@ mod tests {
         let root = temp_dir("dl-fail");
         let service = open_service(root.clone()).await;
         let pa = platform_arch_for(&host());
-        // Use a VALID 64-hex sha256 so the integrity check passes and the
-        // download is actually attempted (the failing CannedDownloader then
-        // trips DOWNLOAD_FAILED). A short/invalid sha would short-circuit at
-        // INTEGRITY_METADATA_MISSING before the download.
-        let valid_sha = "a".repeat(64);
+        // No integrity check — the download is attempted regardless of the
+        // `sha256` field. The failing CannedDownloader then trips
+        // DOWNLOAD_FAILED.
         let agent = sample_binary_agent(
             "dl-fail",
             &pa,
-            Some(valid_sha.as_str()),
+            None,
             "./acp",
             "https://example.com/dl-fail.zip",
         );

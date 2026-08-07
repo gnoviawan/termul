@@ -105,9 +105,23 @@ pub enum CatalogSource {
     Registry,
 }
 
+/// Resolved installed-binary info for a host-installed agent. Populated by
+/// `overlay_installed` from the `AcpInstallService` manifest so the web client
+/// (which has no renderer persistence) can build a spawn config from the
+/// host-resolved absolute `command`/`args` without re-deriving it locally.
+/// Carries NO env/API keys — the renderer pulls env from the distribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledCatalogInfo {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
 /// One resolved catalog entry. Carries identity + distribution metadata +
-/// computed `status` + `runtimeRequirements` + `platformTargets`. Never
-/// carries `AgentConfig.env` (API keys) or resolved absolute executable paths.
+/// computed `status` + `runtimeRequirements` + `platformTargets`. The
+/// optional `installed` block carries the host-resolved absolute
+/// `command`/`args` for an already-installed agent (populated by
+/// `overlay_installed`); it carries NO `AgentConfig.env` (API keys).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogAgent {
@@ -120,6 +134,8 @@ pub struct CatalogAgent {
     pub runtime_requirements: Vec<String>,
     pub status: SupportedAcpAgentStatus,
     pub platform_targets: Vec<PlatformTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<InstalledCatalogInfo>,
 }
 
 /// The resolved catalog payload served across all three transports.
@@ -643,6 +659,9 @@ fn compute_catalog_agent(
         runtime_requirements: runtime_reqs,
         status,
         platform_targets,
+        // Populated later by `overlay_installed` from the host install manifest;
+        // `None` here — the catalog's own resolution never knows install state.
+        installed: None,
     }
 }
 
@@ -666,11 +685,10 @@ fn parse_binary_platform_targets(dist: &serde_json::Value) -> Vec<PlatformTarget
 
 /// Compute the status for a binary-distributed agent.
 /// - Binary on PATH (bare name) → `ready`
-/// - Binary not on PATH + HTTPS archive + `sha256` present → `install-required`
-/// - Binary not on PATH + HTTPS archive but NO `sha256` → `manual-install`
-///   (Story 9 tightening: the catalog does not promise an install the host
-///   must reject — `INTEGRITY_METADATA_MISSING`. The launcher shows
-///   manual-install until the maintainer publishes a digest.)
+/// - Binary not on PATH + HTTPS archive → `install-required` (clickable
+///   one-click install). The catalog is the trusted Zed ACP registry, so no
+///   `sha256` digest is required or verified — `AcpInstallService::install`
+///   downloads + extracts + activates without integrity verification.
 /// - Binary not on PATH + no archive → `manual-install`
 /// - No platform target → `unavailable`
 ///
@@ -685,15 +703,6 @@ fn compute_binary_status(
     };
     let cmd = target.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
     let archive = target.get("archive").and_then(|a| a.as_str());
-    // Treat an empty-string sha256 as absent (Story 9 tightening): the host
-    // cannot verify integrity against an empty digest, so the catalog must
-    // not offer the install. `sha256.map(|s| !s.is_empty())` collapses `""`
-    // and missing both to `false`.
-    let has_sha256 = target
-        .get("sha256")
-        .and_then(|s| s.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
 
     // If the command is a bare name (not a relative path), probe it on PATH.
     let is_relative = cmd.starts_with("./") || cmd.starts_with(".\\");
@@ -701,17 +710,13 @@ fn compute_binary_status(
         return SupportedAcpAgentStatus::Ready;
     }
 
-    // Binary not on PATH. Check for an installable archive (HTTPS + allowed
-    // format). Story 9 tightening: an archive without a non-empty `sha256`
-    // digest is `manual-install` (not `install-required`) — the host cannot
-    // verify integrity without the catalog digest, so it must not offer the
-    // install.
+    // Binary not on PATH. Any installable HTTPS archive (zip/tar.gz/tgz) is
+    // `install-required` — the catalog is trusted (Zed ACP registry), so no
+    // `sha256` digest is required. `AcpInstallService::install` proceeds
+    // without integrity verification.
     if let Some(url) = archive {
         if is_https_archive_url(url) {
-            if has_sha256 {
-                return SupportedAcpAgentStatus::InstallRequired;
-            }
-            return SupportedAcpAgentStatus::ManualInstall;
+            return SupportedAcpAgentStatus::InstallRequired;
         }
     }
     SupportedAcpAgentStatus::ManualInstall
@@ -725,6 +730,36 @@ fn is_https_archive_url(url: &str) -> bool {
     }
     let path = url.split(['?', '#']).next().unwrap_or(url).to_lowercase();
     path.ends_with(".zip") || path.ends_with(".tar.gz") || path.ends_with(".tgz")
+}
+
+/// Overlay host-installed state onto a resolved catalog. For each catalog
+/// agent whose `id` matches an entry in `installed`, set `status = Ready` and
+/// populate `installed` with the host-resolved absolute `command`/`args` from
+/// the install manifest. This makes the host the single source of truth for
+/// "is this agent installed" — desktop and web both see installed agents as
+/// `ready` (the web has no renderer persistence, so without this overlay it
+/// could not reuse a host install). Idempotent; call after `list_catalog`.
+///
+/// Install-state must NOT downgrade a `ready` npx/uvx agent whose runtime is
+/// present (those are never in the install manifest — the install service
+/// only installs binary archives), and must NOT override an agent the catalog
+/// resolved `unavailable`/`needs-runtime` (an installed binary whose runtime
+/// disappeared is still installed — its `command` is absolute, not PATH-bound).
+pub fn overlay_installed(catalog: &mut AcpCatalog, installed: &[crate::acp::install::InstalledAgent]) {
+    if installed.is_empty() {
+        return;
+    }
+    let by_id: std::collections::HashMap<&str, &crate::acp::install::InstalledAgent> =
+        installed.iter().map(|i| (i.agent_id.as_str(), i)).collect();
+    for agent in &mut catalog.agents {
+        if let Some(inst) = by_id.get(agent.id.as_str()) {
+            agent.status = SupportedAcpAgentStatus::Ready;
+            agent.installed = Some(InstalledCatalogInfo {
+                command: inst.command.clone(),
+                args: inst.args.clone(),
+            });
+        }
+    }
 }
 
 /// Epoch-millis timestamp (mirrors `workspace_manifest::now_millis`).
@@ -858,14 +893,13 @@ mod tests {
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::NeedsRuntime);
     }
 
-    // ---- I/O matrix: binary with archive + sha256 → install-required ----
+    // ---- I/O matrix: binary with archive → install-required (no sha256 gate) ----
 
     #[test]
     fn binary_agent_with_https_archive_and_sha256_is_install_required() {
-        // Story 9 tightening: `install-required` only when the catalog target
-        // carries BOTH an HTTPS archive AND a `sha256` digest. Without the
-        // digest, the host cannot verify integrity, so the status is
-        // `manual-install` (a separate test pins that).
+        // The catalog is the trusted Zed ACP registry, so an HTTPS archive is
+        // `install-required` regardless of a `sha256` digest — the host
+        // downloads + extracts + activates without integrity verification.
         let agent = sample_agent(
             "test-binary",
             serde_json::json!({
@@ -884,13 +918,13 @@ mod tests {
         assert!(!catalog_agent.platform_targets.is_empty());
     }
 
-    // ---- I/O matrix: binary with archive but NO sha256 → manual-install (Story 9) ----
+    // ---- I/O matrix: binary with archive but NO sha256 → install-required ----
 
     #[test]
-    fn binary_agent_with_archive_but_no_sha256_is_manual_install() {
-        // Story 9 tightening: an HTTPS archive without a `sha256` digest is
-        // `manual-install` (not `install-required`) — the host cannot verify
-        // integrity, so the catalog must not promise an install it must reject.
+    fn binary_agent_with_archive_but_no_sha256_is_install_required() {
+        // No sha256 gate: an HTTPS archive without a digest is still
+        // `install-required` (clickable) — the trusted catalog makes the
+        // install available; the host installs without integrity verification.
         let agent = sample_agent(
             "test-binary",
             serde_json::json!({
@@ -904,16 +938,15 @@ mod tests {
         );
         let host = host_with_runtimes(false, false);
         let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::ManualInstall);
+        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
     }
 
-    // ---- I/O matrix: binary with archive + EMPTY-string sha256 → manual-install ----
+    // ---- I/O matrix: binary with archive + EMPTY-string sha256 → install-required ----
 
     #[test]
-    fn binary_agent_with_archive_but_empty_sha256_is_manual_install() {
-        // Story 9 tightening (patch): an empty-string `sha256` is treated as
-        // absent — the host cannot verify integrity against an empty digest,
-        // so the catalog must not offer the install.
+    fn binary_agent_with_archive_but_empty_sha256_is_install_required() {
+        // An empty-string `sha256` is irrelevant now — the install proceeds
+        // without verification, so the status is `install-required`.
         let agent = sample_agent(
             "test-binary",
             serde_json::json!({
@@ -928,7 +961,7 @@ mod tests {
         );
         let host = host_with_runtimes(false, false);
         let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::ManualInstall);
+        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
     }
 
     // ---- I/O matrix: binary without archive → manual-install ----
@@ -974,11 +1007,11 @@ mod tests {
 
     #[test]
     fn binary_agent_bare_name_on_path_is_ready() {
-        // A bare-name (non-relative) cmd with an installable archive + sha256.
+        // A bare-name (non-relative) cmd with an installable archive.
         // When the injected probe reports the binary is on PATH, the status is
         // `ready` (the archive is not used). When the probe reports it is NOT
         // on PATH, the status falls through to `install-required` (HTTPS
-        // archive + sha256 present — Story 9 tightening).
+        // archive — no sha256 gate, the trusted catalog makes install available).
         let target: serde_json::Map<String, serde_json::Value> = serde_json::json!({
             "cmd": "test-agent",
             "archive": "https://example.com/test-agent.zip",
@@ -994,11 +1027,91 @@ mod tests {
         );
 
         // When the probe reports it is NOT on PATH, the status falls through
-        // to `install-required` (HTTPS archive + sha256 present).
+        // to `install-required` (HTTPS archive — sha256 is not required).
         assert_eq!(
             compute_binary_status(Some(&target), |_| false),
             SupportedAcpAgentStatus::InstallRequired
         );
+    }
+
+    // ---- overlay_installed: host-installed agents → ready + command/args ----
+
+    #[test]
+    fn overlay_installed_marks_installed_agents_ready_with_command() {
+        // The host overlays installed state so installed agents report `ready`
+        // with their resolved absolute command/args — the web (no renderer
+        // persistence) builds a spawn config from this.
+        let mut catalog = AcpCatalog {
+            host: host_with_runtimes(false, false),
+            agents: vec![
+                CatalogAgent {
+                    id: "installed-bin".to_string(),
+                    name: "Installed".to_string(),
+                    version: "1.0.0".to_string(),
+                    description: "d".to_string(),
+                    source: CatalogSource::Bundled,
+                    distribution: serde_json::json!({
+                        "binary": { "linux-x86_64": {
+                            "cmd": "./installed",
+                            "archive": "https://example.com/installed.zip"
+                        }}
+                    }),
+                    runtime_requirements: Vec::new(),
+                    status: SupportedAcpAgentStatus::InstallRequired,
+                    platform_targets: Vec::new(),
+                    installed: None,
+                },
+                CatalogAgent {
+                    id: "not-installed".to_string(),
+                    name: "NotInstalled".to_string(),
+                    version: "1.0.0".to_string(),
+                    description: "d".to_string(),
+                    source: CatalogSource::Bundled,
+                    distribution: serde_json::json!({
+                        "binary": { "linux-x86_64": {
+                            "cmd": "./other",
+                            "archive": "https://example.com/other.zip"
+                        }}
+                    }),
+                    runtime_requirements: Vec::new(),
+                    status: SupportedAcpAgentStatus::InstallRequired,
+                    platform_targets: Vec::new(),
+                    installed: None,
+                },
+            ],
+        };
+        let installed = vec![crate::acp::install::InstalledAgent {
+            agent_id: "installed-bin".to_string(),
+            version: "1.0.0".to_string(),
+            platform_target: "linux-x86_64".to_string(),
+            sha256: String::new(),
+            command: "/abs/acp-registry-binaries/installed-bin/installed".to_string(),
+            args: vec!["acp".to_string()],
+            installed_at: 0,
+        }];
+        overlay_installed(&mut catalog, &installed);
+
+        let by_id: std::collections::HashMap<&str, &CatalogAgent> =
+            catalog.agents.iter().map(|a| (a.id.as_str(), a)).collect();
+        let installed_agent = by_id.get("installed-bin").unwrap();
+        assert_eq!(installed_agent.status, SupportedAcpAgentStatus::Ready);
+        let info = installed_agent.installed.as_ref().expect("installed block");
+        assert_eq!(info.command, "/abs/acp-registry-binaries/installed-bin/installed");
+        assert_eq!(info.args, vec!["acp".to_string()]);
+        // The not-installed agent is untouched.
+        let other = by_id.get("not-installed").unwrap();
+        assert_eq!(other.status, SupportedAcpAgentStatus::InstallRequired);
+        assert!(other.installed.is_none());
+    }
+
+    #[test]
+    fn overlay_installed_no_op_when_empty() {
+        let mut catalog = AcpCatalog {
+            host: host_with_runtimes(false, false),
+            agents: vec![],
+        };
+        overlay_installed(&mut catalog, &[]);
+        assert!(catalog.agents.is_empty());
     }
 
     // ---- I/O matrix: opt-in path succeeds (degrades gracefully if CDN fails) ----
@@ -1161,6 +1274,7 @@ mod tests {
                 runtime_requirements: vec!["npx".to_string()],
                 status: SupportedAcpAgentStatus::Ready,
                 platform_targets: vec![],
+                installed: None,
             }],
         };
         let value = serde_json::to_value(&catalog).unwrap();

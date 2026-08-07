@@ -121,7 +121,12 @@ export const WS_REQUEST_TYPES = [
   'kill_agent',
   'list_agents',
   'switch_project',
+  // WS connection token-gate handshake (pre-auth). Distinct from
+  // `authenticate_agent` (the ACP agent method).
   'authenticate',
+  // ACP agent-advertised `authenticate` method (e.g. `pi_terminal_login`).
+  // Post-auth request routed to `AcpManager::authenticate` on the host.
+  'authenticate_agent',
   'subscribe',
   'ping',
   'list_persisted_sessions',

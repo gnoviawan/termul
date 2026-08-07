@@ -283,6 +283,7 @@ pub fn acp_probe_runtime() -> crate::acp::config::AcpRuntimeProbe {
 pub async fn acp_list_catalog(
     refresh: Option<bool>,
     store: State<'_, crate::commands::HostAcpCatalogStore>,
+    install_store: State<'_, crate::commands::HostAcpInstallStore>,
 ) -> Result<crate::commands::IpcResult<crate::acp::AcpCatalog>, String> {
     let refresh = refresh.unwrap_or(false);
     log::info!("[acp-catalog] list start refresh={refresh}");
@@ -294,7 +295,16 @@ pub async fn acp_list_catalog(
         ));
     };
     match service.list_catalog(refresh).await {
-        Ok(catalog) => {
+        Ok(mut catalog) => {
+            // Overlay host-installed state so installed agents report `ready`
+            // with their resolved command/args. The host is the single source
+            // of truth for "is this agent installed" — desktop and web both
+            // see installed agents as ready (the web has no renderer
+            // persistence, so without this it could not reuse a host install).
+            if let Some(install) = install_store.store() {
+                let installed = install.installed_agents();
+                crate::acp::overlay_installed(&mut catalog, &installed);
+            }
             log::info!(
                 "[acp-catalog] list success agents={}",
                 catalog.agents.len()

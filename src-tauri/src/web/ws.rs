@@ -936,7 +936,7 @@ async fn handle_request(
         // `@tauri-apps/plugin-os` or PATH locally — the host is the single
         // source of truth.
         "list_acp_catalog" => {
-            handle_list_acp_catalog(id, &req.payload, acp_catalog).await
+            handle_list_acp_catalog(id, &req.payload, acp_catalog, acp_install).await
         }
         "set_catalog_opt_in" => {
             handle_set_catalog_opt_in(id, &req.payload, acp_catalog).await
@@ -965,6 +965,10 @@ async fn handle_request(
             .await
         }
         "list_agents" => handle_list_agents(id, acp),
+        // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
+        // `pi_terminal_login`). Distinct from the WS connection `authenticate`
+        // token gate — this runs the method on the host where the agent lives.
+        "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
@@ -1415,6 +1419,7 @@ async fn handle_list_acp_catalog(
     id: String,
     payload: &Value,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+    acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
 ) -> WsReply {
     // Distinct SCREAMING_SNAKE_CASE codes matching the HTTP route
     // (`catalog_api::list`) byte-for-byte (the protocol-level `WsErrorCode`
@@ -1438,7 +1443,16 @@ async fn handle_list_acp_catalog(
         );
     };
     match service.list_catalog(parsed.refresh.unwrap_or(false)).await {
-        Ok(catalog) => ok_with_payload(id, &catalog),
+        Ok(mut catalog) => {
+            // Overlay host-installed state so installed agents report `ready`
+            // with their resolved command/args — the host is the single
+            // source of truth (web has no renderer persistence).
+            if let Some(install) = acp_install {
+                let installed = install.installed_agents();
+                crate::acp::overlay_installed(&mut catalog, &installed);
+            }
+            ok_with_payload(id, &catalog)
+        }
         Err(error) => WsReply::err_with_code(
             id,
             "CATALOG_LOAD_FAILED",
@@ -1537,6 +1551,60 @@ async fn handle_install_acp_agent(
     match service.install_by_id(&parsed.agent_id).await {
         Ok(outcome) => ok_with_payload(id, &outcome),
         Err(error) => WsReply::err_with_code(id, error.code(), error.message),
+    }
+}
+
+/// `authenticate_agent` → `AcpManager::authenticate(agent_id, method_id)`.
+/// Runs the ACP agent-advertised `authenticate` method (e.g.
+/// `pi_terminal_login`) on the host where the agent process runs. Distinct
+/// from the WS connection `authenticate` token gate — this is the agent
+/// method, not the relay handshake. Mirrors the desktop `acp_authenticate`
+/// Tauri command (both call `AcpManager::authenticate`). The provider owns
+/// the login UX (often opens its own browser); Termul never invents a
+/// redirect URL or stores credentials.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthenticateAgentPayload {
+    agent_id: crate::acp::AgentId,
+    method_id: String,
+}
+
+async fn handle_authenticate_agent(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AuthenticateAgentPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed authenticate_agent payload (want agentId, methodId): {e}"),
+            )
+        }
+    };
+    debug!(
+        target: "termul::web::ws",
+        agent = %parsed.agent_id,
+        method = %parsed.method_id,
+        "authenticate_agent: invoking agent auth method"
+    );
+    // `AcpManager::authenticate` takes `method_id` by value, so keep a clone
+    // for the failure log (the debug! above borrows before the move).
+    let method_id = parsed.method_id.clone();
+    match acp.authenticate(&parsed.agent_id, parsed.method_id).await {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                agent = %parsed.agent_id,
+                method = %method_id,
+                error = %e,
+                "authenticate_agent: agent auth failed"
+            );
+            WsReply::err_with_code(id, "AUTHENTICATE_FAILED", e)
+        }
     }
 }
 

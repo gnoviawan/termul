@@ -913,12 +913,13 @@ export class WsAcpTransport implements AcpTransport {
 
   /** Agent method auth — distinct from relay `authenticate` token gate. */
   async authenticate(agentId: AgentId, methodId: string): Promise<void> {
-    // Not in WS_REQUEST_TYPES as agent auth; server may still stub.
-    // Keep a clear error until 1.8 wires agent auth over WS if needed.
-    throw new AcpTransportError(
-      'not_implemented',
-      `Agent authenticate(${agentId}, ${methodId}) is not available over WS yet`
-    )
+    // Routes the ACP agent-advertised `authenticate` method (e.g.
+    // `pi_terminal_login`) to the host's `AcpManager::authenticate` over the
+    // authenticated WS connection. The host runs the method on the agent
+    // process (the provider owns the login UX, often opening its own
+    // browser); Termul never invents a redirect URL or stores credentials.
+    // Mirrors the desktop `acp_authenticate` Tauri command.
+    await this.request('authenticate_agent', { agentId, methodId })
   }
 
   // --- Internals -----------------------------------------------------------

@@ -67,7 +67,14 @@ pub async fn list(
         );
     };
     match service.list_catalog(refresh).await {
-        Ok(catalog) => {
+        Ok(mut catalog) => {
+            // Overlay host-installed state so installed agents report `ready`
+            // with their resolved command/args — the host is the single
+            // source of truth (the web has no renderer persistence).
+            if let Some(install) = state.acp_install.as_ref() {
+                let installed = install.installed_agents();
+                crate::acp::overlay_installed(&mut catalog, &installed);
+            }
             debug!(
                 target: "termul::web::catalog_api",
                 agents = catalog.agents.len(),
@@ -453,6 +460,7 @@ mod tests {
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                 }],
+                installed: None,
             }],
         };
         let value = serde_json::to_value(&catalog).unwrap();
