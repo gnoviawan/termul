@@ -250,8 +250,9 @@ fn get_extension(name: &str) -> Option<String> {
 /// (`ls`/`browse`/`read`) are deliberately broader than `project_root` for
 /// desktop parity, the directory picker, and editor reads; the OPERATION
 /// routes (`/git/*`, `/skills`, `/search/content`) are confined separately
-/// via `git_api::ensure_within_project_root` (rejects with
-/// `OUTSIDE_PROJECT_ROOT`). `/fs/*` writes (`mkdir`/`write`/`delete`/
+/// via `git_api::ensure_within_project_boundary` (accepts the default
+/// `project_root` or any registered, non-archived project root; rejects
+/// with `OUTSIDE_PROJECT_ROOT`). `/fs/*` writes (`mkdir`/`write`/`delete`/
 /// `rename`/`copy`) and `/fs/info` are loopback-guarded (`check_local_only`,
 /// `FORBIDDEN`). The retained guards here are: `..`-component rejection
 /// (defense-in-depth) and path canonicalization / ancestor-walking (symlink
@@ -557,7 +558,7 @@ pub async fn browse(
 /// spec-remove-web-fs-path-jail so the directory picker can navigate outside
 /// the project and the editor can read cross-project files; browse/read are
 /// deliberately broader than the operation routes, which remain confined
-/// via `ensure_within_project_root`). A read route: intentionally NOT
+/// via `ensure_within_project_boundary`). A read route: intentionally NOT
 /// loopback-guarded, so desktop-hosted LAN clients can open files in the
 /// editor; mutations stay loopback-only (`delete`/`rename`/`copy`).
 pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
@@ -972,7 +973,8 @@ mod tests {
     /// PR-S4: build an `AppState` with the project-root boundary set to
     /// `root`. This is the containment boundary for the OPERATION routes
     /// (`/git/*`, `/skills`, `/search/content` — enforced by
-    /// `git_api::ensure_within_project_root`). The `/fs/*` browse/read
+    /// `git_api::ensure_within_project_boundary`, which accepts the default
+    /// `project_root` or any registered, non-archived project root). The `/fs/*` browse/read
     /// routes are intentionally broader (no `project_root` containment —
     /// ADR-007). Tests that previously used the default `test_state()` keep
     /// working because the default root is the OS temp dir (and the existing
@@ -2091,7 +2093,7 @@ mod tests {
     /// breadth — desktop parity, directory picker, editor reads), while
     /// `/git/status` and `/skills` reject the same outside path with
     /// `OUTSIDE_PROJECT_ROOT` (server-side operations confined to
-    /// `project_root` via `ensure_within_project_root`).
+    /// `project_root` via `ensure_within_project_boundary`).
     #[tokio::test]
     async fn fs_containment_boundary_relationship() {
         let root = TempDir::new("boundary-root");
@@ -2133,7 +2135,7 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        let body: IpcBody<serde_json::Value> = body_as_json(resp.into_body()).await;
         assert_ne!(
             body.code.as_deref(),
             Some("OUTSIDE_PROJECT_ROOT"),
@@ -2148,7 +2150,7 @@ mod tests {
         );
         let resp = get_request(state.clone(), &skills_uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        let body: IpcBody<serde_json::Value> = body_as_json(resp.into_body()).await;
         assert_ne!(
             body.code.as_deref(),
             Some("OUTSIDE_PROJECT_ROOT"),
@@ -2255,7 +2257,7 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        let body: IpcBody<serde_json::Value> = body_as_json(resp.into_body()).await;
         assert_ne!(
             body.code.as_deref(),
             Some("OUTSIDE_PROJECT_ROOT"),
@@ -2269,7 +2271,7 @@ mod tests {
         );
         let resp = get_request(state.clone(), &skills_uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        let body: IpcBody<serde_json::Value> = body_as_json(resp.into_body()).await;
         assert_ne!(
             body.code.as_deref(),
             Some("OUTSIDE_PROJECT_ROOT"),

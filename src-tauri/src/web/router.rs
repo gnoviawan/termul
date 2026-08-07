@@ -45,8 +45,9 @@ use super::assets;
 ///
 /// `project_root` (PR-S4) is the containment boundary for the OPERATION
 /// routes (`/git/*`, `/skills`, `/search/content`) — enforced by
-/// [`git_api::ensure_within_project_root`] (rejects with
-/// `OUTSIDE_PROJECT_ROOT`). The `/fs/*` browse/read routes (`ls`/`browse`/
+/// [`git_api::ensure_within_project_boundary`] (accepts the default
+/// `project_root` or any registered, non-archived project root; rejects
+/// with `OUTSIDE_PROJECT_ROOT`). The `/fs/*` browse/read routes (`ls`/`browse`/
 /// `read`) are intentionally broader — no `project_root` check — for desktop
 /// parity, the directory picker, and editor reads; `/fs/*` writes (`mkdir`/
 /// `write`/`delete`/`rename`/`copy`) and `/fs/info` are loopback-guarded

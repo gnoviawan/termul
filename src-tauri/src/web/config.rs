@@ -74,12 +74,13 @@ pub fn default_project_root() -> Option<PathBuf> {
 /// Used at every entry point that constructs a `ServerConfig::project_root`
 /// (the `from_args` `--project-root` flag, the desktop shared-live host's
 /// `default_project_root()` fallback, the standalone `termul-server`
-/// binary) so the boundary check in `git_api::ensure_within_project_root`
+/// binary) so the boundary check in `git_api::ensure_within_project_boundary`
 /// (the shared operations chokepoint for `/git/*`, `/skills`,
-/// `/search/content`) can rely on `project_root` being a real, accessible
-/// directory rather than a path string that only resolves correctly at the
-/// first request. The `/fs/*` browse/read routes are intentionally broader
-/// (no `project_root` containment — ADR-007).
+/// `/search/content` — accepts the default `project_root` or any registered,
+/// non-archived project root) can rely on `project_root` being a real,
+/// accessible directory rather than a path string that only resolves
+/// correctly at the first request. The `/fs/*` browse/read routes are
+/// intentionally broader (no `project_root` containment — ADR-007).
 ///
 /// Rejects:
 /// - Paths that do not exist or are not accessible (canonicalize fails).
