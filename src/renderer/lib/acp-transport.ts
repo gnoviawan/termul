@@ -913,12 +913,18 @@ export class WsAcpTransport implements AcpTransport {
 
   /** Agent method auth — distinct from relay `authenticate` token gate. */
   async authenticate(agentId: AgentId, methodId: string): Promise<void> {
+    // Await the authenticated relay socket before sending — `connect()`
+    // resolves only after the WS token-gate handshake completes (openSocket
+    // settles on `authed`), so this never fires `authenticate_agent` before
+    // the connection is authenticated. Mirrors `fetchSessionCursor`/
+    // `subscribeSession` (which `await this.connect()` before `request()`).
     // Routes the ACP agent-advertised `authenticate` method (e.g.
     // `pi_terminal_login`) to the host's `AcpManager::authenticate` over the
     // authenticated WS connection. The host runs the method on the agent
     // process (the provider owns the login UX, often opening its own
     // browser); Termul never invents a redirect URL or stores credentials.
     // Mirrors the desktop `acp_authenticate` Tauri command.
+    await this.connect()
     await this.request('authenticate_agent', { agentId, methodId })
   }
 
@@ -1386,9 +1392,18 @@ export class WsAcpTransport implements AcpTransport {
       // activity. `0` (unlimited hard cap) → no absolute deadline.
       const deadline =
         serverHardCapMs > 0 ? Date.now() + serverHardCapMs + SEND_PROMPT_GRACE_MS : undefined
+      // `authenticate_agent` is an interactive agent auth flow (the provider
+      // may open a browser + wait for the user to sign in) — apply NO
+      // client-side timeout (0 = no timer), matching the desktop
+      // `acp_authenticate` path (which awaits the agent reply indefinitely)
+      // and the `send_prompt` unlimited-policy pattern. A reply, disconnect,
+      // or disposal resolves/rejects the pending request.
+      const isAuthenticateAgent = type === 'authenticate_agent'
       const timerMs = isSendPrompt
         ? this.computeSendPromptTimerMs(inactivityMs, deadline)
-        : REQUEST_TIMEOUT_MS
+        : isAuthenticateAgent
+          ? 0
+          : REQUEST_TIMEOUT_MS
       const timer =
         timerMs > 0
           ? setTimeout(() => {

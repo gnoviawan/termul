@@ -1577,9 +1577,9 @@ async fn handle_authenticate_agent(
     let parsed: AuthenticateAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
-            return WsReply::err(
+            return WsReply::err_with_code(
                 id,
-                WsErrorCode::Unsupported,
+                "VALIDATION_ERROR",
                 format!("malformed authenticate_agent payload (want agentId, methodId): {e}"),
             )
         }
