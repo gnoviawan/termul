@@ -43,9 +43,15 @@ use super::assets;
 /// and replay cursors (Story 1.4). The `/ws` + `/health` routes are registered
 /// BEFORE the static fallback so the static mount cannot shadow them (AC1).
 ///
-/// `project_root` (PR-S4) is the boundary the fs_api routes enforce — see
-/// `crate::web::fs_api::check_within_root`. Resolved by the caller from
-/// `ServerConfig::project_root` (or its default).
+/// `project_root` (PR-S4) is the containment boundary for the OPERATION
+/// routes (`/git/*`, `/skills`, `/search/content`) — enforced by
+/// [`git_api::ensure_within_project_root`] (rejects with
+/// `OUTSIDE_PROJECT_ROOT`). The `/fs/*` browse/read routes (`ls`/`browse`/
+/// `read`) are intentionally broader — no `project_root` check — for desktop
+/// parity, the directory picker, and editor reads; `/fs/*` writes (`mkdir`/
+/// `write`/`delete`/`rename`/`copy`) and `/fs/info` are loopback-guarded
+/// (`check_local_only`, `FORBIDDEN`). See ADR-007 for the recorded policy.
+/// Resolved by the caller from `ServerConfig::project_root` (or its default).
 ///
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
