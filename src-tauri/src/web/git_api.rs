@@ -169,6 +169,22 @@ pub(crate) fn ensure_within_project_root<T>(
     }
 }
 
+/// Reject when the resolved cwd is outside ALL authorized project roots. First
+/// checks the default `project_root` via `ensure_within_project_root` (fast
+/// path — single `starts_with`), then falls back to ALL registered project
+/// roots (handles a web client that switched to a non-default project via
+/// per-connection `switch_project` — the boundary follows any registered
+/// project, not just the host default). Returns `None` when within bounds;
+/// otherwise `Some(IpcBody::err(..., "OUTSIDE_PROJECT_ROOT"))`.
+pub(crate) fn ensure_within_project_boundary<T>(
+    resolved: &Path,
+    project_root: &Path,
+    registry: &crate::web::project_registry::ProjectRegistry,
+) -> Option<IpcBody<T>> {
+    ensure_within_project_root::<T>(resolved, project_root)
+        .filter(|_| !registry.is_within_any_registered_root(resolved))
+}
+
 /// Resolve + boundary-check the request `cwd`. On failure returns the
 /// `(StatusCode, Json<IpcBody::err>)` to send directly; on success returns the
 /// resolved `PathBuf` (which the caller passes to `spawn_blocking` as a
@@ -203,10 +219,14 @@ fn resolve_cwd<T>(
     // 3) project_root containment (web-server security boundary). CAP-1:
     //    lock-read the RwLock for the duration of the `starts_with` check
     //    (sync — no `.await` under the guard). The boundary may have been
-    //    rebound by a project switch since the last request.
+    //    rebound by a project switch since the last request. CAP-2: also
+    //    check ALL registered project roots so a web client that switched to
+    //    a non-default project (per-connection `switch_project`) can operate
+    //    on it — the boundary follows any registered project, not just the
+    //    host default.
     let outside_err = {
         let project_root = state.project_root.read();
-        ensure_within_project_root::<T>(&resolved, &project_root)
+        ensure_within_project_boundary::<T>(&resolved, &project_root, &state.registry)
     };
     if let Some(err) = outside_err {
         return Err((StatusCode::OK, Json(err)));

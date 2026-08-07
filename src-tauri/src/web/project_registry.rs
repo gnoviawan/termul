@@ -298,6 +298,37 @@ impl ProjectRegistry {
         self.len() == 0
     }
 
+    /// Check whether a canonical `path` is within ANY registered (non-archived)
+    /// project root. Used by the operation containment check
+    /// (`ensure_within_project_boundary`) so that a web client that switched to
+    /// a non-default project (per-connection `switch_project`) can still run
+    /// git/skills/search operations — the boundary follows any registered
+    /// project, not just the host default.
+    ///
+    /// Collects display paths under a short lock, then canonicalizes each
+    /// outside the lock (sync fs call). Paths that fail to canonicalize
+    /// (deleted/moved) are silently skipped — they cannot match a live request.
+    #[must_use]
+    pub fn is_within_any_registered_root(&self, path: &std::path::Path) -> bool {
+        let paths: Vec<String> = {
+            let g = self.inner.lock();
+            g.projects
+                .iter()
+                .filter(|p| !p.is_archived)
+                .filter_map(|p| p.path.as_deref().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        for raw in paths {
+            if let Ok(canonical) = std::fs::canonicalize(&raw) {
+                if path.starts_with(&canonical) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     // ---- CAP-1: live project_root rebind ----
 
     /// Register the `Arc<RwLock<PathBuf>>` handle that `AppState.project_root`

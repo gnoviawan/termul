@@ -142,13 +142,14 @@ pub async fn content(
     // switch). Scope the guard in a block so it is provably dropped before the
     // `spawn_blocking` `.await` (the guard is `!Send` — keeping it alive across
     // an `.await` would make the handler future `!Send`, failing axum's
-    // `Handler` trait). `ensure_within_project_root` returns an owned
-    // `Option<IpcBody<T>>` so no borrow escapes the block.
+    // `Handler` trait). CAP-2: also check all registered project roots so a
+    // web client that switched to a non-default project can search.
     let outside_err = {
         let project_root = state.project_root.read();
-        crate::web::git_api::ensure_within_project_root::<FileSearchResponse>(
+        crate::web::git_api::ensure_within_project_boundary::<FileSearchResponse>(
             &canonical_root,
             &project_root,
+            &state.registry,
         )
     };
     if let Some(err) = outside_err {

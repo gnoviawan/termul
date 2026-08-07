@@ -57,19 +57,23 @@ pub async fn list(
 ) -> impl IntoResponse {
     // Enforce `project_root` containment (web-server security boundary): a web
     // client must not probe skills under an arbitrary host path — only under
-    // the server's `project_root` (mirrors `/git/*` + `/search/*`). A
-    // non-existent projectRoot canonicalizes to Err and is allowed through
-    // (no project skills scanned; only global skills — harmless degrade).
+    // the server's `project_root` or any registered project root (mirrors
+    // `/git/*` + `/search/*`). A non-existent projectRoot canonicalizes to Err
+    // and is allowed through (no project skills scanned; only global skills —
+    // harmless degrade).
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
             // CAP-1: lock-read the live boundary (may have been rebound).
+            // CAP-2: also check all registered project roots so a web client
+            // that switched to a non-default project can list skills.
             // Scope in a block so the `!Send` guard drops before the
             // `spawn_blocking` `.await` (keeps the handler future `Send`).
             let outside_err = {
                 let project_root = state.project_root.read();
-                crate::web::git_api::ensure_within_project_root::<Vec<AgentSkillSummary>>(
+                crate::web::git_api::ensure_within_project_boundary::<Vec<AgentSkillSummary>>(
                     &canonical,
                     &project_root,
+                    &state.registry,
                 )
             };
             if let Some(err) = outside_err {
@@ -118,13 +122,15 @@ pub async fn read(
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
             // CAP-1: lock-read the live boundary (may have been rebound).
+            // CAP-2: also check all registered project roots.
             // Scope in a block so the `!Send` guard drops before the
             // `spawn_blocking` `.await` (keeps the handler future `Send`).
             let outside_err = {
                 let project_root = state.project_root.read();
-                crate::web::git_api::ensure_within_project_root::<AgentSkillContent>(
+                crate::web::git_api::ensure_within_project_boundary::<AgentSkillContent>(
                     &canonical,
                     &project_root,
+                    &state.registry,
                 )
             };
             if let Some(err) = outside_err {

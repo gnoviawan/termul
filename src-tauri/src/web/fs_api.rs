@@ -924,7 +924,7 @@ fn sort_directory_entries(entries: &mut [DirectoryEntryDto]) {
 mod tests {
     use super::*;
     use crate::acp::AcpManager;
-    use crate::web::project_registry::ProjectRegistry;
+    use crate::web::project_registry::{ProjectRegistry, ProjectSummary};
     use crate::web::sink::WsRelaySink;
     use crate::web::test_pty_manager;
     use axum::body::Body;
@@ -2205,5 +2205,102 @@ mod tests {
             "/skills outside project_root must be rejected"
         );
         assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+    }
+
+    /// CAP-2: a web client that switched to a non-default registered project
+    /// (per-connection `switch_project`) can still run git/skills operations.
+    /// The containment boundary follows ANY registered project root, not just
+    /// the host default. An unregistered path is still rejected.
+    #[tokio::test]
+    async fn operations_accept_registered_non_default_project() {
+        let root = TempDir::new("registered-default");
+        let registered = TempDir::new("registered-other");
+        let outside = TempDir::new("registered-unregistered");
+        fs::write(registered.path().join("marker.txt"), "x").expect("write marker");
+        fs::write(outside.path().join("marker.txt"), "x").expect("write marker");
+        let state = test_state_with_root(root.path());
+
+        // Seed the registry with two projects: `root` (default) and
+        // `registered` (non-default, outside `root`). The `set` call's
+        // `rebind_project_root` is a no-op here (no handle registered in
+        // test state), so `project_root` stays as `root`.
+        state.registry.set(
+            vec![
+                ProjectSummary {
+                    id: "default".to_string(),
+                    name: "Default".to_string(),
+                    color: "blue".to_string(),
+                    path: Some(root.path().to_string_lossy().into_owned()),
+                    is_archived: false,
+                    is_default: true,
+                },
+                ProjectSummary {
+                    id: "registered".to_string(),
+                    name: "Registered".to_string(),
+                    color: "green".to_string(),
+                    path: Some(registered.path().to_string_lossy().into_owned()),
+                    is_archived: false,
+                    is_default: false,
+                },
+            ],
+            Some("default".to_string()),
+        );
+
+        // `/git/status` on the registered (non-default) project is NOT
+        // rejected — it's a registered project root.
+        let resp = post_json(
+            state.clone(),
+            "/git/status",
+            &serde_json::json!({ "cwd": registered.path().to_string_lossy() }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert_ne!(
+            body.code.as_deref(),
+            Some("OUTSIDE_PROJECT_ROOT"),
+            "/git/status on registered non-default project must not be rejected"
+        );
+
+        // `/skills` on the registered (non-default) project is NOT rejected.
+        let skills_uri = format!(
+            "/skills?projectRoot={}",
+            urlencoding(&registered.path().to_string_lossy())
+        );
+        let resp = get_request(state.clone(), &skills_uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert_ne!(
+            body.code.as_deref(),
+            Some("OUTSIDE_PROJECT_ROOT"),
+            "/skills on registered non-default project must not be rejected"
+        );
+
+        // An unregistered path (outside both root and registered) is still
+        // rejected — the boundary only follows registered projects.
+        let resp = post_json(
+            state.clone(),
+            "/git/status",
+            &serde_json::json!({ "cwd": outside.path().to_string_lossy() }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(
+            !body.success,
+            "/git/status on unregistered path must be rejected"
+        );
+        assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+
+        // `/fs/ls` on the registered (non-default) project also succeeds —
+        // intentional breadth (always accepted, registered or not).
+        let ls_uri = format!(
+            "/fs/ls?path={}",
+            urlencoding(&registered.path().to_string_lossy())
+        );
+        let resp = get_request(state, &ls_uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "/fs/ls on registered project must succeed");
     }
 }
