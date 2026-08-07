@@ -167,6 +167,14 @@ pub fn router(
     } else {
         r = r.fallback(assets::serve_embedded);
     }
+    // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
+    // registry can rebind it in place on a project switch (the handle is
+    // the *same* `Arc` `AppState.project_root` owns). Register it with the
+    // registry before building `AppState` so `set` / `set_default_project`
+    // mutations can recompute + write the canonical path here.
+    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+
     r.with_state(AppState {
         acp,
         pty,
@@ -182,7 +190,7 @@ pub fn router(
         workspace_manifest,
         acp_catalog,
         acp_install,
-        project_root: Arc::new(project_root),
+        project_root: project_root_handle,
     })
 }
 
@@ -260,22 +268,28 @@ pub fn router_with_static(
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/acp/install", post(install_api::install))
         .fallback_service(assets::static_service_from(static_dir))
-        .with_state(AppState {
-            acp,
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: ws_relay,
-            registry,
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            project_root: Arc::new(project_root),
+        // CAP-1: same RwLock wrap + handle registration as `router`.
+        .with_state({
+            let project_root_handle =
+                std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+            registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+            AppState {
+                acp,
+                terminal_events: pty.terminal_events(),
+                cwd_tracker: pty.cwd_tracker(),
+                git_tracker: pty.git_tracker(),
+                exit_code_tracker: pty.exit_code_tracker(),
+                pty,
+                relay: ws_relay,
+                registry,
+                registry_persistence: None,
+                projects_file: None,
+                history_mode: HistoryMode::LiveOnly,
+                workspace_manifest: None,
+                acp_catalog: None,
+                acp_install: None,
+                project_root: project_root_handle,
+            }
         })
 }
 

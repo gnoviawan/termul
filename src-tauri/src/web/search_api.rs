@@ -138,10 +138,20 @@ pub async fn content(
             );
         }
     };
-    if let Some(err) = crate::web::git_api::ensure_within_project_root::<FileSearchResponse>(
-        &canonical_root,
-        &state.project_root,
-    ) {
+    // CAP-1: lock-read the live boundary (may have been rebound by a project
+    // switch). Scope the guard in a block so it is provably dropped before the
+    // `spawn_blocking` `.await` (the guard is `!Send` — keeping it alive across
+    // an `.await` would make the handler future `!Send`, failing axum's
+    // `Handler` trait). `ensure_within_project_root` returns an owned
+    // `Option<IpcBody<T>>` so no borrow escapes the block.
+    let outside_err = {
+        let project_root = state.project_root.read();
+        crate::web::git_api::ensure_within_project_root::<FileSearchResponse>(
+            &canonical_root,
+            &project_root,
+        )
+    };
+    if let Some(err) = outside_err {
         tracing::warn!(
             "[Security] Content search rejected: root '{}' outside project_root",
             canonical_root.display()
@@ -332,11 +342,11 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(
+            project_root: Arc::new(parking_lot::RwLock::new(
                 std::env::temp_dir()
                     .canonicalize()
                     .unwrap_or_else(|_| std::env::temp_dir()),
-            ),
+            )),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

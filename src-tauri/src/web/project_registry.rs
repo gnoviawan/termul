@@ -18,7 +18,10 @@
 //! (desktop-hosted push — the desktop user IS the host operator, so their
 //! active selection IS the default for new clients).
 
-use parking_lot::Mutex;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use agent_client_protocol::schema::v1::McpServer;
@@ -98,10 +101,24 @@ struct RegistryData {
 /// resolution), the `remote_sync_projects` command (write path), and
 /// `remote_server_stop` (clear). All mutation is behind a single
 /// `parking_lot::Mutex` so a renderer sync and a `/projects` read never race.
+///
+/// **CAP-1 (live project_root rebind):** the registry also holds an optional
+/// `Arc<RwLock<PathBuf>>` handle — the *same* `Arc` `AppState.project_root`
+/// owns. `serve_router` / `router` registers it via `set_project_root_handle`
+/// after constructing `AppState`. The `set` / `set_default_project` mutators
+/// then call `rebind_project_root`, which reads the new default's path,
+/// canonicalizes it via `resolve_and_validate_project_root`, and writes the
+/// canonical form to the handle — so switching the active project updates the
+/// containment boundary without a server restart. When no handle is registered
+/// (tests, pre-`serve_router` seed) the rebind is a no-op.
 #[derive(Default)]
 pub struct ProjectRegistry {
     inner: Mutex<RegistryData>,
     mcp_servers: Mutex<std::collections::HashMap<String, Vec<McpServer>>>,
+    /// CAP-1: the live `project_root` handle shared with `AppState`. `None`
+    /// until `serve_router` / `router` registers it. The `set` /
+    /// `set_default_project` mutators rebind through this handle.
+    project_root_handle: Mutex<Option<Arc<RwLock<PathBuf>>>>,
 }
 
 impl ProjectRegistry {
@@ -117,13 +134,20 @@ impl ProjectRegistry {
     /// desktop's current non-archived + archived summaries + default id. The
     /// renderer is the source of truth in desktop-hosted mode — a fresh `set`
     /// fully supersedes the prior snapshot.
+    ///
+    /// **CAP-1:** after the mutation lands, rebinds `AppState.project_root`
+    /// (via the registered handle) to the new default's canonical path so the
+    /// containment boundary follows the active project without a restart.
     pub fn set(&self, mut projects: Vec<ProjectSummary>, default_id: Option<String>) {
         for project in &mut projects {
             project.is_default = default_id.as_deref() == Some(project.id.as_str());
         }
-        let mut g = self.inner.lock();
-        g.projects = projects;
-        g.default_project_id = default_id;
+        {
+            let mut g = self.inner.lock();
+            g.projects = projects;
+            g.default_project_id = default_id;
+        }
+        self.rebind_project_root();
     }
 
     /// Snapshot the current mirror for `GET /projects`. Clones the vec under
@@ -169,22 +193,34 @@ impl ProjectRegistry {
     /// Called by the explicit `set_default_project` operation (Tauri command +
     /// WS request + HTTP route). Returns `false` when the target is unknown,
     /// archived, or pathless (not switchable) — the caller replies `NOT_FOUND`.
+    ///
+    /// **CAP-1:** on success, rebinds `AppState.project_root` (via the
+    /// registered handle) to the new default's canonical path so the
+    /// containment boundary follows the active project without a restart.
     pub fn set_default_project(&self, project_id: &str) -> bool {
-        let mut g = self.inner.lock();
-        if !g.projects.iter().any(|p| {
-            p.id == project_id
-                && !p.is_archived
-                && p.path
-                    .as_deref()
-                    .is_some_and(|path| !path.trim().is_empty())
-        }) {
-            return false;
+        let ok = {
+            let mut g = self.inner.lock();
+            let valid = g.projects.iter().any(|p| {
+                p.id == project_id
+                    && !p.is_archived
+                    && p.path
+                        .as_deref()
+                        .is_some_and(|path| !path.trim().is_empty())
+            });
+            if !valid {
+                false
+            } else {
+                g.default_project_id = Some(project_id.to_string());
+                for project in &mut g.projects {
+                    project.is_default = project.id == project_id;
+                }
+                true
+            }
+        };
+        if ok {
+            self.rebind_project_root();
         }
-        g.default_project_id = Some(project_id.to_string());
-        for project in &mut g.projects {
-            project.is_default = project.id == project_id;
-        }
-        true
+        ok
     }
 
     /// Resolve a project id → its cwd (`path`), or `None` when the project is
@@ -241,7 +277,9 @@ impl ProjectRegistry {
     }
 
     /// Clear the mirror (called on `remote_server_stop` so a stale list does
-    /// not linger after the server is off). Idempotent.
+    /// not linger after the server is off). Idempotent. Does NOT trigger a
+    /// `project_root` rebind — the server is stopping; the boundary is
+    /// re-established on the next `serve_router` start.
     pub fn clear(&self) {
         let mut g = self.inner.lock();
         *g = RegistryData::default();
@@ -258,6 +296,91 @@ impl ProjectRegistry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // ---- CAP-1: live project_root rebind ----
+
+    /// Register the `Arc<RwLock<PathBuf>>` handle that `AppState.project_root`
+    /// owns. Called once by `serve_router` / `router` after `AppState` is
+    /// built (the initial canonical `project_root` is already correct — the
+    /// host computed it from this registry's default, or the standalone from
+    /// its CLI arg). Subsequent `set` / `set_default_project` mutations
+    /// recompute the canonical path from the new default and write it here via
+    /// `rebind_project_root`. Safe to call multiple times (a restart builds a
+    /// new `AppState` + re-registers) — last handle wins.
+    pub fn set_project_root_handle(&self, handle: Arc<RwLock<PathBuf>>) {
+        *self.project_root_handle.lock() = Some(handle);
+    }
+
+    /// The default project's cwd `path` (display form, not canonicalized), or
+    /// `None` when the registry has no default or the default has no path.
+    /// Single-lock read of `default_project_id` + the matching summary's
+    /// `path`. `rebind_project_root` canonicalizes this via
+    /// `resolve_and_validate_project_root`. Also used by
+    /// `RemoteServerState::start` to derive the initial `project_root` from
+    /// the active project (CAP-1). `pub(crate)` — the returned path is a
+    /// display form (not canonicalized); callers MUST run it through
+    /// `resolve_and_validate_project_root` before using it as a boundary.
+    #[must_use]
+    pub(crate) fn default_project_path(&self) -> Option<String> {
+        let g = self.inner.lock();
+        let default_id = g.default_project_id.as_deref()?;
+        g.projects
+            .iter()
+            .find(|p| p.id == default_id)
+            .and_then(|p| p.path.clone())
+            .filter(|p| !p.trim().is_empty())
+    }
+
+    /// CAP-1: recompute `AppState.project_root` from the current default
+    /// project's path and write the canonical form to the registered handle.
+    /// Called by `set` / `set_default_project` after the mutation lands.
+    ///
+    /// - No handle registered (tests, pre-`serve_router` seed) → no-op.
+    /// - No default / empty path → `warn!` + keep the prior boundary (do NOT
+    ///   widen to home mid-run; only the START path falls back to home).
+    /// - Canonicalization fails (deleted/moved path) → `warn!` + keep the
+    ///   prior boundary (transient failure does not widen the jail).
+    /// - Success → write lock the handle + replace with the canonical path.
+    ///
+    /// The lock is held only across the `starts_with`-style replacement (no
+    /// `.await` under the guard). `resolve_and_validate_project_root` is a
+    /// sync fs canonicalize — called outside any registry lock.
+    fn rebind_project_root(&self) {
+        // Clone the Arc out of the handle lock, then drop the handle lock so
+        // the fs canonicalize below never runs under a registry mutex.
+        let handle = self
+            .project_root_handle
+            .lock()
+            .clone();
+        let Some(handle) = handle else {
+            // No handle registered yet (test / pre-serve seed) — nothing to
+            // rebind. This is the normal path for `seed_from_file` + unit
+            // tests that construct AppState directly without calling
+            // `set_project_root_handle`.
+            return;
+        };
+        let Some(path) = self.default_project_path() else {
+            tracing::warn!(
+                "project_root rebind skipped: registry has no default project path; \
+                 keeping the prior boundary"
+            );
+            return;
+        };
+        match crate::web::config::resolve_and_validate_project_root(PathBuf::from(&path).as_path())
+        {
+            Ok(canonical) => {
+                let mut g = handle.write();
+                *g = canonical;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "project_root rebind failed for '{}': {}; keeping the prior boundary",
+                    path,
+                    e
+                );
+            }
+        }
     }
 }
 
@@ -624,5 +747,137 @@ mod tests {
             Some("p-app"),
             "child must win regardless of registration order"
         );
+    }
+
+    // ---- CAP-1: live project_root rebind edge cases ----
+
+    fn tempdir_like(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let p = std::env::temp_dir().join(format!(
+            "termul-reg-rebind-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&p).expect("create tempdir_like");
+        p
+    }
+
+    /// Row: "No default / empty path → warn! + keep the prior boundary" and
+    /// "No handle registered → no-op". With no handle registered, `set` on a
+    /// registry with no default must be a silent no-op (the start path falls
+    /// back to home separately; the rebind never widens mid-run).
+    #[test]
+    fn rebind_is_noop_when_no_handle_registered() {
+        let reg = ProjectRegistry::new();
+        // No handle set — set() must not panic and must not rebind anything.
+        reg.set(vec![sample("p-1", Some("/a"), false)], None);
+        // No default → default_project_path is None.
+        assert!(reg.default_project_path().is_none());
+    }
+
+    /// Row: empty registry / no default at start. The rebind, when a handle IS
+    /// registered but the registry has no default, must keep the prior boundary
+    /// (do not widen to home mid-run; only the START path falls back to home).
+    #[test]
+    fn rebind_keeps_prior_boundary_when_no_default() {
+        let reg = ProjectRegistry::new();
+        let prior = PathBuf::from("/prior/boundary");
+        let handle: Arc<RwLock<PathBuf>> = Arc::new(RwLock::new(prior.clone()));
+        reg.set_project_root_handle(Arc::clone(&handle));
+        // set() with no default → rebind skips (warns, keeps prior).
+        reg.set(vec![sample("p-1", Some("/a"), false)], None);
+        assert_eq!(
+            *handle.read(),
+            prior,
+            "rebind with no default must keep the prior boundary, not widen"
+        );
+    }
+
+    /// Row: canonicalization failure (deleted/moved default path) keeps the
+    /// prior boundary — a transient failure does not widen the jail.
+    #[test]
+    fn rebind_keeps_prior_boundary_when_default_path_unresolvable() {
+        let reg = ProjectRegistry::new();
+        let prior = PathBuf::from("/prior/boundary");
+        let handle: Arc<RwLock<PathBuf>> = Arc::new(RwLock::new(prior.clone()));
+        reg.set_project_root_handle(Arc::clone(&handle));
+        // A default project whose path does NOT exist on disk — canonicalize
+        // fails, so the rebind must keep the prior boundary.
+        reg.set(
+            vec![sample("p-ghost", Some("/this/path/does/not/exist"), false)],
+            Some("p-ghost".to_string()),
+        );
+        assert_eq!(
+            *handle.read(),
+            prior,
+            "rebind on an unresolvable default path must keep the prior boundary"
+        );
+    }
+
+    /// Row: success path — rebind writes the canonical default path to the
+    /// handle so the containment boundary follows the active project.
+    #[test]
+    fn rebind_writes_canonical_default_path_to_handle() {
+        let dir = tempdir_like("ok");
+        let reg = ProjectRegistry::new();
+        let prior = PathBuf::from("/prior/boundary");
+        let handle: Arc<RwLock<PathBuf>> = Arc::new(RwLock::new(prior));
+        reg.set_project_root_handle(Arc::clone(&handle));
+        reg.set(
+            vec![sample("p-live", Some(dir.to_str().unwrap()), false)],
+            Some("p-live".to_string()),
+        );
+        let bound = handle.read().clone();
+        assert!(
+            bound.is_absolute(),
+            "rebind must write a canonical absolute path, got: {}",
+            bound.display()
+        );
+        // The canonical form must resolve to the same real directory (a second
+        // canonicalize is idempotent).
+        let again = bound.canonicalize().expect("canonicalize again");
+        assert_eq!(bound, again, "rebind must write the canonical form");
+        assert_ne!(
+            bound, PathBuf::from("/prior/boundary"),
+            "rebind must replace the prior boundary with the active project's path"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `set_default_project` triggers a rebind too — switching the default
+    /// updates the handle to the new default's canonical path.
+    #[test]
+    fn set_default_project_rebinds_to_new_default_path() {
+        let dir_a = tempdir_like("a");
+        let dir_b = tempdir_like("b");
+        let reg = ProjectRegistry::new();
+        let handle: Arc<RwLock<PathBuf>> = Arc::new(RwLock::new(PathBuf::from("/prior")));
+        reg.set_project_root_handle(Arc::clone(&handle));
+        reg.set(
+            vec![
+                sample("p-a", Some(dir_a.to_str().unwrap()), false),
+                sample("p-b", Some(dir_b.to_str().unwrap()), false),
+            ],
+            Some("p-a".to_string()),
+        );
+        let first = handle.read().clone();
+        assert_eq!(
+            first.canonicalize().expect("canonicalize a"),
+            first,
+            "initial rebind binds to p-a's canonical path"
+        );
+        // Switch default to p-b → rebind updates the handle.
+        assert!(reg.set_default_project("p-b"));
+        let second = handle.read().clone();
+        assert_ne!(second, first, "switching default must rebind the boundary");
+        assert_eq!(
+            second.canonicalize().expect("canonicalize b"),
+            second,
+            "rebind after switch writes p-b's canonical path"
+        );
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
     }
 }

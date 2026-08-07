@@ -17,7 +17,10 @@ fn registry_path(project_root: &Path) -> PathBuf {
 }
 
 pub async fn get(State(state): State<AppState>) -> Json<IpcBody<Value>> {
-    let path = registry_path(&state.project_root);
+    // CAP-1: lock-read the live project_root so the MCP registry file
+    // (.termul/mcp-servers.json) follows the active project on a switch.
+    let project_root = state.project_root.read().clone();
+    let path = registry_path(&project_root);
     match fs::read(&path).await {
         Ok(bytes) if bytes.len() > MAX_REGISTRY_BYTES => Json(IpcBody::err(
             "MCP registry exceeds the 1 MiB limit",
@@ -75,7 +78,9 @@ pub async fn put(State(state): State<AppState>, Json(value): Json<Value>) -> Jso
         }
     };
 
-    let path = registry_path(&state.project_root);
+    // CAP-1: lock-read the live project_root (follows the active project).
+    let project_root = state.project_root.read().clone();
+    let path = registry_path(&project_root);
     let write_path = path.clone();
     let write_result =
         tokio::task::spawn_blocking(move || atomic_file::replace(&write_path, &bytes)).await;
@@ -128,7 +133,7 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(dir),
+            project_root: Arc::new(parking_lot::RwLock::new(dir)),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

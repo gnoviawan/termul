@@ -1,11 +1,14 @@
 /**
  * Agent Skills IPC facade — lists and reads Zed-compatible SKILL.md packages.
  *
- * Desktop-only by design: skill discovery reads the user's local filesystem
- * (`~/.agents/skills/` + `{project}/.agents/skills/`). The web/remote client
- * has no parity route yet; on web we return an empty list (no skills surface)
- * rather than throwing, so the slash menu degrades cleanly. Web parity is
- * tracked as a follow-up.
+ * Skill discovery reads the user's local filesystem (`~/.agents/skills/` +
+ * `{project}/.agents/skills/`). On desktop the Tauri commands
+ * `list_agent_skills_cmd` / `read_agent_skill_cmd` back this facade; on the
+ * web/remote client the same calls hit the shipped parity routes `GET /skills`
+ * + `GET /skills/:name` (see `webServerSkills`), so the slash menu is usable
+ * on both surfaces. `projectRoot` is optional — when omitted, only global
+ * skills are listed; on web the route degrades to an empty list on scan
+ * failure (never throws, so the slash menu stays usable).
  */
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriContext } from './tauri-runtime'

@@ -62,12 +62,17 @@ pub async fn list(
     // (no project skills scanned; only global skills — harmless degrade).
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
-            if let Some(err) =
+            // CAP-1: lock-read the live boundary (may have been rebound).
+            // Scope in a block so the `!Send` guard drops before the
+            // `spawn_blocking` `.await` (keeps the handler future `Send`).
+            let outside_err = {
+                let project_root = state.project_root.read();
                 crate::web::git_api::ensure_within_project_root::<Vec<AgentSkillSummary>>(
                     &canonical,
-                    &state.project_root,
+                    &project_root,
                 )
-            {
+            };
+            if let Some(err) = outside_err {
                 tracing::warn!(
                     "[Security] /skills rejected: projectRoot '{}' outside project_root",
                     canonical.display()
@@ -112,10 +117,17 @@ pub async fn read(
     // mirrors `/skills` (list). A non-existent projectRoot is allowed through.
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
-            if let Some(err) = crate::web::git_api::ensure_within_project_root::<AgentSkillContent>(
-                &canonical,
-                &state.project_root,
-            ) {
+            // CAP-1: lock-read the live boundary (may have been rebound).
+            // Scope in a block so the `!Send` guard drops before the
+            // `spawn_blocking` `.await` (keeps the handler future `Send`).
+            let outside_err = {
+                let project_root = state.project_root.read();
+                crate::web::git_api::ensure_within_project_root::<AgentSkillContent>(
+                    &canonical,
+                    &project_root,
+                )
+            };
+            if let Some(err) = outside_err {
                 tracing::warn!(
                     "[Security] /skills/:name rejected: projectRoot '{}' outside project_root",
                     canonical.display()
@@ -176,11 +188,11 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(
+            project_root: Arc::new(parking_lot::RwLock::new(
                 std::env::temp_dir()
                     .canonicalize()
                     .unwrap_or_else(|_| std::env::temp_dir()),
-            ),
+            )),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
@@ -246,8 +258,10 @@ mod tests {
         // A projectRoot that exists but is outside the server's project_root
         // (temp_dir's parent) must be rejected with OUTSIDE_PROJECT_ROOT.
         let state = test_state();
-        let outside = state
-            .project_root
+        // CAP-1: project_root is now `Arc<RwLock<PathBuf>>` — lock-read to
+        // derive the "outside" path (temp_dir's parent) for the test.
+        let root = state.project_root.read().clone();
+        let outside = root
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| std::path::PathBuf::from("/"));

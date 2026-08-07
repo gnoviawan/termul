@@ -103,11 +103,11 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(
+            project_root: Arc::new(parking_lot::RwLock::new(
                 std::env::temp_dir()
                     .canonicalize()
                     .unwrap_or_else(|_| std::env::temp_dir()),
-            ),
+            )),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

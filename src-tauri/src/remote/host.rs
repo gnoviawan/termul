@@ -266,30 +266,69 @@ impl RemoteServerState {
             }
         }
 
-        // PR-S4: resolve the project-root boundary for the fs_api routes.
-        // Honor an explicit override from the desktop settings (when wired
-        // through), then fall back to $TERMUL_PROJECT_ROOT, then to $HOME /
-        // $USERPROFILE. Per `default_project_root`'s contract, `None` here
-        // means no home dir is discoverable — treat it as fatal. We then
-        // run the result through `resolve_and_validate_project_root` so
-        // the value stored in `ServerConfig::project_root` is a canonical
-        // absolute path to an existing directory, exactly like the
-        // standalone `termul-server` binary does. A misconfigured $HOME
-        // (deleted account, broken symlink, etc.) now fails the start
-        // call rather than leaking through and confusing the boundary
-        // check.
-        let raw_root = crate::web::config::default_project_root().ok_or_else(|| {
-            "could not determine project root for shared-live server: \
-                 set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
-                .to_string()
-        })?;
-        let project_root = crate::web::config::resolve_and_validate_project_root(&raw_root)
-            .map_err(|e| {
-                format!(
-                    "shared-live server refused to start: {e} \
-                     (set $TERMUL_PROJECT_ROOT to a valid directory)"
-                )
-            })?;
+        // CAP-1 / Story 1: resolve the project-root boundary for the
+        // shared-live server from the **active project** (the
+        // `ProjectRegistry`'s default-project path), NOT the user home dir.
+        // On a cross-drive setup (profile on C:, project on E:) the home-dir
+        // fallback rejects every `/skills`, `/git/*`, and `/search/content`
+        // probe for the real project with `OUTSIDE_PROJECT_ROOT`. The registry
+        // carries display paths (not canonical forms), so we run the result
+        // through `resolve_and_validate_project_root` so the value stored in
+        // `ServerConfig::project_root` is a canonical absolute path to an
+        // existing directory — exactly like the standalone `termul-server`.
+        //
+        // Fallback chain:
+        // 1. Registry default project path → canonicalize.
+        // 2. `default_project_root()` ($TERMUL_PROJECT_ROOT / $HOME) → canonicalize.
+        // 3. None discoverable → fatal (the server cannot enforce a boundary).
+        //
+        // A transient canonicalization failure on the registry default (deleted
+        // between sync and start) falls through to the home fallback rather
+        // than refusing to start — the operator can still re-sync the registry
+        // and rebind live. A `warn!` is logged so the operator notices.
+        let project_root = {
+            // 1. Try the registry's default-project path first.
+            let from_registry = registry
+                .default_project_path()
+                .and_then(|p| {
+                    match crate::web::config::resolve_and_validate_project_root(
+                        std::path::Path::new(&p),
+                    ) {
+                        Ok(canonical) => Some(canonical),
+                        Err(e) => {
+                            warn!(
+                                "shared-live: registry default project path '{}' failed \
+                                 canonicalization: {}; falling back to home",
+                                p,
+                                e
+                            );
+                            None
+                        }
+                    }
+                });
+            if let Some(root) = from_registry {
+                root
+            } else {
+                // 2. Empty registry / bad default → home fallback + warn.
+                let raw_root = crate::web::config::default_project_root().ok_or_else(|| {
+                    "could not determine project root for shared-live server: \
+                     set $TERMUL_PROJECT_ROOT or ensure $HOME is available"
+                        .to_string()
+                })?;
+                warn!(
+                    "shared-live started with no usable registry default; project_root \
+                     fell back to home ({}). /skills, /git/*, /search/content will \
+                     reject any project outside this tree until a project is synced.",
+                    raw_root.display()
+                );
+                crate::web::config::resolve_and_validate_project_root(&raw_root).map_err(|e| {
+                    format!(
+                        "shared-live server refused to start: {e} \
+                         (set $TERMUL_PROJECT_ROOT to a valid directory)"
+                    )
+                })?
+            }
+        };
 
         let cfg = ServerConfig {
             host: bind_mode.host().to_string(),
@@ -509,6 +548,30 @@ impl Default for RemoteServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Percent-encode a filesystem path for use as a query-string value in a
+    /// test URL (Windows backslashes, spaces, etc. would otherwise break the
+    /// URL parse). Mirrors the `urlencoding` helper in `git_api::tests`.
+    fn percent_encode_path(path: &std::path::Path) -> String {
+        let mut out = String::with_capacity(path.as_os_str().len());
+        for c in path.to_string_lossy().chars() {
+            match c {
+                ' ' => out.push_str("%20"),
+                '\\' => out.push_str("%5C"),
+                _ if c.is_ascii_alphanumeric()
+                    || matches!(c, '-' | '_' | '.' | '~' | '/' | ':') =>
+                {
+                    out.push(c)
+                }
+                _ => {
+                    for byte in c.to_string().as_bytes() {
+                        out.push_str(&format!("%{:02X}", byte));
+                    }
+                }
+            }
+        }
+        out
+    }
 
     #[test]
     fn remote_bind_mode_parse() {
@@ -870,5 +933,266 @@ mod tests {
     #[test]
     fn remote_server_state_default_equals_new() {
         let _ = RemoteServerState::default();
+    }
+
+    /// CAP-1 / CAP-8: the keystone cross-drive integration test.
+    ///
+    /// Seeds a `ProjectRegistry` with a default project whose path is provably
+    /// OUTSIDE the user home tree, starts `RemoteServerState`, and asserts
+    /// `GET /skills` + `POST /git/status` pass the containment check (not
+    /// `OUTSIDE_PROJECT_ROOT`) over the real shared-live HTTP socket. Then
+    /// switches the default to a second project and asserts the new project is
+    /// accepted WITHOUT a server restart — proving the live rebind threads
+    /// through.
+    ///
+    /// The bug this guards against is the `project_root = %USERPROFILE%` (home)
+    /// binding that rejects every project outside the home tree. To reproduce
+    /// that rejection, the project dirs MUST NOT be under the home dir. On
+    /// Windows `std::env::temp_dir()` resolves to `%USERPROFILE%\AppData\Local\
+    /// Temp` — i.e. INSIDE the home tree — so using it would let the buggy
+    /// `project_root = home` code accept the project (false pass). We instead
+    /// derive the project dirs from `home.parent()` (a sibling of the home
+    /// dir), which is provably outside home on every platform. If the home dir
+    /// cannot be resolved or its parent is not writable, the test skips rather
+    /// than false-pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_live_binds_project_root_to_active_cross_drive_project() {
+        let (acp, pty, relay, registry) = lifecycle_fixtures();
+
+        // Resolve the user home dir the way the buggy `default_project_root()`
+        // does, then create the project dirs as SIBLINGS of home (under
+        // `home.parent()`) so they are provably outside the home tree —
+        // reproducing the cross-drive / outside-home rejection the bug caused.
+        let Some(home) = crate::web::config::default_project_root() else {
+            eprintln!("skip: cannot resolve user home dir for cross-drive test");
+            return;
+        };
+        let Some(outside_base) = home.parent() else {
+            eprintln!("skip: home dir has no parent; cannot create an outside-home project");
+            return;
+        };
+        // Guard: if `outside_base` is not writable, skip rather than fail (the
+        // test cannot reproduce the cross-drive layout on this filesystem).
+        let probe = outside_base.join(format!(
+            "termul-xdrive-probe-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        if std::fs::create_dir_all(&probe).is_err() {
+            eprintln!(
+                "skip: cannot write outside-home base '{}'; cross-drive layout \
+                 not reproducible on this filesystem",
+                outside_base.display()
+            );
+            return;
+        }
+        let _ = std::fs::remove_dir_all(&probe);
+
+        // RAII cleanup guards — remove the dirs even if an assertion panics
+        // mid-test (avoids leaking random-named dirs on the dev/CI machine).
+        struct TempDirGuard(std::path::PathBuf);
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let dir_a = outside_base.join(format!(
+            "termul-cross-drive-a-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let dir_b = outside_base.join(format!(
+            "termul-cross-drive-b-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir_a).expect("create dir_a outside home");
+        std::fs::create_dir_all(&dir_b).expect("create dir_b outside home");
+        let _guard_a = TempDirGuard(dir_a.clone());
+        let _guard_b = TempDirGuard(dir_b.clone());
+
+        // Sanity: the project dirs are provably outside the home tree. If this
+        // ever fails (unexpected home layout), the test would false-pass — skip.
+        let home_canonical = home.canonicalize().unwrap_or_else(|_| home.clone());
+        let dir_a_canonical = dir_a.canonicalize().unwrap_or_else(|_| dir_a.clone());
+        if dir_a_canonical.starts_with(&home_canonical) {
+            eprintln!(
+                "skip: project dir '{}' is inside home '{}'; cross-drive layout \
+                 not reproducible",
+                dir_a_canonical.display(),
+                home_canonical.display()
+            );
+            return;
+        }
+
+        // Optionally init a git repo in dir_a so /git/status can return a real
+        // status (not just pass the containment check). When git is unavailable
+        // the route still exercises the containment boundary and returns
+        // GIT_STATUS_ERROR — never OUTSIDE_PROJECT_ROOT.
+        let git_available = crate::trackers::GitTracker::run_git_command(
+            std::env::temp_dir().to_str().unwrap(),
+            &["--version"],
+        )
+        .is_some();
+        if git_available {
+            for args in [
+                ["init", "-q"].as_slice(),
+                ["config", "user.email", "t@example.com"].as_slice(),
+                ["config", "user.name", "Test"].as_slice(),
+                ["config", "commit.gpgsign", "false"].as_slice(),
+            ] {
+                let out = crate::trackers::GitTracker::run_git_command(
+                    dir_a.to_str().unwrap(),
+                    args,
+                )
+                .expect("git command runs");
+                assert!(
+                    out.status.success(),
+                    "git {:?} failed: {}",
+                    args,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            std::fs::write(dir_a.join("README.md"), "hello\n").expect("write file");
+        }
+
+        // Seed the registry with both projects; dir_a is the default (the
+        // "active" project the host should bind to).
+        let project_a = crate::web::ProjectSummary {
+            id: "p-a".to_string(),
+            name: "Project A".to_string(),
+            color: "blue".to_string(),
+            path: Some(dir_a.to_string_lossy().into_owned()),
+            is_archived: false,
+            is_default: true,
+        };
+        let project_b = crate::web::ProjectSummary {
+            id: "p-b".to_string(),
+            name: "Project B".to_string(),
+            color: "green".to_string(),
+            path: Some(dir_b.to_string_lossy().into_owned()),
+            is_archived: false,
+            is_default: false,
+        };
+        registry.set(vec![project_a, project_b], Some("p-a".to_string()));
+
+        // Start the shared-live server. CAP-1: `start` now derives project_root
+        // from the registry default (dir_a), NOT the user home dir.
+        let state = RemoteServerState::new();
+        let status = state
+            .start(
+                acp.clone(),
+                pty.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("start with a cross-drive project must succeed");
+        assert!(status.running, "server should be running");
+        let url = status
+            .url
+            .expect("localhost bind produces a loopback URL")
+            .clone();
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("build reqwest client");
+
+        // GET /skills?projectRoot=dir_a — must succeed (not OUTSIDE_PROJECT_ROOT).
+        // The route canonicalizes dir_a and checks it against project_root
+        // (which is now dir_a's canonical form, not the home dir). Build the
+        // URL with percent-encoding so Windows backslash paths parse correctly.
+        let skills_url_a = format!(
+            "{url}/skills?projectRoot={}",
+            percent_encode_path(&dir_a)
+        );
+        let resp = client
+            .get(&skills_url_a)
+            .send()
+            .await
+            .expect("GET /skills");
+        let body: serde_json::Value = resp.json().await.expect("parse /skills body");
+        // The containment claim is "not OUTSIDE_PROJECT_ROOT" — do NOT also
+        // assert success==true, since /skills success depends on the global
+        // skills scan (~/.agents/skills) which may be unreadable/empty in CI
+        // for reasons unrelated to the boundary fix. The cross-drive fix is
+        // proven by the absence of the OUTSIDE_PROJECT_ROOT rejection.
+        assert!(
+            body.get("code").and_then(|v| v.as_str()) != Some("OUTSIDE_PROJECT_ROOT"),
+            "/skills must not reject the active project (cross-drive fix), got: {body}"
+        );
+
+        // POST /git/status { cwd: dir_a } — must not be OUTSIDE_PROJECT_ROOT.
+        // When git is available + repo initialized, returns success with a
+        // status list; otherwise GIT_STATUS_ERROR (the containment check still
+        // passed).
+        let resp = client
+            .post(format!("{url}/git/status"))
+            .json(&serde_json::json!({ "cwd": dir_a.to_string_lossy() }))
+            .send()
+            .await
+            .expect("POST /git/status");
+        let body: serde_json::Value = resp.json().await.expect("parse /git/status body");
+        assert!(
+            body.get("code").and_then(|v| v.as_str()) != Some("OUTSIDE_PROJECT_ROOT"),
+            "/git/status must not reject the active project (cross-drive fix), got: {body}"
+        );
+        if git_available {
+            assert!(
+                body.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+                "/git/status should succeed for a git repo, got: {body}"
+            );
+        }
+
+        // ---- Switch the default to project B (dir_b) WITHOUT a restart ----
+        // CAP-1: the registry's set_default_project triggers rebind_project_root,
+        // which recomputes project_root from the new default (dir_b) and writes
+        // the canonical path to the AppState.project_root handle in place.
+        assert!(
+            registry.set_default_project("p-b"),
+            "set_default_project must succeed for a switchable project"
+        );
+
+        // GET /skills?projectRoot=dir_b — must succeed with the new boundary.
+        let skills_url_b = format!(
+            "{url}/skills?projectRoot={}",
+            percent_encode_path(&dir_b)
+        );
+        let resp = client
+            .get(&skills_url_b)
+            .send()
+            .await
+            .expect("GET /skills after switch");
+        let body: serde_json::Value = resp.json().await.expect("parse /skills body");
+        // Containment claim only (see above) — do not couple to skills-scan success.
+        assert!(
+            body.get("code").and_then(|v| v.as_str()) != Some("OUTSIDE_PROJECT_ROOT"),
+            "/skills must not reject the new active project after switch, got: {body}"
+        );
+
+        // The old project (dir_a) is now OUTSIDE the new project_root (dir_b),
+        // so /skills?projectRoot=dir_a should be rejected. This proves the
+        // rebound boundary actually moved (not just widened to cover both).
+        let resp = client
+            .get(&skills_url_a)
+            .send()
+            .await
+            .expect("GET /skills old project after switch");
+        let body: serde_json::Value = resp.json().await.expect("parse /skills body");
+        assert_eq!(
+            body.get("code").and_then(|v| v.as_str()),
+            Some("OUTSIDE_PROJECT_ROOT"),
+            "the old project must be rejected after the boundary moved to dir_b, got: {body}"
+        );
+
+        let _ = state.stop().await;
+        // dir_a / dir_b are removed by the TempDirGuard RAII guards on drop,
+        // even if an assertion above panicked.
     }
 }

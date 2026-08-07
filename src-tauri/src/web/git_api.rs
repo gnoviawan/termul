@@ -200,8 +200,15 @@ fn resolve_cwd<T>(
             return Err((StatusCode::OK, Json(IpcBody::<T>::err(msg, code))));
         }
     };
-    // 3) project_root containment (web-server security boundary).
-    if let Some(err) = ensure_within_project_root::<T>(&resolved, &state.project_root) {
+    // 3) project_root containment (web-server security boundary). CAP-1:
+    //    lock-read the RwLock for the duration of the `starts_with` check
+    //    (sync — no `.await` under the guard). The boundary may have been
+    //    rebound by a project switch since the last request.
+    let outside_err = {
+        let project_root = state.project_root.read();
+        ensure_within_project_root::<T>(&resolved, &project_root)
+    };
+    if let Some(err) = outside_err {
         return Err((StatusCode::OK, Json(err)));
     }
     Ok(resolved)
@@ -1027,7 +1034,7 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf())),
+            project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

@@ -977,7 +977,7 @@ mod tests {
             registry_persistence: None,
             projects_file: None,
             history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf())),
+            project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

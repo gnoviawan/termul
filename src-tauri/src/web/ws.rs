@@ -340,12 +340,26 @@ pub struct AppState {
     /// `install_acp_agent`; the desktop renderer uses the `acp_install_agent`
     /// Tauri command (same `IpcResult<T>` shape byte-for-byte).
     pub acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
-    /// PR-S4: the project-root boundary for the fs_api routes. Requests whose
-    /// canonicalized target path resolves outside this root are refused with
-    /// `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit `..`
-    /// components). Resolved from `ServerConfig::project_root` at startup;
-    /// defaults to the user's home directory when unset.
-    pub project_root: Arc<std::path::PathBuf>,
+    /// PR-S4 / CAP-1: the project-root boundary for the fs_api / git / skills /
+    /// search routes. Requests whose canonicalized target path resolves outside
+    /// this root are refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL`
+    /// for explicit `..` components). On the desktop shared-live path it is
+    /// derived from the `ProjectRegistry`'s default (active) project at start
+    /// (falling back to the user home dir only when the registry is empty); on
+    /// the standalone `termul-server` path it comes from
+    /// `ServerConfig::project_root` (the `--project-root` CLI flag or the
+    /// env/home default).
+    ///
+    /// **CAP-1 (live rebind):** wrapped in `Arc<parking_lot::RwLock<PathBuf>>`
+    /// so switching the active project (via `remote_sync_projects` /
+    /// `set_default_project`) updates the boundary in place without a server
+    /// restart. The same `Arc` handle is registered with the
+    /// `ProjectRegistry` (see `set_project_root_handle`) so the registry's
+    /// `set` / `set_default_project` mutators recompute the canonical path
+    /// from the new default and write it here. Read sites lock-read the guard
+    /// for the duration of the `starts_with` containment check (no `.await`
+    /// under the guard).
+    pub project_root: Arc<parking_lot::RwLock<std::path::PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
