@@ -6,7 +6,10 @@
  * doing nothing visible. Success paths must NOT show an error toast.
  */
 
+import type { ReactElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { UpdateChannel } from '@/lib/tauri-updater-api'
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), {
@@ -21,10 +24,19 @@ vi.mock('sonner', () => ({
 const downloadUpdate = vi.fn(async () => {})
 const installAndRestart = vi.fn(async () => {})
 let storeError: string | null = null
+let storeChannel: UpdateChannel = 'stable'
 
 vi.mock('@/stores/updater-store', () => ({
   updaterStore: {
-    getState: () => ({ downloadUpdate, installAndRestart, error: storeError })
+    // `showUpdateToast` reads `updateChannel` from the store to pick the
+    // channel prefix + manual-download action label. Without `updateChannel`
+    // here it reads `undefined` and produces "A new undefined build...".
+    getState: () => ({
+      downloadUpdate,
+      installAndRestart,
+      error: storeError,
+      updateChannel: storeChannel
+    })
   },
   // Hooks are unused by the functions under test but imported by the module.
   useUpdaterState: vi.fn(),
@@ -64,6 +76,7 @@ describe('UpdateAvailableToast error surfacing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     storeError = null
+    storeChannel = 'stable'
     downloadUpdate.mockResolvedValue(undefined)
     installAndRestart.mockResolvedValue(undefined)
     confirmMock.mockResolvedValue(true)
@@ -142,5 +155,53 @@ describe('UpdateAvailableToast error surfacing', () => {
     expect(confirmMock).toHaveBeenCalledTimes(1)
     const message = confirmMock.mock.calls[0][0]
     expect(message).toContain('terminal sessions')
+  })
+})
+
+describe('UpdateAvailableToast channel-aware labeling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    storeChannel = 'stable'
+    storeError = null
+  })
+
+  it('uses the stable title, description, and Download action label by default', () => {
+    showUpdateToast('0.4.8')
+    const calls = vi.mocked(toast.success).mock.calls
+    const [title, opts] = calls[calls.length - 1] as [
+      string,
+      { description: string; action: { label: ReactElement } }
+    ]
+    expect(title).toBe('Update available: version 0.4.8')
+    expect(opts.description).toBe('A new version is available for download.')
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Download')
+    // The stable action label must NOT show the manual-download CTA.
+    expect(renderToStaticMarkup(opts.action.label)).not.toContain('Open Download Page')
+  })
+
+  it('prefixes the title with "Insider" and uses the manual-download action label for insider', () => {
+    storeChannel = 'insider'
+    showUpdateToast('0.5.0-rc.1')
+    const calls = vi.mocked(toast.success).mock.calls
+    const [title, opts] = calls[calls.length - 1] as [
+      string,
+      { description: string; action: { label: ReactElement } }
+    ]
+    expect(title).toBe('Insider Update available: version 0.5.0-rc.1')
+    expect(opts.description).toBe(
+      'A new insider build is available. Open the download page to install it manually.'
+    )
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Open Download Page')
+  })
+
+  it('prefixes the title with "Nightly" for the nightly channel', () => {
+    storeChannel = 'nightly'
+    showUpdateToast('0.0.0-nightly.20260808.abc')
+    const calls = vi.mocked(toast.success).mock.calls
+    const [title, opts] = calls[calls.length - 1] as [string, { description: string }]
+    expect(title).toBe('Nightly Update available: version 0.0.0-nightly.20260808.abc')
+    expect(opts.description).toBe(
+      'A new nightly build is available. Open the download page to install it manually.'
+    )
   })
 })

@@ -12,10 +12,50 @@ import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updat
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
+// Stable signed-manifest alias published alongside `latest-stable.json` so the
+// Tauri updater plugin's build-time `endpoints` config (which cannot be
+// overridden per check from the renderer) keeps resolving for stable users.
 const STABLE_UPDATE_MANIFEST_URL =
   'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
 const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
 const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
+
+/**
+ * Release channel selection for the desktop updater. The persisted preference
+ * selects which per-channel manifest the facade consults. Stable reuses the
+ * signed `@tauri-apps/plugin-updater` `check()` flow (the plugin's endpoint
+ * resolves to the stable manifest alias); Insider/Nightly fetch their manifest
+ * JSON directly and offer the update via manual download, because the Tauri
+ * updater plugin cannot take a runtime endpoint URL from the renderer.
+ */
+export type UpdateChannel = 'stable' | 'insider' | 'nightly'
+
+export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'stable'
+
+const CHANNEL_MANIFEST_URLS: Record<UpdateChannel, string> = {
+  stable: 'https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json',
+  insider: 'https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json',
+  nightly: 'https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json'
+}
+
+const CHANNEL_RELEASE_PAGE_URLS: Record<UpdateChannel, string> = {
+  stable: 'https://github.com/gnoviawan/termul/releases/latest',
+  insider: 'https://github.com/gnoviawan/termul/releases/tag/insider',
+  nightly: 'https://github.com/gnoviawan/termul/releases/tag/nightly'
+}
+
+export function getChannelManifestUrl(channel: UpdateChannel): string {
+  return CHANNEL_MANIFEST_URLS[channel]
+}
+
+export function getChannelReleasePageUrl(channel: UpdateChannel): string {
+  return CHANNEL_RELEASE_PAGE_URLS[channel]
+}
+
+export function normalizeUpdateChannel(value: string | null | undefined): UpdateChannel {
+  if (value === 'insider' || value === 'nightly') return value
+  return DEFAULT_UPDATE_CHANNEL
+}
 
 export type UpdateMode = 'tauri' | 'aur'
 
@@ -188,25 +228,94 @@ interface GitHubRelease {
   published_at?: string
 }
 
-function normalizeVersion(version: string): string {
-  // Ignore AUR pkgrel/build metadata; app updates only track upstream release versions.
-  return version.trim().replace(/^v/i, '').split(/[+-]/)[0] ?? version
+interface ParsedSemver {
+  core: number[]
+  prerelease: string[]
 }
 
-function compareVersions(a: string, b: string): number {
-  const partsA = normalizeVersion(a)
-    .split('.')
-    .map((part) => Number.parseInt(part, 10) || 0)
-  const partsB = normalizeVersion(b)
-    .split('.')
-    .map((part) => Number.parseInt(part, 10) || 0)
-  const length = Math.max(partsA.length, partsB.length, 3)
+/**
+ * Parse a normalized version into core numeric components (padded to 3) and a
+ * dot-separated prerelease identifier list (empty when the version is a release).
+ * The first `-` separates the prerelease from the core; build metadata (`+`)
+ * is stripped upstream by `normalizeVersion`.
+ */
+function parseSemver(version: string): ParsedSemver {
+  const dashIndex = version.indexOf('-')
+  const coreStr = dashIndex === -1 ? version : version.slice(0, dashIndex)
+  const preStr = dashIndex === -1 ? '' : version.slice(dashIndex + 1)
+  const core = coreStr.split('.').map((part) => Number.parseInt(part, 10) || 0)
+  while (core.length < 3) core.push(0)
+  const prerelease = preStr ? preStr.split('.') : []
+  return { core, prerelease }
+}
 
+function isNumericIdentifier(value: string): boolean {
+  return value.length > 0 && /^\d+$/.test(value)
+}
+
+/**
+ * Compare two prerelease identifier lists per SemVer 2.0 precedence:
+ * numeric identifiers compare numerically and always precede alphanumeric ones;
+ * alphanumeric identifiers compare lexically (ASCII); a smaller identifier
+ * count precedes a larger one when all preceding identifiers are equal.
+ */
+function comparePrerelease(a: string[], b: string[]): number {
+  const length = Math.max(a.length, b.length)
   for (let index = 0; index < length; index += 1) {
-    const diff = (partsA[index] ?? 0) - (partsB[index] ?? 0)
+    const ai = a[index]
+    const bi = b[index]
+    if (ai === undefined) return -1
+    if (bi === undefined) return 1
+    const aNum = isNumericIdentifier(ai)
+    const bNum = isNumericIdentifier(bi)
+    if (aNum && bNum) {
+      const diff = Number.parseInt(ai, 10) - Number.parseInt(bi, 10)
+      if (diff !== 0) return diff
+    } else if (aNum !== bNum) {
+      return aNum ? -1 : 1
+    } else if (ai < bi) {
+      return -1
+    } else if (ai > bi) {
+      return 1
+    }
+  }
+  return 0
+}
+
+/**
+ * Normalize a version string for comparison: trim, strip the leading `v`, and
+ * drop build metadata (`+...`). The prerelease segment (`-rc.1`, `-nightly.*`)
+ * is preserved so SemVer prerelease precedence is honored across channels.
+ */
+export function normalizeVersion(version: string): string {
+  const trimmed = version.trim().replace(/^v/i, '')
+  return trimmed.split('+')[0] ?? trimmed
+}
+
+/**
+ * Compare two versions with full SemVer 2.0 prerelease precedence.
+ *
+ * Core version components (major.minor.patch) are compared numerically first.
+ * A release version (no prerelease) is always greater than one with a
+ * prerelease (`0.5.0` > `0.5.0-rc.1`), and prerelease identifiers are compared
+ * per SemVer rules. This guarantees `0.0.0-nightly.*` (core `0.0.0` + prerelease)
+ * is less than any real release, so a nightly user that later switches to
+ * Stable is always offered the stable build.
+ */
+export function compareVersions(a: string, b: string): number {
+  const pa = parseSemver(normalizeVersion(a))
+  const pb = parseSemver(normalizeVersion(b))
+
+  for (let index = 0; index < 3; index += 1) {
+    const diff = pa.core[index] - pb.core[index]
     if (diff !== 0) return diff
   }
 
+  const aHasPre = pa.prerelease.length > 0
+  const bHasPre = pb.prerelease.length > 0
+  if (!aHasPre && bHasPre) return 1
+  if (aHasPre && !bHasPre) return -1
+  if (aHasPre && bHasPre) return comparePrerelease(pa.prerelease, pb.prerelease)
   return 0
 }
 
@@ -253,15 +362,109 @@ async function checkAurUpdate(): Promise<UpdateInfo | null> {
   return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
-export async function checkForUpdates(): Promise<UpdateInfo | null> {
+interface ChannelManifest {
+  version?: string
+  notes?: string
+  pub_date?: string
+  platforms?: Record<string, unknown>
+}
+
+async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelManifest> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => {
+    controller.abort()
+  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
+
   try {
-    if (isAurUpdateMode()) {
+    const response = await fetch(getChannelManifestUrl(channel), {
+      headers: {
+        Accept: 'application/json'
+      },
+      signal: controller.signal
+    })
+    if (!response.ok) {
+      throw new Error(`Channel manifest returned HTTP ${response.status}`)
+    }
+    return (await response.json()) as ChannelManifest
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Insider/Nightly check: fetch the per-channel manifest, compare against the
+ * current app version with SemVer prerelease precedence, and offer the update
+ * via manual download. The Tauri updater plugin cannot take a runtime endpoint
+ * URL from the renderer, so non-stable channels offer a manual download of the
+ * channel's GitHub release page instead of the signed in-app install.
+ *
+ * On manifest fetch failure (404 / network) the call throws so the store
+ * surfaces the error and the periodic retry re-attempts next cycle.
+ */
+async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
+  let manifest: ChannelManifest
+  try {
+    manifest = await fetchChannelManifest(channel)
+  } catch (error) {
+    lastCheckedAt = new Date().toISOString()
+    throw createUpdaterCheckError(error, getChannelManifestUrl(channel))
+  }
+
+  const latestVersion = normalizeVersion(manifest.version ?? '')
+  let updateInfo: UpdateInfo | null = null
+
+  if (latestVersion) {
+    const currentVersion = await getVersion()
+    if (compareVersions(latestVersion, currentVersion) > 0) {
+      updateInfo = {
+        version: latestVersion,
+        // Use the manifest's actual pub_date; do NOT fabricate a "now"
+        // timestamp for a stale/undated manifest (it would masquerade as
+        // just-published). Omit when the manifest lacks pub_date.
+        releaseDate: manifest.pub_date,
+        releaseNotes: manifest.notes ?? undefined,
+        isSecurityUpdate: false,
+        downloadUrl: getChannelReleasePageUrl(channel)
+      }
+    }
+  }
+
+  pendingTauriUpdate = null
+  isManualUpdateMode = updateInfo !== null
+  manualUpdateInfo = updateInfo
+  downloadedVersion = null
+  preparedUpdateVersion = null
+  lastCheckedAt = new Date().toISOString()
+  return updateInfo
+}
+
+export async function checkForUpdates(
+  channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL
+): Promise<UpdateInfo | null> {
+  // AUR mode is orthogonal to the channel preference: AUR users update via yay,
+  // so the channel selection does not redirect their check.
+  if (isAurUpdateMode()) {
+    try {
       const update = await checkAurUpdate()
       pendingAurUpdate = update
       lastCheckedAt = new Date().toISOString()
       return update
+    } catch (error) {
+      lastCheckedAt = new Date().toISOString()
+      throw createUpdaterCheckError(error, UPSTREAM_LATEST_RELEASE_URL)
     }
+  }
 
+  // Insider / Nightly consult their per-channel manifest and offer manual
+  // download (the signed `check()` flow is stable-only by plugin limitation).
+  if (channel !== DEFAULT_UPDATE_CHANNEL) {
+    return checkChannelUpdate(channel)
+  }
+
+  // Stable: reuse the signed `@tauri-apps/plugin-updater` `check()` flow so the
+  // existing signed download/install path and its backward compatibility are
+  // preserved (the plugin endpoint resolves to the stable manifest alias).
+  try {
     const update = await check()
     pendingTauriUpdate = update
     isManualUpdateMode = false
@@ -281,32 +484,27 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
 
-    if (!isAurUpdateMode()) {
-      const errorMsg = getErrorMessage(error, '')
-      const isManifestMissing =
-        errorMsg.includes('valid release JSON') ||
-        errorMsg.includes('Could not fetch') ||
-        errorMsg.includes('404')
-      if (isManifestMissing) {
-        try {
-          const fallback = await checkGitHubFallback()
-          if (fallback) {
-            isManualUpdateMode = true
-            manualUpdateInfo = fallback
-            pendingTauriUpdate = null
-            return fallback
-          }
-          return null
-        } catch (fallbackError) {
-          throw createUpdaterCheckError(fallbackError, UPSTREAM_LATEST_RELEASE_URL)
+    const errorMsg = getErrorMessage(error, '')
+    const isManifestMissing =
+      errorMsg.includes('valid release JSON') ||
+      errorMsg.includes('Could not fetch') ||
+      errorMsg.includes('404')
+    if (isManifestMissing) {
+      try {
+        const fallback = await checkGitHubFallback()
+        if (fallback) {
+          isManualUpdateMode = true
+          manualUpdateInfo = fallback
+          pendingTauriUpdate = null
+          return fallback
         }
+        return null
+      } catch (fallbackError) {
+        throw createUpdaterCheckError(fallbackError, UPSTREAM_LATEST_RELEASE_URL)
       }
     }
 
-    throw createUpdaterCheckError(
-      error,
-      isAurUpdateMode() ? UPSTREAM_LATEST_RELEASE_URL : STABLE_UPDATE_MANIFEST_URL
-    )
+    throw createUpdaterCheckError(error, STABLE_UPDATE_MANIFEST_URL)
   }
 }
 

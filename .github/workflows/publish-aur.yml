@@ -75,17 +75,30 @@ jobs:
             VERSION="$REF_NAME"
           fi
           VERSION="${VERSION#v}"
-          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([._+-][0-9A-Za-z]+)?$ ]]; then
-            echo "Invalid version: $VERSION" >&2
-            exit 1
+          # Prerelease guard: any version with a prerelease segment (RC, nightly)
+          # is skipped so AUR only publishes stable. Mirrors publish-homebrew's
+          # stable-only cask gate without sourcing the termul checkout (this job
+          # runs in the archlinux container and does not check out the repo).
+          if [[ "$VERSION" == *-* ]]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping AUR publish for prerelease $VERSION."
+          else
+            if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+              echo "Invalid stable version: $VERSION" >&2
+              exit 1
+            fi
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Clone AUR package
+        if: steps.version.outputs.is_prerelease != 'true'
         run: |
           runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
 
       - name: Update PKGBUILD
+        if: steps.version.outputs.is_prerelease != 'true'
         working-directory: /home/builder/termul-manager
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -98,6 +111,7 @@ jobs:
           runuser -u builder -- bash -c 'makepkg --printsrcinfo > .SRCINFO'
 
       - name: Commit and push
+        if: steps.version.outputs.is_prerelease != 'true'
         working-directory: /home/builder/termul-manager
         env:
           VERSION: ${{ steps.version.outputs.version }}

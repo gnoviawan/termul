@@ -3,7 +3,10 @@ import type { IpcResult } from './ipc.types'
 // Updater information for available updates
 export interface UpdateInfo {
   version: string
-  releaseDate: string
+  // Optional: channel manifests may omit `pub_date`; producers must NOT
+  // fabricate a "now" timestamp for a stale manifest (which would make it look
+  // just-published). Stable/AUR producers always set it from real metadata.
+  releaseDate?: string
   releaseNotes?: string
   isSecurityUpdate: boolean
   downloadUrl?: string

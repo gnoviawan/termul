@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: Stable version to promote an Insider manifest to (without leading v)
+        required: true
+        type: string
+      rc_version:
+        description: Insider RC version the manifest currently points at (without leading v)
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,6 +25,7 @@ permissions:
 jobs:
   changelog:
     name: Generate Changelog
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       changelog: ${{ steps.cliff.outputs.content }}
@@ -59,6 +70,7 @@ jobs:
   create_release:
     name: Create Draft Release
     needs: changelog
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,6 +130,7 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     needs: changelog
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -383,6 +396,7 @@ jobs:
   standalone-server:
     name: Build termul-server (linux-x64)
     needs: changelog
+    if: github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
       - name: Harden runner
@@ -438,22 +452,51 @@ jobs:
 
       - name: Build termul-server (linux-x64 release)
         working-directory: src-tauri
+        # Bake the signing pubkey into the binary at compile time so the opt-in
+        # self-update subsystem can verify downloaded binaries (option_env!).
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: >
           cargo build --release --bin termul-server
           --features standalone-server
           --target x86_64-unknown-linux-gnu
 
+      - name: Sign termul-server binary
+        working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bun run tauri signer sign target/x86_64-unknown-linux-gnu/release/termul-server
+          test -f target/x86_64-unknown-linux-gnu/release/termul-server.sig
+
+      - name: Prepare server manifest fragment
+        shell: bash
+        env:
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release/prepare-server-artifacts.mjs \
+            --signature src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --output server-collected/server-manifest.json
+
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: release-standalone-server
-          path: src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
+          path: |
+            src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server
+            src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig
+            server-collected/
           if-no-files-found: error
           retention-days: 1
 
   publish_release:
     name: Validate, upload, and publish release
     needs: [changelog, create_release, build, standalone-server]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -478,6 +521,7 @@ jobs:
         env:
           VERSION: ${{ needs.changelog.outputs.normalized_version }}
           RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
         run: |
           expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
           manifests=()
@@ -503,9 +547,31 @@ jobs:
           done
 
           cp release-inputs/release-standalone-server/termul-server release-assets/termul-server
+          cp release-inputs/release-standalone-server/termul-server.sig release-assets/termul-server.sig
+          manifests+=("release-inputs/release-standalone-server/server-collected/server-manifest.json")
+
+          # Channel selection: stable (`v*` tag) vs Insider RC (`v*-rc.*` tag).
+          # The merge validator derives the asset URL tag from the channel:
+          # stable/insider → `v<version>` (the triggering tag), nightly → `nightly`.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            CHANNEL="insider"
+            MANIFEST_NAME="latest-insider.json"
+          else
+            CHANNEL="stable"
+            MANIFEST_NAME="latest-stable.json"
+          fi
+
           PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
           node scripts/release/merge-updater-manifests.mjs \
-            latest.json "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
+            --channel "$CHANNEL" \
+            "$MANIFEST_NAME" "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
+
+          # Stable publishes a `latest.json` alias so the Tauri updater plugin's
+          # build-time endpoint (which cannot be overridden per check from the
+          # renderer) keeps resolving for stable users.
+          if [[ "$CHANNEL" == "stable" ]]; then
+            cp "$MANIFEST_NAME" latest.json
+          fi
 
           release_file_count=0
           while IFS= read -r -d '' _release_file; do
@@ -520,13 +586,34 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
         run: |
           assets=()
           while IFS= read -r -d '' asset; do
             assets+=("$asset")
           done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
-          assets+=(latest.json)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            assets+=(latest-insider.json)
+          else
+            assets+=(latest-stable.json latest.json)
+          fi
           gh release upload "$TAG" "${assets[@]}" --clobber
+
+          # Mirror the Insider manifest under the moving `insider` tag so the
+          # desktop facade's `releases/download/insider/latest-insider.json`
+          # URL resolves. The bundles themselves stay under the versioned RC tag.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            SHA="$(git rev-parse HEAD)"
+            if gh release view insider >/dev/null 2>&1; then
+              gh release edit insider --target "$SHA" --prerelease
+            else
+              gh release create insider --target "$SHA" \
+                --title "Termul Insider" \
+                --notes "Latest Insider (release candidate) channel. See the versioned RC release for asset details." \
+                --prerelease
+            fi
+            gh release upload insider latest-insider.json --clobber
+          fi
 
       - name: Publish draft release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -552,6 +639,7 @@ jobs:
   publish_homebrew:
     name: Publish checksums and Homebrew metadata
     needs: [changelog, publish_release]
+    if: github.event_name == 'push'
     permissions:
       contents: write
     uses: ./.github/workflows/publish-homebrew.yml
@@ -559,3 +647,96 @@ jobs:
       version: ${{ needs.changelog.outputs.normalized_version }}
     secrets:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # Manual Insider→Stable promotion. Copies the moving-tag Insider manifest,
+  # rewrites its version + asset URLs to a stable tag (whose release must
+  # already exist from a normal `v*` tag push), and publishes `latest-stable.json`
+  # + the `latest.json` alias for stable users.
+  promote:
+    name: Promote Insider manifest to Stable
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Promote Insider manifest to Stable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABLE_VERSION: ${{ inputs.stable_version }}
+          RC_VERSION: ${{ inputs.rc_version }}
+        run: |
+          STABLE_TAG="v$STABLE_VERSION"
+          RC_TAG="v$RC_VERSION"
+          if ! gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            echo "Stable release $STABLE_TAG does not exist. Push the stable tag first." >&2
+            exit 1
+          fi
+          if ! gh release view insider >/dev/null 2>&1; then
+            echo "Insider release (moving 'insider' tag) does not exist. Publish an RC first." >&2
+            exit 1
+          fi
+          mkdir -p promote
+          # (patch 16) Verify the stable release's assets are uploaded before
+          # pointing the stable manifest at them — a manifest referencing missing
+          # assets would 404 the updater.
+          gh release view "$STABLE_TAG" --json assets -q '.assets[].name' > promote/stable-assets.txt
+          gh release download insider --pattern latest-insider.json --dir promote
+          node -e '
+            const fs = require("fs");
+            const stable = process.env.STABLE_VERSION;
+            const rc = process.env.RC_VERSION;
+            const stableAssets = new Set(
+              fs.readFileSync("promote/stable-assets.txt", "utf8")
+                .split("\n").map((s) => s.trim()).filter(Boolean)
+            );
+            const from = `/releases/download/v${rc}/`;
+            const to = `/releases/download/v${stable}/`;
+            const m = JSON.parse(fs.readFileSync("promote/latest-insider.json", "utf8"));
+            m.version = stable;
+            // (patch 15) Refresh pub_date to the promotion timestamp and replace
+            // the RC-flavored notes so the stable manifest does not advertise a
+            // stale RC build time / RC release notes.
+            m.pub_date = new Date().toISOString();
+            m.notes = `Stable ${stable} (promoted from Insider ${rc}).`;
+            for (const key of Object.keys(m.platforms)) {
+              const url = String(m.platforms[key].url || "");
+              // (patch 14) Refuse to ship a URL that does not reference the RC
+              // tag — a mismatched URL would point the stable manifest at the
+              // wrong release asset.
+              if (!url.includes(from)) {
+                throw new Error(
+                  `promote: platform ${key} url ${url} does not reference RC tag v${rc}; refusing to ship a mismatched URL`
+                );
+              }
+              const rewritten = url.split(from).join(to);
+              // (patch 16) The rewritten URL must target an asset that actually
+              // exists in the stable release.
+              let assetName;
+              try {
+                assetName = decodeURIComponent(new URL(rewritten).pathname.split("/").pop());
+              } catch (e) {
+                throw new Error(`promote: platform ${key} url ${rewritten} is not a valid URL: ${e.message}`);
+              }
+              if (!stableAssets.has(assetName)) {
+                throw new Error(
+                  `promote: stable release v${stable} is missing asset ${assetName} (referenced by ${key}); upload assets before promoting`
+                );
+              }
+              m.platforms[key].url = rewritten;
+            }
+            fs.writeFileSync("latest-stable.json", JSON.stringify(m, null, 2) + "\n");
+            fs.copyFileSync("latest-stable.json", "latest.json");
+          '
+          gh release upload "$STABLE_TAG" latest-stable.json latest.json --clobber
+          echo "Promoted Insider $RC_TAG manifest to Stable $STABLE_TAG."

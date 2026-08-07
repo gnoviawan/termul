@@ -11,6 +11,11 @@ mod path_validation;
 mod pty;
 mod remote;
 mod secure_storage;
+// Opt-in `termul-server` self-update subsystem. The library module itself is
+// intentionally NOT feature-gated so its full test suite — including signature
+// verification — runs under the spec's default `cargo test` gate. Only the
+// standalone binary wiring (server_main.rs) is gated by `standalone-server`.
+pub mod server_update;
 mod shell_paths;
 mod skills;
 mod ssh;

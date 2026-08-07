@@ -11,10 +11,15 @@
 //!
 //! This is a CONSOLE server — do NOT add `windows_subsystem = "windows"`.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use termul_manager_lib::server_update::{
+    check_and_apply_update, current_version, embedded_public_key, is_update_enabled,
+    restart_binary, UpdateChannel, UpdateOptions, UpdateOutcome, SERVER_PLATFORM_KEY,
+};
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
@@ -25,12 +30,22 @@ use termul_manager_lib::{
     FileProjectRegistry, GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
     WorkspaceManifestService,
 };
-use tracing::info;
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+
+    // `--check-update`: operator-explicit one-shot self-update. Handled before
+    // `ServerConfig::from_args` so the flag (unknown to the shared parser) does
+    // not trip it. Performs fetch → verify → swap → reexec, then exits.
+    if raw_args.iter().any(|arg| arg == "--check-update") {
+        init_tracing();
+        return run_one_shot_update_check();
+    }
+
     // Parse CLI BEFORE any tokio / app setup (AC2).
-    let cfg = match ServerConfig::from_args(std::env::args().skip(1)) {
+    let cfg = match ServerConfig::from_args(raw_args) {
         Ok(cfg) => cfg,
         Err(ParseCliError::Help) => {
             println!("{}", usage());
@@ -44,11 +59,7 @@ fn main() -> ExitCode {
         }
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    init_tracing();
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -207,6 +218,11 @@ fn main() -> ExitCode {
         ));
 
         let projects_file = cfg.projects_file.clone();
+        // Opt-in self-update loop (default off): only runs when the operator set
+        // TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL. A bad
+        // signature keeps the current binary running (verify-before-swap), so an
+        // unattended server is never bricked by a failed update attempt.
+        spawn_periodic_update_loop();
         match serve(
             acp,
             pty,
@@ -234,8 +250,200 @@ fn main() -> ExitCode {
     })
 }
 
+/// Initialize `tracing` + `tracing-subscriber` (EnvFilter, `RUST_LOG`; floor `info`).
+/// Extracted so both the normal server path and the `--check-update` one-shot
+/// share the same setup.
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+}
+
+/// Resolve the server's own binary path for the self-update swap/reexec.
+fn current_binary_path() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"))
+}
+
+/// Build the self-update options from env + the embedded pubkey. `Err` when
+/// self-update is unavailable (no pubkey baked in) — the caller logs + skips.
+///
+/// `default_channel`: when `TERMUL_SERVER_UPDATE_CHANNEL` is unset/invalid,
+/// `Some(c)` falls back to `c` (used by the operator-explicit `--check-update`
+/// one-shot, which defaults to Stable), while `None` surfaces an error (used by
+/// the periodic loop, which requires the env to opt in).
+fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<UpdateOptions, String> {
+    let channel = UpdateChannel::parse(
+        &std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default(),
+    )
+    .or(default_channel);
+    let channel = match channel {
+        Some(c) => c,
+        None => {
+            return Err(
+                "TERMUL_SERVER_UPDATE_CHANNEL is unset or not stable/insider/nightly".to_owned(),
+            )
+        }
+    };
+    // `embedded_public_key()` returns `Result<&'static PublicKey>` backed by a
+    // `OnceLock`; the `&'static` ref moves into `UpdateOptions` (and across the
+    // spawned periodic task) directly — no clone needed.
+    let public_key = embedded_public_key().map_err(|e| e.to_string())?;
+    Ok(UpdateOptions {
+        channel,
+        current_version: current_version().to_owned(),
+        binary_path: current_binary_path(),
+        platform_key: SERVER_PLATFORM_KEY,
+        public_key,
+    })
+}
+
+/// `--check-update`: fetch → verify → swap → reexec, then exit. Operator-
+/// explicit, so the channel defaults to Stable when the env is unset (the
+/// periodic loop, by contrast, requires the env to opt in). Never auto-
+/// restarts an unattended server without this explicit trigger or the env gate.
+fn run_one_shot_update_check() -> ExitCode {
+    info!(
+        target: "termul::server_update",
+        "one-shot server self-update requested (--check-update)"
+    );
+    // Operator-explicit one-shot: default to Stable when the channel env is
+    // unset (matches the `--check-update` usage docs); the env still wins when set.
+    let opts = match build_update_options(Some(UpdateChannel::Stable)) {
+        Ok(o) => o,
+        Err(reason) => {
+            error!(target: "termul::server_update", "self-update unavailable: {reason}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            error!(
+                target: "termul::server_update",
+                "failed to start tokio runtime for update check: {e}"
+            );
+            return ExitCode::from(1);
+        }
+    };
+
+    match runtime.block_on(check_and_apply_update(&opts)) {
+        Ok(UpdateOutcome::NoUpdate) => {
+            info!(
+                target: "termul::server_update",
+                "no newer server binary on channel {:?} (current {})",
+                opts.channel,
+                opts.current_version
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(UpdateOutcome::Updated { new_version }) => {
+            info!(
+                target: "termul::server_update",
+                "verified + swapped to {new_version}; restarting into the new binary"
+            );
+            if let Err(e) = restart_binary() {
+                error!(
+                    target: "termul::server_update",
+                    "reexec failed: {e}; the new binary is in place — restart the server manually"
+                );
+                return ExitCode::from(1);
+            }
+            // restart_binary never returns on success.
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            error!(
+                target: "termul::server_update",
+                "update check failed (keeping current binary): {e}"
+            );
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Spawn the background periodic self-update loop on the server's tokio runtime.
+/// No-op (with an info log) when the operator did not opt in via env — the
+/// default is off so an unattended server never auto-updates.
+fn spawn_periodic_update_loop() {
+    if !is_update_enabled() {
+        info!(
+            target: "termul::server_update",
+            "self-update disabled (set TERMUL_SERVER_UPDATE_ENABLED=true + \
+             TERMUL_SERVER_UPDATE_CHANNEL to opt in)"
+        );
+        return;
+    }
+
+    // Periodic loop: opt-in requires the channel env (no default) — an
+    // unattended server never auto-updates unless the operator named a channel.
+    let opts = match build_update_options(None) {
+        Ok(o) => o,
+        Err(reason) => {
+            warn!(
+                target: "termul::server_update",
+                "TERMUL_SERVER_UPDATE_ENABLED=true but self-update unavailable: {reason} \
+                 (periodic loop disabled)"
+            );
+            return;
+        }
+    };
+
+    // Default 6h, mirroring the desktop's periodic cadence. Overridable so an
+    // operator can tune the polling frequency for their deployment.
+    let interval_secs = std::env::var("TERMUL_SERVER_UPDATE_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(6 * 60 * 60);
+
+    let channel = opts.channel;
+    info!(
+        target: "termul::server_update",
+        "periodic self-update enabled on channel {:?} (every {}s)", channel, interval_secs
+    );
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+        loop {
+            ticker.tick().await;
+            match check_and_apply_update(&opts).await {
+                Ok(UpdateOutcome::NoUpdate) => {
+                    tracing::debug!(
+                        target: "termul::server_update",
+                        "no newer server binary on channel {:?}", opts.channel
+                    );
+                }
+                Ok(UpdateOutcome::Updated { new_version }) => {
+                    info!(
+                        target: "termul::server_update",
+                        "verified + swapped to {new_version}; restarting into the new binary"
+                    );
+                    if let Err(e) = restart_binary() {
+                        error!(
+                            target: "termul::server_update",
+                            "reexec failed: {e}; the new binary is in place — \
+                             the supervisor must restart the server"
+                        );
+                    }
+                    // restart_binary never returns on success.
+                    return;
+                }
+                Err(e) => {
+                    warn!(
+                        target: "termul::server_update",
+                        "periodic update check failed (keeping current binary): {e}"
+                    );
+                }
+            }
+        }
+    });
+}
+
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--check-update]\n\n\
      Options:\n\
         --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
         --port PORT                 Bind port (default: 8080)\n\
@@ -247,5 +455,11 @@ fn usage() -> &'static str {
         --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
+        --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
+                                     verify the downloaded binary signature, atomically swap, and\n\
+                                     reexec. Defaults to the stable channel when\n\
+                                     TERMUL_SERVER_UPDATE_CHANNEL is unset; the env wins when set.\n\
+                                     (env: TERMUL_SERVER_UPDATE_ENABLED + TERMUL_SERVER_UPDATE_CHANNEL\n\
+                                     gate the periodic loop; TERMUL_SERVER_UPDATE_INTERVAL_SECS default 21600)\n\
         -h, --help                  Show this help"
 }

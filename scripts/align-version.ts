@@ -1,8 +1,26 @@
 import fs from 'node:fs'
 
+// Nightly builds synthesize `0.0.0-nightly.<YYYYMMDD>.<shortsha>` from main HEAD
+// and may write it to only a subset of the three version sources (or pass it via
+// Tauri config overrides), so the strict 3-source equality guard is bypassed
+// for nightly. Stable and Insider RC tags keep the strict guard.
+const nightlyBypass =
+  process.argv.slice(2).includes('--nightly') ||
+  process.env.TERMUL_NIGHTLY === '1' ||
+  process.env.NIGHTLY === '1'
+
 const tagVersion = process.env.TAG_VERSION
 if (!tagVersion) {
+  if (nightlyBypass) {
+    console.log('ℹ️ Nightly bypass active: TAG_VERSION unset, skipping version alignment.')
+    process.exit(0)
+  }
   throw new Error('TAG_VERSION environment variable is not set')
+}
+
+if (nightlyBypass) {
+  console.log(`ℹ️ Nightly bypass active: skipping strict 3-source version guard for ${tagVersion}.`)
+  process.exit(0)
 }
 
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))

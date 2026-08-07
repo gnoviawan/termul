@@ -215,6 +215,12 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['automatic', 'version']
   },
   {
+    categoryId: 'updates',
+    label: 'Release Channel',
+    description: 'Choose Stable, Insider, or Nightly update track.',
+    keywords: ['insider', 'nightly', 'stable', 'prerelease', 'beta', 'channel']
+  },
+  {
     categoryId: 'diagnostics',
     label: 'Diagnostics & Logs',
     description: 'Export or copy application logs to troubleshoot issues.',
@@ -272,9 +278,11 @@ export default function AppPreferences(): React.JSX.Element {
     autoUpdateEnabled,
     skippedVersion,
     error: updateError,
-    isManualUpdateMode
+    isManualUpdateMode,
+    updateChannel
   } = useUpdaterState()
-  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled } = useUpdaterActions()
+  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
+    useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -1160,6 +1168,76 @@ export default function AppPreferences(): React.JSX.Element {
                     </span>
                   </div>
                 </div>
+
+                {/* Release Channel */}
+                {!isAurUpdater && (
+                  <div>
+                    <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                      Release Channel
+                    </label>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {(
+                          [
+                            {
+                              id: 'stable',
+                              label: 'Stable',
+                              description: 'Production releases. Most reliable.'
+                            },
+                            {
+                              id: 'insider',
+                              label: 'Insider',
+                              description: 'Release candidates (rc) before stable.'
+                            },
+                            {
+                              id: 'nightly',
+                              label: 'Nightly',
+                              description: 'Automated main-branch builds.'
+                            }
+                          ] as const
+                        ).map((option) => {
+                          const active = updateChannel === option.id
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => setUpdateChannel(option.id)}
+                              aria-pressed={active}
+                              className={cn(
+                                'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors',
+                                active
+                                  ? 'bg-primary/10 border-primary'
+                                  : 'bg-secondary/30 border-border hover:bg-secondary/60'
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  'text-sm font-medium',
+                                  active ? 'text-primary' : 'text-foreground'
+                                )}
+                              >
+                                {option.label}
+                              </span>
+                              <span className="text-3xs text-muted-foreground font-normal">
+                                {option.description}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {updateChannel !== 'stable' && (
+                        <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2.5">
+                          <AlertCircle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                          <div className="text-xs text-foreground">
+                            {updateChannel === 'nightly'
+                              ? 'Nightly builds are automated from the latest commit and may be unstable. Updates are offered as a manual download from the nightly release page.'
+                              : 'Insider release candidates may be unfinished. Updates are offered as a manual download from the insider release page.'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Update Status */}
                 {updateAvailable && version && (

@@ -29,9 +29,18 @@ required-features = ["standalone-server"]
 
 [features]
 default = []
-# Enables the termul-server binary entry. rust-embed is now always-on (the
-# desktop's in-process shared-live server serves the SAME embedded bundle in a
-# release install without dist-web/ on disk).
+# Enables the termul-server binary entry (server_main.rs, required-features on
+# the [[bin]] target). rust-embed is always-on (the desktop's in-process
+# shared-live server serves the SAME embedded bundle in a release install
+# without dist-web/ on disk).
+#
+# The `server_update` library module + its `minisign-verify` dependency are
+# intentionally NOT feature-gated: the spec's verification gate runs
+# `cargo test` (default features) and expects the new `server_update` tests —
+# including signature verification — to execute there. Only the standalone
+# *binary* (and its wiring in server_main.rs) is gated, which preserves the
+# "default `cargo build` / `tauri build` do NOT bundle the standalone server
+# binary" invariant.
 standalone-server = []
 
 [build-dependencies]
@@ -59,7 +68,7 @@ chrono = "0.4"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
 # only). rustls-tls matches the backend already pulled in by the updater plugin.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "stream"] }
 
 # ACP registry binary install (zip / tar.gz archives)
 zip = "2"
@@ -151,9 +160,26 @@ async-trait = "0.1"
 # build.rs when it is missing.
 rust-embed = { version = "8.12", features = ["mime-guess"] }
 
+# Standalone `termul-server` self-update (opt-in, default off): verifies
+# downloaded binary signatures against the same minisign keypair the desktop
+# updater uses. Non-optional so the `server_update` module + its tests (incl.
+# signature verification) compile and run under default `cargo test`, per the
+# spec's verification gate. The standalone *binary* that actually wires the
+# subsystem remains gated by the `standalone-server` feature.
+minisign-verify = "0.2"
+
+# Decodes the outer base64 wrapper around the embedded minisign pubkey (the
+# `TAURI_SIGNING_PUBLIC_KEY` secret / tauri.conf.json `pubkey` field both hold
+# the minisign `.pub` file text, base64-encoded) so `PublicKey::decode` can
+# parse the raw key the updater verifies against.
+base64 = "0.22"
+
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
+# Swap/rollback file tests in `server_update` use a temp dir so they never
+# touch the real binary path.
+tempfile = "3"
 
 # --- OS keychain backends for `keyring` (see note on the keyring dep above) ---
 # Windows Credential Manager

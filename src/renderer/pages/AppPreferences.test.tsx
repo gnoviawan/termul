@@ -48,12 +48,14 @@ vi.mock('@/stores/updater-store', () => ({
     autoUpdateEnabled: false,
     skippedVersion: null,
     error: null,
-    isManualUpdateMode: false
+    isManualUpdateMode: false,
+    updateChannel: 'stable'
   }),
   useUpdaterActions: () => ({
     checkForUpdates: vi.fn(),
     installAndRestart: vi.fn(),
-    setAutoUpdateEnabled: vi.fn()
+    setAutoUpdateEnabled: vi.fn(),
+    setUpdateChannel: vi.fn()
   })
 }))
 

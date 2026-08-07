@@ -16,7 +16,11 @@ export const requiredPlatformKeys = [
   'darwin-aarch64',
   'darwin-aarch64-app',
   'darwin-x86_64',
-  'darwin-x86_64-app'
+  'darwin-x86_64-app',
+  // Standalone `termul-server` binary (linux-x64 only today). Each channel's
+  // manifest covers both the desktop targets and the server target so a single
+  // manifest drives both updaters.
+  'linux-x86_64-server'
 ]
 
 function assertNonEmptyString(value, description) {
@@ -37,20 +41,20 @@ function assertStringArray(value, description) {
   }
 }
 
-function releaseUrlAssetName(url, version, description) {
+function releaseUrlAssetName(url, tag, description) {
   let parsed
   try {
     parsed = new URL(url)
   } catch {
     throw new Error(`${description} must be a valid URL`)
   }
-  const expectedPrefix = `/gnoviawan/termul/releases/download/${encodeURIComponent(`v${version}`)}/`
+  const expectedPrefix = `/gnoviawan/termul/releases/download/${encodeURIComponent(tag)}/`
   if (
     parsed.protocol !== 'https:' ||
     parsed.hostname !== 'github.com' ||
     !parsed.pathname.startsWith(expectedPrefix)
   ) {
-    throw new Error(`${description} must target the current v${version} GitHub release`)
+    throw new Error(`${description} must target the current ${tag} GitHub release`)
   }
   const encodedName = parsed.pathname.slice(expectedPrefix.length)
   if (!encodedName || encodedName.includes('/')) {
@@ -63,7 +67,29 @@ function releaseUrlAssetName(url, version, description) {
   }
 }
 
-export async function mergeUpdaterManifests({ inputPaths, outputPath, version, notes, pubDate }) {
+/**
+ * Resolve the GitHub release tag the channel's assets live under.
+ *
+ * Stable and Insider RC tags are the versioned tag (`v<version>`). Nightly
+ * assets live under the moving `nightly` tag regardless of the synthesized
+ * `0.0.0-nightly.*` version, so the URL validator must use `nightly` as the
+ * tag prefix for that channel. An explicit `tag` override wins.
+ */
+function resolveReleaseTag(channel, tag, version) {
+  if (tag) return tag
+  if (channel === 'nightly') return 'nightly'
+  return `v${version}`
+}
+
+export async function mergeUpdaterManifests({
+  inputPaths,
+  outputPath,
+  version,
+  notes,
+  pubDate,
+  channel = 'stable',
+  tag
+}) {
   assertNonEmptyString(version, 'version')
   assertNonEmptyString(pubDate, 'pub_date')
   if (typeof notes !== 'string') throw new Error('notes must be a string')
@@ -71,6 +97,7 @@ export async function mergeUpdaterManifests({ inputPaths, outputPath, version, n
     throw new Error('At least one updater manifest is required')
   }
 
+  const releaseTag = resolveReleaseTag(channel, tag, version)
   const platforms = {}
   for (const inputPath of inputPaths) {
     const manifest = JSON.parse(await readFile(inputPath, 'utf8'))
@@ -89,7 +116,7 @@ export async function mergeUpdaterManifests({ inputPaths, outputPath, version, n
       assertNonEmptyString(record.url, `Updater record ${key} url`)
       assertNonEmptyString(record.signature, `Updater record ${key} signature`)
       const normalized = { url: record.url.trim(), signature: record.signature.trim() }
-      const assetName = releaseUrlAssetName(normalized.url, version, `Updater record ${key} url`)
+      const assetName = releaseUrlAssetName(normalized.url, releaseTag, `Updater record ${key} url`)
       if (!assetNames.has(assetName)) {
         throw new Error(`Updater record ${key} references uncollected release asset ${assetName}`)
       }
@@ -125,10 +152,26 @@ export async function mergeUpdaterManifests({ inputPaths, outputPath, version, n
 }
 
 async function runCli() {
-  const [outputPath, version, notesPath, pubDate, ...inputPaths] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+  const options = { channel: undefined, tag: undefined }
+  const positional = []
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === '--channel') {
+      options.channel = argv[index + 1]
+      index += 1
+    } else if (arg === '--tag') {
+      options.tag = argv[index + 1]
+      index += 1
+    } else {
+      positional.push(arg)
+    }
+  }
+
+  const [outputPath, version, notesPath, pubDate, ...inputPaths] = positional
   if (!outputPath || !version || !notesPath || !pubDate || inputPaths.length === 0) {
     throw new Error(
-      'Usage: merge-updater-manifests.mjs <output> <version> <notes-file> <pub-date> <manifest> [manifest...]'
+      'Usage: merge-updater-manifests.mjs [--channel <stable|insider|nightly>] [--tag <tag>] <output> <version> <notes-file> <pub-date> <manifest> [manifest...]'
     )
   }
   await mergeUpdaterManifests({
@@ -136,7 +179,9 @@ async function runCli() {
     outputPath,
     version,
     notes: await readFile(notesPath, 'utf8'),
-    pubDate
+    pubDate,
+    channel: options.channel,
+    tag: options.tag
   })
 }
 
