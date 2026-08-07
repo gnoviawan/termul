@@ -344,9 +344,10 @@ pub struct AppState {
     /// search routes. Requests whose canonicalized target path resolves outside
     /// this root are refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL`
     /// for explicit `..` components). On the desktop shared-live path it is
-    /// derived from the `ProjectRegistry`'s default (active) project at start
-    /// (falling back to the user home dir only when the registry is empty); on
-    /// the standalone `termul-server` path it comes from
+    /// derived from the `ProjectRegistry`'s default (active) project at start,
+    /// falling back to the user home dir when the registry is empty or its
+    /// default project path is invalid (fails canonicalization); on the
+    /// standalone `termul-server` path it comes from
     /// `ServerConfig::project_root` (the `--project-root` CLI flag or the
     /// env/home default).
     ///

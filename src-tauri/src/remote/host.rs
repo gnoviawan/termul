@@ -951,37 +951,64 @@ mod tests {
     /// Windows `std::env::temp_dir()` resolves to `%USERPROFILE%\AppData\Local\
     /// Temp` — i.e. INSIDE the home tree — so using it would let the buggy
     /// `project_root = home` code accept the project (false pass). We instead
-    /// derive the project dirs from `home.parent()` (a sibling of the home
-    /// dir), which is provably outside home on every platform. If the home dir
-    /// cannot be resolved or its parent is not writable, the test skips rather
-    /// than false-pass.
+    /// derive the project dirs from an outside-home base: `$TERMUL_TEST_OUTSIDE_
+    /// HOME_BASE` when set (so CI can pin a known-writable path outside home),
+    /// falling back to `home.parent()` (a sibling of home) when unset. If the
+    /// base cannot be resolved or (without an override) is not writable, the
+    /// test skips rather than false-pass; an explicit override that is unusable
+    /// panics so a broken CI setup is loud, not silent.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shared_live_binds_project_root_to_active_cross_drive_project() {
         let (acp, pty, relay, registry) = lifecycle_fixtures();
 
         // Resolve the user home dir the way the buggy `default_project_root()`
-        // does, then create the project dirs as SIBLINGS of home (under
-        // `home.parent()`) so they are provably outside the home tree —
-        // reproducing the cross-drive / outside-home rejection the bug caused.
+        // does, then pick a base provably OUTSIDE the home tree so the project
+        // dirs reproduce the cross-drive / outside-home rejection the bug caused.
         let Some(home) = crate::web::config::default_project_root() else {
             eprintln!("skip: cannot resolve user home dir for cross-drive test");
             return;
         };
-        let Some(outside_base) = home.parent() else {
-            eprintln!("skip: home dir has no parent; cannot create an outside-home project");
-            return;
+        // `$TERMUL_TEST_OUTSIDE_HOME_BASE` lets CI pin a known-writable path
+        // outside home (e.g. `/var/tmp` or a separate drive on runners where
+        // `home.parent()` is locked down). When unset, fall back to
+        // `home.parent()`. An explicit override that is unusable is a hard
+        // error — the operator asked for it, so a silent skip would mask a
+        // broken setup.
+        let override_set = std::env::var_os("TERMUL_TEST_OUTSIDE_HOME_BASE").is_some();
+        let outside_base = match std::env::var("TERMUL_TEST_OUTSIDE_HOME_BASE") {
+            Ok(raw) if !raw.trim().is_empty() => std::path::PathBuf::from(raw.trim()),
+            _ => match home.parent() {
+                Some(p) => p.to_path_buf(),
+                None => {
+                    eprintln!(
+                        "skip: home dir has no parent and \
+                         TERMUL_TEST_OUTSIDE_HOME_BASE is unset"
+                    );
+                    return;
+                }
+            },
         };
-        // Guard: if `outside_base` is not writable, skip rather than fail (the
-        // test cannot reproduce the cross-drive layout on this filesystem).
+        // Probe the base is writable. An explicit override that is not writable
+        // panics (CI must not silently skip a test the operator forced on);
+        // without an override, skip silently — local dev may lack a writable
+        // outside-home path.
         let probe = outside_base.join(format!(
             "termul-xdrive-probe-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
         if std::fs::create_dir_all(&probe).is_err() {
+            if override_set {
+                panic!(
+                    "TERMUL_TEST_OUTSIDE_HOME_BASE='{}' is not writable; CI cannot \
+                     run the cross-drive test reliably — fix the override path",
+                    outside_base.display()
+                );
+            }
             eprintln!(
                 "skip: cannot write outside-home base '{}'; cross-drive layout \
-                 not reproducible on this filesystem",
+                 not reproducible on this filesystem (set \
+                 TERMUL_TEST_OUTSIDE_HOME_BASE to force)",
                 outside_base.display()
             );
             return;
