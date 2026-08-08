@@ -1203,8 +1203,9 @@ export default function AppPreferences(): React.JSX.Element {
                               type="button"
                               onClick={() => setUpdateChannel(option.id)}
                               aria-pressed={active}
+                              disabled={isChecking}
                               className={cn(
-                                'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors',
+                                'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                                 active
                                   ? 'bg-primary/10 border-primary'
                                   : 'bg-secondary/30 border-border hover:bg-secondary/60'

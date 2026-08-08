@@ -385,7 +385,15 @@ async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelMani
     if (!response.ok) {
       throw new Error(`Channel manifest returned HTTP ${response.status}`)
     }
-    return (await response.json()) as ChannelManifest
+    const body = (await response.json()) as unknown
+    if (typeof body !== 'object' || body === null) {
+      throw new Error('Channel manifest is not a JSON object')
+    }
+    const manifest = body as ChannelManifest
+    if (manifest.version !== undefined && typeof manifest.version !== 'string') {
+      throw new Error('Channel manifest `version` is not a string')
+    }
+    return manifest
   } finally {
     window.clearTimeout(timeoutId)
   }

@@ -395,6 +395,9 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
     let new_path = sibling(binary_path, ".new");
     let old_path = sibling(binary_path, ".old");
+    // Capture the running binary's mode before renaming it away so the promoted
+    // file inherits the operator's chosen permissions (not a hardcoded 0o755).
+    let prev_mode = preserved_mode(binary_path);
 
     {
         let mut file = std::fs::File::create(&new_path)
@@ -442,7 +445,7 @@ pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
             .with_context(|| format!("rename {} -> {}", new_path.display(), binary_path.display()));
     }
 
-    make_executable(binary_path)?;
+    make_executable(binary_path, prev_mode)?;
     Ok(old_path)
 }
 
@@ -451,21 +454,41 @@ pub fn restore_previous(binary_path: &Path, old_path: &Path) -> Result<()> {
     if !old_path.exists() {
         bail!("no previous binary at {} to restore", old_path.display());
     }
+    let prev_mode = preserved_mode(old_path);
     std::fs::rename(old_path, binary_path)
         .with_context(|| format!("restore {} -> {}", old_path.display(), binary_path.display()))?;
-    make_executable(binary_path)?;
+    make_executable(binary_path, prev_mode)?;
     Ok(())
 }
 
+/// Capture a file's current Unix mode (for preserving the replaced binary's
+/// permissions across the atomic swap). `None` on non-Unix or when the file is
+/// absent.
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+fn preserved_mode(path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+    std::fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn preserved_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
+/// Apply `prev_mode` (the replaced binary's mode) to `path`, ensuring the
+/// owner-execute bit is set. Don't hardcode 0o755 — an operator may have chosen
+/// a different mode (e.g. restrict group/other) that should survive the swap;
+/// only the execute bit is added on top.
+#[cfg(unix)]
+fn make_executable(path: &Path, prev_mode: Option<u32>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = prev_mode.unwrap_or(0o755);
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o100))
         .with_context(|| format!("set executable perms on {}", path.display()))
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+fn make_executable(_path: &Path, _prev_mode: Option<u32>) -> Result<()> {
     Ok(())
 }
 
@@ -494,8 +517,9 @@ pub fn apply_verified_update(
 pub enum UpdateOutcome {
     /// Manifest fetched but no newer server binary is available.
     NoUpdate,
-    /// Verified, swapped, and ready to restart into this new version.
-    Updated { new_version: String },
+    /// Verified, swapped, and ready to restart into this new version. Carries
+    /// the `.old` path so the caller can roll back if the reexec fails.
+    Updated { new_version: String, old_path: PathBuf },
 }
 
 /// Options for a full check-and-apply cycle.
@@ -527,10 +551,16 @@ pub async fn check_and_apply_update(opts: &UpdateOptions) -> Result<UpdateOutcom
 
     let new_bytes = download_binary(&record.url).await?;
     // verify-before-swap guarantees a bad signature never bricks the server.
-    apply_verified_update(&opts.binary_path, &new_bytes, &record.signature, opts.public_key)?;
+    let old_path = apply_verified_update(
+        &opts.binary_path,
+        &new_bytes,
+        &record.signature,
+        opts.public_key,
+    )?;
 
     Ok(UpdateOutcome::Updated {
         new_version: manifest.version,
+        old_path,
     })
 }
 
@@ -540,28 +570,36 @@ pub async fn check_and_apply_update(opts: &UpdateOptions) -> Result<UpdateOutcom
 /// not a crash-restart). The `--check-update` one-shot flag is stripped so the
 /// reexec'd binary starts the server normally instead of re-looping the check.
 ///
+/// `binary_path` is the canonical install path (NOT `current_exe()`): on Linux
+/// `/proc/self/exe` follows the inode, so after `atomic_swap` renames the
+/// running binary to `<bin>.old`, `current_exe()` would resolve to `<bin>.old`
+/// and re-exec the OLD binary. Exec the install path directly — it now points
+/// at the freshly-promoted new binary.
+///
 /// Only meaningful on Unix (the server target is linux-x64); returns an error
 /// on other platforms without touching the process.
-pub fn restart_binary() -> Result<()> {
+pub fn restart_binary(binary_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let exe = std::env::current_exe().context("failed to resolve current_exe for reexec")?;
         // Drop `--check-update` so the new binary runs the server / periodic
         // loop rather than re-entering the one-shot check (which would loop).
         let args: Vec<String> = std::env::args()
             .skip(1)
             .filter(|arg| arg != "--check-update")
             .collect();
-        let error = std::process::Command::new(&exe).args(&args).exec();
+        let error = std::process::Command::new(binary_path)
+            .args(&args)
+            .exec();
         // `exec` only returns on failure.
-        Err(anyhow!("re-exec of {} failed: {error}", exe.display()))
+        Err(anyhow!("re-exec of {} failed: {error}", binary_path.display()))
     }
 
     #[cfg(not(unix))]
     {
         // The server target is linux-x64; reexec is unsupported elsewhere so the
         // build still compiles on Windows/macOS dev hosts + under `cargo test`.
+        let _ = binary_path;
         Err(anyhow!("self-reexec is not supported on this platform"))
     }
 }
@@ -760,7 +798,7 @@ mod tests {
     fn write_current_binary(dir: &Path, contents: &[u8]) -> PathBuf {
         let bin = dir.join("termul-server");
         fs::write(&bin, contents).expect("write current binary");
-        make_executable(&bin).expect("chmod current binary");
+        make_executable(&bin, None).expect("chmod current binary");
         bin
     }
 

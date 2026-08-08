@@ -8,6 +8,7 @@ import {
 } from '@/lib/tauri-update-channel'
 import {
   clearPendingUpdate,
+  DEFAULT_UPDATE_CHANNEL,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -420,7 +421,12 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
 
         const persistedChannel = await getUpdateChannel()
         if (currentGeneration !== updaterLifecycleGeneration) return
-        set({ updateChannel: persistedChannel })
+        // Only hydrate the persisted channel when the user hasn't already
+        // selected one during the async init window — a concurrent
+        // setUpdateChannel would otherwise be reverted to the persisted value.
+        if (get().updateChannel === DEFAULT_UPDATE_CHANNEL) {
+          set({ updateChannel: persistedChannel })
+        }
 
         if (options?.autoCheck === true && get().autoUpdateEnabled) {
           await get().runCheckWithRetry(currentGeneration)

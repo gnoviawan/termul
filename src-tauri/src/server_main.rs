@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use termul_manager_lib::server_update::{
     check_and_apply_update, current_version, embedded_public_key, is_update_enabled,
-    restart_binary, UpdateChannel, UpdateOptions, UpdateOutcome, SERVER_PLATFORM_KEY,
+    restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
+    SERVER_PLATFORM_KEY,
 };
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
@@ -299,10 +300,13 @@ fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<Update
     })
 }
 
-/// `--check-update`: fetch → verify → swap → reexec, then exit. Operator-
+/// `--check-update`: fetch → verify → swap, then exit SUCCESS. Operator-
 /// explicit, so the channel defaults to Stable when the env is unset (the
-/// periodic loop, by contrast, requires the env to opt in). Never auto-
-/// restarts an unattended server without this explicit trigger or the env gate.
+/// periodic loop, by contrast, requires the env to opt in). Does **not**
+/// re-exec: re-exec would start the server in this one-shot's place; the
+/// operator restarts the server to run the new version (the `.old` binary is
+/// retained for manual rollback). Never auto-restarts an unattended server
+/// without this explicit trigger or the env gate.
 fn run_one_shot_update_check() -> ExitCode {
     info!(
         target: "termul::server_update",
@@ -339,19 +343,17 @@ fn run_one_shot_update_check() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Ok(UpdateOutcome::Updated { new_version }) => {
+        Ok(UpdateOutcome::Updated { new_version, old_path }) => {
+            // One-shot: apply the update but do NOT re-exec — re-exec would
+            // start the server in this one-shot's place. The operator restarts
+            // the server to run the new version; the `.old` binary is retained
+            // for manual rollback.
             info!(
                 target: "termul::server_update",
-                "verified + swapped to {new_version}; restarting into the new binary"
+                "verified + swapped to {new_version}; previous binary retained at {}. \
+                 Restart the server to run the new version (no auto-reexec from --check-update)",
+                old_path.display()
             );
-            if let Err(e) = restart_binary() {
-                error!(
-                    target: "termul::server_update",
-                    "reexec failed: {e}; the new binary is in place — restart the server manually"
-                );
-                return ExitCode::from(1);
-            }
-            // restart_binary never returns on success.
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -416,17 +418,29 @@ fn spawn_periodic_update_loop() {
                         "no newer server binary on channel {:?}", opts.channel
                     );
                 }
-                Ok(UpdateOutcome::Updated { new_version }) => {
+                Ok(UpdateOutcome::Updated { new_version, old_path }) => {
                     info!(
                         target: "termul::server_update",
                         "verified + swapped to {new_version}; restarting into the new binary"
                     );
-                    if let Err(e) = restart_binary() {
+                    // Re-exec the canonical install path (NOT current_exe(),
+                    // which would resolve to the `.old` inode after the swap).
+                    if let Err(e) = restart_binary(&opts.binary_path) {
                         error!(
                             target: "termul::server_update",
-                            "reexec failed: {e}; the new binary is in place — \
-                             the supervisor must restart the server"
+                            "reexec failed: {e}; rolling back to the previous binary"
                         );
+                        // Roll the swap back so the deployment keeps running the
+                        // known-good binary instead of a new binary that can't re-exec.
+                        if let Err(restore_err) = restore_previous(&opts.binary_path, &old_path) {
+                            error!(
+                                target: "termul::server_update",
+                                "rollback also failed: {restore_err}; the new binary is at {} \
+                                 and the previous at {} — recover manually",
+                                opts.binary_path.display(),
+                                old_path.display()
+                            );
+                        }
                     }
                     // restart_binary never returns on success.
                     return;

@@ -8,7 +8,8 @@
 // (produced via `tauri signer sign`) and emits a manifest with the same shape
 // so the central merge can validate + merge it alongside the desktop entries.
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
@@ -63,6 +64,9 @@ export async function prepareServerArtifacts({
       [platformKey]: { url, signature }
     }
   }
+  // Ensure the output directory exists (the workflow passes a nested path like
+  // `server-collected/server-manifest.json` whose dir may not exist yet).
+  await mkdir(dirname(outputPath), { recursive: true })
   await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`)
   return manifest
 }
