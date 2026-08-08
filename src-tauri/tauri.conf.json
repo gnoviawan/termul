@@ -1,12 +1,12 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Termul Manager",
-	"version": "0.4.8",
+	"version": "0.4.9",
 	"identifier": "com.termul-manager.app",
 	"build": {
 		"beforeDevCommand": "npx vite --config vite.config.tauri.ts",
 		"devUrl": "http://localhost:5180/tauri-index.html",
-		"beforeBuildCommand": "npx vite build --config vite.config.tauri.ts",
+		"beforeBuildCommand": "npx vite build --config vite.config.web.ts && npx vite build --config vite.config.tauri.ts",
 		"frontendDist": "../dist-tauri"
 	},
 	"app": {

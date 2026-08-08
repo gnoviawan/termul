@@ -151,11 +151,86 @@ vi.mock('./useTerminalAutoSave', () => ({
   loadPersistedTerminals: mockLoadPersistedTerminals
 }))
 
+// P11: mock the manifest facade + log facade + sync store so loadWorkspaceManifest
+// doesn't hit real network I/O (web transport fetch in jsdom → NETWORK_ERROR).
+// Default getManifest → null (no manifest → legacy editorStateKey.paneLayout path).
+const {
+  mockGetManifest,
+  mockWriteManifest,
+  mockDeleteManifest,
+  mockLogFrontendError,
+  mockSetManifestRestoreInProgress,
+  mockSyncStoreState
+} = vi.hoisted(() => ({
+  mockGetManifest: vi.fn().mockResolvedValue({ success: true, data: null }),
+  mockWriteManifest: vi
+    .fn()
+    .mockResolvedValue({ success: true, data: { status: 'updated', revision: 1, updatedAt: 1 } }),
+  mockDeleteManifest: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+  mockLogFrontendError: vi.fn().mockResolvedValue(undefined),
+  mockSetManifestRestoreInProgress: vi.fn(),
+  mockSyncStoreState: {
+    setBasedRevision: vi.fn(),
+    advanceBasedRevision: vi.fn(),
+    setPendingConflict: vi.fn(),
+    setManifestRestoreInProgress: vi.fn(),
+    getBasedRevision: vi.fn(() => null),
+    hasPendingConflict: vi.fn(() => false),
+    pendingConflict: null,
+    basedRevisionByProject: {},
+    manifestRestoreInProgressByProject: {}
+  }
+}))
+
+vi.mock('@/lib/workspace-manifest-api', () => ({
+  workspaceManifestApi: {
+    getManifest: mockGetManifest,
+    writeManifest: mockWriteManifest,
+    deleteManifest: mockDeleteManifest
+  }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: mockLogFrontendError
+}))
+
+vi.mock('@/stores/workspace-manifest-sync-store', () => ({
+  setManifestRestoreInProgress: mockSetManifestRestoreInProgress,
+  isManifestRestoreInProgress: vi.fn(() => false),
+  isManifestRestoreInProgressFor: vi.fn(() => false),
+  useWorkspaceManifestSyncStore: {
+    getState: vi.fn(() => mockSyncStoreState),
+    setState: vi.fn(),
+    subscribe: vi.fn(() => vi.fn())
+  }
+}))
+
+// P11/P3: the manifest sync module is NOT mocked — the real loadWorkspaceManifest
+// runs against the mocked facade (mockGetManifest) so the manifest-wins branch
+// exercises the actual topology rebuild (rebuildTopologyFromManifest +
+// loadProjectWorkspace). The sync-store + log facades are mocked above.
+
 beforeEach(() => {
   mockPersistenceRead.mockReset()
   mockPersistenceWriteDebounced.mockReset()
   mockLoadPersistedTerminals.mockReset()
   mockLoadPersistedTerminals.mockResolvedValue(null)
+  // P11: default getManifest → null (no manifest → legacy path).
+  mockGetManifest.mockReset()
+  mockGetManifest.mockResolvedValue({ success: true, data: null })
+  mockWriteManifest.mockReset()
+  // Re-arm: Vitest 4 `mockReset` clears `mockResolvedValue`, leaving the mock
+  // returning `undefined` — tests that exercise the manifest-write path would
+  // otherwise see a silent failure. Restore the default success payload
+  // (mirrors the hoisted definition above).
+  mockWriteManifest.mockResolvedValue({
+    success: true,
+    data: { status: 'updated', revision: 1, updatedAt: 1 }
+  })
+  mockDeleteManifest.mockReset()
+  mockDeleteManifest.mockResolvedValue({ success: true, data: undefined })
+  mockLogFrontendError.mockReset()
+  mockSetManifestRestoreInProgress.mockReset()
 
   mockEditorState.openFiles = new Map<string, ReturnType<typeof createEditorFileState>>()
   mockEditorState.activeFilePath = null
@@ -687,5 +762,139 @@ describe('useEditorPersistence', () => {
     await waitFor(() => {
       expect(mockWorkspaceState.resetLayout).toHaveBeenCalledTimes(1)
     })
+  })
+
+  // P3: manifest-wins integration — when getManifest returns a real manifest,
+  // loadWorkspaceManifest rebuilds the tree from the manifest's portable
+  // topology and the legacy paneLayout path (reconcileTerminalTabs +
+  // loadPersistedTerminals) is skipped. Asserts the workspace root matches
+  // the manifest-rebuilt tree (leaf id from manifest), NOT the paneLayout tree.
+  it('uses the manifest-rebuilt tree and skips the legacy paneLayout path when a manifest exists', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: {
+          type: 'leaf',
+          id: 'legacy-leaf',
+          tabs: [{ type: 'editor', filePath: '/projects/a/legacy.ts' }],
+          activeTabId: 'edit-/projects/a/legacy.ts'
+        }
+      }
+    })
+    mockGetManifest.mockResolvedValue({
+      success: true,
+      data: {
+        projectId: 'project-a',
+        revision: 3,
+        updatedAt: 1,
+        topology: {
+          type: 'leaf',
+          id: 'manifest-leaf-A',
+          terminalIds: [],
+          editorIds: ['edit-/manifest/file.ts'],
+          activeTabId: null
+        },
+        activePaneId: 'manifest-leaf-A',
+        focusedSessionId: null,
+        terminals: [],
+        editors: [{ editorId: 'edit-/manifest/file.ts', filePath: '/manifest/file.ts' }]
+      }
+    })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockGetManifest).toHaveBeenCalledWith('project-a')
+    })
+
+    // The manifest path rebuilt the tree → loadProjectWorkspace called with
+    // the manifest-rebuilt root (leaf id 'manifest-leaf-A'), NOT 'legacy-leaf'.
+    await waitFor(() => {
+      expect(mockWorkspaceState.loadProjectWorkspace).toHaveBeenCalledTimes(1)
+    })
+    const [restoredRootArg, activePaneIdArg] = mockWorkspaceState.loadProjectWorkspace.mock.calls[0]
+    expect((restoredRootArg as { id: string }).id).toBe('manifest-leaf-A')
+    expect(activePaneIdArg).toBe('manifest-leaf-A')
+
+    // The legacy path is skipped: loadPersistedTerminals + reconcileTerminalTabs
+    // (which would call loadProjectWorkspace with the 'legacy-leaf' tree) are
+    // NOT invoked.
+    expect(mockLoadPersistedTerminals).not.toHaveBeenCalled()
+    expect(mockWorkspaceState.resetLayout).not.toHaveBeenCalled()
+    expect(mockWorkspaceState.syncEditorTabs).not.toHaveBeenCalled()
+
+    // P2: the manifest's editor descriptors are seeded into openFiles.
+    expect(mockEditorState.openFile).toHaveBeenCalledWith('/manifest/file.ts')
+  })
+
+  // P11: when no manifest exists (data: null), the legacy paneLayout fallback runs.
+  it('falls back to the legacy paneLayout path when no manifest exists', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: {
+          type: 'leaf',
+          id: 'legacy-leaf',
+          tabs: [{ type: 'editor', filePath: '/projects/a/legacy.ts' }],
+          activeTabId: 'edit-/projects/a/legacy.ts'
+        }
+      }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockGetManifest).toHaveBeenCalledWith('project-a')
+      // The legacy path runs — loadPersistedTerminals + loadProjectWorkspace.
+      expect(mockLoadPersistedTerminals).toHaveBeenCalledWith('project-a')
+      expect(mockWorkspaceState.loadProjectWorkspace).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // P9: the restore flow sets setManifestRestoreInProgress(projectId, true)
+  // before the manifest load and (projectId, false) in the finally.
+  it('sets manifestRestoreInProgress true on entry and false in finally', async () => {
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null
+      }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockGetManifest).toHaveBeenCalled()
+    })
+
+    // true is set before the load, false in the finally.
+    expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', true)
+    expect(mockSetManifestRestoreInProgress).toHaveBeenCalledWith('project-a', false)
+
+    // Verify call order: true before false.
+    const calls = mockSetManifestRestoreInProgress.mock.calls
+    const trueIndex = calls.findIndex(
+      (call: unknown[]) => call[0] === 'project-a' && call[1] === true
+    )
+    const falseIndex = calls.findIndex(
+      (call: unknown[]) => call[0] === 'project-a' && call[1] === false
+    )
+    expect(trueIndex).toBeGreaterThanOrEqual(0)
+    expect(falseIndex).toBeGreaterThanOrEqual(0)
+    expect(trueIndex).toBeLessThan(falseIndex)
   })
 })

@@ -2,8 +2,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
-import { useFileExplorerStore } from '@/stores/file-explorer-store'
-import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { ActivityRail } from './ActivityRail'
 
@@ -28,6 +26,14 @@ vi.mock('@/lib/platform', () => ({
   }
 }))
 
+// Mutable: defaults to desktop so existing tests pass. Web-mode tests set
+// this to false to verify the SSH rail button's disabled-with-reason gate.
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return {
@@ -43,8 +49,6 @@ describe('ActivityRail', () => {
     vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(
       mockUpdatePanelVisibility
     )
-    useSidebarStore.setState({ isVisible: true })
-    useFileExplorerStore.setState({ isVisible: true })
     useSSHPanelStore.setState({ isVisible: true })
   })
 
@@ -56,48 +60,11 @@ describe('ActivityRail', () => {
     )
   }
 
-  it('toggles sidebar via persistence-aware updater on click', async () => {
+  it('does not render sidebar or file-explorer toggles (moved to titlebar)', () => {
     renderRail()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
-    })
-  })
-
-  it('toggles file explorer via persistence-aware updater on click', async () => {
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
-
-    await waitFor(() => {
-      expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
-    })
-  })
-
-  it('shows error toast when sidebar persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
-
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
-    })
-  })
-
-  it('shows error toast when file explorer persistence update fails', async () => {
-    mockUpdatePanelVisibility.mockRejectedValueOnce(new Error('persist failed'))
-
-    renderRail()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide file explorer' }))
-
-    await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('persist failed')
-    })
+    expect(screen.queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /file explorer/i })).not.toBeInTheDocument()
   })
 
   it('navigates to preferences on click', () => {
@@ -243,5 +210,18 @@ describe('ActivityRail', () => {
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith('persist failed')
     })
+  })
+
+  it('disables the SSH rail button with a desktop-only reason on web', () => {
+    const prev = tauriRef.current
+    tauriRef.current = false
+    try {
+      renderRail()
+      const sshButton = screen.getByRole('button', { name: /SSH/i })
+      expect(sshButton).toBeDisabled()
+      expect(sshButton).toHaveAttribute('title', 'SSH is desktop-only')
+    } finally {
+      tauriRef.current = prev
+    }
   })
 })

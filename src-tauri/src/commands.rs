@@ -3,17 +3,21 @@ use crate::migrations::{
     MigrationInfo, MigrationManager, MigrationRecord, MigrationResult, SchemaVersion,
 };
 use crate::path_validation;
-use crate::pty::{PtyManager, SpawnOptions, TerminalInfo};
+use crate::pty::claims::RotatedClaim;
+use crate::pty::manager::{SpawnedTerminal, TerminalAttachResult};
+use crate::pty::{PtyManager, SpawnOptions};
 use crate::remote;
+use crate::trackers::{
+    CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitStatusDetail, GitTracker,
+};
 use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitTracker, GitStatusDetail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, Read};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter, State, Webview};
@@ -44,11 +48,7 @@ fn validate_project_path(path: &str) -> Result<PathBuf, String> {
 
     // Canonicalize to resolve symlinks and relative paths
     let canonical = path_buf.canonicalize().map_err(|e| {
-        log::warn!(
-            "[Security] Path validation failed for '{}': {}",
-            path,
-            e
-        );
+        log::warn!("[Security] Path validation failed for '{}': {}", path, e);
         format!("Invalid or inaccessible path: {}", e)
     })?;
 
@@ -69,7 +69,12 @@ macro_rules! validate_and_stringify {
         match validate_project_path($path) {
             Ok(validated) => match validated.to_str() {
                 Some(s) => s.to_string(),
-                None => return Ok(IpcResult::error("Path contains invalid UTF-8", "INVALID_PATH_ENCODING")),
+                None => {
+                    return Ok(IpcResult::error(
+                        "Path contains invalid UTF-8",
+                        "INVALID_PATH_ENCODING",
+                    ))
+                }
             },
             Err(e) => return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED")),
         }
@@ -140,6 +145,79 @@ pub struct SetTerminalProtectedRequest {
     pub protected: bool,
 }
 
+// ==================== Attachment Commands ====================
+
+/// Maximum attachment image size the renderer may read through this command.
+/// Mirrors the renderer's `MAX_IMAGE_BYTES` (10 MB) so the brokered read can
+/// reject oversized files before transferring them across IPC.
+const ATTACHMENT_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Image extensions the attachment flow is allowed to read by path. The
+/// generic `fs:allow-read-file` permission was removed from the renderer
+/// capability; this command is the only binary-read path left, and it is
+/// intentionally restricted to images (the only content type the composer and
+/// chat preview need to read by path) to limit the confidentiality surface.
+const ATTACHMENT_IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg", "ico",
+];
+
+fn attachment_is_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ATTACHMENT_IMAGE_EXTENSIONS
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+
+/// Read attachment image bytes by path. Replaces direct renderer
+/// `fs:allow-read-file` access so binary reads go through one validated,
+/// size- and type-constrained command instead of the generic fs plugin.
+///
+/// Returns the raw bytes via `Response::new`, which arrives on the JS side as
+/// an `ArrayBuffer`. Rejects (throws on JS) when the path is not absolute,
+/// does not exist, is not a regular file, exceeds the size cap, or is not an
+/// image — callers fall back to a file-icon preview on rejection.
+#[tauri::command]
+pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
+    let stripped = path_validation::strip_verbatim_prefix(&path);
+    let candidate = PathBuf::from(stripped.as_ref());
+
+    if !candidate.is_absolute() {
+        return Err("Attachment path must be absolute".to_string());
+    }
+
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|e| format!("Invalid or inaccessible attachment path: {}", e))?;
+
+    if !attachment_is_image_extension(&canonical) {
+        return Err("Attachment path is not an image".to_string());
+    }
+
+    let mut file =
+        std::fs::File::open(&canonical).map_err(|e| format!("Failed to open attachment: {}", e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
+    if !metadata.is_file() {
+        return Err("Attachment path is not a regular file".to_string());
+    }
+    if metadata.len() > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read attachment: {}", e))?;
+    if bytes.len() as u64 > ATTACHMENT_MAX_IMAGE_BYTES {
+        return Err("Attachment image exceeds the 10 MB limit".to_string());
+    }
+    Ok(Response::new(bytes))
+}
+
 // ==================== Terminal Commands ====================
 
 /// Spawn a new terminal with binary data channel
@@ -148,15 +226,265 @@ pub struct SetTerminalProtectedRequest {
 /// zero-overhead binary IPC. PTY output is sent as raw `Vec<u8>` via
 /// `Response::new(bytes)`, arriving in JS as `ArrayBuffer` with no JSON
 /// serialization overhead.
+///
+/// CAP-3: the response carries the terminal info PLUS the issued `claim`
+/// credential (flattened camelCase, same shape as the web `spawn` reply).
+/// This is the only issuance path.
 #[tauri::command]
 pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
-) -> Result<IpcResult<TerminalInfo>, String> {
+) -> Result<IpcResult<SpawnedTerminal>, String> {
     match pty_manager.spawn(options, Some(on_data)).await {
-        Ok(info) => Ok(IpcResult::success(info)),
+        Ok(spawned) => Ok(IpcResult::success(spawned)),
         Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
+    }
+}
+
+/// Milliseconds between claim-generation checks in a desktop attach forwarder.
+/// Bounds how long a forwarder survives a rotate/revoke while its terminal is
+/// idle (no output events to piggyback the check on).
+const ATTACH_FORWARDER_GENERATION_CHECK_MS: u64 = 250;
+
+/// Tracked desktop attach forwarders: terminal_id → (token, abort handle).
+/// Exactly one live forwarder per terminal — a re-attach aborts the
+/// predecessor; rotate/revoke terminate it via the claim generation bump.
+static ATTACH_FORWARDERS: OnceLock<Mutex<HashMap<String, (u64, tokio::task::AbortHandle)>>> =
+    OnceLock::new();
+static ATTACH_FORWARDER_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn attach_forwarders() -> &'static Mutex<HashMap<String, (u64, tokio::task::AbortHandle)>> {
+    ATTACH_FORWARDERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Recover the forwarder map guard even if a holder panicked while holding the
+/// lock — silently skipping on poison would skip predecessor aborts and leak
+/// entries.
+fn lock_forwarders() -> std::sync::MutexGuard<'static, HashMap<String, (u64, tokio::task::AbortHandle)>> {
+    attach_forwarders()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Teardown condition for an attach forwarder, pure for testability. Shared
+/// by the desktop forwarder and the web attachment task (CAP-3 amendment R1:
+/// invalidation severs EVERY access derived from the credential, on all
+/// connections).
+///
+/// A forwarder must terminate when the captured claim generation no longer
+/// matches the registry: a bump means rotate/revoke invalidated the credential
+/// this stream was derived from, and a missing record (`None`) means the
+/// terminal was killed/reaped.
+pub(crate) fn forwarder_should_terminate(
+    captured_generation: Option<u64>,
+    current_generation: Option<u64>,
+) -> bool {
+    captured_generation != current_generation
+}
+
+#[cfg(test)]
+mod forwarder_teardown_tests {
+    use super::forwarder_should_terminate;
+
+    #[test]
+    fn same_generation_keeps_streaming() {
+        assert!(!forwarder_should_terminate(Some(3), Some(3)));
+    }
+
+    #[test]
+    fn rotated_generation_terminates() {
+        assert!(forwarder_should_terminate(Some(3), Some(4)));
+        assert!(forwarder_should_terminate(Some(3), Some(2)));
+    }
+
+    #[test]
+    fn killed_or_reaped_terminal_terminates() {
+        assert!(forwarder_should_terminate(Some(3), None));
+    }
+
+    #[test]
+    fn absent_at_both_ends_is_neutral() {
+        assert!(!forwarder_should_terminate(None, None));
+        // A forwarder can never start without a record, but the condition must
+        // still be total.
+        assert!(forwarder_should_terminate(None, Some(1)));
+    }
+}
+
+/// Attach to a terminal's output stream with a claim credential (CAP-3).
+///
+/// Verification is the gate: `terminalId` + valid `claim` + `lastSeq`. Any
+/// verification failure (unknown terminal, missing/wrong/revoked credential,
+/// binding mismatch) returns ONE generic UNAUTHORIZED error — no response
+/// shape distinguishes the cases (existence leak stays fixed). On success the
+/// ring-bounded replay (chunks with `seq > lastSeq`) is delivered through the
+/// raw-bytes channel, then a tracked forwarder streams live output.
+///
+/// Forwarder lifecycle: exactly one per terminal — this command aborts any
+/// predecessor before installing the new one; rotate/revoke bump the claim
+/// generation, which the forwarder observes and terminates on. The PTY is
+/// never touched by attach failures or forwarder teardown.
+#[tauri::command]
+pub async fn terminal_attach(
+    terminal_id: String,
+    claim: String,
+    last_seq: u64,
+    on_data: Channel<Response>,
+    pty_manager: State<'_, Arc<PtyManager>>,
+) -> Result<IpcResult<TerminalAttachResult>, String> {
+    // Capture the generation BEFORE verifying (TOCTOU-safe ordering): if a
+    // rotate/revoke lands between capture and verify, verify fails (the
+    // credential was invalidated) and we reject; if it lands after verify, the
+    // captured generation is stale and the forwarder terminates on its next
+    // check. Capturing after verify would invert the race and let an
+    // invalidated credential stream forever.
+    let generation = pty_manager.claim_generation(&terminal_id);
+    if pty_manager.verify_claim(&terminal_id, &claim).is_err() {
+        // Registry already logged the failure (terminal id, never the
+        // credential). Keep the response generic.
+        return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"));
+    }
+    let Some(instance) = pty_manager.get(&terminal_id) else {
+        // Verified a heartbeat ago but gone now — same generic error.
+        return Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED"));
+    };
+
+    // Bounded replay + live subscription snapshot atomically (existing seq
+    // infra, unchanged).
+    let replay = instance.subscribe_from(last_seq);
+    let result = pty_manager.build_attach_result(&instance, &replay);
+
+    // Single-forwarder invariant: abort the predecessor BEFORE delivering the
+    // replay so it cannot interleave a duplicate stream.
+    let token = ATTACH_FORWARDER_TOKENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    {
+        let mut forwarders = lock_forwarders();
+        if let Some((_, previous)) = forwarders.remove(&terminal_id) {
+            previous.abort();
+            log::info!(
+                "[terminal-attach] aborted previous forwarder terminal_id={}",
+                terminal_id
+            );
+        }
+    }
+
+    for chunk in &replay.chunks {
+        if on_data.send(Response::new(chunk.data.clone())).is_err() {
+            log::warn!(
+                "[terminal-attach] replay channel closed terminal_id={}",
+                terminal_id
+            );
+            return Ok(IpcResult::success(result));
+        }
+    }
+
+    let pty = pty_manager.inner().clone();
+    let forwarder_id = terminal_id.clone();
+    let handle = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+            ATTACH_FORWARDER_GENERATION_CHECK_MS,
+        ));
+        let mut receiver = replay.receiver;
+        loop {
+            // Teardown on rotate/revoke (generation bump) or kill/reap
+            // (record gone). Checked every tick AND after every chunk.
+            if forwarder_should_terminate(generation, pty.claim_generation(&forwarder_id)) {
+                log::info!(
+                    "[terminal-attach] forwarder terminating (claim invalidated) terminal_id={}",
+                    forwarder_id
+                );
+                break;
+            }
+            tokio::select! {
+                received = receiver.recv() => {
+                    match received {
+                        Ok(chunk) => {
+                            if on_data.send(Response::new(chunk.data)).is_err() {
+                                break; // renderer channel gone
+                            }
+                        }
+                        // Desktop's raw-bytes channel has no gap framing
+                        // (deferred parity decision) — keep streaming.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            log::warn!(
+                                "[terminal-attach] output receiver lagged by {skipped} for {forwarder_id}"
+                            );
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                _ = tick.tick() => {}
+            }
+        }
+        // Self-deregister only if this forwarder is still the tracked one (a
+        // later re-attach may have replaced the entry already).
+        let mut forwarders = lock_forwarders();
+        if let Some((tracked_token, _)) = forwarders.get(&forwarder_id) {
+            if *tracked_token == token {
+                forwarders.remove(&forwarder_id);
+            }
+        }
+    });
+
+    if !handle.is_finished() {
+        let mut forwarders = lock_forwarders();
+        // A concurrent attach may have raced — keep this (latest) forwarder
+        // and abort any rival: exactly one survives, last attach wins. A
+        // forwarder that already terminated (e.g. a generation bump raced the
+        // spawn) is never registered, so no dead entry lingers in the map.
+        if let Some((prev_token, prev_abort)) =
+            forwarders.insert(terminal_id.clone(), (token, handle.abort_handle()))
+        {
+            if prev_token != token {
+                prev_abort.abort();
+            }
+        }
+    }
+
+    log::info!(
+        "[terminal-attach] attached terminal_id={} latest_seq={} gap={}",
+        terminal_id,
+        result.latest_seq,
+        result.gap
+    );
+    Ok(IpcResult::success(result))
+}
+
+/// Rotate a terminal's claim credential (CAP-3).
+///
+/// Possession-based: presenting the current credential yields a fresh one and
+/// atomically invalidates the old. Any verification failure returns the same
+/// generic UNAUTHORIZED error as attach. The generation bump terminates the
+/// tracked desktop attach forwarder (teardown of the invalidated holder's
+/// access) while the PTY itself keeps running.
+#[tauri::command]
+pub async fn terminal_rotate_claim(
+    terminal_id: String,
+    claim: String,
+    pty_manager: State<'_, Arc<PtyManager>>,
+) -> Result<IpcResult<RotatedClaim>, String> {
+    match pty_manager.rotate_claim(&terminal_id, &claim) {
+        Ok(new_claim) => Ok(IpcResult::success(RotatedClaim { claim: new_claim })),
+        Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
+    }
+}
+
+/// Revoke a terminal's claim credential (CAP-3).
+///
+/// The PTY survives (never-clause) and stays attachable by a client holding a
+/// newly rotated credential; only the presented credential is invalidated. The
+/// generation bump terminates the tracked desktop attach forwarder. Any
+/// verification failure returns the same generic UNAUTHORIZED error.
+#[tauri::command]
+pub async fn terminal_revoke_claim(
+    terminal_id: String,
+    claim: String,
+    pty_manager: State<'_, Arc<PtyManager>>,
+) -> Result<IpcResult<()>, String> {
+    match pty_manager.revoke_claim(&terminal_id, &claim) {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
     }
 }
 
@@ -329,9 +657,7 @@ pub async fn agent_registry_fetch(
 /// List all worktrees for a git repo at the given path.
 /// Filters out bare worktrees and detached-HEAD worktrees.
 #[tauri::command]
-pub async fn worktree_list(
-    project_path: String,
-) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
+pub async fn worktree_list(project_path: String) -> Result<IpcResult<Vec<WorktreeInfo>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::list(&validated_path) {
         Ok(entries) => {
@@ -388,11 +714,7 @@ pub async fn worktree_remove(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::remove(
-        &validated_project,
-        &validated_worktree,
-        force,
-    ) {
+    match WorktreeManager::remove(&validated_project, &validated_worktree, force) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -400,9 +722,7 @@ pub async fn worktree_remove(
 
 /// List local and remote branches for a git repo.
 #[tauri::command]
-pub async fn worktree_branches(
-    project_path: String,
-) -> Result<IpcResult<Vec<BranchInfo>>, String> {
+pub async fn worktree_branches(project_path: String) -> Result<IpcResult<Vec<BranchInfo>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
     match WorktreeManager::branches(&validated_path) {
         Ok(entries) => {
@@ -424,9 +744,7 @@ pub async fn worktree_branches(
 
 /// Check dirty status for a worktree checkout.
 #[tauri::command]
-pub async fn worktree_check_dirty(
-    worktree_path: String,
-) -> Result<IpcResult<DirtyStatus>, String> {
+pub async fn worktree_check_dirty(worktree_path: String) -> Result<IpcResult<DirtyStatus>, String> {
     let validated_path = validate_and_stringify!(&worktree_path);
     match WorktreeManager::check_dirty(&validated_path) {
         Ok(status) => Ok(IpcResult::success(status)),
@@ -489,11 +807,7 @@ pub async fn worktree_create_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::create_symlinks(
-        &validated_project,
-        &validated_worktree,
-        &dirs,
-    );
+    let results = WorktreeManager::create_symlinks(&validated_project, &validated_worktree, &dirs);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -525,11 +839,7 @@ pub async fn worktree_ensure_symlinks(
             ));
         }
     };
-    let results = WorktreeManager::ensure_symlinks(
-        &validated_project,
-        &validated_worktree,
-        &dirs2,
-    );
+    let results = WorktreeManager::ensure_symlinks(&validated_project, &validated_worktree, &dirs2);
     let infos: Vec<SymlinkResultInfo> = results
         .into_iter()
         .map(|r| SymlinkResultInfo {
@@ -550,10 +860,7 @@ pub async fn worktree_archive(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::archive(
-        &validated_project,
-        &validated_worktree,
-    ) {
+    match WorktreeManager::archive(&validated_project, &validated_worktree) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -567,10 +874,7 @@ pub async fn worktree_restore(
 ) -> Result<IpcResult<()>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_archive = validate_and_stringify!(&archive_path);
-    match WorktreeManager::restore(
-        &validated_project,
-        &validated_archive,
-    ) {
+    match WorktreeManager::restore(&validated_project, &validated_archive) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
     }
@@ -589,12 +893,16 @@ pub async fn worktree_merge_preview(
                 direction: preview.direction,
                 source_branch: preview.source_branch,
                 target_branch: preview.target_branch,
-                conflict_files: preview.conflict_files.into_iter().map(|f| ConflictFileInfo {
-                    path: f.path,
-                    severity: f.severity,
-                    conflict_count: f.conflict_count,
-                    is_lock_file: f.is_lock_file,
-                }).collect(),
+                conflict_files: preview
+                    .conflict_files
+                    .into_iter()
+                    .map(|f| ConflictFileInfo {
+                        path: f.path,
+                        severity: f.severity,
+                        conflict_count: f.conflict_count,
+                        is_lock_file: f.is_lock_file,
+                    })
+                    .collect(),
                 changed_files: preview.changed_files,
                 total_changes: preview.total_changes,
                 detection_mode: preview.detection_mode,
@@ -715,7 +1023,7 @@ pub async fn browser_tab_create(
     bounds: BrowserBounds,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<BrowserTabInfo>, String> {
-    match browser_manager.create(tab_id, url, bounds) {
+    match browser_manager.create(tab_id, url, bounds).await {
         Ok(info) => Ok(IpcResult::success(info)),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
     }
@@ -830,7 +1138,6 @@ pub async fn browser_tab_open_devtools(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
     }
 }
-
 
 /// Inject annotation overlay script into a browser tab
 #[tauri::command]
@@ -1090,21 +1397,21 @@ pub struct RollbackRequest {
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchMatch {
     pub line_number: usize,
     pub line_text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResult {
     pub file_path: String,
     pub matches: Vec<FileSearchMatch>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResponse {
     pub results: Vec<FileSearchResult>,
@@ -1172,13 +1479,30 @@ pub struct SearchFileNamesStreamRequest {
     pub root_path: String,
     pub query: String,
     pub search_id: String,
+    /// When true, run `rg --no-ignore --hidden` and emit ignored/hidden files
+    /// with `ignored: true` so the @-mention picker can dim them. When false
+    /// (the default), the common-ignore exclusions are applied and every hit
+    /// carries `ignored: false`. See ADR 0003.
+    #[serde(default)]
+    pub include_ignored: bool,
+}
+
+/// One filename-search hit. `ignored` is set when the path runs through a
+/// commonly-ignored directory or a hidden/cruft segment, so the @-mention
+/// picker can dim it. `ignored: false` for every hit when the caller did not
+/// request `include_ignored`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileHit {
+    pub path: String,
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesBatchEvent {
     pub search_id: String,
-    pub files: Vec<String>,
+    pub files: Vec<SearchFileHit>,
     /// `None` on mid-stream batches (final truncation state is not yet known).
     /// `Some(true)` is set on the trailing batch if the result was capped, and
     /// `Some(false)` otherwise. `serde` skips `None` so the field is omitted
@@ -1201,7 +1525,7 @@ pub struct SearchFileNamesDoneEvent {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RgInfoResponse {
     pub sidecar_binary_name: String,
@@ -1215,7 +1539,7 @@ static FILENAME_SEARCH_PROCESSES: OnceLock<Mutex<HashMap<String, Arc<Mutex<Child
     OnceLock::new();
 static RG_PATH_CACHE: OnceLock<String> = OnceLock::new();
 
-fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
+pub(crate) fn search_processes() -> &'static Mutex<HashMap<String, Arc<Mutex<Child>>>> {
     SEARCH_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1261,7 +1585,7 @@ fn rg_sidecar_name() -> &'static str {
     "rg"
 }
 
-fn resolve_rg_path() -> (String, String) {
+pub(crate) fn resolve_rg_path() -> (String, String) {
     let from_env = std::env::var("TERMUL_RG_PATH")
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -1315,7 +1639,7 @@ fn resolve_rg_path() -> (String, String) {
     ("rg".to_string(), "path".to_string())
 }
 
-fn detect_rg_path() -> String {
+pub(crate) fn detect_rg_path() -> String {
     if let Some(cached) = RG_PATH_CACHE.get() {
         return cached.clone();
     }
@@ -1329,23 +1653,23 @@ fn detect_rg_path() -> String {
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(target_os = "windows")]
-fn configure_background_command(command: &mut Command) {
+pub(crate) fn configure_background_command(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(target_os = "windows"))]
-fn configure_background_command(_command: &mut Command) {}
+pub(crate) fn configure_background_command(_command: &mut Command) {}
 
 /// Maximum allowed search query length to prevent resource exhaustion via
 /// oversized input passed to ripgrep or the file-name walker.
-const MAX_SEARCH_QUERY_LEN: usize = 500;
+pub(crate) const MAX_SEARCH_QUERY_LEN: usize = 500;
 
-fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
+pub(crate) fn validated_search_root(scope_root: &str, search_root: &str) -> Result<String, String> {
     path_validation::validate_search_path(search_root, scope_root)
         .map(|path| path.to_string_lossy().to_string())
 }
 
-fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
+pub(crate) fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
         "-F".to_string(),
@@ -1384,6 +1708,83 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
     args
 }
 
+/// Directory basenames that are commonly git-ignored. Entries under these are
+/// still walked when `include_ignored` is set, but classified as `ignored` so
+/// the @-mention picker can dim them. Mirrors the renderer's `ALWAYS_IGNORE`
+/// list in `tauri-filesystem-api.ts` so the two sides agree on "ignored".
+const COMMONLY_IGNORED_NAMES: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".next",
+    ".cache",
+    ".turbo",
+    "dist",
+    "build",
+    ".output",
+    ".nuxt",
+    ".svelte-kit",
+    "__pycache__",
+    ".pytest_cache",
+    "venv",
+    "coverage",
+    ".nyc_output",
+];
+
+/// Cruft file basenames (not dir names) that should be dimmed when surfaced.
+const COMMONLY_IGNORED_FILES: &[&str] = &["Thumbs.db", "desktop.ini", ".DS_Store"];
+
+/// True when a (slash-normalized, relative) path runs through a
+/// commonly-ignored directory, a hidden segment, or a cruft basename. Used to
+/// tag `SearchFileHit.ignored` for the @-mention picker. Pure so it can be
+/// unit-tested directly.
+fn path_is_ignored(rel_path: &str) -> bool {
+    let segments: Vec<&str> = rel_path.split(['/', '\\']).collect();
+    for seg in &segments {
+        if seg.is_empty() {
+            continue;
+        }
+        if seg.starts_with('.') || COMMONLY_IGNORED_NAMES.contains(seg) {
+            return true;
+        }
+    }
+    if let Some(basename) = segments.last() {
+        if COMMONLY_IGNORED_FILES.contains(basename) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Concatenate non-ignored hits first, then ignored hits up to `cap`. Pure so
+/// it can be unit-tested directly. The caller is expected to have already
+/// capped `non_ignored` at `cap`; this extends with ignored only into the
+/// remaining slots so ignored files can never crowd out non-ignored ones.
+/// Reap an rg child after stdout reading stops. When the reader breaks early
+/// (cap hit) stdout is no longer drained; kill first so rg cannot block on a
+/// full pipe before `wait()` returns.
+fn reap_rg_child_after_stdout(
+    child: &mut Child,
+    stdout_stopped_early: bool,
+) -> Option<std::process::ExitStatus> {
+    if stdout_stopped_early {
+        let _ = child.kill();
+    }
+    child.wait().ok()
+}
+
+fn rank_search_hits(
+    non_ignored: Vec<SearchFileHit>,
+    ignored: Vec<SearchFileHit>,
+    cap: usize,
+) -> Vec<SearchFileHit> {
+    let mut out = non_ignored;
+    let remaining = cap.saturating_sub(out.len());
+    if remaining > 0 {
+        out.extend(ignored.into_iter().take(remaining));
+    }
+    out
+}
+
 /// Build the ripgrep argv for a streaming filename search.
 ///
 /// We rely on `rg --files --iglob` so we get the same multi-threaded tree walk
@@ -1393,7 +1794,12 @@ fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) 
 /// default is already case-insensitive on Windows, but Linux/macOS would
 /// otherwise be sensitive). Glob metacharacters in the query are escaped so
 /// they match literally, mirroring the old `contains` semantics.
-fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
+///
+/// When `include_ignored` is true, the common-ignore exclusions are dropped
+/// and `--no-ignore --hidden` are added so ignored/hidden files surface;
+/// classification + non-ignored-first ranking happen after the walk. See ADR
+/// 0003.
+fn build_file_name_search_args(query: &str, root_path: &str, include_ignored: bool) -> Vec<String> {
     // Escape glob metacharacters that ripgrep would otherwise interpret as
     // wildcards (`*`, `?`, `[`, `]`, `{`, `}`, `\`) so the query is matched
     // as a substring of the basename. `{`/`}` are alternation in globset.
@@ -1415,42 +1821,34 @@ fn build_file_name_search_args(query: &str, root_path: &str) -> Vec<String> {
         format!("**/*{}*", escaped),
     ];
 
-    // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
-    // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
-    // `!**/name/**` form that `build_search_args` uses for content search
-    // is silently dropped here, so we explicitly use the basename form.
-    for ignored in [
-        "node_modules",
-        ".git",
-        ".next",
-        ".cache",
-        ".turbo",
-        "dist",
-        "build",
-        ".output",
-        ".nuxt",
-        ".svelte-kit",
-        "__pycache__",
-        ".pytest_cache",
-        "venv",
-        "coverage",
-        ".nyc_output",
-    ] {
+    if include_ignored {
+        // Surface ignored + hidden files so they can be mentioned and dimmed.
+        // No `-g !<name>` exclusions; per-hit classification and non-ignored-
+        // first ranking happen after the walk.
+        args.push("--no-ignore".to_string());
+        args.push("--hidden".to_string());
+    } else {
+        // NB: In `--files` + `--iglob` mode, ripgrep only honors `-g` ignore
+        // patterns written as bare basenames (e.g. `-g '!node_modules'`). The
+        // `!**/name/**` form that `build_search_args` uses for content search
+        // is silently dropped here, so we explicitly use the basename form.
+        for ignored in COMMONLY_IGNORED_NAMES {
+            args.push("-g".to_string());
+            args.push(format!("!{}", ignored));
+        }
+        // Exclude platform cruft and common dotenv secrets. The exact `.env`
+        // exclusion matches the spec; `.env.local` / `.env.production` are
+        // deliberately left to `.gitignore` so a project's own ignore list is
+        // honored.
         args.push("-g".to_string());
-        args.push(format!("!{}", ignored));
+        args.push("!.env".to_string());
+        args.push("-g".to_string());
+        args.push("!Thumbs.db".to_string());
+        args.push("-g".to_string());
+        args.push("!desktop.ini".to_string());
+        args.push("-g".to_string());
+        args.push("!.DS_Store".to_string());
     }
-    // Exclude platform cruft and common dotenv secrets. The exact `.env`
-    // exclusion matches the spec; `.env.local` / `.env.production` are
-    // deliberately left to `.gitignore` so a project's own ignore list is
-    // honored.
-    args.push("-g".to_string());
-    args.push("!.env".to_string());
-    args.push("-g".to_string());
-    args.push("!Thumbs.db".to_string());
-    args.push("-g".to_string());
-    args.push("!desktop.ini".to_string());
-    args.push("-g".to_string());
-    args.push("!.DS_Store".to_string());
 
     args.push(root_path.to_string());
     args
@@ -1507,8 +1905,7 @@ pub async fn search_content_stream(
                 code: Some("QUERY_TOO_LONG".to_string()),
                 error: Some(format!(
                     "Search query too long: {} characters (max {})",
-                    query_char_count,
-                    MAX_SEARCH_QUERY_LEN
+                    query_char_count, MAX_SEARCH_QUERY_LEN
                 )),
             },
         );
@@ -1545,7 +1942,10 @@ pub async fn search_content_stream(
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
-    rg_command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    rg_command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     configure_background_command(&mut rg_command);
     let mut child = match rg_command.spawn() {
         Ok(c) => c,
@@ -1598,6 +1998,7 @@ pub async fn search_content_stream(
         let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut pending_matches: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
         let mut truncated = false;
+        let mut stdout_stopped_early = false;
         let mut stream_error: Option<String> = None;
 
         let flush_batch = |pending: &mut BTreeMap<String, Vec<FileSearchMatch>>,
@@ -1677,6 +2078,7 @@ pub async fn search_content_stream(
             if !grouped.contains_key(&file_path) {
                 if grouped.len() >= max_files_with_matches {
                     truncated = true;
+                    stdout_stopped_early = true;
                     break;
                 }
                 grouped.insert(file_path.clone(), Vec::new());
@@ -1717,7 +2119,7 @@ pub async fn search_content_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = search_processes().lock() {
             guard.remove(&search_id);
@@ -1825,8 +2227,7 @@ pub async fn search_file_names_stream(
         return Ok(IpcResult::error(
             format!(
                 "Search query too long: {} characters (max {})",
-                query_char_count,
-                MAX_SEARCH_QUERY_LEN
+                query_char_count, MAX_SEARCH_QUERY_LEN
             ),
             "QUERY_TOO_LONG",
         ));
@@ -1855,7 +2256,8 @@ pub async fn search_file_names_stream(
         }
     };
 
-    let args = build_file_name_search_args(&trimmed_query, &validated_root);
+    let args =
+        build_file_name_search_args(&trimmed_query, &validated_root, request.include_ignored);
 
     let rg_path = detect_rg_path();
     let mut rg_command = Command::new(&rg_path);
@@ -1911,13 +2313,26 @@ pub async fn search_file_names_stream(
         guard.insert(search_id.clone(), Arc::clone(&child_handle));
     }
 
+    let include_ignored = request.include_ignored;
+
     tauri::async_runtime::spawn_blocking(move || {
         let reader = BufReader::new(stdout);
-        let mut files: Vec<String> = Vec::new();
         let max_files: usize = 100;
         let batch_size: usize = 25;
         let mut truncated = false;
         let mut stream_error: Option<String> = None;
+
+        // `files` is the default-path bucket (mid-stream batched).
+        // `non_ignored` + `ignored_bucket` are the `include_ignored`-path
+        // buckets, ranked after the walk so node_modules can't crowd out
+        // source files. See ADR 0003.
+        let mut files: Vec<SearchFileHit> = Vec::new();
+        let mut non_ignored: Vec<SearchFileHit> = Vec::new();
+        let mut ignored_bucket: Vec<SearchFileHit> = Vec::new();
+        const IGNORED_CAP: usize = 20;
+        let mut ignored_dropped: usize = 0;
+        let mut broke_at_cap = false;
+        let mut stdout_stopped_early = false;
         let mut last_batch_count: usize = 0;
 
         // Collect output until we hit the cap, EOF, or a pipe error. The
@@ -1927,35 +2342,64 @@ pub async fn search_file_names_stream(
         loop {
             match iter.next() {
                 Some(Ok(line)) => {
-                    if files.len() >= max_files {
-                        truncated = true;
-                        break;
-                    }
                     // ripgrep on Windows may emit verbatim paths
                     // (e.g. `\\?\C:\...`) when the root is canonicalized.
                     // Strip the prefix before the slash-normalization so the
                     // renderer never sees a `\\?\` blob in click paths.
                     let normalized =
                         path_validation::strip_verbatim_prefix(&line).replace('\\', "/");
-                    files.push(normalized);
-
-                    // Emit a mid-stream batch when we cross a batch
-                    // boundary, but skip the trailing batch below if we
-                    // already published this exact count.
-                    if files.len() % batch_size == 0 {
-                        // Mid-stream batch — final truncation state is not
-                        // known yet, so the field is `None` (serde omits it
-                        // from the wire). The trailing batch below carries
-                        // the authoritative value.
-                        let _ = app_handle.emit(
-                            "search-file-names-batch",
-                            SearchFileNamesBatchEvent {
-                                search_id: search_id.clone(),
-                                files: files.clone(),
-                                truncated: None,
-                            },
-                        );
-                        last_batch_count = files.len();
+                    if include_ignored {
+                        // Stop as soon as the non-ignored bucket is full: later
+                        // ignored hits can no longer survive `rank_search_hits`,
+                        // so walking further just wastes time in large repos.
+                        if non_ignored.len() >= max_files {
+                            broke_at_cap = true;
+                            stdout_stopped_early = true;
+                            break;
+                        }
+                        if path_is_ignored(&normalized) {
+                            if ignored_bucket.len() < IGNORED_CAP {
+                                ignored_bucket.push(SearchFileHit {
+                                    path: normalized,
+                                    ignored: true,
+                                });
+                            } else {
+                                ignored_dropped += 1;
+                            }
+                        } else {
+                            non_ignored.push(SearchFileHit {
+                                path: normalized,
+                                ignored: false,
+                            });
+                        }
+                    } else {
+                        if files.len() >= max_files {
+                            truncated = true;
+                            stdout_stopped_early = true;
+                            break;
+                        }
+                        files.push(SearchFileHit {
+                            path: normalized,
+                            ignored: false,
+                        });
+                        // Emit a mid-stream batch when we cross a batch
+                        // boundary, but skip the trailing batch below if we
+                        // already published this exact count.
+                        if files.len().is_multiple_of(batch_size) {
+                            // Mid-stream batch — final truncation state is
+                            // not known yet, so the field is `None` (serde
+                            // omits it from the wire). The trailing batch
+                            // below carries the authoritative value.
+                            let _ = app_handle.emit(
+                                "search-file-names-batch",
+                                SearchFileNamesBatchEvent {
+                                    search_id: search_id.clone(),
+                                    files: files.clone(),
+                                    truncated: None,
+                                },
+                            );
+                            last_batch_count = files.len();
+                        }
                     }
                 }
                 Some(Err(e)) => {
@@ -1966,19 +2410,35 @@ pub async fn search_file_names_stream(
             }
         }
 
-        // Always publish a final batch with the authoritative list so the
-        // renderer converges to the same total. Skip if the count is exactly
-        // what the last mid-stream batch carried.
-        if files.len() != last_batch_count {
+        // Publish the authoritative final batch. For `include_ignored`, emit
+        // a single ranked batch (non-ignored first) so the picker never
+        // flickers between mid-stream order and the ranked order. For the
+        // default path, skip if the count matches the last mid-stream batch.
+        let final_files: Vec<SearchFileHit> = if include_ignored {
+            truncated = broke_at_cap || ignored_dropped > 0;
+            let ranked = rank_search_hits(non_ignored, ignored_bucket, max_files);
             let _ = app_handle.emit(
                 "search-file-names-batch",
                 SearchFileNamesBatchEvent {
                     search_id: search_id.clone(),
-                    files: files.clone(),
+                    files: ranked.clone(),
                     truncated: Some(truncated),
                 },
             );
-        }
+            ranked
+        } else {
+            if files.len() != last_batch_count {
+                let _ = app_handle.emit(
+                    "search-file-names-batch",
+                    SearchFileNamesBatchEvent {
+                        search_id: search_id.clone(),
+                        files: files.clone(),
+                        truncated: Some(truncated),
+                    },
+                );
+            }
+            files
+        };
 
         // Reap the child and propagate a non-zero exit status (other than 1,
         // which rg uses for "no matches") as a surfaced error. The previous
@@ -1992,7 +2452,7 @@ pub async fn search_file_names_stream(
                     return;
                 }
             };
-            child.wait().ok()
+            reap_rg_child_after_stdout(&mut child, stdout_stopped_early)
         };
         if let Ok(mut guard) = filename_search_processes().lock() {
             guard.remove(&search_id);
@@ -2023,7 +2483,7 @@ pub async fn search_file_names_stream(
             SearchFileNamesDoneEvent {
                 search_id,
                 truncated,
-                total_files: files.len(),
+                total_files: final_files.len(),
                 code: final_code,
                 error: final_error,
             },
@@ -2507,7 +2967,10 @@ pub async fn sftp_download(
     {
         Ok(Ok(())) => Ok(IpcResult::success(())),
         Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_DOWNLOAD_ERROR")),
-        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_DOWNLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(
+            format!("Task failed: {}", e),
+            "SFTP_DOWNLOAD_ERROR",
+        )),
     }
 }
 
@@ -2540,7 +3003,10 @@ pub async fn sftp_upload(
     {
         Ok(Ok(())) => Ok(IpcResult::success(())),
         Ok(Err(e)) => Ok(IpcResult::error(e, "SFTP_UPLOAD_ERROR")),
-        Err(e) => Ok(IpcResult::error(format!("Task failed: {}", e), "SFTP_UPLOAD_ERROR")),
+        Err(e) => Ok(IpcResult::error(
+            format!("Task failed: {}", e),
+            "SFTP_UPLOAD_ERROR",
+        )),
     }
 }
 
@@ -2764,39 +3230,132 @@ pub async fn sftp_create_file(
 
 // ==================== Remote Server Commands ====================
 
-/// Start the remote terminal server
+/// Start the desktop-hosted shared-live web server.
+///
+/// Shares the desktop's live `AcpManager` sessions with a phone/browser client.
+///
+/// Starts the in-process localhost web server (the same one the standalone
+/// `termul-server` binary uses), then brings up a built-in cloudflared
+/// quick-tunnel so the phone can reach it on any network — the popover renders
+/// the ephemeral `https://*.trycloudflare.com` URL as a QR. The `bind_mode`
+/// param is accepted for API stability but ignored (the tunnel targets
+/// localhost). App auth / token-gating land in Epic 2.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn remote_server_start(
-    app_handle: AppHandle,
+    acp_manager: State<'_, Arc<crate::acp::AcpManager>>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    workspace_manifest_store: State<'_, HostWorkspaceManifestStore>,
+    acp_catalog_store: State<'_, HostAcpCatalogStore>,
+    acp_install_store: State<'_, HostAcpInstallStore>,
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let bind_mode = bind_mode
-        .as_deref()
-        .and_then(remote::server::RemoteBindMode::parse)
-        .unwrap_or(remote::server::RemoteBindMode::Localhost);
-    match remote_state
-        .start(pty_manager.inner().clone(), app_handle, bind_mode)
-        .await
-    {
-        Ok(status) => Ok(IpcResult::success(status)),
+    // Default to localhost only when the caller omits the bind mode; an
+    // explicit-but-unrecognized value (e.g. a typo of "all") is an error — do
+    // not silently downgrade to localhost (the phone would silently fail to
+    // connect).
+    let bind_mode = match bind_mode.as_deref() {
+        None => remote::RemoteBindMode::Localhost,
+        Some(s) => remote::RemoteBindMode::parse(s)
+            .ok_or_else(|| format!("invalid bind mode '{s}': use 'localhost' or 'all'",))?,
+    };
+    // CAP-5: thread the desktop's `WorkspaceManifestService` (opened under
+    // `<app_data_dir>/workspace-manifests` in `lib.rs`) through to
+    // `serve_router` so the web/remote client can read/write a project's
+    // manifest through the three `/workspace/*` routes. `None` degrades to
+    // fresh-only mode (no host store attached).
+    let workspace_manifest = workspace_manifest_store.store().map(Arc::clone);
+    // CAP-6 / Story 8: thread the desktop's `AcpCatalogService` (opened under
+    // `<app_data_dir>/acp-catalog` in `lib.rs`) through to `serve_router` so
+    // the web/remote client can resolve the catalog through `GET /acp/catalog`
+    // + WS `list_acp_catalog`. `None` degrades to `ACP_CATALOG_UNAVAILABLE`.
+    let acp_catalog = acp_catalog_store.store().map(Arc::clone);
+    // CAP-6 / Story 9: thread the desktop's `AcpInstallService` (opened under
+    // `<app_data_dir>/acp-registry-binaries` in `lib.rs`) through to
+    // `serve_router` so the web/remote client can install through
+    // `POST /acp/install` + WS `install_acp_agent`. `None` degrades to
+    // `ACP_INSTALL_UNAVAILABLE`.
+    let acp_install = acp_install_store.store().map(Arc::clone);
+    let started = remote_state
+        .start(
+            acp_manager.inner().clone(),
+            pty_manager.inner().clone(),
+            ws_relay.inner().clone(),
+            project_registry.inner().clone(),
+            bind_mode,
+            workspace_manifest,
+            acp_catalog,
+            acp_install,
+        )
+        .await;
+    match started {
+        Ok(status) => {
+            // Server is up on localhost. Bring up the cloudflared quick-tunnel so
+            // the phone can reach it on any network — the QR encodes the resulting
+            // ephemeral HTTPS URL (edge TLS via cloudflared; app auth is Epic 2).
+            // On tunnel failure, drain the server and surface the error so the
+            // popover never holds a localhost-only server + a stale toggle.
+            let port = match status.port {
+                Some(p) => p,
+                None => {
+                    return Ok(IpcResult::error(
+                        "started remote server reported no port".to_string(),
+                        "REMOTE_START_FAILED",
+                    ))
+                }
+            };
+            match remote::cloudflared::start_quick_tunnel(port).await {
+                Ok(tunnel) => {
+                    // Clone the URL before attach consumes it, so the background
+                    // probe can log reachability without blocking the QR.
+                    let probe_url = tunnel.url.clone();
+                    if let Err(e) = remote_state.attach_tunnel(tunnel.url, tunnel.child) {
+                        // Server stopped between start and attach; attach already
+                        // killed the orphan child. Surface the error.
+                        return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
+                    }
+                    // Best-effort reachability probe in the background — logs
+                    // whether the edge routes to the origin. Non-blocking so the
+                    // QR appears immediately; never hides the QR on probe timeout
+                    // (a slow edge / cold start must not block the connect UI).
+                    tokio::spawn(remote::cloudflared::log_tunnel_reachability(probe_url));
+                    Ok(IpcResult::success(remote_state.status()))
+                }
+                Err(e) => {
+                    let _ = remote_state.stop().await;
+                    Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"))
+                }
+            }
+        }
         Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
     }
 }
 
-/// Stop the remote terminal server
+/// Stop the desktop-hosted web server.
+///
+/// Signals graceful shutdown to the serve task. The desktop's live agents are
+/// NOT killed — they survive a shared-live toggle-off. The in-memory project
+/// registry is cleared (it lives only while the server runs — Epic-4 bridge).
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    match remote_state.stop().await {
+    let result = remote_state.stop().await;
+    // Clear the in-memory project mirror so a stale list does not linger after
+    // the server is off (the registry is renderer-fed; it is repopulated on the
+    // next server start via `remote_sync_projects`).
+    project_registry.clear();
+    match result {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
     }
 }
 
-/// Get remote server status
+/// Get the desktop-hosted web server status.
 #[tauri::command]
 pub async fn remote_server_status(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
@@ -2804,28 +3363,402 @@ pub async fn remote_server_status(
     Ok(IpcResult::success(remote_state.status()))
 }
 
-/// Publish the renderer's project → terminal tree to the remote server.
+/// Push the desktop renderer's current project list into the in-memory
+/// `ProjectRegistry` (Epic-4 bridge) and broadcast a `projects_changed` WS event
+/// so connected web clients refetch `GET /projects`. Called by the renderer
+/// on server-start success + on every project-store mutation while the server
+/// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
 ///
-/// The web client reads this tree from `GET /api/projects`. The renderer should
-/// call this whenever its projects/terminals change (and once on server start).
+/// In desktop-hosted mode the desktop's `activeProjectId` IS the host default
+/// (the desktop user is the host operator), so it is pushed as `defaultProjectId`.
+/// The web client seeds its initial `activeProjectId` from it on the first
+/// `GET /projects` but preserves its own selection on subsequent refetches.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProjectsPayload {
+    pub projects: Vec<crate::web::ProjectSummary>,
+    #[serde(default)]
+    pub default_project_id: Option<String>,
+}
+
 #[tauri::command]
-pub async fn remote_publish_projects(
-    tree: remote::ProjectTree,
+pub async fn remote_sync_projects(
+    payload: SyncProjectsPayload,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    project_registry.set(payload.projects, payload.default_project_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.default_project_id.as_deref());
+    Ok(IpcResult::success(()))
+}
+
+/// Explicitly set the host's default project (Epic 7 — cross-client
+/// workspace continuity). Distinct from a per-connection `switch_project`:
+/// this changes the host default that new web clients start with. Validates
+/// the project is switchable, updates `registry.set_default_project`, and
+/// broadcasts `projects_changed` to all connected web clients. Desktop-hosted
+/// mode has no `FileProjectRegistry` (the file registry is VPS-only); the
+/// desktop pushes its active selection as the default via `remote_sync_projects`,
+/// but this command lets the desktop set a default DIFFERENT from its own
+/// active project.
+#[tauri::command]
+pub async fn set_host_default_project(
+    project_id: String,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
+    if project_registry.switch_context(&project_id).is_none() {
+        log::warn!(
+            "set_host_default_project: project '{}' not found or not switchable",
+            project_id
+        );
+        return Ok(IpcResult::error(
+            format!("project '{project_id}' not found or not switchable"),
+            "NOT_FOUND",
+        ));
+    }
+    if !project_registry.set_default_project(&project_id) {
+        log::warn!(
+            "set_host_default_project: project '{}' became unavailable before commit",
+            project_id
+        );
+        return Ok(IpcResult::error(
+            "target project became unavailable before commit".to_string(),
+            "NOT_FOUND",
+        ));
+    }
+    crate::web::broadcast_projects_changed(ws_relay.inner(), Some(&project_id));
+    log::info!(
+        "set_host_default_project: host default updated to '{}' + broadcast",
+        project_id
+    );
+    Ok(IpcResult::success(()))
+}
+
+/// Compatibility refresh command for older renderer callers.
+///
+/// Durable desktop history is owned by `acp_history_*`; this command retains
+/// the old invoke shape but only broadcasts `chat_history_changed`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct SyncChatHistoryPayload {
+    /// The full session index (wire `PersistedSessionSummary[]` shape).
+    /// `None` on a payload-only sync (the `useAcpHistorySync` hook owns the
+    /// index push; `persistSession` pushes only its payload to avoid a
+    /// double `set_index` + double broadcast per mutation).
+    #[serde(default)]
+    pub index: Option<Vec<crate::acp::SessionIndexEntry>>,
+    /// Monotonic revision stamped by the renderer on each index push
+    /// (`useAcpHistorySync` increments it; the seed in `RemoteAccessPopover`
+    /// omits it → `0`). `set_index` rejects a push whose revision is strictly
+    /// lower than the current one so a delayed older index cannot replace a
+    /// newer snapshot. Absent on a payload-only sync (unused).
+    #[serde(default)]
+    pub revision: Option<u64>,
+    /// Optional per-session payloads (`{ metadata, messages }`) — pushed lazily
+    /// (only sessions the renderer has in memory). Omitted on an index-only sync.
+    #[serde(default)]
+    pub payloads: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[tauri::command]
+pub async fn remote_sync_chat_history(
+    payload: SyncChatHistoryPayload,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
 ) -> Result<IpcResult<()>, String> {
-    remote_state.registry.replace(tree);
+    // Defense in depth: the TS caller already gates on `running`, but the
+    // server may have just been stopped (`remote_server_stop` clears the
+    // cache). Early-return so a late push does not repopulate a cache that
+    // was just cleared.
+    if !remote_state.status().running {
+        return Ok(IpcResult::success(()));
+    }
+    // Compatibility bridge only: durable desktop history is now written by
+    // the dedicated `acp_history_*` commands. Existing callers may still use
+    // this command to request a browser index refresh, but payload/index values
+    // are deliberately not retained or cloned in Rust memory.
+    let _ = payload;
+    crate::web::broadcast_chat_history_changed(ws_relay.inner());
     Ok(IpcResult::success(()))
+}
+
+/// Host-owned durable history state (CAP-2). `None` when the desktop could not
+/// open `SessionPersistence` at startup (degraded live-only mode); commands
+/// must treat absence as empty history, never crash.
+#[derive(Default)]
+pub struct HostHistoryStore(pub Option<Arc<crate::acp::SessionPersistence>>);
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopChatHistoryList {
+    pub sessions: Vec<crate::acp::ChatHistoryIndexEntry>,
+    pub legacy_import_complete: bool,
+}
+
+fn host_entry_to_desktop(entry: crate::acp::SessionIndexEntry) -> crate::acp::ChatHistoryIndexEntry {
+    crate::acp::ChatHistoryIndexEntry {
+        id: entry.session_id,
+        agent_id: entry.runtime_agent_id.unwrap_or_default(),
+        // The renderer maps `config:<id>` namespaces back to the bare config
+        // id; anything else (absent or unprefixed) omits the key.
+        agent_config_id: entry
+            .stable_agent_namespace
+            .as_deref()
+            .and_then(|namespace| namespace.strip_prefix("config:"))
+            .map(str::to_string),
+        title: entry.title.unwrap_or_else(|| "Untitled Chat".to_string()),
+        cwd: entry.cwd,
+        project_id: entry.project_id.unwrap_or_default(),
+        created_at: entry.created_at,
+        last_activity_at: entry.last_activity_at,
+        message_count: entry.message_count,
+        status: match entry.status {
+            crate::acp::PersistedSessionStatus::Active => crate::acp::ChatHistoryStatus::Active,
+            crate::acp::PersistedSessionStatus::Error => crate::acp::ChatHistoryStatus::Error,
+            crate::acp::PersistedSessionStatus::Closed => crate::acp::ChatHistoryStatus::Closed,
+        },
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_list(
+    host: State<'_, HostHistoryStore>,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<DesktopChatHistoryList>, String> {
+    log::info!("[acp-history] list start");
+    // The legacy flag still gates the renderer's one-time KV wipe migration;
+    // the session list itself is host-owned now.
+    let legacy_import_complete = store.list().1;
+    let sessions = match &host.0 {
+        Some(persistence) => persistence
+            .list_sessions()
+            .into_iter()
+            .map(host_entry_to_desktop)
+            .collect(),
+        None => Vec::new(),
+    };
+    log::info!("[acp-history] list success sessions={}", sessions.len());
+    Ok(IpcResult::success(DesktopChatHistoryList {
+        sessions,
+        legacy_import_complete,
+    }))
+}
+
+#[tauri::command]
+pub async fn acp_history_get(
+    session_id: String,
+    host: State<'_, HostHistoryStore>,
+) -> Result<IpcResult<Option<serde_json::Value>>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] get start session_id={}", log_session_id);
+    let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
+        log::info!("[acp-history] get not_found session_id={}", log_session_id);
+        return Ok(IpcResult::success(None));
+    };
+    match persistence.session_payload_async(&session_id).await {
+        Ok(payload) => {
+            log::info!("[acp-history] get success session_id={}", log_session_id);
+            let value = serde_json::to_value(&payload)
+                .map_err(|error| error.to_string())?;
+            Ok(IpcResult::success(Some(value)))
+        }
+        Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+            log::info!("[acp-history] get not_found session_id={}", log_session_id);
+            Ok(IpcResult::success(None))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] get failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_GET_FAILED",
+            ))
+        }
+    }
+}
+
+/// Legacy write path (renderer wipe-migration only). Live sessions are authored
+/// by the host event/session layer and never flow through this command. The
+/// payload lands in the legacy `ChatHistoryStore`; the incremental host import
+/// then converges it into `SessionPersistence` so the host-owned `list`/`get`
+/// read back exactly what was just saved (read-your-writes for the migration).
+#[tauri::command]
+pub async fn acp_history_save(
+    session_id: String,
+    payload: serde_json::Value,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+    host: State<'_, HostHistoryStore>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] save start session_id={}", log_session_id);
+    let task_store = store.inner().clone();
+    let task_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.save(&task_id, payload))
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            if let Some(persistence) = &host.0 {
+                crate::acp::import_chat_history(persistence, store.inner()).await;
+            }
+            crate::web::broadcast_chat_history_changed(ws_relay.inner());
+            log::info!("[acp-history] save success session_id={}", log_session_id);
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] save failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_SAVE_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_delete(
+    session_id: String,
+    host: State<'_, HostHistoryStore>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    log::info!("[acp-history] delete start session_id={}", log_session_id);
+    match &host.0 {
+        Some(persistence) => match persistence.delete_session(&session_id).await {
+            Ok(()) => {
+                crate::web::broadcast_chat_history_changed(ws_relay.inner());
+                log::info!("[acp-history] delete success session_id={}", log_session_id);
+                Ok(IpcResult::success(()))
+            }
+            Err(error) => {
+                log::error!(
+                    "[acp-history] delete failure session_id={} error={}",
+                    log_session_id,
+                    error
+                );
+                Ok(IpcResult::error(
+                    error.to_string(),
+                    "ACP_HISTORY_DELETE_FAILED",
+                ))
+            }
+        },
+        // Degraded live-only mode: there is no durable history to delete.
+        None => Ok(IpcResult::success(())),
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_flush(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<()>, String> {
+    log::info!("[acp-history] flush start");
+    let task_store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.flush())
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            log::info!("[acp-history] flush success");
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!("[acp-history] flush failure error={}", error);
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_FLUSH_FAILED",
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn acp_history_mark_legacy_import_complete(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+    host: State<'_, HostHistoryStore>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<()>, String> {
+    log::info!("[acp-history] legacy marker start");
+    let task_store = store.inner().clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || task_store.mark_legacy_import_complete())
+            .await
+            .map_err(|error| error.to_string())?;
+    match result {
+        Ok(()) => {
+            // The wipe migration may just have written new legacy entries;
+            // converge the host store incrementally (idempotent).
+            if let Some(persistence) = &host.0 {
+                let imported = crate::acp::import_chat_history(persistence, store.inner()).await;
+                if imported > 0 {
+                    crate::web::broadcast_chat_history_changed(ws_relay.inner());
+                }
+            }
+            log::info!("[acp-history] legacy marker success");
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::error!("[acp-history] legacy marker failure error={}", error);
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_MIGRATION_FAILED",
+            ))
+        }
+    }
+}
+
+/// Legacy-store read used ONLY by the renderer's one-time KV wipe migration,
+/// which must read back exactly what it wrote to the legacy
+/// `ChatHistoryStore` (byte-for-byte verification). Live history reads use the
+/// host-owned `acp_history_list` / `acp_history_get` instead.
+#[tauri::command]
+pub async fn acp_history_list_legacy(
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<DesktopChatHistoryList>, String> {
+    let (sessions, legacy_import_complete) = store.list();
+    Ok(IpcResult::success(DesktopChatHistoryList {
+        sessions,
+        legacy_import_complete,
+    }))
+}
+
+/// Legacy-store payload read for the wipe migration (see `acp_history_list_legacy`).
+#[tauri::command]
+pub async fn acp_history_get_legacy(
+    session_id: String,
+    store: State<'_, Arc<crate::acp::ChatHistoryStore>>,
+) -> Result<IpcResult<Option<serde_json::Value>>, String> {
+    let task_store = store.inner().clone();
+    let task_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || task_store.get(&task_id))
+        .await
+        .map_err(|error| error.to_string())?;
+    match result {
+        Ok(payload) => Ok(IpcResult::success(Some(payload))),
+        Err(crate::acp::ChatHistoryStoreError::SessionNotFound) => Ok(IpcResult::success(None)),
+        Err(error) => Ok(IpcResult::error(
+            error.to_string(),
+            "ACP_HISTORY_GET_FAILED",
+        )),
+    }
 }
 
 // ==================== Git Commands ====================
 
 /// Get git status for a repository
 #[tauri::command]
-pub async fn git_get_status(
-    cwd: String,
-) -> Result<Vec<GitStatusDetail>, String> {
-    crate::trackers::git_tracker::git_get_status_detail(&cwd)
-        .map_err(|e: String| e)
+pub async fn git_get_status(cwd: String) -> Result<Vec<GitStatusDetail>, String> {
+    crate::trackers::git_tracker::git_get_status_detail(&cwd).map_err(|e: String| e)
 }
 
 /// Get git diff for a file. `staged` selects the index-vs-HEAD diff
@@ -2947,11 +3880,7 @@ pub async fn git_create_branch(
     start_ref: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::trackers::git_tracker::git_create_branch(
-            &cwd,
-            &branch,
-            start_ref.as_deref(),
-        )
+        crate::trackers::git_tracker::git_create_branch(&cwd, &branch, start_ref.as_deref())
     })
     .await
     .map_err(|e| format!("git create branch task failed: {e}"))?
@@ -2988,8 +3917,9 @@ pub async fn git_stash_save(
             msg = m.clone();
             args.push(&msg);
         }
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
-            .ok_or_else(|| "Failed to run git stash push".to_string())?;
+        let output =
+            crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &args)
+                .ok_or_else(|| "Failed to run git stash push".to_string())?;
         if output.status.success() {
             Ok(())
         } else {
@@ -3009,8 +3939,11 @@ pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
         .to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["stash", "list"])
-            .ok_or_else(|| "Failed to run git stash list".to_string())?;
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["stash", "list"],
+        )
+        .ok_or_else(|| "Failed to run git stash list".to_string())?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
@@ -3023,7 +3956,11 @@ pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
                     if let Some(end) = name.find('}') {
                         if let Ok(index) = name[start + 1..end].parse::<usize>() {
                             let message = rest.trim().to_string();
-                            stashes.push(GitStashInfo { index, name, message });
+                            stashes.push(GitStashInfo {
+                                index,
+                                name,
+                                message,
+                            });
                         }
                     }
                 }
@@ -3150,8 +4087,11 @@ pub async fn git_branch_switch(cwd: String, name: String) -> Result<(), String> 
         .to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(&validated_str, &["checkout", &name])
-            .ok_or_else(|| "Failed to run git checkout".to_string())?;
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            &validated_str,
+            &["checkout", &name],
+        )
+        .ok_or_else(|| "Failed to run git checkout".to_string())?;
         if output.status.success() {
             Ok(())
         } else {
@@ -3188,13 +4128,13 @@ pub async fn git_branch_create(cwd: String, name: String) -> Result<(), String> 
 
 /// Cap on any single renderer-supplied field to keep one forwarded error from
 /// ballooning the log file.
-const MAX_FRONTEND_FIELD_LEN: usize = 4096;
+pub(crate) const MAX_FRONTEND_FIELD_LEN: usize = 4096;
 
 /// Sanitize untrusted renderer text for single-line logging: escape newlines
 /// and control characters so a crafted error message/stack cannot forge
 /// additional, authoritative-looking log lines (log injection), and truncate
 /// to a sane bound.
-fn sanitize_log_field(value: &str) -> String {
+pub(crate) fn sanitize_log_field(value: &str) -> String {
     let mut out = String::with_capacity(value.len().min(MAX_FRONTEND_FIELD_LEN));
     for ch in value.chars().take(MAX_FRONTEND_FIELD_LEN) {
         match ch {
@@ -3250,6 +4190,256 @@ pub fn log_frontend_error(
     Ok(())
 }
 
+// ============================================================================
+// Workspace Manifest Commands (CAP-5 / Story 5)
+// ============================================================================
+//
+// Host-owned versioned workspace manifests — one per project, atomically
+// persisted, revision-checked. Conflict is a success-body variant of
+// `WriteOutcome`, NOT an error code; serde `deny_unknown_fields` rejection
+// (an over-serialized payload with `envVars` / raw `claim` /
+// `fullscreenPaneId`) maps to `VALIDATION_ERROR`. Mirrors the three HTTP
+// routes in `web/workspace_api.rs` byte-for-byte (camelCase `IpcResult<T>`).
+
+/// Host-owned workspace-manifest state (CAP-5). `None` when the desktop could
+/// not open `WorkspaceManifestService` at startup (degraded fresh-only mode);
+/// commands must treat absence as an empty manifest, never crash.
+///
+/// Patch 12: the inner field is private (not `pub`) so callers cannot reach
+/// the `Arc` directly — they go through [`Self::store`] (read) or
+/// [`Self::new`] (construct). This keeps the access surface tight so a future
+/// swap (e.g. a manager wrapper that owns the `Arc`) doesn't break every call
+/// site.
+#[derive(Default)]
+pub struct HostWorkspaceManifestStore(Option<Arc<crate::acp::WorkspaceManifestService>>);
+
+impl HostWorkspaceManifestStore {
+    /// Construct from an already-opened `WorkspaceManifestService` (`None`
+    /// for degraded fresh-only mode — the desktop could not open the store
+    /// at startup).
+    #[must_use]
+    pub fn new(service: Option<Arc<crate::acp::WorkspaceManifestService>>) -> Self {
+        Self(service)
+    }
+
+    /// Access the inner `WorkspaceManifestService` (`None` in degraded mode).
+    /// Callers that need to clone the `Arc` should `.as_ref().map(Arc::clone)`.
+    #[must_use]
+    pub(crate) fn store(&self) -> Option<&Arc<crate::acp::WorkspaceManifestService>> {
+        self.0.as_ref()
+    }
+}
+
+/// Tauri state wrapper for the host-owned `AcpCatalogService` (CAP-6 / Story
+/// 8). Mirrors `HostWorkspaceManifestStore`: `None` degrades to
+/// `ACP_CATALOG_UNAVAILABLE` (the desktop could not open the catalog root at
+/// startup). Held as `Option<Arc<…>>` so the desktop's degraded path is
+/// graceful, not a boot failure.
+#[derive(Default)]
+pub struct HostAcpCatalogStore(Option<Arc<crate::acp::AcpCatalogService>>);
+
+impl HostAcpCatalogStore {
+    /// Construct from an already-opened `AcpCatalogService` (`None` for
+    /// degraded mode — the desktop could not open the store at startup).
+    #[must_use]
+    pub fn new(service: Option<Arc<crate::acp::AcpCatalogService>>) -> Self {
+        Self(service)
+    }
+
+    /// Access the inner `AcpCatalogService` (`None` in degraded mode).
+    /// Callers that need to clone the `Arc` should `.as_ref().map(Arc::clone)`.
+    #[must_use]
+    pub(crate) fn store(&self) -> Option<&Arc<crate::acp::AcpCatalogService>> {
+        self.0.as_ref()
+    }
+}
+
+/// Tauri state wrapper for the host-owned `AcpInstallService` (CAP-6 / Story
+/// 9). Mirrors `HostAcpCatalogStore`: `None` degrades to
+/// `ACP_INSTALL_UNAVAILABLE` (the desktop could not open the install root at
+/// startup). Held as `Option<Arc<…>>` so the desktop's degraded path is
+/// graceful, not a boot failure.
+#[derive(Default)]
+pub struct HostAcpInstallStore(Option<Arc<crate::acp::install::AcpInstallService>>);
+
+impl HostAcpInstallStore {
+    /// Construct from an already-opened `AcpInstallService` (`None` for
+    /// degraded mode — the desktop could not open the store at startup).
+    #[must_use]
+    pub fn new(service: Option<Arc<crate::acp::install::AcpInstallService>>) -> Self {
+        Self(service)
+    }
+
+    /// Access the inner `AcpInstallService` (`None` in degraded mode).
+    /// Callers that need to clone the `Arc` should `.as_ref().map(Arc::clone)`.
+    #[must_use]
+    pub(crate) fn store(&self) -> Option<&Arc<crate::acp::install::AcpInstallService>> {
+        self.0.as_ref()
+    }
+}
+
+/// `workspace_manifest_get(projectId)` — load a project's manifest. Returns
+/// `IpcResult::success(None)` when no manifest exists (the success path — a
+/// workspace reload starts fresh) OR when the host store is unavailable
+/// (degraded mode). Mirrors `GET /workspace/:projectId` byte-for-byte.
+#[tauri::command]
+pub async fn workspace_manifest_get(
+    project_id: String,
+    store: State<'_, HostWorkspaceManifestStore>,
+) -> Result<IpcResult<Option<crate::acp::WorkspaceManifest>>, String> {
+    let log_project_id = sanitize_log_field(&project_id);
+    log::info!(
+        "[workspace-manifest] get start project_id={}",
+        log_project_id
+    );
+    let Some(service) = store.store().map(Arc::clone) else {
+        log::info!(
+            "[workspace-manifest] get unavailable project_id={}",
+            log_project_id
+        );
+        return Ok(IpcResult::success(None));
+    };
+    match service.load(&project_id).await {
+        Ok(manifest) => {
+            log::info!(
+                "[workspace-manifest] get success project_id={} revision={}",
+                log_project_id,
+                manifest.as_ref().map_or(0, |m| m.revision)
+            );
+            Ok(IpcResult::success(manifest))
+        }
+        Err(error) => {
+            log::error!(
+                "[workspace-manifest] get failure project_id={} error={}",
+                log_project_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "WORKSPACE_MANIFEST_GET_FAILED",
+            ))
+        }
+    }
+}
+
+/// `workspace_manifest_write(projectId, basedRevision, manifest)` —
+/// revision-checked write. The host compares `basedRevision` (null = initial
+/// write) against the on-disk `revision`; on match → apply + increment +
+/// persist + return `WriteOutcome::Updated`; on mismatch → return
+/// `WriteOutcome::Conflict` WITHOUT mutating state. Conflict is a SUCCESS
+/// body variant (NOT an error code) — the caller branches on the
+/// `status` discriminator.
+///
+/// Patch 1: the `manifest` argument is `serde_json::Value` (not
+/// `WorkspaceManifest`) so the manual deserialization inside the command
+/// catches a `deny_unknown_fields` rejection (an excluded field like
+/// `envVars` / raw `claim` / `fullscreenPaneId`) and maps it to
+/// `IpcResult::error(VALIDATION_ERROR)` — BEFORE the service is reached, with
+/// NO state change. If the argument were typed `WorkspaceManifest`, Tauri's
+/// IPC deserialization layer would reject the payload before this command
+/// body runs, surfacing as an `INVOKE_ERROR` (a thrown IPC error) instead of
+/// the spec-required `VALIDATION_ERROR`.
+#[tauri::command]
+pub async fn workspace_manifest_write(
+    project_id: String,
+    based_revision: Option<u64>,
+    manifest: serde_json::Value,
+    store: State<'_, HostWorkspaceManifestStore>,
+) -> Result<IpcResult<crate::acp::WriteOutcome>, String> {
+    let log_project_id = sanitize_log_field(&project_id);
+    log::info!(
+        "[workspace-manifest] write start project_id={} based_revision={:?}",
+        log_project_id,
+        based_revision
+    );
+    // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
+    // (envVars / raw claim / fullscreenPaneId / agentLauncherPaneId) surfaces
+    // as `IpcResult::error(VALIDATION_ERROR)` — NOT a thrown IPC error
+    // (`INVOKE_ERROR`) that would mask the validation failure.
+    let manifest: crate::acp::WorkspaceManifest = match serde_json::from_value(manifest) {
+        Ok(m) => m,
+        Err(error) => {
+            log::warn!(
+                "[workspace-manifest] write payload validation failed project_id={} error={}",
+                log_project_id,
+                error
+            );
+            return Ok(IpcResult::error(
+                format!("payload validation failed: {error}"),
+                "VALIDATION_ERROR",
+            ));
+        }
+    };
+    let Some(service) = store.store().map(Arc::clone) else {
+        log::error!(
+            "[workspace-manifest] write unavailable project_id={}",
+            log_project_id
+        );
+        return Ok(IpcResult::error(
+            "workspace manifest store is unavailable",
+            "WORKSPACE_MANIFEST_UNAVAILABLE",
+        ));
+    };
+    match service
+        .write(&project_id, based_revision, manifest)
+        .await
+    {
+        Ok(outcome) => {
+            // Boundary log emits project_id + revision + update_identity —
+            // never the topology or claim. The service already logged it.
+            Ok(IpcResult::success(outcome))
+        }
+        Err(error) => {
+            log::error!(
+                "[workspace-manifest] write failure project_id={} error={}",
+                log_project_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "WORKSPACE_MANIFEST_WRITE_FAILED",
+            ))
+        }
+    }
+}
+
+/// `workspace_manifest_delete(projectId)` — idempotent delete. Returns
+/// `IpcResult::success(())` whether the file existed or not. Never touches
+/// the PTY / agent layer (the manifest is a passive durable projection).
+#[tauri::command]
+pub async fn workspace_manifest_delete(
+    project_id: String,
+    store: State<'_, HostWorkspaceManifestStore>,
+) -> Result<IpcResult<()>, String> {
+    let log_project_id = sanitize_log_field(&project_id);
+    log::info!(
+        "[workspace-manifest] delete start project_id={}",
+        log_project_id
+    );
+    let Some(service) = store.store().map(Arc::clone) else {
+        log::info!(
+            "[workspace-manifest] delete unavailable project_id={}",
+            log_project_id
+        );
+        // Idempotent success — there is nothing to delete in degraded mode.
+        return Ok(IpcResult::success(()));
+    };
+    match service.delete(&project_id).await {
+        Ok(()) => Ok(IpcResult::success(())),
+        Err(error) => {
+            log::error!(
+                "[workspace-manifest] delete failure project_id={} error={}",
+                log_project_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "WORKSPACE_MANIFEST_DELETE_FAILED",
+            ))
+        }
+    }
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {
@@ -3271,6 +4461,70 @@ mod tests {
         assert!(result.data.is_none());
         assert_eq!(result.error, Some("test error".to_string()));
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
+    }
+
+    /// The host-owned list maps `SessionIndexEntry` (camelCase wire) into the
+    /// renderer's `ChatHistoryIndexEntry` shape unchanged by the ownership
+    /// transfer: `config:<id>` namespaces collapse back to the bare config id,
+    /// absent titles/projects fall back to the renderer defaults.
+    #[test]
+    fn host_entry_to_desktop_maps_renderer_shape() {
+        let entry = crate::acp::SessionIndexEntry {
+            storage_key: "key".to_string(),
+            session_id: "s-1".to_string(),
+            stable_agent_namespace: Some("config:claude".to_string()),
+            runtime_agent_id: Some("runtime-1".to_string()),
+            project_id: Some("p-1".to_string()),
+            cwd: "/work".to_string(),
+            title: Some("Chat".to_string()),
+            created_at: 10,
+            last_activity_at: 20,
+            status: crate::acp::PersistedSessionStatus::Active,
+            message_count: 3,
+            tool_count: 1,
+            last_seq: 5,
+            resume_eligible: true,
+        };
+        let desktop = host_entry_to_desktop(entry);
+        assert_eq!(desktop.id, "s-1");
+        assert_eq!(desktop.agent_id, "runtime-1");
+        assert_eq!(desktop.agent_config_id.as_deref(), Some("claude"));
+        assert_eq!(desktop.title, "Chat");
+        assert_eq!(desktop.cwd, "/work");
+        assert_eq!(desktop.project_id, "p-1");
+        assert_eq!(desktop.created_at, 10);
+        assert_eq!(desktop.last_activity_at, 20);
+        assert_eq!(desktop.message_count, 3);
+        assert!(matches!(
+            desktop.status,
+            crate::acp::ChatHistoryStatus::Active
+        ));
+
+        let bare = crate::acp::SessionIndexEntry {
+            storage_key: "k".to_string(),
+            session_id: "s-2".to_string(),
+            stable_agent_namespace: Some("custom-ns".to_string()),
+            runtime_agent_id: None,
+            project_id: None,
+            cwd: "/w".to_string(),
+            title: None,
+            created_at: 1,
+            last_activity_at: 2,
+            status: crate::acp::PersistedSessionStatus::Error,
+            message_count: 0,
+            tool_count: 0,
+            last_seq: 0,
+            resume_eligible: false,
+        };
+        let desktop = host_entry_to_desktop(bare);
+        assert_eq!(desktop.agent_id, "");
+        assert!(
+            desktop.agent_config_id.is_none(),
+            "non config: namespace must not surface as agentConfigId"
+        );
+        assert_eq!(desktop.title, "Untitled Chat");
+        assert_eq!(desktop.project_id, "");
+        assert!(matches!(desktop.status, crate::acp::ChatHistoryStatus::Error));
     }
 
     #[test]
@@ -3309,7 +4563,7 @@ mod tests {
         // interpreted as a glob wildcard or alternation. Each metacharacter
         // should be prefixed with a backslash so rg treats it as a literal
         // substring match.
-        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp");
+        let args = build_file_name_search_args("foo*bar?baz[qux]{a,b}\\z", "/tmp", false);
         let iglob_idx = args
             .iter()
             .position(|a| a == "--iglob")
@@ -3322,7 +4576,7 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_includes_ignore_list_and_excludes() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         // The hardcoded ignore list must show up as bare-basename `-g !<name>`
         // entries so rg actually skips those directories in `--files` mode.
         for ignored in [
@@ -3343,14 +4597,14 @@ mod tests {
 
     #[test]
     fn build_file_name_search_args_appends_root_path() {
-        let args = build_file_name_search_args("term", "/some/root path");
+        let args = build_file_name_search_args("term", "/some/root path", false);
         // Root paths with spaces should appear verbatim, not split.
         assert_eq!(args.last().map(String::as_str), Some("/some/root path"));
     }
 
     #[test]
     fn build_file_name_search_args_starts_with_files_and_case_insensitive() {
-        let args = build_file_name_search_args("foo", "/tmp");
+        let args = build_file_name_search_args("foo", "/tmp", false);
         assert_eq!(args[0], "--files");
         assert_eq!(args[1], "-i");
     }
@@ -3387,7 +4641,10 @@ mod tests {
         // unknown; serde should drop the field from the wire.
         let mid_stream = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: None,
         };
         let json = serde_json::to_string(&mid_stream).unwrap();
@@ -3395,11 +4652,110 @@ mod tests {
 
         let final_batch = SearchFileNamesBatchEvent {
             search_id: "search-1".to_string(),
-            files: vec!["a".to_string()],
+            files: vec![SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            }],
             truncated: Some(true),
         };
         let json = serde_json::to_string(&final_batch).unwrap();
         assert!(json.contains("\"truncated\":true"));
+        // The per-hit `ignored` flag is on the wire.
+        assert!(json.contains("\"ignored\":false"));
+    }
+
+    #[test]
+    fn build_file_name_search_args_include_ignored_surfaces_hidden_and_drops_exclusions() {
+        let args = build_file_name_search_args("foo", "/tmp", true);
+        assert!(args.contains(&"--no-ignore".to_string()));
+        assert!(args.contains(&"--hidden".to_string()));
+        // The common-ignore exclusions must be absent so ignored/hidden files
+        // are actually walked.
+        for needle in ["!node_modules", "!.env", "!Thumbs.db", "!.DS_Store"] {
+            let has = args.windows(2).any(|w| w[0] == "-g" && w[1] == needle);
+            assert!(!has, "include_ignored must not exclude `{}`", needle);
+        }
+        assert_eq!(args.last().map(String::as_str), Some("/tmp"));
+    }
+
+    #[test]
+    fn path_is_ignored_classifies_commonly_ignored_paths() {
+        assert!(path_is_ignored("node_modules/pkg/index.js"));
+        assert!(path_is_ignored(".git/HEAD"));
+        assert!(path_is_ignored("dist/bundle.js"));
+        assert!(path_is_ignored(".env"));
+        assert!(path_is_ignored("src/.hidden.ts"));
+        assert!(path_is_ignored("assets/Thumbs.db"));
+        assert!(path_is_ignored("assets/.DS_Store"));
+        // Source files and non-cruft paths are not ignored.
+        assert!(!path_is_ignored("src/auth.ts"));
+        assert!(!path_is_ignored("README.md"));
+        assert!(!path_is_ignored("lib/router/index.ts"));
+    }
+
+    #[test]
+    fn rank_search_hits_puts_non_ignored_first_and_caps_total() {
+        let non_ignored = vec![
+            SearchFileHit {
+                path: "a".to_string(),
+                ignored: false,
+            },
+            SearchFileHit {
+                path: "b".to_string(),
+                ignored: false,
+            },
+        ];
+        let ignored = vec![
+            SearchFileHit {
+                path: "c".to_string(),
+                ignored: true,
+            },
+            SearchFileHit {
+                path: "d".to_string(),
+                ignored: true,
+            },
+            SearchFileHit {
+                path: "e".to_string(),
+                ignored: true,
+            },
+        ];
+        // cap=3 → all non-ignored (2) + one ignored.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 3);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        // cap=2 → only non-ignored; ignored never crowds them out.
+        let ranked = rank_search_hits(non_ignored.clone(), ignored.clone(), 2);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        // No non-ignored → ignored fills up to cap.
+        let ranked = rank_search_hits(vec![], ignored.clone(), 100);
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["c", "d", "e"]
+        );
+        // No ignored → non-ignored only, untruncated when under cap.
+        let ranked = rank_search_hits(
+            vec![
+                SearchFileHit {
+                    path: "a".to_string(),
+                    ignored: false,
+                },
+                SearchFileHit {
+                    path: "b".to_string(),
+                    ignored: false,
+                },
+            ],
+            vec![],
+            100,
+        );
+        assert_eq!(
+            ranked.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 
     #[test]
@@ -3415,3 +4771,4 @@ mod tests {
         assert_eq!(req.search_id, "search-1");
     }
 }
+

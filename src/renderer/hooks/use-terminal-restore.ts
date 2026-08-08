@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
-import { sessionApi, terminalApi } from '@/lib/api'
+import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { shellApi } from '@/lib/shell-api'
 import {
@@ -12,7 +12,11 @@ import {
 import { isVisibleReady } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
 import type { Terminal as TerminalRecord } from '@/types/project'
-import type { PersistedTerminalLayout } from '../../shared/types/persistence.types'
+import type {
+  PersistedTerminal,
+  PersistedTerminalLayout
+} from '../../shared/types/persistence.types'
+import { useAcpStore } from '../stores/acp-store'
 import { useAppSettingsStore } from '../stores/app-settings-store'
 import { useProjectStore } from '../stores/project-store'
 import { useTerminalStore } from '../stores/terminal-store'
@@ -417,6 +421,7 @@ export function useTerminalRestore(): void {
           }
 
           const workspaceStore = useWorkspaceStore.getState()
+          const preserveActiveTab = hasValidActiveAgentChatTab(workspaceStore, projectIdToRestore)
           reconcilePersistedHistoryIntoLiveTerminals(liveProjectTerminals, layout)
           const terminalIdToSelect = selectTerminalForProject(liveProjectTerminals, layout)
 
@@ -424,7 +429,7 @@ export function useTerminalRestore(): void {
             workspaceStore.ensureTerminalTab(
               terminal.id,
               undefined,
-              terminal.id === terminalIdToSelect
+              !preserveActiveTab && terminal.id === terminalIdToSelect
             )
           }
 
@@ -438,7 +443,7 @@ export function useTerminalRestore(): void {
             ? findPaneContainingTab(useWorkspaceStore.getState().root, terminalTab)
             : null
           const activePane = containingPane ?? workspaceStore.getActivePaneLeaf()
-          if (terminalTab && activePane) {
+          if (!preserveActiveTab && terminalTab && activePane) {
             workspaceStore.setActiveTab(activePane.id, terminalTab)
           }
 
@@ -480,7 +485,7 @@ export function useTerminalRestore(): void {
           correlationId: continuityCorrelationId,
           projectId: projectIdToRestore,
           details: {
-            path: restoreMode === 'layout' ? 'persisted-replay' : 'default-terminal',
+            path: restoreMode === 'layout' ? 'persisted-replay' : 'empty-state',
             persistedTerminalCount: layout?.terminals.length ?? 0
           }
         })
@@ -488,40 +493,22 @@ export function useTerminalRestore(): void {
         let attempt = 0
 
         if (restoreMode !== 'layout') {
-          const sessionResult = await sessionApi.restore()
-          const sessionWorkspace = sessionResult.success
-            ? sessionResult.data.workspaces.find(
-                (workspace) => workspace.projectId === projectIdToRestore
-              )
-            : null
-          const sessionActiveTerminalId = sessionWorkspace?.activeTerminalId ?? null
-          const restoreResult = await createDefaultTerminal(projectIdToRestore, isCancelled)
-
-          if (restoreResult.status === 'completed') {
-            if (!isCancelled()) {
-              emitTerminalContinuityEvent({
-                name: 'restore-complete',
-                correlationId: continuityCorrelationId,
-                projectId: projectIdToRestore,
-                terminalId: restoreResult.selectedTerminalId,
-                details: {
-                  path: sessionActiveTerminalId ? 'session-active-terminal' : restoreResult.path,
-                  persistedTerminalCount: layout?.terminals.length ?? 0,
-                  restoredTerminalCount: restoreResult.restoredTerminalCount ?? 0,
-                  attempt
-                }
-              })
-            }
-          } else if (restoreResult.status === 'failed') {
+          // No live or persisted terminals for this project. Do NOT auto-spawn a
+          // default terminal — that forces a terminal on the user every time they
+          // create or switch to a project, which is poor UX. Instead, leave the
+          // workspace on its empty leaf pane so PaneContent renders the empty-state
+          // launcher (AgentLauncher), letting the user choose whether to open a
+          // terminal or launch an agent.
+          if (!isCancelled()) {
             emitTerminalContinuityEvent({
-              name: 'restore-failed',
+              name: 'restore-complete',
               correlationId: continuityCorrelationId,
               projectId: projectIdToRestore,
               details: {
-                callId,
-                attempt,
-                reason: 'permanent-restore-failure',
-                path: restoreResult.path
+                path: 'empty-state',
+                persistedTerminalCount: layout?.terminals.length ?? 0,
+                restoredTerminalCount: 0,
+                attempt
               }
             })
           }
@@ -668,6 +655,25 @@ export function useTerminalRestore(): void {
  * Select the appropriate terminal for a project
  * Uses multiple matching strategies: ID match, then name match, then fallback
  */
+function hasValidActiveAgentChatTab(
+  workspaceStore: ReturnType<typeof useWorkspaceStore.getState>,
+  projectId: string
+): boolean {
+  const activePane = workspaceStore.getActivePaneLeaf()
+  if (!activePane?.activeTabId) return false
+
+  const activeTab = activePane.tabs.find((tab) => tab.id === activePane.activeTabId)
+  if (!activeTab || activeTab.type !== 'agent-chat') return false
+
+  const acpState = useAcpStore.getState()
+  return (
+    acpState.sessions[activeTab.sessionId]?.projectId === projectId ||
+    acpState.sessionIndex.some(
+      (entry) => entry.id === activeTab.sessionId && entry.projectId === projectId
+    )
+  )
+}
+
 function reconcilePersistedHistoryIntoLiveTerminals(
   liveProjectTerminals: TerminalRecord[],
   layout: PersistedTerminalLayout | null
@@ -701,7 +707,13 @@ function reconcilePersistedHistoryIntoLiveTerminals(
     return {
       ...terminal,
       pendingScrollback: terminal.pendingScrollback ?? persistedTerminal.scrollback,
-      transcript: terminal.transcript ?? persistedTerminal.transcript
+      transcript: terminal.transcript ?? persistedTerminal.transcript,
+      // R3: also carry the captured DEC modes so a pane-transition remount can
+      // replay them (the live tracker is reset on unmount→remount). Prefer the
+      // persisted snapshot when present so a stale in-memory pendingModes can't
+      // override newer persisted state (e.g. alt-screen turned off after restore).
+      pendingModes:
+        persistedTerminal.modes != null ? persistedTerminal.modes : terminal.pendingModes
     }
   })
 
@@ -822,7 +834,12 @@ async function restoreFromLayout(
       output: never[]
       pendingScrollback?: string[]
       transcript?: string
+      // R3: DEC private-mode snapshot replayed before pendingScrollback on mount.
+      pendingModes?: PersistedTerminal['modes']
       ptyId?: string
+      // CAP-3: lease credential issued by the restore re-spawn (in-memory
+      // only, never persisted).
+      claim?: string
       // ADR-004.4: restored agent metadata (re-applied after store insert)
       kind?: 'shell' | 'agent'
       agentId?: string
@@ -896,11 +913,13 @@ async function restoreFromLayout(
             const result = await terminalApi.spawn(
               agentSpawnOptions
                 ? {
+                    projectId,
                     cwd: persistedTerminal.cwd,
                     ...agentSpawnOptions,
                     ...(spawnEnv ? { env: spawnEnv } : {})
                   }
                 : {
+                    projectId,
                     shell: normalizedShell,
                     cwd: persistedTerminal.cwd,
                     ...(spawnEnv ? { env: spawnEnv } : {})
@@ -974,6 +993,11 @@ async function restoreFromLayout(
           pendingScrollback: persistedTerminal.scrollback,
           transcript: persistedTerminal.transcript,
           ptyId: spawnData.id,
+          // CAP-3: the restore re-spawn issues a fresh lease — capture it.
+          ...(spawnData.claim ? { claim: spawnData.claim } : {}),
+          // R3: carry the captured DEC mode snapshot so ConnectedTerminal can
+          // replay it (via restoreScrollback) before the scrollback content.
+          ...(persistedTerminal.modes ? { pendingModes: persistedTerminal.modes } : {}),
           // ADR-004.4: carry restored agent metadata so the tab labels as the
           // agent and re-persists correctly. Seed prompt stays dropped.
           ...(isAgentTerminal
@@ -1162,6 +1186,7 @@ async function createDefaultTerminal(
         const result = await terminalApi.spawn({
           shell,
           cwd,
+          projectId,
           ...(hasProjectEnv ? { env } : {})
         })
         if (spawnTimeout) {
@@ -1227,6 +1252,10 @@ async function createDefaultTerminal(
     // Create default terminal - addTerminal also sets it as active
     const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, cwd)
     terminalStore.setTerminalPtyId(newTerminal.id, spawnData.id)
+    // CAP-3: store the issued lease credential (in-memory only).
+    if (spawnData.claim) {
+      terminalStore.setTerminalClaim(spawnData.id, spawnData.claim)
+    }
 
     // Explicitly select to ensure activeTerminalId is set correctly
     terminalStore.selectTerminal(newTerminal.id)

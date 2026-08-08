@@ -40,6 +40,17 @@ export interface FileSearchResult {
   matches: FileSearchMatch[]
 }
 
+/**
+ * One filename-search hit. `ignored` is true when the path runs through a
+ * commonly-ignored directory or a hidden/cruft segment, so the @-mention
+ * picker can dim it. Mirrors the Rust `SearchFileHit` in `commands.rs`.
+ * See ADR 0003.
+ */
+export interface SearchFileHit {
+  path: string
+  ignored: boolean
+}
+
 export interface FileSearchResponse {
   results: FileSearchResult[]
   truncated: boolean

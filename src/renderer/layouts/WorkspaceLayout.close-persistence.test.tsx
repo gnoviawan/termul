@@ -20,7 +20,10 @@ const {
   mockKeyboardOnShortcut,
   mockUpdatePanelVisibility,
   mockWaitForPendingAppSettingsPersistence,
-  mockToastError
+  mockWaitForPendingSessionIndexWrite,
+  mockFlushSessionHistory,
+  mockToastError,
+  mockListen
 } = vi.hoisted(() => ({
   activeProject: {
     id: 'project-1',
@@ -81,7 +84,10 @@ const {
   mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingAppSettingsPersistence: vi.fn(async () => undefined),
-  mockToastError: vi.fn()
+  mockWaitForPendingSessionIndexWrite: vi.fn(async () => undefined),
+  mockFlushSessionHistory: vi.fn(async () => undefined),
+  mockToastError: vi.fn(),
+  mockListen: vi.fn(async () => vi.fn())
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -218,12 +224,33 @@ vi.mock('@/hooks/use-app-settings', () => ({
   waitForPendingAppSettingsPersistence: mockWaitForPendingAppSettingsPersistence
 }))
 
+vi.mock('@/lib/acp-history-persistence', () => ({
+  flushSessionHistory: mockFlushSessionHistory,
+  waitForPendingSessionIndexWrite: mockWaitForPendingSessionIndexWrite
+}))
+
+vi.mock('@/lib/tauri-event', () => ({
+  listen: mockListen
+}))
+
 vi.mock('@/hooks/use-file-watcher', () => ({
   useFileWatcher: () => undefined
 }))
 
 vi.mock('@/hooks/use-editor-persistence', () => ({
   useEditorPersistence: () => undefined
+}))
+
+// P17: shared canonical mock shape for the Story 6 sync hook + banner —
+// identical inline factories across the three WorkspaceLayout suites.
+vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
+  useWorkspaceManifestSync: vi.fn(),
+  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
+  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
+  performManifestWrite: vi.fn().mockResolvedValue(undefined)
+}))
+vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
+  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
 }))
 
 vi.mock('@/components/ProjectSidebar', () => ({
@@ -362,7 +389,49 @@ describe('WorkspaceLayout close persistence', () => {
     mockFlushPendingWrites.mockResolvedValue({ success: true, data: undefined })
     mockUpdatePanelVisibility.mockResolvedValue(undefined)
     mockWaitForPendingAppSettingsPersistence.mockResolvedValue(undefined)
+    mockWaitForPendingSessionIndexWrite.mockResolvedValue(undefined)
+    mockFlushSessionHistory.mockResolvedValue(undefined)
     mockCloseRequested.mockImplementation(() => vi.fn())
+    mockListen.mockResolvedValue(vi.fn())
+  })
+
+  it('routes tray quit through the same persistence flush as a window quit', async () => {
+    renderLayout()
+
+    await waitFor(() => {
+      expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+    })
+    const trayQuitHandler = mockListen.mock.calls.find(
+      ([event]) => event === 'tray:quit-requested'
+    )?.[1] as (() => void) | undefined
+
+    await act(async () => {
+      trayQuitHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('routes tray quit through the unsaved-file prompt', async () => {
+    mockEditorStoreState.getDirtyFileCount.mockReturnValue(2)
+    renderLayout()
+
+    await waitFor(() => {
+      expect(mockListen).toHaveBeenCalledWith('tray:quit-requested', expect.any(Function))
+    })
+    const trayQuitHandler = mockListen.mock.calls.find(
+      ([event]) => event === 'tray:quit-requested'
+    )?.[1] as (() => void) | undefined
+
+    await act(async () => {
+      trayQuitHandler?.()
+    })
+
+    expect(await screen.findByText('Unsaved Changes')).toBeInTheDocument()
+    expect(mockRespondToClose).not.toHaveBeenCalled()
   })
 
   it('flushes pending persistence writes before closing when there are no dirty files', async () => {
@@ -376,6 +445,52 @@ describe('WorkspaceLayout close persistence', () => {
 
     await waitFor(() => {
       expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('awaits pending session index write before closing', async () => {
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockWaitForPendingSessionIndexWrite).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('flushes the Rust-backed ACP history before closing', async () => {
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockFlushSessionHistory).toHaveBeenCalledTimes(1)
+      expect(mockRespondToClose).toHaveBeenCalledWith('close')
+    })
+  })
+
+  it('still closes when the Rust-backed ACP history flush rejects', async () => {
+    mockFlushSessionHistory.mockRejectedValueOnce(new Error('flush failed'))
+    renderLayout()
+
+    const closeHandler = (mockCloseRequested.mock.calls as unknown as Array<[() => void]>)[0]?.[0]
+
+    await act(async () => {
+      closeHandler?.()
+    })
+
+    await waitFor(() => {
+      expect(mockRespondToClose).toHaveBeenCalledTimes(1)
       expect(mockRespondToClose).toHaveBeenCalledWith('close')
     })
   })

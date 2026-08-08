@@ -1,9 +1,9 @@
 use parking_lot::RwLock;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+
+use super::{TerminalEvent, TerminalEventHub};
 
 const POLL_INTERVAL_MS: u64 = 500;
 
@@ -13,14 +13,6 @@ struct CwdState {
     terminal_id: String,
     pid: u32,
     last_known_cwd: String,
-}
-
-/// Event emitted when a terminal's CWD changes
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CwdChangedEvent {
-    pub terminal_id: String,
-    pub cwd: String,
 }
 
 /// Tracks the current working directory (CWD) of terminal processes.
@@ -34,8 +26,9 @@ pub struct CwdTracker {
     /// Map of terminal_id to their CWD state
     tracked_terminals: Arc<RwLock<HashMap<String, CwdState>>>,
 
-    /// Tauri app handle for emitting events
-    app_handle: AppHandle,
+    /// Transport-neutral event fan-out (Tauri renderer + web subscribers).
+    events: TerminalEventHub,
+    git_tracker: Arc<RwLock<Option<std::sync::Weak<super::git_tracker::GitTracker>>>>,
 
     /// Handle to the polling task (wrapped in Arc<RwLock> for interior mutability)
     poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
@@ -54,16 +47,21 @@ impl CwdTracker {
     /// Creates a new CWD tracker.
     ///
     /// # Arguments
-    /// * `app_handle` - Tauri app handle for emitting events
-    pub fn new(app_handle: AppHandle) -> Self {
+    /// * `events` - transport-neutral terminal event hub
+    pub fn new(events: TerminalEventHub) -> Self {
         Self {
             tracked_terminals: Arc::new(RwLock::new(HashMap::new())),
-            app_handle,
+            events,
+            git_tracker: Arc::new(RwLock::new(None)),
             poll_handle: Arc::new(RwLock::new(None)),
             is_polling_started: Arc::new(AtomicBool::new(false)),
             is_visible: Arc::new(AtomicBool::new(true)),
             poll_count: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_git_tracker(&self, git_tracker: &Arc<super::git_tracker::GitTracker>) {
+        *self.git_tracker.write() = Some(Arc::downgrade(git_tracker));
     }
 
     /// Detects the current working directory for a given process ID.
@@ -203,7 +201,8 @@ impl CwdTracker {
     fn start_polling(&self) {
         let tracked = self.tracked_terminals.clone();
         let is_visible = self.is_visible.clone();
-        let app_handle = self.app_handle.clone();
+        let events = self.events.clone();
+        let git_tracker = self.git_tracker.clone();
         let poll_handle = self.poll_handle.clone();
         let poll_count = self.poll_count.clone();
 
@@ -240,14 +239,14 @@ impl CwdTracker {
                             // Only emit event if CWD actually changed
                             if state.last_known_cwd != new_cwd {
                                 state.last_known_cwd = new_cwd.clone();
+                                if let Some(git) = git_tracker.read().as_ref().and_then(|g| g.upgrade()) {
+                                    git.update_terminal_cwd(&terminal_id, new_cwd.clone());
+                                }
 
-                                // Emit the event
-                                let event = CwdChangedEvent {
+                                events.emit(TerminalEvent::CwdChanged {
                                     terminal_id: terminal_id.clone(),
                                     cwd: new_cwd,
-                                };
-
-                                let _ = app_handle.emit("terminal-cwd-changed", event);
+                                });
                             }
                         }
                     }
@@ -442,20 +441,4 @@ mod tests {
         assert!(!poll_executed);
     }
 
-    #[test]
-    fn test_cwd_changed_event_shape() {
-        // Verify the CwdChangedEvent has the correct shape for serialization
-        let event = CwdChangedEvent {
-            terminal_id: "term-123".to_string(),
-            cwd: "/home/user/projects".to_string(),
-        };
-
-        assert_eq!(event.terminal_id, "term-123");
-        assert_eq!(event.cwd, "/home/user/projects");
-
-        // The #[serde(rename_all = "camelCase")] attribute ensures
-        // the JSON output uses camelCase for field names
-        // This is tested by the type signature alone in unit tests
-        // Integration tests would verify the actual JSON serialization
-    }
 }

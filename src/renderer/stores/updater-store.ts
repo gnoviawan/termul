@@ -3,7 +3,12 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
+  getUpdateChannel,
+  setUpdateChannel as tauriSetUpdateChannel
+} from '@/lib/tauri-update-channel'
+import {
   clearPendingUpdate,
+  DEFAULT_UPDATE_CHANNEL,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -11,7 +16,8 @@ import {
   getAutoUpdateEnabled as tauriGetAutoUpdateEnabled,
   getUpdaterState as tauriGetUpdaterState,
   installAndRestart as tauriInstallAndRestart,
-  setAutoUpdateEnabled as tauriSetAutoUpdateEnabled
+  setAutoUpdateEnabled as tauriSetAutoUpdateEnabled,
+  type UpdateChannel
 } from '@/lib/tauri-updater-api'
 import {
   clearSkippedVersion,
@@ -61,6 +67,7 @@ export interface UpdaterStoreState {
   releaseNotes: string | null
   hasActiveTerminals: boolean
   isManualUpdateMode: boolean
+  updateChannel: UpdateChannel
 
   // Actions
   checkForUpdates: () => Promise<void>
@@ -69,6 +76,7 @@ export interface UpdaterStoreState {
   skipVersion: (version: string) => Promise<void>
   setError: (error: string | null) => void
   setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
+  setUpdateChannel: (channel: UpdateChannel) => Promise<void>
   initializeUpdater: (options?: { autoCheck?: boolean }) => Promise<void>
   schedulePeriodicChecks: (generation?: number) => void
   stopPeriodicChecks: () => void
@@ -101,12 +109,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   releaseNotes: null,
   hasActiveTerminals: false,
   isManualUpdateMode: false,
+  updateChannel: 'stable',
 
   /**
    * Check for available updates via the Tauri updater plugin
    */
   checkForUpdates: async (): Promise<void> => {
-    const { isChecking } = get()
+    const { isChecking, updateChannel } = get()
     if (isChecking) return
 
     set({ isChecking: true, error: null })
@@ -115,7 +124,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       const activeTerminals = hasActiveTerminalSessions()
       set({ hasActiveTerminals: activeTerminals })
 
-      const updateInfo = await tauriCheckForUpdates()
+      const updateInfo = await tauriCheckForUpdates(updateChannel)
       const checkedAt = new Date()
 
       if (!updateInfo) {
@@ -285,6 +294,54 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     }
   },
 
+  /**
+   * Switch the release channel and re-check against the new manifest. The
+   * preference is persisted via the updater-preferences store so it survives a
+   * restart.
+   *
+   * `clearPendingUpdate()` resets the module-level stale update state in
+   * `tauri-updater-api.ts` (`pendingTauriUpdate`, `downloadedUpdate`,
+   * `manualUpdateInfo`, `downloadedVersion`, `preparedUpdateVersion`,
+   * `isManualUpdateMode`) so a stale stable `Update` object — or its in-memory
+   * downloaded bytes — can never be installed after switching to
+   * insider/nightly.
+   *
+   * The re-check only fires when `autoUpdateEnabled` is true: switching channel
+   * while auto-update is off clears state + persists the preference; the next
+   * manual check (or a later enable) uses the new channel. The periodic loop,
+   * if running, resumes on its own cadence.
+   */
+  setUpdateChannel: async (channel: UpdateChannel): Promise<void> => {
+    set({ error: null })
+
+    try {
+      await tauriSetUpdateChannel(channel)
+      // Reset the facade's module-level pending/downloaded state BEFORE
+      // clearing store state + re-checking, so a stale stable `Update` (and its
+      // downloaded bytes) can't survive into the new channel.
+      await clearPendingUpdate()
+      set({
+        updateChannel: channel,
+        updateAvailable: false,
+        downloaded: false,
+        version: null,
+        downloadProgress: 0,
+        releaseNotes: null
+      })
+
+      // Re-check only when auto-update is enabled — switching channel while
+      // auto-update is off just persists the preference; the next manual check
+      // uses the new channel.
+      if (get().autoUpdateEnabled) {
+        const generation = updaterLifecycleGeneration
+        await get().runCheckWithRetry(generation)
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to switch update channel'
+      set({ error: errorMessage })
+    }
+  },
+
   initializeUpdater: async (options?: { autoCheck?: boolean }): Promise<void> => {
     const currentGeneration = updaterLifecycleGeneration
 
@@ -361,6 +418,15 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         const skippedVersion = await getSkippedVersion()
         if (currentGeneration !== updaterLifecycleGeneration) return
         set({ skippedVersion })
+
+        const persistedChannel = await getUpdateChannel()
+        if (currentGeneration !== updaterLifecycleGeneration) return
+        // Only hydrate the persisted channel when the user hasn't already
+        // selected one during the async init window — a concurrent
+        // setUpdateChannel would otherwise be reverted to the persisted value.
+        if (get().updateChannel === DEFAULT_UPDATE_CHANNEL) {
+          set({ updateChannel: persistedChannel })
+        }
 
         if (options?.autoCheck === true && get().autoUpdateEnabled) {
           await get().runCheckWithRetry(currentGeneration)
@@ -581,6 +647,13 @@ export function useAutoUpdateEnabled(): boolean {
 }
 
 /**
+ * Selector: Get the active release channel
+ */
+export function useUpdateChannel(): UpdateChannel {
+  return useUpdaterStore((state) => state.updateChannel)
+}
+
+/**
  * Selector: Get skipped version
  */
 export function useSkippedVersion(): string | null {
@@ -605,7 +678,8 @@ export function useUpdaterState() {
       autoUpdateEnabled: state.autoUpdateEnabled,
       releaseNotes: state.releaseNotes,
       hasActiveTerminals: state.hasActiveTerminals,
-      isManualUpdateMode: state.isManualUpdateMode
+      isManualUpdateMode: state.isManualUpdateMode,
+      updateChannel: state.updateChannel
     }))
   )
 }
@@ -622,6 +696,7 @@ export function useUpdaterActions() {
       skipVersion: state.skipVersion,
       setError: state.setError,
       setAutoUpdateEnabled: state.setAutoUpdateEnabled,
+      setUpdateChannel: state.setUpdateChannel,
       initializeUpdater: state.initializeUpdater,
       schedulePeriodicChecks: state.schedulePeriodicChecks,
       stopPeriodicChecks: state.stopPeriodicChecks,

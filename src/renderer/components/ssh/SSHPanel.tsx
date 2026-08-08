@@ -2,6 +2,7 @@ import type { SSHProfile } from '@shared/types/ssh.types'
 import { Download, Eye, EyeOff, Loader2, Pencil, Plus, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
 import { SSHProfileForm } from './SSHProfileForm'
@@ -124,7 +125,7 @@ export function SSHPanel({
                   )}
                   onClick={() => onSelectProfile?.(profile.id)}
                   onDoubleClick={() => {
-                    if (!isConnected && !isConnecting) {
+                    if (isTauriContext() && !isConnected && !isConnecting) {
                       handleConnect(profile)
                     }
                   }}
@@ -198,8 +199,8 @@ export function SSHPanel({
                           handleConnect(profile)
                         }}
                         className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground"
-                        title="Connect"
-                        disabled={isConnecting}
+                        title={isTauriContext() ? 'Connect' : 'SSH is desktop-only'}
+                        disabled={isConnecting || !isTauriContext()}
                       >
                         <Wifi className="h-3 w-3" />
                       </button>

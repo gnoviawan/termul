@@ -1,6 +1,7 @@
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as tauriSafeUpdate from '@/lib/tauri-safe-update'
+import * as tauriUpdateChannel from '@/lib/tauri-update-channel'
 import * as tauriUpdaterApi from '@/lib/tauri-updater-api'
 import * as tauriVersionSkip from '@/lib/tauri-version-skip'
 import { useUpdaterStore } from './updater-store'
@@ -40,6 +41,20 @@ vi.mock('@/lib/tauri-safe-update', async () => {
   return {
     ...actual,
     hasActiveTerminalSessions: vi.fn(() => false)
+  }
+})
+
+// `initializeUpdater` persists/loads the channel preference via this facade.
+// Mock it so the init flow reaches `checkForUpdates` instead of rejecting on
+// the missing Tauri `plugin-store` runtime under jsdom.
+vi.mock('@/lib/tauri-update-channel', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tauri-update-channel')>(
+    '@/lib/tauri-update-channel'
+  )
+  return {
+    ...actual,
+    getUpdateChannel: vi.fn(),
+    setUpdateChannel: vi.fn()
   }
 })
 
@@ -87,6 +102,9 @@ beforeEach(() => {
 
   vi.mocked(tauriSafeUpdate.hasActiveTerminalSessions).mockReturnValue(false)
 
+  vi.mocked(tauriUpdateChannel.getUpdateChannel).mockResolvedValue('stable')
+  vi.mocked(tauriUpdateChannel.setUpdateChannel).mockResolvedValue(undefined)
+
   useUpdaterStore.setState({
     updateAvailable: false,
     version: null,
@@ -99,7 +117,10 @@ beforeEach(() => {
     lastChecked: null,
     autoUpdateEnabled: true,
     releaseNotes: null,
-    hasActiveTerminals: false
+    hasActiveTerminals: false,
+    // Reset the channel so tests that mutate it (channel-preference suite)
+    // stay isolated — the store's create() default is 'stable'.
+    updateChannel: 'stable'
   })
 })
 
@@ -342,6 +363,80 @@ describe('updater-store', () => {
 
       expect(useUpdaterStore.getState().autoUpdateEnabled).toBe(true)
       expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalled()
+    })
+  })
+
+  describe('channel preference', () => {
+    it('passes the active channel to the updater API on check', async () => {
+      useUpdaterStore.setState({ updateChannel: 'insider' })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      // A regression that hardcoded the channel (e.g. always 'stable') would
+      // ship undetected without this assertion.
+      expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalledWith('insider')
+    })
+
+    it('hydrates the persisted channel into state during initialization', async () => {
+      vi.mocked(tauriUpdateChannel.getUpdateChannel).mockResolvedValue('insider')
+
+      await useUpdaterStore.getState().initializeUpdater({ autoCheck: false })
+
+      // The initial state default is also 'stable', so removing the load line
+      // would pass every other test — this assertion pins the hydration.
+      expect(useUpdaterStore.getState().updateChannel).toBe('insider')
+      expect(tauriUpdateChannel.getUpdateChannel).toHaveBeenCalledTimes(1)
+    })
+
+    it('setUpdateChannel persists, clears update + stale pending state, and re-checks when auto-update is enabled', async () => {
+      // Seed stale update state + module-level pending state to be cleared.
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        downloaded: true,
+        version: '2.0.0',
+        downloadProgress: 42,
+        releaseNotes: 'old stable notes',
+        autoUpdateEnabled: true,
+        updateChannel: 'stable'
+      })
+
+      await useUpdaterStore.getState().setUpdateChannel('insider')
+
+      // (b) persisted via the channel facade
+      expect(tauriUpdateChannel.setUpdateChannel).toHaveBeenCalledWith('insider')
+      // stale module-level pending state in tauri-updater-api.ts cleared before
+      // the re-check, so a stable Update / downloaded bytes can't survive into
+      // the insider channel.
+      expect(tauriUpdaterApi.clearPendingUpdate).toHaveBeenCalled()
+      // (a) update state cleared
+      const state = useUpdaterStore.getState()
+      expect(state.updateChannel).toBe('insider')
+      expect(state.updateAvailable).toBe(false)
+      expect(state.downloaded).toBe(false)
+      expect(state.version).toBeNull()
+      expect(state.downloadProgress).toBe(0)
+      expect(state.releaseNotes).toBeNull()
+      // (c) re-check fired against the new channel (auto-update enabled)
+      expect(tauriUpdaterApi.checkForUpdates).toHaveBeenCalledWith('insider')
+    })
+
+    it('setUpdateChannel persists + clears state but does NOT re-check when auto-update is disabled', async () => {
+      useUpdaterStore.setState({
+        autoUpdateEnabled: false,
+        updateAvailable: true,
+        version: '2.0.0',
+        updateChannel: 'stable'
+      })
+
+      await useUpdaterStore.getState().setUpdateChannel('nightly')
+
+      expect(tauriUpdateChannel.setUpdateChannel).toHaveBeenCalledWith('nightly')
+      const state = useUpdaterStore.getState()
+      expect(state.updateChannel).toBe('nightly')
+      expect(state.updateAvailable).toBe(false)
+      expect(state.version).toBeNull()
+      // No re-check when auto-update is off (the preference still persisted).
+      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
     })
   })
 

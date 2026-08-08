@@ -1,9 +1,9 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
-import type { GitStatus } from '@shared/types/ipc.types'
+import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
 
 // Re-export for convenience
-export type { GitStatus }
+export type { GitStatus, TerminalModes }
 
 export type ProjectColor =
   | 'blue'
@@ -38,6 +38,14 @@ export interface Project {
   color: ProjectColor
   path?: string
   isActive?: boolean
+  /**
+   * `true` when this is the host's default project (set by the host's
+   * `default_project_id`). Mirrors `ProjectSummary.isDefault` on the wire.
+   * Distinct from `isActive` (per-client, set locally by `selectProject`).
+   * Surfaced in the desktop-hosted shared-live bridge (`useProjectsAutoSave`
+   * maps `summary.isDefault` → `Project.isDefault`).
+   */
+  isDefault?: boolean
   isArchived?: boolean
   gitBranch?: string
   lastOpened?: Date
@@ -78,6 +86,12 @@ export interface Terminal {
   output?: TerminalLine[]
   pendingScrollback?: string[] // Legacy text snapshot to restore on terminal mount
   transcript?: string // Raw PTY transcript used for ANSI/styling-preserving restoration
+  /**
+   * Captured DEC private-mode snapshot (R3) to replay before `pendingScrollback`
+   * on terminal mount, so an alt-screen TUI (vim/tmux/less) restores its
+   * screen/modes. Optional — absence degrades to content-only restore.
+   */
+  pendingModes?: TerminalModes
   detachedOutput?: string // Raw PTY output captured while no renderer is mounted
   rendererAttachmentCount?: number // Number of mounted renderers bound to this PTY
   healthStatus?: TerminalHealthStatus // Terminal health status
@@ -96,6 +110,13 @@ export interface Terminal {
   agentProgram?: string // Resolved/declared program for restore re-spawn (no prompt)
   agentArgs?: string[] // baseArgs only (seed prompt intentionally excluded for restore)
   kind?: 'shell' | 'agent' // Session type marker; defaults to 'shell' when unset
+  /**
+   * CAP-3: the reclaimable-terminal lease credential issued at spawn.
+   * IN-MEMORY ONLY — never written to auto-save/snapshot persistence,
+   * localStorage, or any browser storage. Set on spawn/rotate, cleared on
+   * kill/close/restart/clearTerminalPtyId.
+   */
+  claim?: string
 }
 
 export interface TerminalLine {

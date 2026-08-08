@@ -117,6 +117,7 @@ export async function launchAgentInPane(
     const { program, args } = buildAgentArgv(def, prompt)
 
     const spawnResult = await terminalApi.spawn({
+      projectId,
       cwd,
       program,
       args,
@@ -162,7 +163,10 @@ export async function launchAgentInPane(
         agentId: def.id,
         agentName: def.name,
         agentProgram: program,
-        agentArgs: agentArgsCopy
+        agentArgs: agentArgsCopy,
+        // CAP-3: the issued lease credential, captured in the SAME batched
+        // set() as the ptyId — it is in-memory only and never persisted.
+        ...(spawnResult.data.claim ? { claim: spawnResult.data.claim } : {})
       }
     ])
 

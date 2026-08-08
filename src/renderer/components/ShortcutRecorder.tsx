@@ -1,5 +1,6 @@
 import { RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,
   formatKeyForDisplay,
@@ -111,7 +112,20 @@ export function ShortcutRecorder({
     [handleClick, isRecording]
   )
 
-  // Attach keydown listener when recording
+  // Suspend the native app menu while recording so its accelerators (e.g. ⌘W,
+  // ⌘R, ⌘C) stop intercepting keys before they reach the webview, letting the
+  // user record any combination. Keyed only on `isRecording` so a change in
+  // `handleKeyDown`'s identity does not churn the menu mid-recording.
+  useEffect(() => {
+    if (!isRecording) return
+    void beginShortcutCapture()
+    return () => {
+      void endShortcutCapture()
+    }
+  }, [isRecording])
+
+  // Attach the capture-phase keydown listener while recording. Re-binds when
+  // `handleKeyDown` changes identity (e.g. after the shortcut map updates).
   useEffect(() => {
     if (isRecording && inputRef.current) {
       inputRef.current.focus()

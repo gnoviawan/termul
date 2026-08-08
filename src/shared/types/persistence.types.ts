@@ -1,3 +1,5 @@
+import type { TerminalModes } from './ipc.types'
+
 // Persisted terminal data (subset of Terminal for storage)
 export interface PersistedTerminal {
   id: string
@@ -6,6 +8,12 @@ export interface PersistedTerminal {
   cwd?: string
   scrollback?: string[] // Legacy text snapshot for restoration fallback
   transcript?: string // Raw PTY transcript for ANSI/styling-preserving restoration; cap at renderer MAX_TRANSCRIPT_CHARS to avoid unbounded persistence
+  /**
+   * Captured DEC private-mode snapshot (R3). Replayed before `scrollback` on
+   * restore via `buildRehydrateSequences` so an alt-screen TUI (vim/tmux/less)
+   * screen/modes survive refresh. Optional — absence degrades to content-only.
+   */
+  modes?: TerminalModes
   // ADR-004.4: terminal-native agent metadata. Persisted so a restored agent
   // terminal re-spawns the agent TUI — but the seed prompt is intentionally NOT
   // persisted, so restore boots the agent fresh rather than re-submitting a
@@ -66,7 +74,10 @@ export const PersistenceKeys = {
   // Last-selected agent in the launcher (persisted across sessions).
   // GH-289: value shape is `LastSelectedAgent` ({ agentId, mode }); legacy
   // records carrying only `{ agentId }` are read as `mode: 'cli'`.
-  lastSelectedAgent: 'agents/last-selected'
+  lastSelectedAgent: 'agents/last-selected',
+  // Mobile file explorer: last folder the user navigated into, per project.
+  // Restored on drawer reopen across close/reopen and page reloads (web only).
+  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`
 } as const
 
 // GH-289: persisted launcher selection — the chosen agent plus its call mode.

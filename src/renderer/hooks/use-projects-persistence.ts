@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { persistenceApi, secureStorageApi, terminalApi, worktreeApi } from '@/lib/api'
+import { getAcpTransport } from '@/lib/acp-transport'
+import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
+import { webServerProjects } from '@/lib/web-server-api'
+import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { useProjectStore } from '@/stores/project-store'
+import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
   PersistedProject,
@@ -11,6 +17,7 @@ import type {
   PersistedWorktree
 } from '../../shared/types/persistence.types'
 import { PersistenceKeys } from '../../shared/types/persistence.types'
+import type { ProjectSummary } from '../../shared/types/web-projects.types'
 
 const REDACTED_VALUE = '[REDACTED]'
 type EnvVariableSnapshot = Pick<EnvVariable, 'key' | 'value' | 'isSecret'>
@@ -363,39 +370,6 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
 }
 
 /**
- * Hook that reconciles worktrees for the active project.
- * Runs on project selection and periodically (every 60s).
- * Also reconciles all projects on initial load.
- */
-export function useWorktreeReconciler(): void {
-  const activeProjectId = useProjectStore((state) => state.activeProjectId)
-  // Use a stable selector that returns only what we need to avoid retriggers on store writes
-  const projectRef = useRef<Project | null>(null)
-
-  useEffect(() => {
-    const project = useProjectStore.getState().projects.find((p) => p.id === activeProjectId)
-    if (!project?.path) return
-
-    projectRef.current = project
-
-    // Reconcile on project selection
-    reconcileProjectWorktrees(project)
-
-    // Periodic reconciliation every 60s for active project
-    const interval = setInterval(() => {
-      const currentProject = useProjectStore
-        .getState()
-        .projects.find((p) => p.id === activeProjectId)
-      if (currentProject?.path) {
-        reconcileProjectWorktrees(currentProject)
-      }
-    }, 60_000)
-
-    return () => clearInterval(interval)
-  }, [activeProjectId])
-}
-
-/**
  * Force-reconcile worktrees for a specific project after create/remove operations.
  * Always re-lists from git to ensure consistency.
  */
@@ -406,10 +380,130 @@ export async function reconcileProjectWorktreesNow(projectId: string): Promise<v
   }
 }
 
+/**
+ * Build the redacted `ProjectSummary[]` wire shape for the web/remote mirror
+ * (Epic-4 bridge) from the renderer `Project` store. No env-var values cross
+ * the wire — redact-by-omission. Shared by the auto-save live-push path + the
+ * `RemoteAccessPopover` server-start seed.
+ *
+ * In desktop-hosted mode the desktop's `activeProjectId` IS the host default
+ * (the desktop user is the host operator), so the per-entry flag is
+ * `isDefault` (the host default), not `isActive` (which is per-client and the
+ * host cannot know). The param is named `defaultProjectId` because the value
+ * the desktop renderer tracks (its active selection) is pushed as the default
+ * for new web clients — the caller passes `state.activeProjectId` as the
+ * `defaultProjectId` (P12: the param name now matches its wire semantics).
+ */
+export function toProjectSummaries(
+  projects: Project[],
+  defaultProjectId: string
+): ProjectSummary[] {
+  // Derive the host default from each project's stored `isDefault` flag — NOT
+  // from `defaultProjectId`. At the autosave call site `defaultProjectId` is
+  // `state.activeProjectId`, but the active (per-connection) project and the
+  // host default are distinct: `handleSetDefault` flips the stored flags while
+  // `activeProjectId` still points at the switch target. Deriving from
+  // `activeProjectId` here would re-broadcast the active project as the host
+  // default and clobber an explicit `set_default_project`. Fall back to
+  // `defaultProjectId` only when no project carries a stored flag (legacy
+  // snapshots / initial load where the flag was never set).
+  const hasStoredDefault = projects.some((p) => p.isDefault === true)
+  return projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    path: p.path ?? null,
+    isArchived: p.isArchived ?? false,
+    isDefault: hasStoredDefault ? p.isDefault === true : p.id === defaultProjectId
+  }))
+}
+
+/**
+ * Map a web/remote `ProjectSummary` (the in-memory registry's wire shape) to
+ * the renderer `Project`. The mirror carries NO env-var values (redact-by-
+ * omission — secrets live in secure storage; plain env is omitted for the
+ * interim), so `envVars` is empty and worktree reconciliation is skipped (the
+ * browser cannot shell out to git anyway). `color` is a valid `ProjectColor`
+ * token string the desktop sent, cast through.
+ *
+ * Maps `summary.isDefault` (host default) → `Project.isDefault`. Does NOT map
+ * an `isActive` — the host no longer sends one (it cannot know a client's
+ * per-connection active selection). `Project.isActive` stays per-client and is
+ * stamped locally by `selectProject`.
+ */
+function summaryToProject(summary: ProjectSummary): Project {
+  return {
+    id: summary.id,
+    name: summary.name,
+    color: summary.color as ProjectColor,
+    path: summary.path ?? undefined,
+    isArchived: summary.isArchived,
+    isDefault: summary.isDefault,
+    envVars: [],
+    worktrees: [],
+    activeWorktreeId: null
+  }
+}
+
 export function useProjectsLoader(): void {
   const setProjects = useProjectStore((state) => state.setProjects)
 
   useEffect(() => {
+    // Web/remote mode: mirror the desktop's project list from the in-memory
+    // `ProjectRegistry` via `GET /projects`. The browser's stubbed plugin-store
+    // returns nothing, so without this branch the sidebar renders empty. The
+    // mirror is read-only — `useProjectsAutoSave` is disabled in web mode. The
+    // desktop broadcasts `projects_changed` on store mutation; refetch on it.
+    //
+    // Epic 7 (cross-client continuity): on the INITIAL load (store not yet
+    // `isLoaded`) the client seeds `activeProjectId` from the host's
+    // `defaultProjectId`. On subsequent `projects_changed` refetches it
+    // preserves its OWN `activeProjectId` (no silent retarget when another
+    // client switches). If the current project was deleted by the host, it
+    // falls back to `defaultProjectId` (or the first project).
+    if (!isTauriContext()) {
+      let unsub: (() => void) | undefined
+      // Guard against completing a fetch after unmount (skip the stale
+      // setProjects so a remounted store is not clobbered).
+      let cancelled = false
+      const fetchMirror = async (): Promise<void> => {
+        const result = await webServerProjects.list()
+        if (cancelled || !result.success || !result.data) return
+        const projects = result.data.projects.map(summaryToProject)
+        const defaultId = result.data.defaultProjectId
+        // P2: validate the host default references a project still in the
+        // list (the host may have deleted the default project). Fall back to
+        // the first project when the default is null or dangling.
+        const validDefault =
+          defaultId && projects.some((p) => p.id === defaultId)
+            ? defaultId
+            : (projects[0]?.id ?? '')
+        if (!useProjectStore.getState().isLoaded) {
+          // Initial load: seed activeProjectId from the host default.
+          setProjects(projects, validDefault)
+        } else {
+          // Subsequent refetch: preserve the client's own activeProjectId.
+          // If it's no longer in the list (host deleted it), fall back to the
+          // default (or the first project if the default is also gone).
+          const currentActive = useProjectStore.getState().activeProjectId
+          const stillExists = !!currentActive && projects.some((p) => p.id === currentActive)
+          setProjects(projects, stillExists ? currentActive : validDefault)
+        }
+      }
+      void fetchMirror()
+      try {
+        unsub = getAcpTransport().onEvent('acp:projects_changed', () => {
+          void fetchMirror()
+        })
+      } catch (err) {
+        console.debug('[projects] projects_changed listener unavailable', err)
+      }
+      return () => {
+        cancelled = true
+        unsub?.()
+      }
+    }
+
     async function load(): Promise<void> {
       const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
       if (result.success && result.data) {
@@ -448,6 +542,11 @@ export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
 
   useEffect(() => {
+    // Web/remote mode: the project list is a read-only mirror of the desktop's
+    // store; never persist from the browser (the stubbed plugin-store would
+    // silently drop writes, and edits belong on the desktop anyway).
+    if (!isTauriContext()) return
+
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
       // Skip auto-saving if the store is not yet loaded
@@ -486,6 +585,25 @@ export function useProjectsAutoSave(): void {
       ).catch((err: unknown) => {
         console.error('Failed to auto-save projects:', err)
       })
+
+      // Epic-4 bridge live push: if the shared-live server is running, mirror
+      // the new project list into the in-memory registry + broadcast
+      // `projects_changed` so connected web clients refetch `GET /projects`.
+      // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
+      if (useRemoteStatusStore.getState().status?.running) {
+        syncProjects(
+          toProjectSummaries(state.projects, state.activeProjectId),
+          state.activeProjectId || null
+        )
+          .then((result) => {
+            if (!result.success) {
+              console.warn('[projects] remote sync unsuccessful:', result.error)
+            }
+          })
+          .catch((err: unknown) => {
+            console.debug('[projects] remote sync failed', err)
+          })
+      }
     })
 
     return () => {
@@ -561,10 +679,35 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     // Delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
-    // Cascade delete: remove terminal layout and snapshots for this project
+    // Patch 15: evict the deleted project's entries from the manifest sync
+    // store (basedRevision + restore-in-progress flags) so they don't leak.
+    const syncStore = useWorkspaceManifestSyncStore.getState()
+    syncStore.setBasedRevision(id, null)
+    syncStore.setManifestRestoreInProgress(id, false)
+    // Clear a pending conflict that belonged to the deleted project.
+    if (syncStore.pendingConflict?.projectId === id) {
+      syncStore.setPendingConflict(null)
+    }
+
+    // Cascade delete: remove terminal layout and snapshots for this project.
+    // Story 6: also delete the host-owned workspace manifest (best-effort —
+    // a failure is logged but never blocks the project delete; the host's
+    // delete is idempotent whether or not the manifest file existed).
     await Promise.all([
       persistenceApi.delete(PersistenceKeys.terminals(id)),
-      persistenceApi.delete(PersistenceKeys.snapshots(id))
+      persistenceApi.delete(PersistenceKeys.snapshots(id)),
+      workspaceManifestApi
+        .deleteManifest(id)
+        .then((result) => {
+          if (!result.success) {
+            console.warn(
+              `[projects] manifest delete unsuccessful for ${id}: ${result.error} (${result.code})`
+            )
+          }
+        })
+        .catch((error) => {
+          console.warn(`[projects] manifest delete threw for ${id}:`, error)
+        })
     ])
 
     // Persist the updated projects list

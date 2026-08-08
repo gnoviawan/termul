@@ -48,6 +48,19 @@ async function invokeIpc<T>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<IpcResult<T>> {
+  // Web/remote mode: SSH/SFTP/port-forwarding are desktop-only. Return an
+  // explicit `WEB_UNSUPPORTED` result instead of invoking a Tauri-only
+  // command whose stub throws `tauriUnavailable`. All SSH command methods
+  // (profile CRUD, connect/disconnect, port forwarding, SFTP) and
+  // `createAskpassScript` delegate through this function, so the guard is
+  // applied once for the whole API.
+  if (!isTauriContext()) {
+    return {
+      success: false,
+      error: 'SSH is not available in the web client',
+      code: 'WEB_UNSUPPORTED'
+    }
+  }
   try {
     return await invoke<IpcResult<T>>(command, args)
   } catch (error) {

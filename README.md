@@ -91,7 +91,33 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 ## 📸 Screenshots
 
-![Termul Manager Screenshot](img/termul.png)
+### Home
+
+![Home](img/01-home.jpg)
+
+### Agent Chat
+
+![Agent Chat](img/02-agent-chat.jpg)
+
+### Markdown Editor
+
+![Markdown Editor](img/03-markdown-editor.jpg)
+
+### Agent Tools
+
+![Agent Tools](img/04-agent-tools.jpg)
+
+### Code Editor
+
+![Code Editor](img/05-code-editor.jpg)
+
+### Git Panel
+
+![Git Panel](img/06-git-panel.jpg)
+
+### Git History
+
+![Git History](img/07-git-history.jpg)
 
 ## 📦 Install
 
@@ -323,7 +349,8 @@ bun run tauri <command>  # Direct Tauri CLI access
 - Active SSH sessions may retain the relevant secret in process memory only to support automatic reconnect; use SSH agent authentication to avoid runtime secret retention.
 - Interactive SSH terminals use OpenSSH's default known-hosts file with `StrictHostKeyChecking=accept-new`; do not override `UserKnownHostsFile` to `/dev/null`/`NUL` because that disables persistent host-key verification.
 - Local port forwarding uses `ssh2` `channel_direct_tcpip` over the active SSH session; remote/reverse forwarding is not supported by the MVP command path yet.
-- `ssh2` intentionally stays on system OpenSSL for now. Enabling `vendored-openssl` forces a local OpenSSL source build that can fail in Windows/MSYS environments without a complete Perl module setup.
+- `ssh2` vendors OpenSSL only for macOS targets so packaged `.app` bundles do not depend on Homebrew or build-runner library paths.
+- Windows and Linux retain `ssh2`'s system/default OpenSSL behavior. Do not enable `vendored-openssl` globally: its local source build can fail in common Windows/MSYS environments without a complete Perl module setup.
 
 ## ⭐ Star History
 

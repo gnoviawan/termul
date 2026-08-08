@@ -1,26 +1,19 @@
-import { Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { RefreshCw, Search } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import { type AgentConfig, acpApi } from '@/lib/acp-api'
-import {
-  currentPlatformArch,
-  deriveAgentConfig,
-  REGISTRY_AGENTS,
-  type RegistryAgent
-} from '@/lib/agents/acp-registry'
+import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
+import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
+import {
+  filterSupportedAcpAgents,
+  type SupportedAcpAgentEntry
+} from '@/lib/agents/supported-acp-agents'
+import { dialogApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
-import { useProjectStore } from '@/stores/project-store'
-
-/** Persisted-config id for a registry agent. */
-function registryConfigId(regId: string): string {
-  return `acp-registry:${regId}`
-}
 
 /** Render a bundled SVG icon string inline (theme-aware via currentColor). */
 function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
@@ -34,91 +27,132 @@ function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
   )
 }
 
-interface AgentRowProps {
-  agent: RegistryAgent
-  platformArch: string
-}
-
-function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
-  const configId = registryConfigId(agent.id)
-  const enabled = useAcpStore((s) => s.agentConfigs.some((c) => c.id === configId))
-  // Warm state is rolled up across every per-project process for this config
-  // (the reuse/warming maps are keyed by config+cwd, so one config may own
-  // several live processes).
-  const warmState = useConfigWarmState(configId)
+function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element | null {
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
-  const prewarmAgent = useAcpStore((s) => s.prewarmAgent)
+  const [path, setPath] = useState(entry.config?.command ?? '')
+  const [saving, setSaving] = useState(false)
 
-  const derived = useMemo(() => deriveAgentConfig(agent, platformArch), [agent, platformArch])
-  const iconEntry = useMemo(() => findBundledIconByKey(`acp:${agent.id}`), [agent.id])
-  const [installing, setInstalling] = useState(false)
-  const canEnable =
-    derived.kind === 'runnable' || (derived.kind === 'needs-install' && Boolean(derived.archiveUrl))
-  const runnable = derived.kind === 'runnable'
+  useEffect(() => {
+    setPath(entry.config?.command ?? '')
+  }, [entry.config?.command])
 
-  const enableWithConfig = async (config: AgentConfig): Promise<void> => {
-    await saveAgentConfig({
-      id: configId,
-      templateId: agent.id,
-      ...config
-    })
-    // Warm the process for the active project's cwd (skip if no project/cwd).
-    // Other projects warm lazily on first use — each gets its own process.
-    const activeProjectId = useProjectStore.getState().activeProjectId
-    const cwd = activeProjectId ? getDefaultCwdForProject(activeProjectId) : ''
-    if (cwd.trim().length > 0) void prewarmAgent(configId, cwd)
-  }
+  if (!entry.config) return null
 
-  const handleToggle = async (next: boolean): Promise<void> => {
+  const savePath = async (): Promise<void> => {
+    const base = entry.config
+    if (!base) return
+    const command = path.trim()
+    if (!command) {
+      toast.error('Enter the path to the ACP binary.')
+      return
+    }
+    setSaving(true)
     try {
-      if (next) {
-        if (!canEnable) return
-        if (derived.kind === 'runnable') {
-          await enableWithConfig(derived.config)
-          return
-        }
-        if (derived.kind === 'needs-install' && derived.archiveUrl) {
-          setInstalling(true)
-          try {
-            const installed = await acpApi.installRegistryBinary({
-              agentId: agent.id,
-              archiveUrl: derived.archiveUrl,
-              cmd: derived.cmd,
-              args: derived.args
-            })
-            await enableWithConfig({
-              name: agent.name,
-              command: installed.command,
-              args: installed.args,
-              env: derived.env,
-              allowTerminal: false
-            })
-          } finally {
-            setInstalling(false)
-          }
-          return
-        }
-      } else {
-        await deleteAgentConfig(configId)
-      }
+      // If the generated config was launcher-backed (npx/uvx), its args are the
+      // package-manager invocation (e.g. `-y @scope/agent`). Browsing to a real
+      // binary must clear those args or the saved command/args pair will not
+      // launch correctly.
+      const wasLauncherBacked = base.command === 'npx' || base.command === 'uvx'
+      await saveAgentConfig({
+        ...base,
+        command,
+        args: wasLauncherBacked ? [] : base.args
+      })
+      toast.success(`${entry.agent.name} path updated`)
     } catch (err) {
-      toast.error(`Failed to ${next ? 'enable' : 'disable'} ${agent.name}: ${String(err)}`)
+      toast.error(String(err))
+    } finally {
+      setSaving(false)
     }
   }
 
-  // Warm state for the badge: an enabled agent is warming while a background
-  // spawn is in flight (any project), ready once any process is connected,
-  // needs auth, or idle.
-  const warmBadge: { label: string; tone: 'ready' | 'auth' | 'muted' } | null = !enabled
-    ? null
-    : warmState.connected
-      ? { label: 'Ready', tone: 'ready' }
-      : warmState.needsAuth
-        ? { label: 'Auth required', tone: 'auth' }
-        : warmState.warming
-          ? { label: 'Warming…', tone: 'muted' }
-          : null
+  const clearPath = async (): Promise<void> => {
+    setSaving(true)
+    try {
+      await deleteAgentConfig(entry.configId)
+      toast.success(`${entry.agent.name} custom path cleared`)
+    } catch (err) {
+      toast.error(String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Input
+          value={path}
+          onChange={(event) => setPath(event.target.value)}
+          placeholder="Path to ACP binary"
+          aria-label={`${entry.agent.name} executable path`}
+          className="h-7 font-mono text-xs"
+          disabled={saving}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={saving}
+          onClick={() =>
+            void dialogApi.selectFile({ title: 'Select ACP agent executable' }).then((result) => {
+              if (result.success && result.data) setPath(result.data)
+            })
+          }
+        >
+          Browse
+        </Button>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={saving || path.trim().length === 0}
+          onClick={() => void savePath()}
+        >
+          Save path
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={saving}
+          onClick={() => void clearPath()}
+        >
+          Clear saved path
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+interface AgentRowProps {
+  entry: SupportedAcpAgentEntry
+}
+
+function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
+  const warmState = useConfigWarmState(entry.configId)
+  const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
+
+  const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
+    ? { label: 'Session ready', tone: 'ready' }
+    : warmState.warming || warmState.warmingSession
+      ? { label: 'Warming…', tone: 'muted' }
+      : warmState.connected
+        ? { label: 'Warm', tone: 'ready' }
+        : entry.status === 'ready'
+          ? { label: 'Available', tone: 'ready' }
+          : entry.status === 'install-required'
+            ? { label: 'Install from Agent Chat', tone: 'warn' }
+            : entry.status === 'needs-runtime'
+              ? {
+                  label: entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node.js',
+                  tone: 'warn'
+                }
+              : entry.status === 'manual-install'
+                ? { label: 'Manual install', tone: 'warn' }
+                : { label: 'Unavailable', tone: 'muted' }
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
@@ -127,82 +161,165 @@ function AgentRow({ agent, platformArch }: AgentRowProps): React.JSX.Element {
           <InlineIcon svg={iconEntry.svg} />
         ) : (
           <span className="text-xs font-semibold uppercase text-muted-foreground">
-            {agent.name.charAt(0)}
+            {entry.agent.name.charAt(0)}
           </span>
         )}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
-          {agent.version && (
+          <span className="truncate text-sm font-medium text-foreground">{entry.agent.name}</span>
+          {entry.agent.version && (
             <span className="shrink-0 font-mono text-3xs text-muted-foreground">
-              v{agent.version}
+              v{entry.agent.version}
             </span>
           )}
-          {warmBadge && (
-            <Badge
-              variant="secondary"
-              className={cn(
-                'h-4 px-1.5 text-3xs',
-                warmBadge.tone === 'ready' && 'text-green-500',
-                warmBadge.tone === 'auth' && 'text-amber-500'
-              )}
-            >
-              {warmBadge.label}
-            </Badge>
-          )}
+          <Badge
+            variant="secondary"
+            className={cn(
+              'h-4 px-1.5 text-3xs',
+              statusBadge.tone === 'ready' && 'text-green-500',
+              statusBadge.tone === 'warn' && 'text-amber-500'
+            )}
+          >
+            {statusBadge.label}
+          </Badge>
         </div>
-        {agent.description && (
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{agent.description}</p>
-        )}
-        {!runnable && (
-          <p className="mt-1 text-2xs text-amber-500">
-            {derived.kind === 'needs-install'
-              ? derived.archiveUrl
-                ? installing
-                  ? 'Downloading and installing…'
-                  : 'Turn on to download the release binary for your platform.'
-                : 'Install the binary manually, then add a custom agent.'
-              : 'Not available for your platform.'}
+        {entry.agent.description && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+            {entry.agent.description}
           </p>
         )}
-      </div>
-
-      <div className="shrink-0 pt-0.5">
-        <Switch
-          checked={enabled}
-          disabled={(!canEnable && !enabled) || installing}
-          onCheckedChange={handleToggle}
-          aria-label={`Enable ${agent.name}`}
-        />
+        {entry.status !== 'ready' && (
+          <p className="mt-1 text-2xs text-amber-500">
+            {entry.status === 'install-required'
+              ? 'Open Agent Chat and choose Install before first use.'
+              : entry.status === 'manual-install'
+                ? 'Open Agent Chat and save the path to your installed binary.'
+                : entry.unavailableReason}
+          </p>
+        )}
+        {entry.status === 'ready' &&
+          entry.config &&
+          entry.config.command !== 'npx' &&
+          entry.config.command !== 'uvx' && <AgentPathEditor entry={entry} />}
+        {entry.status === 'manual-install' && entry.manualInstall && (
+          <p className="mt-1 font-mono text-2xs text-muted-foreground">
+            Expected: {entry.manualInstall.cmd}
+            {entry.manualInstall.args.length > 0 ? ` ${entry.manualInstall.args.join(' ')}` : ''}
+          </p>
+        )}
       </div>
     </div>
   )
 }
 
 /**
- * Registry-driven ACP agent list. Lists every agent from the offline snapshot
- * with an enable toggle; enabling derives an `AgentConfig` for the current
- * OS/arch, persists it, and warms the process in the background.
+ * Status-only ACP agent list. Agent Chat derives these supported agents without
+ * requiring a Preferences toggle; this view only shows availability/debug state.
  */
 export function AcpAgentsSettings(): React.JSX.Element {
   const [filter, setFilter] = useState('')
-  const platformArch = useMemo(() => currentPlatformArch(), [])
+  const {
+    usingRemoteRegistry,
+    remoteAvailable,
+    advisorySummary,
+    checking,
+    lastCheckedAt,
+    checkForUpdates,
+    applyRemoteRegistry,
+    useBundledRegistry: switchToBundledRegistry
+  } = useAcpRegistryCatalog()
+  const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  const supportedAgents = useResolvedSupportedAcpAgents(agentConfigs)
 
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return REGISTRY_AGENTS
-    return REGISTRY_AGENTS.filter(
-      (a) =>
-        a.name.toLowerCase().includes(q) ||
-        a.id.toLowerCase().includes(q) ||
-        a.description.toLowerCase().includes(q)
-    )
-  }, [filter])
+  const visible = useMemo(
+    () => filterSupportedAcpAgents(supportedAgents, filter),
+    [filter, supportedAgents]
+  )
+
+  const handleCheckUpdates = (): void => {
+    void (async () => {
+      try {
+        const summary = await checkForUpdates(true)
+        if (!summary) {
+          toast.error('Could not fetch the ACP registry.')
+          return
+        }
+        if (summary.updatedCount === 0) {
+          toast.success('ACP registry is up to date.')
+          return
+        }
+        toast.success(
+          `${summary.updatedCount} agent${summary.updatedCount === 1 ? '' : 's'} available from the registry. Review and apply to use them.`
+        )
+      } catch (err) {
+        toast.error(String(err))
+      }
+    })()
+  }
+
+  const handleApplyRemote = async (): Promise<void> => {
+    try {
+      await applyRemoteRegistry()
+      const count = advisorySummary?.updatedCount ?? 0
+      toast.success(
+        count > 0
+          ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
+          : 'Using remote registry.'
+      )
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  const handleUseBundled = async (): Promise<void> => {
+    try {
+      await switchToBundledRegistry()
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={checking}
+          onClick={handleCheckUpdates}
+        >
+          {checking ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : (
+            <RefreshCw size={14} className="mr-1.5" />
+          )}
+          Check for registry updates
+        </Button>
+        {remoteAvailable && (
+          <Button type="button" size="sm" variant="secondary" onClick={handleApplyRemote}>
+            Apply remote registry
+          </Button>
+        )}
+        {usingRemoteRegistry && (
+          <Button type="button" size="sm" variant="ghost" onClick={handleUseBundled}>
+            Use bundled registry
+          </Button>
+        )}
+        {lastCheckedAt && (
+          <span className="text-2xs text-muted-foreground">
+            {usingRemoteRegistry
+              ? 'Using remote registry'
+              : remoteAvailable
+                ? `${advisorySummary?.updatedCount ?? 0} update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
+                : 'Last checked'}{' '}
+            · {lastCheckedAt}
+          </span>
+        )}
+      </div>
+
       <div className="relative">
         <Search
           size={14}
@@ -220,9 +337,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
         {visible.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
         ) : (
-          visible.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} platformArch={platformArch} />
-          ))
+          visible.map((entry) => <AgentRow key={entry.id} entry={entry} />)
         )}
       </div>
     </div>

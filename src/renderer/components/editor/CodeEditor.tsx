@@ -3,6 +3,7 @@ import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-
 import { useShallow } from 'zustand/shallow'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useCodeMirror, type VisibleLineRange } from '@/hooks/use-codemirror'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
@@ -90,7 +91,11 @@ export function CodeEditor({
 
   const tocPanelBounds = useMemo(() => getTocPercentBounds(getPanelWidth()), [getPanelWidth])
   const tocPanelDefaultSize = useMemo(() => getTocPanelSizePercent(), [getTocPanelSizePercent])
-  const canRenderToc = isTocHydrated && isTocVisible && language === 'markdown'
+  // On a narrow (≤767px) mobile viewport the side-by-side TOC panel squeezes the
+  // editor (TOC_MIN_WIDTH=150 leaves ~225px on a 375px phone). Hide it on mobile
+  // so the editor gets the full width; desktop keeps the TOC unchanged.
+  const isMobileWebShell = useMobileWebShell()
+  const canRenderToc = !isMobileWebShell && isTocHydrated && isTocVisible && language === 'markdown'
 
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {

@@ -1,9 +1,9 @@
-import { Check, SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
+import { forwardRef, type RefObject } from 'react'
+import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { SlashItem, SlashSection } from './slash-menu-model'
 
-export interface SlashMenuHandle {
+export type SlashMenuHandle = {
   /** Move highlight. Returns true if handled. */
   move: (delta: 1 | -1) => void
   /** Select the highlighted item. Returns true if an item was selected. */
@@ -13,11 +13,8 @@ export interface SlashMenuHandle {
 interface SlashCommandMenuProps {
   sections: SlashSection[]
   onSelect: (item: SlashItem) => void
-}
-
-/** Flatten sections to a single ordered list for highlight indexing. */
-function flatten(sections: SlashSection[]): SlashItem[] {
-  return sections.flatMap((s) => s.items)
+  /** The composer textarea that owns this listbox (for aria-controls/activedescendant). */
+  inputRef?: RefObject<HTMLTextAreaElement | null>
 }
 
 function itemKey(item: SlashItem): string {
@@ -33,120 +30,47 @@ function itemKey(item: SlashItem): string {
   }
 }
 
+function slashItemToComposer(item: SlashItem): ComposerMenuItem {
+  const isCommandOrSkill = item.kind === 'command' || item.kind === 'skill'
+  const Icon =
+    item.kind === 'command' ? TerminalSquare : item.kind === 'skill' ? Sparkles : SlidersHorizontal
+  const label = isCommandOrSkill ? `/${item.name}` : item.label
+  const selected = !isCommandOrSkill && item.selected
+  return {
+    key: itemKey(item),
+    label,
+    description: item.description,
+    icon: Icon,
+    // Skill rows share the accent `Sparkles` treatment with `SkillChip`
+    // (composer overlay + timeline) so the skills icon reads consistently
+    // across the picker and the chips. Commands/config/mode stay muted.
+    iconClassName: item.kind === 'skill' ? 'text-primary' : undefined,
+    selected,
+    payload: item
+  }
+}
+
 /**
- * Inline slash-command menu rendered above the chat input. Highlight navigation
- * is driven imperatively by the input (↑/↓/Enter) via the forwarded handle, so
- * the textarea keeps focus.
+ * Inline slash-command menu rendered above the chat input. A thin wrapper over
+ * the shared {@link ComposerMenu} shell; the slash-specific part is the
+ * SlashItem → ComposerMenuItem mapping (icon, `/<name>` label).
  */
 export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProps>(
-  ({ sections, onSelect }, ref) => {
-    const flat = useMemo(() => flatten(sections), [sections])
-    const [highlight, setHighlight] = useState(0)
-    const listRef = useRef<HTMLDivElement>(null)
+  ({ sections, onSelect, inputRef }, ref) => {
+    const composerSections: ComposerMenuSection[] = sections.map((s) => ({
+      id: s.id,
+      heading: s.heading,
+      items: s.items.map(slashItemToComposer)
+    }))
 
-    // Clamp the highlight whenever the item set changes (filtering, updates).
-    useEffect(() => {
-      setHighlight((h) => (flat.length === 0 ? 0 : Math.min(h, flat.length - 1)))
-    }, [flat.length])
-
-    // Keep the highlighted row visible so keyboard nav / Enter never targets an
-    // off-screen item.
-    useEffect(() => {
-      const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`)
-      el?.scrollIntoView({ block: 'nearest' })
-    }, [highlight])
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        move: (delta) => {
-          if (flat.length === 0) return
-          setHighlight((h) => (h + delta + flat.length) % flat.length)
-        },
-        selectHighlighted: () => {
-          if (flat.length === 0) return false
-          const item = flat[Math.min(highlight, flat.length - 1)]
-          if (!item) return false
-          onSelect(item)
-          return true
-        }
-      }),
-      [flat, highlight, onSelect]
-    )
-
-    if (sections.length === 0) {
-      return (
-        <div className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md">
-          No commands available.
-        </div>
-      )
-    }
-
-    let flatIndex = -1
     return (
-      <div
-        ref={listRef}
-        className="absolute bottom-full left-2 right-2 mb-1 max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md"
-      >
-        {sections.map((section) => (
-          <div key={section.id}>
-            <div className="label-group px-3 py-1 text-muted-foreground/70">{section.heading}</div>
-            {section.items.map((item) => {
-              flatIndex += 1
-              const isHighlighted = flatIndex === highlight
-              const idx = flatIndex
-              const Icon =
-                item.kind === 'command'
-                  ? TerminalSquare
-                  : item.kind === 'skill'
-                    ? Sparkles
-                    : SlidersHorizontal
-              const selected = item.kind !== 'command' && item.kind !== 'skill' && item.selected
-              const label =
-                item.kind === 'command'
-                  ? `/${item.name}`
-                  : item.kind === 'skill'
-                    ? `/${item.name}`
-                    : item.label
-              const description = item.description
-              return (
-                <button
-                  key={itemKey(item)}
-                  type="button"
-                  data-idx={idx}
-                  // Use mousedown so the textarea doesn't blur before we handle it.
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    onSelect(item)
-                  }}
-                  onMouseEnter={() => setHighlight(idx)}
-                  className={cn(
-                    'flex w-full gap-2 px-3 py-1.5 text-left text-sm',
-                    item.kind === 'skill' ? 'flex-wrap items-start' : 'items-center',
-                    isHighlighted ? 'bg-accent text-accent-foreground' : 'text-foreground'
-                  )}
-                >
-                  <Icon size={13} className="shrink-0 text-muted-foreground" />
-                  <span
-                    className={cn(
-                      'font-medium',
-                      item.kind === 'skill' ? 'break-words' : 'min-w-0 truncate'
-                    )}
-                  >
-                    {label}
-                  </span>
-                  {description && (
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                      {description}
-                    </span>
-                  )}
-                  {selected && <Check size={13} className="ml-auto shrink-0 text-primary" />}
-                </button>
-              )
-            })}
-          </div>
-        ))}
-      </div>
+      <ComposerMenu
+        ref={ref}
+        sections={composerSections}
+        emptyLabel="No commands available."
+        inputRef={inputRef}
+        onSelect={(_sectionId, cItem) => onSelect(cItem.payload as SlashItem)}
+      />
     )
   }
 )

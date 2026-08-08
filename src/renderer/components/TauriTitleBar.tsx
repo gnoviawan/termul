@@ -1,6 +1,6 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Copy, Minus, Square, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { getCurrentWindow } from '@/lib/tauri-window'
 
 const focusableButtonClass =
   'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'

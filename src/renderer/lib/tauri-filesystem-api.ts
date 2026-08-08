@@ -5,7 +5,8 @@ import type {
   FileContent,
   FileInfo,
   FilesystemApi,
-  IpcResult
+  IpcResult,
+  SearchFileHit
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -22,7 +23,9 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { sortDirectoryEntries } from './filesystem-sort'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+import { webServerFilesystem } from './web-server-api'
 
 // Names that are commonly git-ignored. Entries matching these are still shown in
 // the file tree but rendered dimmed (and skipped during recursive walks for perf).
@@ -89,32 +92,60 @@ async function searchWithRipgrep(
   }
 }
 
+/**
+ * Watch event types dispatched by the Tauri watcher (mapped from notify kinds).
+ * Type filtering is an internal facade detail — the shared `FilesystemApi`
+ * contract keeps one `FileChangeCallback` signature per subscription method.
+ */
+type FileWatchEventType = 'change' | 'add' | 'unlink'
+
+/** Registry of callbacks keyed by the event types they subscribed for. */
+type TypedCallbackRegistry = Map<FileChangeCallback, Set<FileWatchEventType>>
+
+function registerTypedCallback(
+  registry: TypedCallbackRegistry,
+  callback: FileChangeCallback,
+  eventType: FileWatchEventType
+): void {
+  const types = registry.get(callback)
+  if (types) {
+    types.add(eventType)
+  } else {
+    registry.set(callback, new Set([eventType]))
+  }
+}
+
+function unregisterTypedCallback(
+  registry: TypedCallbackRegistry,
+  callback: FileChangeCallback,
+  eventType: FileWatchEventType
+): void {
+  const types = registry.get(callback)
+  if (!types) return
+  types.delete(eventType)
+  if (types.size === 0) {
+    registry.delete(callback)
+  }
+}
+
+function dispatchTypedEvent(
+  registry: TypedCallbackRegistry,
+  eventType: FileWatchEventType,
+  event: FileChangeEvent
+): void {
+  registry.forEach((types, callback) => {
+    if (types.has(eventType)) {
+      callback(event)
+    }
+  })
+}
+
 const activeWatchers = new Map<string, () => void>()
-const activeCallbacks = new Map<string, Set<FileChangeCallback>>()
-const globalCallbacks = new Set<FileChangeCallback>()
+const activeCallbacks = new Map<string, TypedCallbackRegistry>()
+const globalCallbacks: TypedCallbackRegistry = new Map()
 
 function shouldIgnore(name: string): boolean {
   return ALWAYS_IGNORE.includes(name)
-}
-
-/**
- * Sort directory entries: directories first (A-Z), then files (A-Z)
- */
-function sortDirectoryEntries(entries: DirectoryEntry[]): DirectoryEntry[] {
-  return [...entries].sort((a, b) => {
-    // Directories come before files
-    if (a.type === 'directory' && b.type === 'file') return -1
-    if (a.type === 'file' && b.type === 'directory') return 1
-
-    // Within same type, non-ignored entries come before ignored ones
-    if (!a.ignored && b.ignored) return -1
-    if (a.ignored && !b.ignored) return 1
-
-    // Within same type/ignored group, sort alphabetically by name (case-insensitive)
-    const nameA = a.name.toLowerCase()
-    const nameB = b.name.toLowerCase()
-    return nameA.localeCompare(nameB)
-  })
 }
 
 function isBinaryFile(content: string): boolean {
@@ -188,6 +219,27 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
 export function createTauriFilesystemApi(): FilesystemApi {
   return {
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
+      // Web/remote mode: route through the same-origin server (Story: Web/
+      // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
+      if (!isTauriContext()) {
+        // The web server (fs_api.rs `ls`) returns OS-native entry paths — on
+        // Windows that is backslash separators. The file-explorer store keys
+        // `expandedDirs`/`directoryContents` by normalizePath (`\`→`/`) but
+        // FileTreeNode reads them by raw `entry.path`, so backslash paths
+        // break subdir expansion at level 2+. Normalize to forward slashes to
+        // match the Tauri branch below.
+        const result = await webServerFilesystem.readDirectory(dirPath)
+        if (result.success) {
+          return {
+            success: true,
+            data: result.data.map((entry) => ({
+              ...entry,
+              path: entry.path.replace(/\\/g, '/')
+            }))
+          }
+        }
+        return result
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const entries = await readDir(dirPath)
@@ -231,6 +283,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async readFile(filePath: string): Promise<IpcResult<FileContent>> {
+      // Web/remote mode: route through the same-origin server. The server
+      // enforces size + binary checks (FILE_TOO_LARGE / BINARY_FILE) so this
+      // is a thin passthrough mirroring the desktop facade's behavior.
+      if (!isTauriContext()) {
+        return webServerFilesystem.readFile(filePath)
+      }
       try {
         const info = await stat(filePath)
         if (info.size > MAX_FILE_SIZE) {
@@ -268,6 +326,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {
+      // Web/remote mode: route through the same-origin server (`GET /fs/info`).
+      if (!isTauriContext()) {
+        return webServerFilesystem.getFileInfo(filePath)
+      }
       try {
         const info = await stat(filePath)
         const modifiedAt = info.mtime?.getTime() ?? Date.now()
@@ -421,6 +483,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
       rootPath: string,
       query: string
     ) {
+      // Web/remote mode: streaming search transport (`/search/ws`) is not yet
+      // implemented — return an explicit unsupported result instead of
+      // invoking a Tauri-only command that silently fails.
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_content_stream',
@@ -440,6 +512,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async searchContentStreamCancel(searchId: string) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_content_cancel',
@@ -484,12 +563,28 @@ export function createTauriFilesystemApi(): FilesystemApi {
       searchId: string,
       scopeRoot: string,
       rootPath: string,
-      query: string
+      query: string,
+      includeIgnored?: boolean
     ) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_stream',
-          { request: { searchId, scopeRoot, rootPath, query } }
+          {
+            request: {
+              searchId,
+              scopeRoot,
+              rootPath,
+              query,
+              ...(includeIgnored ? { includeIgnored } : {})
+            }
+          }
         )
         if (!response?.success) {
           return {
@@ -509,6 +604,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async searchFileNamesStreamCancel(searchId: string) {
+      if (!isTauriContext()) {
+        return {
+          success: false as const,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Streaming search is not available in the web client'
+        }
+      }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
           'search_file_names_cancel',
@@ -532,12 +634,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onSearchFileNamesBatch(
-      callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+      callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
     ) {
       if (!isTauriContext()) return () => {}
       let unlisten: Promise<UnlistenFn> | undefined
       try {
-        unlisten = listen<{ searchId: string; files: string[]; truncated?: boolean }>(
+        unlisten = listen<{ searchId: string; files: SearchFileHit[]; truncated?: boolean }>(
           'search-file-names-batch',
           ({ payload }) => callback(payload)
         )
@@ -590,6 +692,11 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async writeFile(filePath: string, content: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server (`POST /fs/write`,
+      // which truncates+overwrites — matches desktop `writeTextFile`).
+      if (!isTauriContext()) {
+        return webServerFilesystem.writeFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -599,6 +706,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createFile(filePath, content)
+      }
       try {
         await writeTextFile(filePath, content)
         return { success: true, data: undefined }
@@ -608,6 +719,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async createDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.createDirectory(dirPath)
+      }
       try {
         await mkdir(dirPath, { recursive: true })
         return { success: true, data: undefined }
@@ -617,6 +732,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async deletePath(path: string, options?: { recursive?: boolean }): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.deletePath(path, options)
+      }
       try {
         await remove(path, { recursive: options?.recursive ?? false })
         return { success: true, data: undefined }
@@ -626,6 +745,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async renameFile(oldPath: string, newPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.renameFile(oldPath, newPath)
+      }
       try {
         await rename(oldPath, newPath)
         return { success: true, data: undefined }
@@ -639,6 +762,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
      * Returns `COPY_ERROR` on failure (e.g. when the source is a directory).
      */
     async copyFile(srcPath: string, destPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: route through the same-origin server.
+      if (!isTauriContext()) {
+        return webServerFilesystem.copyFile(srcPath, destPath)
+      }
       try {
         await copyFile(srcPath, destPath)
         return { success: true, data: undefined }
@@ -648,6 +775,18 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async watchDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: server-side directory watching (notify + WS/SSE event
+      // channel) is not yet implemented. Return an explicit unsupported result
+      // instead of false success — callers can branch on `code` and the
+      // mobile file explorer re-fetches on action/refresh instead of
+      // subscribing to fs events.
+      if (!isTauriContext()) {
+        return {
+          success: false,
+          code: 'WEB_UNSUPPORTED',
+          error: 'Directory watching is not available in the web client'
+        }
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
 
@@ -666,7 +805,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
             // The kind object has a 'type' property: 'create' | 'modify' | 'remove' | 'access' | 'other' | 'any'
             const kindType = (event.type as { type?: string })?.type ?? 'other'
 
-            let changeType: FileChangeEvent['type'] = 'change'
+            let changeType: FileWatchEventType = 'change'
             if (kindType === 'create') changeType = 'add'
             else if (kindType === 'remove') changeType = 'unlink'
 
@@ -677,18 +816,18 @@ export function createTauriFilesystemApi(): FilesystemApi {
               path: changedPath
             }
 
-            callbacks.forEach((cb) => {
-              cb(changeEvent)
-            })
-            globalCallbacks.forEach((cb) => {
-              cb(changeEvent)
-            })
+            // Dispatch by event type: notify fires every kind (a save's modify
+            // events included) and fanning all of them to every subscriber let
+            // delete-handlers run on change events (#539). Route each event
+            // only to callbacks subscribed for its type.
+            dispatchTypedEvent(callbacks, changeType, changeEvent)
+            dispatchTypedEvent(globalCallbacks, changeType, changeEvent)
           }
         )
 
         activeWatchers.set(normalizedDirPath, unlisten)
         if (!activeCallbacks.has(normalizedDirPath)) {
-          activeCallbacks.set(normalizedDirPath, new Set())
+          activeCallbacks.set(normalizedDirPath, new Map())
         }
         return { success: true, data: undefined }
       } catch (err) {
@@ -697,6 +836,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async unwatchDirectory(dirPath: string): Promise<IpcResult<void>> {
+      // Web/remote mode: nothing to unwatch (watchers are desktop-only).
+      if (!isTauriContext()) {
+        return { success: true, data: undefined }
+      }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
         const unlisten = activeWatchers.get(normalizedDirPath)
@@ -712,25 +855,39 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onFileChanged(callback: FileChangeCallback): () => void {
-      globalCallbacks.add(callback)
+      registerTypedCallback(globalCallbacks, callback, 'change')
 
-      // Return cleanup function
+      // Return cleanup function — removes only the 'change' subscription so
+      // callers that registered the same callback for several event types
+      // (e.g. onFileChanged + onFileCreated + onFileDeleted) keep the others.
       return () => {
-        globalCallbacks.delete(callback)
+        unregisterTypedCallback(globalCallbacks, callback, 'change')
         for (const callbacks of activeCallbacks.values()) {
-          callbacks.delete(callback)
+          unregisterTypedCallback(callbacks, callback, 'change')
         }
       }
     },
 
     onFileCreated(callback: FileChangeCallback): () => void {
-      // Same implementation as onFileChanged for plugin-fs
-      return this.onFileChanged(callback)
+      registerTypedCallback(globalCallbacks, callback, 'add')
+
+      return () => {
+        unregisterTypedCallback(globalCallbacks, callback, 'add')
+        for (const callbacks of activeCallbacks.values()) {
+          unregisterTypedCallback(callbacks, callback, 'add')
+        }
+      }
     },
 
     onFileDeleted(callback: FileChangeCallback): () => void {
-      // Same implementation as onFileChanged for plugin-fs
-      return this.onFileChanged(callback)
+      registerTypedCallback(globalCallbacks, callback, 'unlink')
+
+      return () => {
+        unregisterTypedCallback(globalCallbacks, callback, 'unlink')
+        for (const callbacks of activeCallbacks.values()) {
+          unregisterTypedCallback(callbacks, callback, 'unlink')
+        }
+      }
     }
   }
 }

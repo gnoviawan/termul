@@ -1,0 +1,453 @@
+name: Nightly
+
+# Builds dev HEAD every night at 00:00 GMT+7 (17:00 UTC) and on manual
+# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+# (detected from a release/v* branch, or patch-bumped from current), and
+# publishes a prerelease under the moving `nightly` tag with a per-channel
+# `latest-nightly.json` manifest covering both the desktop targets and the
+# standalone `termul-server` binary.
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Synthesize nightly version
+    runs-on: ubuntu-latest
+    outputs:
+      nightly_version: ${{ steps.version.outputs.nightly_version }}
+      short_sha: ${{ steps.version.outputs.short_sha }}
+      nightly_date: ${{ steps.version.outputs.nightly_date }}
+      # Full commit SHA the version was synthesized from, pinned into the build
+      # + publish jobs so the version baked into the binary, the actual build
+      # commit, and the release target are all the same commit (no drift).
+      commit_sha: ${{ steps.version.outputs.commit_sha }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Build dev HEAD — the integration branch receives PRs daily, so the
+          # nightly is always fresh. dev → main only happens during a stable
+          # release (release-stable skill); building main would be stale between
+          # releases.
+          ref: dev
+          fetch-depth: 1
+          # persist-credentials: true needed for git ls-remote (release branch
+          # detection in the version synthesis step below).
+          persist-credentials: true
+
+      - name: Synthesize version
+        id: version
+        shell: bash
+        run: |
+          # 00:00 GMT+7 = 17:00 UTC; use the GMT+7 (Asia/Jakarta) date so the
+          # nightly version reflects the local calendar day the build ships.
+          NIGHTLY_DATE="$(TZ='Asia/Jakarta' date +%Y%m%d)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          COMMIT_SHA="$(git rev-parse HEAD)"
+
+          # Detect the upcoming release version from a release/v* branch on the
+          # remote. If release/v0.5.0 exists, the nightly version is
+          # 0.5.0-nightly.<date>.<sha> — more readable than 0.0.0-nightly.* and
+          # correctly offers the nightly to stable users (0.5.0-nightly > 0.4.8).
+          # If no release branch exists, bump the patch from the current
+          # package.json version as a best guess (0.4.8 -> 0.4.9-nightly.*).
+          RELEASE_VERSION="$(git ls-remote --heads origin 'release/v*' 2>/dev/null \
+            | sed 's|.*refs/heads/release/v||' | sort -V | tail -1)"
+
+          if [ -z "$RELEASE_VERSION" ]; then
+            RELEASE_VERSION="$(node -e \
+              "const v=require('./package.json').version.split('.').map(Number); \
+               console.log(v[0]+'.'+v[1]+'.'+(v[2]+1))")"
+            echo "No release/v* branch found; using patch-bump ${RELEASE_VERSION} as nightly base."
+          else
+            echo "Detected release/v${RELEASE_VERSION} branch; using as nightly base."
+          fi
+
+          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${SHORT_SHA}"
+          echo "nightly_version=$NIGHTLY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "nightly_date=$NIGHTLY_DATE" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu
+          - platform: macos-aarch64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-x64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+    steps:
+      - name: Harden runner
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Pin to the exact commit `prepare` synthesized the version from so
+          # the build commit matches the version baked into the binary.
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stamp nightly version into sources
+        env:
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.nightly_version }}
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.NIGHTLY_VERSION;
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = v;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            conf.version = v;
+            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(conf, null, 2));
+            const cargoPath = "src-tauri/Cargo.toml";
+            const cargo = fs.readFileSync(cargoPath, "utf8");
+            fs.writeFileSync(cargoPath, cargo.replace(/^version\s*=\s*".*"/m, `version = "${v}"`));
+          '
+
+      - name: Install Linux dependencies
+        if: matrix.runner == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            patchelf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Bypass strict version alignment (nightly)
+        run: bun scripts/align-version.ts --nightly
+
+      - name: Build web client (dist-web/)
+        run: bun run build:web
+
+      - name: Assert dist-web/index.html exists
+        shell: bash
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      - name: Build platform artifacts locally
+        id: tauri
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun run tauri
+          args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
+
+      - name: Persist Tauri artifact paths
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: printf '%s\n' "$ARTIFACT_PATHS" > tauri-artifact-paths.json
+
+      - name: Collect platform release assets and updater manifest
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.nightly_version }}
+          TAG: nightly
+        run: |
+          node scripts/release/prepare-platform-artifacts.mjs \
+            --platform "$PLATFORM" \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --artifacts tauri-artifact-paths.json \
+            --output collected
+
+      - name: Upload platform workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: nightly-${{ matrix.platform }}
+          path: collected/
+          if-no-files-found: error
+          retention-days: 1
+
+  standalone-server:
+    name: Build termul-server (linux-x64)
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Pin to the exact commit `prepare` synthesized the version from.
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stamp nightly version into sources
+        env:
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.nightly_version }}
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.NIGHTLY_VERSION;
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = v;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            conf.version = v;
+            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(conf, null, 2));
+            const cargoPath = "src-tauri/Cargo.toml";
+            const cargo = fs.readFileSync(cargoPath, "utf8");
+            fs.writeFileSync(cargoPath, cargo.replace(/^version\s*=\s*".*"/m, `version = "${v}"`));
+          '
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            patchelf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Bypass strict version alignment (nightly)
+        run: bun scripts/align-version.ts --nightly
+
+      - name: Build web client (dist-web/)
+        run: bun run build:web
+
+      - name: Assert dist-web/index.html exists
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      - name: Build termul-server (linux-x64 release)
+        working-directory: src-tauri
+        # Bake the signing pubkey into the binary at compile time so the opt-in
+        # self-update subsystem can verify downloaded binaries (option_env!).
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: >
+          cargo build --release --bin termul-server
+          --features standalone-server
+          --target x86_64-unknown-linux-gnu
+
+      - name: Sign termul-server binary
+        working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bun run tauri signer sign target/x86_64-unknown-linux-gnu/release/termul-server
+          test -f target/x86_64-unknown-linux-gnu/release/termul-server.sig
+
+      - name: Prepare server manifest fragment
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.nightly_version }}
+        run: |
+          node scripts/release/prepare-server-artifacts.mjs \
+            --signature src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig \
+            --tag nightly \
+            --version "$VERSION" \
+            --output server-collected/server-manifest.json
+
+      - name: Stage termul-server binary + signature
+        shell: bash
+        run: |
+          mkdir -p server-collected
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server server-collected/termul-server
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig server-collected/termul-server.sig
+
+      - name: Upload termul-server workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: nightly-standalone-server
+          # Single root so upload-artifact's least-common-ancestor doesn't
+          # collapse to the workspace root (which would re-prefix every path).
+          path: server-collected/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Validate, upload, and publish nightly
+    needs: [prepare, build, standalone-server]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Same commit the binaries were built from (scripts + release target).
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 1
+          # `persist-credentials: true` so the nightly moving-tag push below can
+          # authenticate with the GITHUB_TOKEN (contents: write).
+          persist-credentials: true
+
+      - name: Download all platform workflow artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: nightly-*
+          path: release-inputs
+
+      - name: Validate and merge release inputs
+        env:
+          VERSION: ${{ needs.prepare.outputs.nightly_version }}
+          NIGHTLY_DATE: ${{ needs.prepare.outputs.nightly_date }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
+          manifests=()
+          mkdir -p release-assets
+          printf 'Automated nightly build of main HEAD (%s, %s).\n' "$NIGHTLY_DATE" "$SHORT_SHA" > release-notes.md
+
+          for platform in "${expected[@]}"; do
+            root="release-inputs/nightly-$platform"
+            manifest="$root/platform-manifest.json"
+            if [[ ! -s "$manifest" || ! -d "$root/assets" ]]; then
+              echo "Missing collected nightly input for $platform" >&2
+              exit 1
+            fi
+            manifests+=("$manifest")
+            while IFS= read -r -d '' asset; do
+              name="$(basename "$asset")"
+              if [[ -e "release-assets/$name" ]] && ! cmp -s "$asset" "release-assets/$name"; then
+                echo "Conflicting duplicate release asset: $name" >&2
+                exit 1
+              fi
+              cp "$asset" "release-assets/$name"
+            done < <(find "$root/assets" -maxdepth 1 -type f -print0)
+          done
+
+          cp release-inputs/nightly-standalone-server/server-collected/termul-server release-assets/termul-server
+          cp release-inputs/nightly-standalone-server/server-collected/termul-server.sig release-assets/termul-server.sig
+          manifests+=("release-inputs/nightly-standalone-server/server-collected/server-manifest.json")
+
+          PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          node scripts/release/merge-updater-manifests.mjs \
+            --channel nightly \
+            --tag nightly \
+            latest-nightly.json "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
+
+          release_file_count=0
+          while IFS= read -r -d '' _release_file; do
+            release_file_count=$((release_file_count + 1))
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+          if [[ "$release_file_count" -eq 0 ]]; then
+            echo "No validated release assets were collected." >&2
+            exit 1
+          fi
+
+      - name: Publish (or update) the moving nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.nightly_version }}
+          # The exact commit the binaries were built from — used as the release
+          # target so `nightly` points at the commit the version encodes.
+          COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
+        run: |
+          SHA="$COMMIT_SHA"
+          TITLE="Termul Nightly ($VERSION)"
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # `gh release edit --target` only updates the release's
+            # target_commitish — it does NOT move the git tag that asset URLs
+            # (`releases/download/nightly/...`) resolve via. Force-move the tag.
+            git tag -f nightly "$SHA"
+            git push origin nightly --force
+            gh release edit nightly --repo "$GITHUB_REPOSITORY" \
+              --target "$SHA" --title "$TITLE" --notes-file release-notes.md --prerelease
+          else
+            gh release create nightly --repo "$GITHUB_REPOSITORY" \
+              --target "$SHA" --title "$TITLE" --notes-file release-notes.md --prerelease
+          fi
+
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("$asset")
+          done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          assets+=(latest-nightly.json)
+          gh release upload nightly --repo "$GITHUB_REPOSITORY" "${assets[@]}" --clobber

@@ -117,25 +117,47 @@ export function GitBranchPicker({
     }
   }, [open, loadBranches])
 
-  const localBranches = useMemo(() => branches.filter((branch) => !branch.isRemote), [branches])
+  // Local branch short names - used to suppress remote duplicates
+  const localBranchNames = useMemo(
+    () => new Set(branches.filter((b) => !b.isRemote).map((b) => b.name)),
+    [branches]
+  )
+
+  // Branches after structural filtering (symref removal, local-duplicate suppression)
+  const visibleBranches = useMemo(
+    () =>
+      branches.filter((branch) => {
+        // Skip symbolic refs like origin/HEAD
+        if (branch.isRemote && branch.name.endsWith('/HEAD')) return false
+        // Skip remote branches that already have a local counterpart
+        if (branch.isRemote) {
+          const slash = branch.name.indexOf('/')
+          const shortName = slash >= 0 ? branch.name.slice(slash + 1) : branch.name
+          if (localBranchNames.has(shortName)) return false
+        }
+        return true
+      }),
+    [branches, localBranchNames]
+  )
 
   const filteredBranches = useMemo(() => {
     const query = branchSearch.trim().toLowerCase()
-    return localBranches
+    return visibleBranches
       .filter((branch) => !query || branch.name.toLowerCase().includes(query))
       .sort((a, b) => {
         if (a.isCurrent) return -1
         if (b.isCurrent) return 1
         return a.name.localeCompare(b.name)
       })
-  }, [localBranches, branchSearch])
+  }, [visibleBranches, branchSearch])
 
   const emptyListMessage = useMemo((): string | null => {
     if (loadError || branchesLoading) return null
-    if (localBranches.length === 0) return 'No branches yet.'
-    if (branchSearch.trim()) return 'No branches match your search.'
+    if (visibleBranches.length === 0) return 'No branches yet.'
+    if (branchSearch.trim() && filteredBranches.length === 0)
+      return 'No branches match your search.'
     return null
-  }, [branchSearch, branchesLoading, loadError, localBranches.length])
+  }, [branchSearch, branchesLoading, loadError, visibleBranches.length, filteredBranches.length])
 
   const canCreateBranch = !branchesLoading && !loadError
 
@@ -287,6 +309,9 @@ export function GitBranchPicker({
                 <span className="truncate flex-1">{branch.name}</span>
                 {branch.isCurrent && (
                   <span className="text-[10px] text-muted-foreground">current</span>
+                )}
+                {branch.isRemote && (
+                  <span className="text-[10px] text-muted-foreground">remote</span>
                 )}
                 {branch.hasOtherWorktree && (
                   <span className="text-[10px] text-muted-foreground">worktree</span>

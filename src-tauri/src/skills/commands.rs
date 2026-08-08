@@ -3,14 +3,14 @@
 use super::{list_agent_skills, read_agent_skill, AgentSkillContent, AgentSkillSummary};
 
 #[tauri::command]
-pub fn list_agent_skills_cmd(
+pub async fn list_agent_skills_cmd(
     project_root: Option<String>,
 ) -> Result<Vec<AgentSkillSummary>, String> {
     list_agent_skills(project_root.as_deref())
 }
 
 #[tauri::command]
-pub fn read_agent_skill_cmd(
+pub async fn read_agent_skill_cmd(
     name: String,
     project_root: Option<String>,
 ) -> Result<AgentSkillContent, String> {

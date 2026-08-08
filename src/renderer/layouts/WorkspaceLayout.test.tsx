@@ -4,12 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
+import { useThemePickerStore } from '@/stores/theme-picker-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
-const { platformState } = vi.hoisted(() => ({
-  platformState: { isMac: false }
+const { platformState, tauriRef } = vi.hoisted(() => ({
+  platformState: { isMac: false },
+  tauriRef: { current: true as boolean }
 }))
+
+vi.mock('@/lib/tauri-runtime', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
+  return { ...actual, isTauriContext: () => tauriRef.current }
+})
 
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
@@ -136,8 +143,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     remoteServerApi: {
       start: vi.fn(),
       stop: vi.fn(),
-      status: vi.fn(),
-      publishProjects: vi.fn()
+      status: vi.fn()
     },
     openerApi: {
       openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
@@ -226,6 +232,19 @@ vi.mock('@/hooks/use-file-watcher', () => ({
 vi.mock('@/hooks/use-editor-persistence', () => ({
   useEditorPersistence: vi.fn(),
   persistState: vi.fn()
+}))
+
+// P17: shared canonical mock shape for the Story 6 sync hook + banner —
+// identical inline factories across the three WorkspaceLayout suites so a
+// future export-surface refactor breaks all three with the same error.
+vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
+  useWorkspaceManifestSync: vi.fn(),
+  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
+  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
+  performManifestWrite: vi.fn().mockResolvedValue(undefined)
+}))
+vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
+  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
 }))
 
 const { mockSaveTerminalLayout } = vi.hoisted(() => ({
@@ -370,6 +389,7 @@ beforeEach(() => {
   mockWaitForPendingAppSettingsPersistence.mockReset()
   useFileExplorerStore.setState({ isVisible: true })
   useSidebarStore.setState({ isVisible: true })
+  useThemePickerStore.getState().close()
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
@@ -403,9 +423,33 @@ describe('WorkspaceLayout - Empty States', () => {
 
     renderWithRouter()
 
-    const strip = document.querySelector('[data-tauri-drag-region][aria-hidden="true"]')
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
     expect(strip).not.toBeNull()
     expect(strip?.className).toContain('h-8')
+    // Panel-visibility toggles were relocated into the macOS titlebar strip.
+    expect(strip?.querySelector('button[title="Toggle sidebar"]')).not.toBeNull()
+    expect(strip?.querySelector('button[title="Toggle file explorer"]')).not.toBeNull()
+    // Patch 18: the Story 6 conflict banner is mounted at the workspace root.
+    expect(screen.getByTestId('workspace-conflict-banner')).toBeInTheDocument()
+  })
+
+  it('renders active project name in macOS titlebar strip when a project is active', () => {
+    platformState.isMac = true
+    mockUseActiveProject.mockReturnValue(createProject('my-app', '/workspace/my-app', 'blue'))
+
+    renderWithRouter()
+
+    expect(screen.getByText('MY-APP')).toBeInTheDocument()
+  })
+
+  it('does not render project name in macOS titlebar strip when no project is active', () => {
+    platformState.isMac = true
+
+    renderWithRouter()
+
+    const strip = document.querySelector('[data-testid="macos-titlebar-strip"]')
+    expect(strip).not.toBeNull()
+    expect(strip?.querySelector('span')).not.toBeTruthy()
   })
 
   it('persists terminal layout before unload when a project is active', async () => {
@@ -413,6 +457,10 @@ describe('WorkspaceLayout - Empty States', () => {
     mockUseActiveProject.mockReturnValue(createProject('project-1', '/workspace/project-1', 'blue'))
 
     renderWithRouter()
+
+    // Patch 19: the Story 6 sync hook is mounted with the active project id.
+    const { useWorkspaceManifestSync } = await import('@/hooks/use-workspace-manifest-sync')
+    expect(useWorkspaceManifestSync).toHaveBeenCalledWith('project-1')
 
     window.dispatchEvent(new Event('beforeunload'))
 
@@ -456,6 +504,19 @@ describe('WorkspaceLayout - Empty States', () => {
       const button = screen.getByText('Create Your First Project')
       expect(button).toBeInTheDocument()
       expect(button.tagName).toBe('BUTTON')
+    })
+
+    it('shows the create-first-project CTA on web (isTauriContext false)', () => {
+      const prev = tauriRef.current
+      tauriRef.current = false
+      try {
+        renderWithRouter()
+        const button = screen.getByText('Create Your First Project')
+        expect(button).toBeInTheDocument()
+        expect(button.tagName).toBe('BUTTON')
+      } finally {
+        tauriRef.current = prev
+      }
     })
 
     it('should not show terminal-related elements when no projects', () => {
@@ -812,16 +873,19 @@ describe('WorkspaceLayout - Empty States', () => {
     })
 
     it('opens the color theme picker from backend shortcut callbacks', async () => {
-      mockApi.keyboard.onShortcut.mockImplementationOnce((callback: (shortcut: string) => void) => {
-        callback('colorThemePicker')
+      let backendShortcut: ((shortcut: string) => void) | undefined
+      // Prefer mockImplementation over Once: Strict Mode remounts / sibling
+      // subscribers can consume a one-shot mock before the layout effect runs.
+      mockApi.keyboard.onShortcut.mockImplementation((callback: (shortcut: string) => void) => {
+        backendShortcut = callback
         return vi.fn()
       })
 
       renderWithRouter()
 
-      await waitFor(() => {
-        expect(screen.getByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
-      })
+      await waitFor(() => expect(backendShortcut).toBeDefined())
+      act(() => backendShortcut?.('colorThemePicker'))
+      expect(await screen.findByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
     })
   })
 
@@ -1091,6 +1155,43 @@ describe('WorkspaceLayout - Empty States', () => {
 
       expect(syncCallsAfter).toBe(initialSyncCalls)
       consoleLogSpy.mockRestore()
+    })
+
+    it('treats watchDirectory WEB_UNSUPPORTED as a soft no-op on web (no rootLoadError)', async () => {
+      const prev = tauriRef.current
+      tauriRef.current = false
+      useFileExplorerStore.setState({ rootLoadError: null })
+      mockApi.filesystem.watchDirectory.mockResolvedValue({
+        success: false,
+        code: 'WEB_UNSUPPORTED',
+        error: 'Directory watching is not available in the web client'
+      })
+      try {
+        const projects = [createProject('a', '/workspace/a', 'blue')]
+        mockUseProjects.mockReturnValue(projects)
+        mockUseTerminals.mockReturnValue([])
+        mockUseAllTerminals.mockReturnValue([])
+        mockUseActiveTerminal.mockReturnValue(null)
+        mockUseActiveTerminalId.mockReturnValue('')
+        mockUseActiveProject.mockReturnValue(projects[0])
+        mockUseActiveProjectId.mockReturnValue('a')
+
+        renderWithRouter()
+
+        await waitFor(() => {
+          expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
+        })
+
+        // Give the async project-switch effect a tick to settle.
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // WEB_UNSUPPORTED must NOT set rootLoadError — the project switch
+        // completes (file explorer works, just no live change events).
+        expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
+      } finally {
+        tauriRef.current = prev
+        mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
+      }
     })
   })
 })

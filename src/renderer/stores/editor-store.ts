@@ -2,6 +2,12 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { filesystemApi } from '@/lib/api'
+import {
+  cancelAllAutoSaves,
+  cancelAutoSave,
+  clearAutoSaveFailure,
+  scheduleAutoSave
+} from '@/lib/editor-auto-save'
 import { flushEditorContent } from '@/lib/editor-content-flush'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
@@ -145,6 +151,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   closeFile: (path: string): void => {
+    cancelAutoSave(path)
     const { openFiles, activeFilePath } = get()
     const newFiles = new Map(openFiles)
     newFiles.delete(path)
@@ -170,6 +177,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { openFiles: openFiles2, activeFilePath } = get()
     const newFiles = new Map(openFiles2)
     newFiles.delete(path)
+    cancelAutoSave(path)
 
     let newActive = activeFilePath
     if (activeFilePath === path) {
@@ -187,12 +195,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!file) return
 
     const newFiles = new Map(openFiles)
+    const isDirty = content !== file.originalContent
     newFiles.set(path, {
       ...file,
       content,
-      isDirty: content !== file.originalContent
+      isDirty
     })
     set({ openFiles: newFiles })
+
+    // Auto-save (GH-539): every real buffer change pushes the debounce window;
+    // returning to the original content clears it (and any pending timer).
+    if (content !== file.content) {
+      clearAutoSaveFailure(path)
+      if (isDirty) {
+        scheduleAutoSave(path)
+      } else {
+        cancelAutoSave(path)
+      }
+    }
   },
 
   saveFile: async (path: string): Promise<boolean> => {
@@ -364,6 +384,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   clearAllFiles: (): void => {
+    cancelAllAutoSaves()
     set({ openFiles: new Map(), activeFilePath: null })
   },
 

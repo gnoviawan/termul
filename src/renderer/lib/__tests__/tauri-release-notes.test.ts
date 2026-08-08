@@ -10,6 +10,13 @@ vi.mock('@tauri-apps/plugin-store', () => ({
   }
 }))
 
+// Desktop branch: these tests exercise the Tauri code path. Without this stub,
+// `isTauriContext()` is false under Vitest and the facades take the web branch
+// (covered separately by `tauri-release-notes.web.test.ts`).
+vi.mock('../tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => true)
+}))
+
 import { getVersion } from '@tauri-apps/api/app'
 import { Store } from '@tauri-apps/plugin-store'
 import {

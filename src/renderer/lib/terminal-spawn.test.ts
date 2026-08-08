@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockAddTerminal,
   mockSetTerminalPtyId,
+  mockSetTerminalClaim,
   mockIsTerminalLimitReached,
   mockAddTabToPane,
   mockTerminalApiSpawn,
@@ -14,6 +15,7 @@ const {
 } = vi.hoisted(() => ({
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
+  mockSetTerminalClaim: vi.fn(),
   mockIsTerminalLimitReached: vi.fn(),
   mockAddTabToPane: vi.fn(),
   mockTerminalApiSpawn: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock('@/stores/terminal-store', () => ({
       terminals: mockTerminals,
       addTerminal: mockAddTerminal,
       setTerminalPtyId: mockSetTerminalPtyId,
+      setTerminalClaim: mockSetTerminalClaim,
       isTerminalLimitReached: mockIsTerminalLimitReached
     })
   }
@@ -66,9 +69,11 @@ describe('spawnTerminalInPane', () => {
     mockTerminals.length = 0
     mockIsTerminalLimitReached.mockReturnValue(false)
     mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
+    // CAP-3: spawn is the only claim issuance path — the fixture carries the
+    // issued lease credential alongside the terminal info.
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'bash', cwd: '/test/worktree' }
+      data: { id: 'pty-1', shell: 'bash', cwd: '/test/worktree', claim: 'claim-pty-1' }
     })
   })
 
@@ -82,11 +87,27 @@ describe('spawnTerminalInPane', () => {
     )
     expect(mockAddTerminal).toHaveBeenCalled()
     expect(mockSetTerminalPtyId).toHaveBeenCalledWith('term-new-1', 'pty-1')
+    // CAP-3: the issued claim is stored on the terminal record via the
+    // spawned pty id.
+    expect(mockSetTerminalClaim).toHaveBeenCalledWith('pty-1', 'claim-pty-1')
     expect(mockAddTabToPane).toHaveBeenCalledWith('pane-1', {
       type: 'terminal',
       id: 'term-term-new-1',
       terminalId: 'term-new-1'
     })
+  })
+
+  it('does not store a claim when the spawn response omits one', async () => {
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-no-claim', shell: 'bash', cwd: '/test/worktree' }
+    })
+
+    const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
+
+    expect(result.success).toBe(true)
+    expect(mockSetTerminalPtyId).toHaveBeenCalledWith('term-new-1', 'pty-no-claim')
+    expect(mockSetTerminalClaim).not.toHaveBeenCalled()
   })
 
   it('returns error when global terminal limit is reached', async () => {
@@ -161,6 +182,14 @@ describe('spawnTerminalInPane', () => {
     })
 
     expect(mockTerminalApiSpawn).toHaveBeenCalledWith(expect.objectContaining({ shell: 'zsh' }))
+  })
+
+  it('passes projectId into the spawn payload (web server requires non-empty projectId)', async () => {
+    await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
+
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'proj-1' })
+    )
   })
 
   it('resolves shell from project default when no explicit shell', async () => {

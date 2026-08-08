@@ -1,7 +1,7 @@
-import { confirm } from '@tauri-apps/plugin-dialog'
 import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
+import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import {
@@ -44,19 +44,25 @@ function setReminderForTomorrow(): void {
  */
 export function showUpdateToast(version: string, releaseNotes?: string): void {
   const isAur = isAurUpdateMode()
+  const channel = updaterStore.getState().updateChannel
+  const channelPrefix = channel === 'insider' ? 'Insider ' : channel === 'nightly' ? 'Nightly ' : ''
 
-  toast.success(`Update available: version ${version}`, {
+  toast.success(`${channelPrefix}Update available: version ${version}`, {
     duration: 30000,
     description: releaseNotes
       ? `What's new:\n${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
       : isAur
         ? 'A new version is available. Update with yay.'
-        : 'A new version is available for download.',
+        : channel !== 'stable'
+          ? `A new ${channel} build is available. Open the download page to install it manually.`
+          : 'A new version is available for download.',
     action: {
       label: (
         <div className="flex items-center gap-2">
           {isAur ? <Terminal size={14} /> : <Download size={14} />}
-          <span>{isAur ? 'Use yay' : 'Download'}</span>
+          <span>
+            {isAur ? 'Use yay' : channel !== 'stable' ? 'Open Download Page' : 'Download'}
+          </span>
         </div>
       ),
       onClick: async () => {

@@ -1,5 +1,5 @@
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { useEffect } from 'react'
+import { getCurrentWebview } from '@/lib/tauri-webview'
 import { useAppSettingsLoaded, useUiZoomLevel } from '@/stores/app-settings-store'
 import { UI_ZOOM_MAX, UI_ZOOM_MIN } from '@/types/settings'
 

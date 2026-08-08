@@ -37,6 +37,8 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `terminal/TauriTerminal.tsx` — alternate direct Tauri PTY terminal implementation
 - `terminal/TerminalSearchBar.tsx` — terminal text search UI
 - `terminal/ActivityIndicator.tsx` — recent terminal activity indicator
+- `mobile/MobileChatShell.tsx` — narrow web shell with terminal creation, selection, and close navigation alongside chat history
+- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
 - `TerminalTabBar.tsx` / `TerminalView.tsx` — legacy or transitional terminal view helpers retained in repository
 
 ### Editor Components
@@ -47,6 +49,16 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `editor/EditorToolbar.tsx` — markdown/code mode switching
 - `editor/TableOfContents.tsx` and `editor/TocPanel.tsx` — heading navigation
 - `editor/MermaidBlock.tsx` — diagram rendering for markdown workflows
+
+### Agent Chat (ACP) Components
+
+- `chat/AgentChatPanel.tsx` — top-level agent-chat pane body coordinating header, message thread, plan panel, permission dialog, and composer for a single ACP session
+- `chat/ChatMessage.tsx` — user/agent message row; renders sanitized markdown prose plus media blocks as AI Elements `Attachments` grid thumbnails (lightbox for inline images, click-to-open for `file://`-backed blocks)
+- `chat/ChatInputBar.tsx` — composer with slash commands, `@`-file mentions, config/mode chips, and staged-attachment badges
+- `chat/AttachmentPreviewGroup.tsx` — staged-attachment badges above the composer using AI Elements `Attachments` inline variant with hover-card image previews and click-to-open for path-backed refs
+- `chat/use-composer-attachments.ts` — hybrid transport hook (OS picker → `resource_link`, drag/paste → inline image or embedded text) shared by the chat input and the new-thread launcher
+- `chat/chat-attachments.ts` — attachment helpers: MIME guessing, name humanization, ACP block mapping, and `pendingToAttachmentData`/`blockToAttachmentData` adapters into AI Elements `AttachmentData`
+- `ai-elements/attachments.tsx` — vendored [AI SDK Elements Attachments](https://elements.ai-sdk.dev/components/attachments) component (grid/inline/list variants) adapted to the repo's shadcn primitives and `ai` package types
 
 ### Browser / Annotation Components
 
@@ -105,6 +117,8 @@ These components are coordinated by dedicated Zustand stores:
 The app shell (`WorkspaceLayout`) owns cross-cutting concerns, while feature surfaces (`ConnectedTerminal`, `EditorPanel`, `BrowserPanel`) encapsulate mode-specific behavior.
 
 ### 2. Adapter Isolation Pattern
+
+`terminal-api.ts` selects `tauri-terminal-api.ts` or `web-terminal-api.ts` at runtime. Renderer components, including `ConnectedTerminal` and mobile controls, never import Tauri APIs directly. The browser adapter owns `/terminal/ws` request correlation, listener fan-out, reconnect, and reattach behavior.
 UI components prefer `@/lib/api` adapters rather than direct Tauri APIs, keeping runtime coupling isolated in a service layer.
 
 ### 3. Store-Driven Rendering

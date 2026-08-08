@@ -1,6 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import {
-  Bot,
   Edit2,
   GitBranch,
   Globe,
@@ -16,12 +15,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { ContextMenu } from '@/components/ContextMenu'
+import { AgentBadge } from '@/components/chat/AgentBadge'
+import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
+import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
+import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
 import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -641,8 +643,20 @@ function AgentChatTabInline({
   } | null>(null)
 
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
-  const label = session?.title ?? 'Agent Chat'
+  const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
+  const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
+  const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
+  // The persisted index entry carries the effective title (agent-pushed title,
+  // first-message derivation, or "Untitled Chat N"). `session.title` stays null
+  // until an event sets it, so fall through to the index entry for the label.
+  const indexTitle = useAcpStore(
+    (s) => s.sessionIndex.find((e) => e.id === tab.sessionId)?.title ?? null
+  )
+  // Treat in-flight launcher handoff as connected so we don't flash a red
+  // disconnected lamp on the optimistic placeholder chat.
+  const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
+  const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 
   return (
     <>
@@ -657,25 +671,39 @@ function AgentChatTabInline({
           e.preventDefault()
           setContextMenu({ x: e.clientX, y: e.clientY })
         }}
+        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
         className={cn(
-          'group relative flex items-center h-7 px-3 min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border/40 transition-colors',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
-            ? 'bg-secondary text-foreground'
+            ? 'bg-background border-b-primary text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
-          isDragging && 'opacity-50',
+          isDragging && 'opacity-50 scale-[0.98]',
           isDropTarget && dropPosition === 'before' && 'border-l-2 border-l-primary',
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        <Bot size={12} className={isActive ? 'text-primary' : ''} />
-        <span
-          className={cn(
-            'truncate text-2xs font-medium flex-1',
-            isClosed && 'line-through opacity-60'
-          )}
-        >
-          {label}
-        </span>
+        {session ? (
+          <>
+            <AgentBadge
+              agentId={session.agentId}
+              showName={false}
+              iconSize={12}
+              className="shrink-0"
+            />
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-2xs font-medium',
+                isClosed && 'line-through opacity-60',
+                isActive ? 'text-foreground' : 'text-inherit'
+              )}
+            >
+              {tabLabel}
+            </span>
+            <AgentConnectionLamp connected={connected} />
+          </>
+        ) : (
+          <span className="truncate text-2xs font-medium flex-1">Agent Chat</span>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -685,8 +713,6 @@ function AgentChatTabInline({
         >
           <XIcon size={10} />
         </button>
-
-        {isActive && <div className="absolute bottom-0 left-0 right-0 h-[1.5px] bg-primary" />}
       </div>
 
       {contextMenu && (

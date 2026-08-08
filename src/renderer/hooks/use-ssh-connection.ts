@@ -26,33 +26,75 @@ export function useSSHConnection(profile: SSHProfile | null) {
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [isLoadingRoot, setIsLoadingRoot] = useState(false)
 
+  // Pending timers so we can cancel writes/loads on disconnect/unmount/profile switch.
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const profileId = profile?.id ?? null
+  const previousProfileIdRef = useRef<string | null>(profileId)
+  const profileGenerationRef = useRef(0)
+  if (previousProfileIdRef.current !== profileId) {
+    profileGenerationRef.current += 1
+    previousProfileIdRef.current = profileId
+  }
+  const isCurrentProfileGeneration = useCallback(
+    (generation: number, expectedProfileId: string | null) => {
+      return (
+        profileGenerationRef.current === generation &&
+        previousProfileIdRef.current === expectedProfileId
+      )
+    },
+    []
+  )
+
+  useEffect(() => {
+    void profileId
+    setLocalTerminalPtyId(null)
+    setIsConnecting(false)
+    setSftpReady(false)
+    setEntries([])
+    setCurrentPath('/')
+    setExpandedDirs(new Set())
+    setChildEntries(new Map())
+    setLoadingDirs(new Set())
+    setIsLoadingRoot(false)
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current)
+      writeTimerRef.current = null
+    }
+    if (restoreTimerRef.current) {
+      clearTimeout(restoreTimerRef.current)
+      restoreTimerRef.current = null
+    }
+  }, [profileId])
+
   const loadDirectory = useCallback(
     async (path: string, overrideConnectionId?: string) => {
+      const generation = profileGenerationRef.current
+      const operationProfileId = previousProfileIdRef.current
       const id = overrideConnectionId ?? connectionId
       if (!id) return
       setIsLoadingRoot(true)
       try {
         const result = await sshApi.sftpListDir(id, path)
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         if (result.success) {
           setEntries(result.data)
           setCurrentPath(path)
         } else toast.error(`Failed to load: ${result.error}`)
       } catch (error) {
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         toast.error(`Failed to load: ${error instanceof Error ? error.message : String(error)}`)
       } finally {
-        setIsLoadingRoot(false)
+        if (isCurrentProfileGeneration(generation, operationProfileId)) setIsLoadingRoot(false)
       }
     },
-    [connectionId]
+    [connectionId, isCurrentProfileGeneration]
   )
 
   // Stable ref for loadDirectory so effects always call latest version
   const loadDirRef = useRef(loadDirectory)
   loadDirRef.current = loadDirectory
 
-  // Pending timers so we can cancel writes/loads on disconnect/unmount
-  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
@@ -70,14 +112,21 @@ export function useSSHConnection(profile: SSHProfile | null) {
       if (connectionId && !connectionId.startsWith('ssh-conn-')) {
         setSftpReady(true)
         if (restoreTimerRef.current) clearTimeout(restoreTimerRef.current)
-        restoreTimerRef.current = setTimeout(() => loadDirRef.current('/'), 300)
+        const generation = profileGenerationRef.current
+        const operationProfileId = previousProfileIdRef.current
+        restoreTimerRef.current = setTimeout(() => {
+          if (isCurrentProfileGeneration(generation, operationProfileId))
+            void loadDirRef.current('/')
+        }, 300)
       }
     }
-  }, [isConnected, terminalStoreId, localTerminalPtyId, connectionId])
+  }, [isConnected, terminalStoreId, localTerminalPtyId, connectionId, isCurrentProfileGeneration])
 
   const handleConnect = useCallback(async () => {
     if (!profile) return
     if (isConnecting || isConnected) return
+    const generation = profileGenerationRef.current
+    const operationProfileId = profile.id
     setIsConnecting(true)
 
     // If a previous attempt left a local PTY (e.g. a failed connect the user is
@@ -134,12 +183,17 @@ export function useSSHConnection(profile: SSHProfile | null) {
           )
         } else {
           const result = await createAskpassScript(profile.password)
+          if (!isCurrentProfileGeneration(generation, operationProfileId)) return
           if (result.success) spawnEnv = { SSH_ASKPASS: result.data, SSH_ASKPASS_REQUIRE: 'force' }
           else toast.warning(`Password helper unavailable: ${result.error}`)
         }
       }
 
       const spawnResult = await terminalApi.spawn({ env: spawnEnv })
+      if (!isCurrentProfileGeneration(generation, operationProfileId)) {
+        if (spawnResult.success) void terminalApi.kill(spawnResult.data.id)
+        return
+      }
       if (!spawnResult.success) {
         toast.error('Failed to create terminal')
         return
@@ -156,6 +210,10 @@ export function useSSHConnection(profile: SSHProfile | null) {
         spawnResult.data.cwd
       )
       terminalStore.setTerminalPtyId(terminal.id, ptyId)
+      // CAP-3: store the issued lease credential (in-memory only).
+      if (spawnResult.data.claim) {
+        terminalStore.setTerminalClaim(ptyId, spawnResult.data.claim)
+      }
 
       // Reflect the in-progress state honestly: 'connecting' until we have a
       // real success signal. The green 'connected' badge is no longer set just
@@ -164,12 +222,18 @@ export function useSSHConnection(profile: SSHProfile | null) {
 
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
       writeTimerRef.current = setTimeout(() => {
-        void terminalApi.write(ptyId, `${sshCmd}\r`)
+        if (isCurrentProfileGeneration(generation, operationProfileId))
+          void terminalApi.write(ptyId, `${sshCmd}\r`)
       }, 500)
 
       // The ssh2/SFTP backend connection is the authoritative source of truth
       // for whether SSH actually authenticated.
       const sftpResult = await sshApi.connect(profile.id, profile.password)
+      if (!isCurrentProfileGeneration(generation, operationProfileId)) {
+        void terminalApi.kill(ptyId)
+        if (sftpResult.success && sftpResult.data?.id) void sshApi.disconnect(sftpResult.data.id)
+        return
+      }
       if (sftpResult.success && sftpResult.data?.id) {
         const backendId = sftpResult.data.id
         updateConnectionId(profile.id, backendId)
@@ -189,15 +253,17 @@ export function useSSHConnection(profile: SSHProfile | null) {
         toast.error(`SSH connection failed: ${errMsg ?? 'unknown error'}`)
       }
     } catch (error) {
-      if (profile)
-        updateConnectionStatusByProfile(
-          profile.id,
-          'failed',
-          error instanceof Error ? error.message : String(error)
-        )
-      toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`)
+      if (isCurrentProfileGeneration(generation, operationProfileId)) {
+        if (profile)
+          updateConnectionStatusByProfile(
+            profile.id,
+            'failed',
+            error instanceof Error ? error.message : String(error)
+          )
+        toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     } finally {
-      setIsConnecting(false)
+      if (isCurrentProfileGeneration(generation, operationProfileId)) setIsConnecting(false)
     }
   }, [
     profile,
@@ -207,7 +273,8 @@ export function useSSHConnection(profile: SSHProfile | null) {
     markConnecting,
     updateConnectionId,
     updateConnectionStatusByProfile,
-    loadDirectory
+    loadDirectory,
+    isCurrentProfileGeneration
   ])
 
   // Called when the interactive ssh process in the PTY exits (e.g. the user
@@ -270,8 +337,14 @@ export function useSSHConnection(profile: SSHProfile | null) {
       // so failures normally surface as !success. The try/catch is defensive
       // only: it guarantees the placeholder connection can never stay wedged if
       // the call unexpectedly throws (e.g. a future refactor).
+      const generation = profileGenerationRef.current
+      const operationProfileId = profile.id
       try {
         const sftpResult = await sshApi.connect(profile.id, profile.password)
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) {
+          if (sftpResult.success && sftpResult.data?.id) void sshApi.disconnect(sftpResult.data.id)
+          return
+        }
         if (sftpResult.success && sftpResult.data?.id) {
           const backendId = sftpResult.data.id
           updateConnectionId(profile.id, backendId)
@@ -287,6 +360,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
           toast.error(`SFTP unavailable: ${errMsg ?? 'connection not established'}`)
         }
       } catch (error) {
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         const errMsg = error instanceof Error ? error.message : String(error)
         updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
         setSftpReady(false)
@@ -296,11 +370,20 @@ export function useSSHConnection(profile: SSHProfile | null) {
     }
     setSftpReady(true)
     void loadDirectory('/')
-  }, [connectionId, loadDirectory, profile, updateConnectionId, updateConnectionStatusByProfile])
+  }, [
+    connectionId,
+    loadDirectory,
+    profile,
+    updateConnectionId,
+    updateConnectionStatusByProfile,
+    isCurrentProfileGeneration
+  ])
 
   const toggleDirectory = useCallback(
     async (dirPath: string) => {
       if (!connectionId) return
+      const generation = profileGenerationRef.current
+      const operationProfileId = previousProfileIdRef.current
       if (expandedDirs.has(dirPath)) {
         setExpandedDirs((prev) => {
           const n = new Set(prev)
@@ -312,23 +395,27 @@ export function useSSHConnection(profile: SSHProfile | null) {
       setLoadingDirs((prev) => new Set(prev).add(dirPath))
       try {
         const result = await sshApi.sftpListDir(connectionId, dirPath)
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         if (result.success) {
           setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
           setExpandedDirs((prev) => new Set(prev).add(dirPath))
         } else toast.error(`Permission denied: ${dirPath}`)
       } catch (error) {
+        if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         toast.error(
           `Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`
         )
       } finally {
-        setLoadingDirs((prev) => {
-          const n = new Set(prev)
-          n.delete(dirPath)
-          return n
-        })
+        if (isCurrentProfileGeneration(generation, operationProfileId)) {
+          setLoadingDirs((prev) => {
+            const n = new Set(prev)
+            n.delete(dirPath)
+            return n
+          })
+        }
       }
     },
-    [connectionId, expandedDirs]
+    [connectionId, expandedDirs, isCurrentProfileGeneration]
   )
 
   return {

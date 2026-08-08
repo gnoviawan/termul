@@ -2,7 +2,16 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Story 5.3 (AC1): `interactive-widget=resizes-content` opts Chromium/Android
+         (Chrome 108+) into resizing the layout viewport when the on-screen
+         keyboard shows. iOS Safari ignores this key — the `useOskViewport`
+         hook covers iOS via `window.visualViewport` resize+scroll events.
+         Inert on Tauri desktop (no OSK); harmless. CSP unaffected (meta tags
+         aren't script/style). -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"

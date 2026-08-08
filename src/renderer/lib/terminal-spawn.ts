@@ -81,6 +81,7 @@ export async function spawnTerminalInPane(
     const spawnResult = await terminalApi.spawn({
       shell,
       cwd,
+      projectId,
       ...(hasProjectEnv ? { env } : {})
     })
 
@@ -102,6 +103,12 @@ export async function spawnTerminalInPane(
 
     // Link PTY ID to terminal record
     terminalStore.setTerminalPtyId(terminal.id, spawnResult.data.id)
+
+    // CAP-3: store the issued lease credential on the terminal record
+    // (in-memory only — never persisted).
+    if (spawnResult.data.claim) {
+      terminalStore.setTerminalClaim(spawnResult.data.id, spawnResult.data.claim)
+    }
 
     // Add terminal tab to the workspace pane
     workspaceStore.addTabToPane(paneId, {

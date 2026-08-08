@@ -1,9 +1,19 @@
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, domAnimation, LazyMotion, m, useReducedMotion } from 'framer-motion'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-/** Shared collapse/expand motion used by ProjectSidebar and file explorer. */
-export const collapseExpandTransition = { duration: 0.15, ease: 'easeInOut' } as const
+/**
+ * Collapse/expand via `grid-template-rows` 0fr→1fr (not `height`), so layout
+ * work stays cheaper than animating pixel height. See animations skill.
+ *
+ * Uses LazyMotion + `m` for the shell only. Do not enable `strict`: chat
+ * children (ToolCallCard / ThoughtGroup / ChatMessage) still use `motion.*`,
+ * and strict mode throws when those nest under this provider.
+ */
+const collapseExpandTransition = {
+  duration: 0.15,
+  ease: 'easeInOut'
+} as const
 
 interface CollapseExpandMotionProps {
   open: boolean
@@ -18,19 +28,23 @@ export function CollapseExpandMotion({
   className,
   onExitComplete
 }: CollapseExpandMotionProps): React.JSX.Element {
+  const reduced = useReducedMotion() ?? false
+
   return (
-    <AnimatePresence initial={false} onExitComplete={onExitComplete}>
-      {open && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={collapseExpandTransition}
-          className={cn('overflow-hidden', className)}
-        >
-          {children}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <LazyMotion features={domAnimation}>
+      <AnimatePresence initial={false} onExitComplete={onExitComplete}>
+        {open && (
+          <m.div
+            initial={reduced ? false : { gridTemplateRows: '0fr', opacity: 0 }}
+            animate={{ gridTemplateRows: '1fr', opacity: 1 }}
+            exit={reduced ? { opacity: 0 } : { gridTemplateRows: '0fr', opacity: 0 }}
+            transition={reduced ? { duration: 0 } : collapseExpandTransition}
+            className={cn('grid overflow-hidden', className)}
+          >
+            <div className="min-h-0 overflow-hidden">{children}</div>
+          </m.div>
+        )}
+      </AnimatePresence>
+    </LazyMotion>
   )
 }

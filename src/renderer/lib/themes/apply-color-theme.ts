@@ -64,6 +64,13 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--accent-foreground': accentForeground,
     '--destructive': hexToHslComponents(palette.error),
     '--destructive-foreground': hexToHslComponents('#ffffff'),
+    '--success': hexToHslComponents(palette.success),
+    '--success-foreground': hexToHslComponents('#ffffff'),
+    '--connection': hexToHslComponents(palette.info),
+    '--warning': hexToHslComponents(palette.warning),
+    '--warning-foreground': hexToHslComponents(
+      appearance === 'light' ? darkenHex(palette.warning, 0.45) : darkenHex(palette.warning, 0.55)
+    ),
     '--border': hexToHslComponents(border),
     '--input': hexToHslComponents(border),
     '--ring': hexToHslComponents(palette.primary),

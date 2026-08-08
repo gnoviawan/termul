@@ -52,6 +52,7 @@ export interface TerminalState {
   reorderTerminals: (projectId: string, orderedIds: string[]) => void
   setTerminals: (terminals: Terminal[]) => void
   setTerminalPtyId: (id: string, ptyId: string) => boolean
+  setTerminalClaim: (ptyId: string, claim: string | undefined) => void
   findTerminalByPtyId: (ptyId: string) => Terminal | undefined
   setTerminalAgentMetadata: (id: string, meta: TerminalAgentMetadata) => void
   updateTerminalCwd: (id: string, cwd: string) => void
@@ -205,6 +206,26 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
     })
     return didSet
+  },
+
+  /**
+   * CAP-3: set (or clear, with `undefined`) the in-memory lease credential on
+   * the terminal whose `ptyId` matches. Linear scan over `terminals` — this
+   * does NOT consult the ptyIdIndex; the claim is written before/without any
+   * index guarantee, and a scan keeps the behavior honest for records whose
+   * ptyId predates the current index state. The claim is never persisted.
+   */
+  setTerminalClaim: (ptyId: string, claim: string | undefined): void => {
+    set((state) => {
+      const hasTarget = state.terminals.some((t) => t.ptyId === ptyId)
+      if (!hasTarget) {
+        return state
+      }
+
+      return {
+        terminals: state.terminals.map((t) => (t.ptyId === ptyId ? { ...t, claim } : t))
+      }
+    })
   },
 
   findTerminalByPtyId: (ptyId: string): Terminal | undefined => {
@@ -507,9 +528,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             ? {
                 ...t,
                 ptyId: newPtyId,
+                // CAP-3: the old lease belonged to the old PTY — clear it; a
+                // fresh claim is issued when the restart re-spawns.
+                claim: undefined,
                 healthStatus: 'running',
                 transcript: undefined,
-                pendingScrollback: undefined
+                pendingScrollback: undefined,
+                pendingModes: undefined
               }
             : t
         ),
@@ -532,7 +557,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const newIndex = new Map(state.ptyIdIndex)
       newIndex.delete(ptyId)
       return {
-        terminals: state.terminals.map((t) => (t.ptyId === ptyId ? { ...t, ptyId: undefined } : t)),
+        terminals: state.terminals.map((t) =>
+          // CAP-3: the claim is bound to the PTY — dropping the ptyId drops
+          // the lease with it.
+          t.ptyId === ptyId ? { ...t, ptyId: undefined, claim: undefined } : t
+        ),
         ptyIdIndex: newIndex
       }
     })

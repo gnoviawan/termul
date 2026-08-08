@@ -137,6 +137,7 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
 
   for (const persistedTerminal of snapshot.terminals) {
     const spawnResult = await terminalApi.spawn({
+      projectId,
       shell: persistedTerminal.shell as 'powershell' | 'cmd' | 'bash' | 'zsh' | 'fish' | undefined,
       cwd: persistedTerminal.cwd,
       ...(hasProjectEnv ? { env } : {})
@@ -154,6 +155,11 @@ async function restoreFromSnapshot(projectId: string, snapshot: PersistedSnapsho
       persistedTerminal.scrollback
     )
     terminalStore.setTerminalPtyId(created.id, spawnResult.data.id)
+    // CAP-3: the snapshot re-spawn issues a fresh lease — capture it
+    // (in-memory only, never persisted into the snapshot itself).
+    if (spawnResult.data.claim) {
+      terminalStore.setTerminalClaim(spawnResult.data.id, spawnResult.data.claim)
+    }
 
     if (!firstCreatedId) {
       firstCreatedId = created.id

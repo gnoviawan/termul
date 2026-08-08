@@ -9,21 +9,36 @@ const mockSetContent = vi.fn()
 const mockScrollToLine = vi.fn()
 const mockRestoreViewState = vi.fn()
 
+const { mobileRef, tocSettingsRef } = vi.hoisted(() => ({
+  // Mutable so the mobile TOC-hide test can flip the shell on/off.
+  mobileRef: { current: false as boolean },
+  // Mutable so the TOC-visible path can be exercised (default isVisible=false
+  // keeps the existing tests unchanged).
+  tocSettingsRef: {
+    current: {
+      isLoaded: true,
+      loadFailed: false,
+      settings: { isVisible: false, width: 280 },
+      setWidth: vi.fn()
+    }
+  }
+}))
+
 vi.mock('@/hooks/use-codemirror', () => ({
   useCodeMirror: vi.fn()
 }))
 
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => mobileRef.current,
+  MOBILE_WEB_SHELL_MAX_PX: 767
+}))
+
+vi.mock('./TocPanel', () => ({
+  TocPanel: () => <div data-toc-panel="toc" />
+}))
+
 vi.mock('@/stores/toc-settings-store', () => ({
-  useTocSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      isLoaded: true,
-      loadFailed: false,
-      settings: {
-        isVisible: false,
-        width: 280
-      },
-      setWidth: vi.fn()
-    })
+  useTocSettingsStore: (selector: (state: unknown) => unknown) => selector(tocSettingsRef.current)
 }))
 
 const defaultProps = {
@@ -43,6 +58,8 @@ describe('CodeEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     delete (global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine
+    mobileRef.current = false
+    tocSettingsRef.current.settings.isVisible = false
 
     vi.mocked(useCodeMirror).mockReturnValue({
       view: fakeView,
@@ -123,5 +140,38 @@ describe('CodeEditor', () => {
     const overlay = container.querySelector('[role="status"]')
     expect(overlay).not.toBeNull()
     expect(overlay?.getAttribute('aria-live')).toBe('polite')
+  })
+})
+
+describe('CodeEditor mobile TOC hide', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mobileRef.current = false
+    tocSettingsRef.current = {
+      isLoaded: true,
+      loadFailed: false,
+      settings: { isVisible: true, width: 280 },
+      setWidth: vi.fn()
+    }
+    vi.mocked(useCodeMirror).mockReturnValue({
+      view: fakeView,
+      isReady: true,
+      setContent: mockSetContent,
+      flushPendingContent: vi.fn(),
+      scrollToLine: mockScrollToLine,
+      restoreViewState: mockRestoreViewState,
+      getVisibleLineRange: vi.fn(() => null)
+    })
+  })
+
+  it('hides the TOC panel on mobile web shell so the editor gets full width', () => {
+    // Desktop renders the TOC side-by-side, but that path exercises
+    // `react-resizable-panels` whose 0-panel layout validator rejects jsdom's
+    // zero clientWidth. The mobile branch is the CAP-5 fix under test: it
+    // forces `canRenderToc=false` so the TOC panel never mounts.
+    mobileRef.current = true
+    const { container } = render(<CodeEditor {...defaultProps} language="markdown" />)
+
+    expect(container.querySelector('[data-toc-panel]')).toBeNull()
   })
 })

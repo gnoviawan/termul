@@ -12,6 +12,13 @@ export type TerminalContinuityEventName =
   | 'renderer-recovery-succeeded'
   | 'renderer-recovery-exhausted'
   | 'renderer-recovery-failed'
+  // ACP session reattachment across refresh (R6). `attempted`/`succeeded`/
+  // `failed` bracket a backend resume; `skipped` marks a session that fell
+  // through to read-only local history (agent exited or capability absent).
+  | 'acp-resume-attempted'
+  | 'acp-resume-succeeded'
+  | 'acp-resume-failed'
+  | 'acp-resume-skipped'
 
 export interface TerminalContinuityEvent {
   name: TerminalContinuityEventName

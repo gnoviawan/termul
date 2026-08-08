@@ -1,4 +1,4 @@
-import { create } from 'zustand'
+﻿import { create } from 'zustand'
 import type { AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 
@@ -61,3 +61,16 @@ export const useFileExplorerVisibilitySetting = () =>
 export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
 export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
+export const useAcpTurnTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)
+export const useEditorAutoSave = () => useAppSettingsStore((state) => state.settings.editorAutoSave)
+export const useEditorAutoSaveDelayMs = () =>
+  useAppSettingsStore((state) => state.settings.editorAutoSaveDelayMs)
+export const useAcpTurnIdleTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpTurnIdleTimeoutSecs)
+export const useAcpSessionNewTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionNewTimeoutSecs)
+export const useAcpSessionReopenTimeout = () =>
+  useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
+export const useAcpFirstPromptWarmup = () =>
+  useAppSettingsStore((state) => state.settings.acpFirstPromptWarmupSecs)

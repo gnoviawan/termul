@@ -1,21 +1,54 @@
 [package]
 name = "termul-manager"
-version = "0.4.8"
+version = "0.4.9"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
-rust-version = "1.77"
+# ACP 1.3.0 is edition 2024 and requires Rust ≥ 1.88; bump MSRV to match.
+rust-version = "1.88"
+# Two binaries live in this crate: the desktop app (`termul-manager`, the
+# implicit src/main.rs) and the standalone headless server (`termul-server`).
+# Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
+# ambiguity. The standalone binary is built explicitly via
+# `cargo build --bin termul-server --features standalone-server`.
+default-run = "termul-manager"
 
 [lib]
 name = "termul_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Standalone headless server (Story 1.2). Gated so default `cargo build` / `tauri
+# build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
+# discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
+# disk scan cannot re-add it. Build with:
+#   cargo build --bin termul-server --features standalone-server
+[[bin]]
+name = "termul-server"
+path = "src/server_main.rs"
+required-features = ["standalone-server"]
+
+[features]
+default = []
+# Enables the termul-server binary entry (server_main.rs, required-features on
+# the [[bin]] target). rust-embed is always-on (the desktop's in-process
+# shared-live server serves the SAME embedded bundle in a release install
+# without dist-web/ on disk).
+#
+# The `server_update` library module + its `minisign-verify` dependency are
+# intentionally NOT feature-gated: the spec's verification gate runs
+# `cargo test` (default features) and expects the new `server_update` tests —
+# including signature verification — to execute there. Only the standalone
+# *binary* (and its wiring in server_main.rs) is gated, which preserves the
+# "default `cargo build` / `tauri build` do NOT bundle the standalone server
+# binary" invariant.
+standalone-server = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools"] }
+tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
@@ -28,13 +61,14 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
 # only). rustls-tls matches the backend already pulled in by the updater plugin.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "stream"] }
 
 # ACP registry binary install (zip / tar.gz archives)
 zip = "2"
@@ -44,16 +78,37 @@ flate2 = "1"
 # PTY and async runtime
 portable-pty = "0.9"
 anyhow = "1"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 parking_lot = "0.12"
+futures = "0.3"
+futures-concurrency = "7"
+async-process = "2"
 
-# ACP (Agent Client Protocol) — ADR-003 P0
-# NOTE: agent-client-protocol 0.12 ships its own `AcpAgent`/`Stdio` transport
-# (built on async-process), so the separate `agent-client-protocol-tokio` crate
-# is NOT used — it depends on acp 0.11, which would pull a second, incompatible
-# copy of the protocol crate into the tree. See Spec Change Log in
-# spec-adr-003-p0-rust-acp-core.md.
-agent-client-protocol = "0.12"
+# ACP (Agent Client Protocol) — ADR-003 P0.
+# Upgraded from vendored 0.12.1 to crates.io 1.3.0:
+#  - The Windows console-hiding patch (CREATE_NO_WINDOW) landed upstream in
+#    0.15.1 (#215), so the vendored copy and [patch.crates-io] redirect are no
+#    longer needed — we now consume crates.io directly.
+#  - `unstable_session_model` and `unstable_session_usage` were stabilized in
+#    0.14.0, so the feature flags are dropped.
+#  - 1.3.0 adds Unix process-group teardown on ChildGuard drop and correct EOF
+#    handling, improving agent-subprocess reliability on all platforms.
+agent-client-protocol = "1.3"
+
+# MCP client probe (on-demand `initialize` + `tools/list`). rmcp is already in
+# the dep tree transitively via the vendored ACP (which enables `server` +
+# `transport-io`); this direct dep adds the CLIENT transport features Termul's
+# own probe needs. Resolved to 1.7.0 from `^1.2.0`. The `client-side-sse`
+# feature is rmcp's SSE stream parser (consumed by the streamable-http client);
+# rmcp 1.7.0 removed the standalone legacy SSE transport (CHANGELOG #562), so
+# `type: 'sse'` servers are probed via the modern streamable-http client (which
+# still speaks `text/event-stream`). See `src/acp/mcp_probe.rs`.
+rmcp = { version = "1.2.0", features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "client-side-sse",
+] }
 
 # Regex and parsing
 regex = "1"
@@ -62,11 +117,8 @@ lazy_static = "1.4"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# SSH
-# Keep ssh2 on system OpenSSL for now. Enabling ssh2/vendored-openssl forces a
-# local OpenSSL source build that fails in common Windows/MSYS dev environments
-# without a full Perl module setup; see README SSH development notes.
-ssh2 = "0.9"
+# SSH linkage is selected per target below: macOS vendors OpenSSL for portable
+# app bundles, while Windows/Linux retain the system/default behavior.
 
 # Secure storage (OS keychain for secure credential storage).
 # IMPORTANT: keyring selects its backend at COMPILE TIME via cargo features.
@@ -86,28 +138,69 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 # Cryptographic random generation for auth tokens
 getrandom = "0.2"
 
+# Terminal claim credentials (CAP-3 reclaimable terminal leases): SHA-256
+# digest-only storage of issued credentials + constant-time comparison.
+sha2 = "0.10"
+subtle = "2"
+
 # Structured logging for remote server
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { version = "0.3", default-features = false }
 
+# async trait support (CAP-6 / Story 9: install service Downloader/Extractor
+# injection seams). Already in the dep tree transitively; declared here so
+# the install service can use the macro directly.
+async-trait = "0.1"
+
+# Embed the Vite web bundle (dist-web/) into the binary so the standalone
+# termul-server AND the desktop's in-process shared-live server serve the web
+# client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
+# green when the bundle is absent; the release build fails clearly via
+# build.rs when it is missing.
+rust-embed = { version = "8.12", features = ["mime-guess"] }
+
+# Standalone `termul-server` self-update (opt-in, default off): verifies
+# downloaded binary signatures against the same minisign keypair the desktop
+# updater uses. Non-optional so the `server_update` module + its tests (incl.
+# signature verification) compile and run under default `cargo test`, per the
+# spec's verification gate. The standalone *binary* that actually wires the
+# subsystem remains gated by the `standalone-server` feature.
+minisign-verify = "0.2"
+
+# Decodes the outer base64 wrapper around the embedded minisign pubkey (the
+# `TAURI_SIGNING_PUBLIC_KEY` secret / tauri.conf.json `pubkey` field both hold
+# the minisign `.pub` file text, base64-encoded) so `PublicKey::decode` can
+# parse the raw key the updater verifies against.
+base64 = "0.22"
+
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
+# Swap/rollback file tests in `server_update` use a temp dir so they never
+# touch the real binary path.
+tempfile = "3"
 
 # --- OS keychain backends for `keyring` (see note on the keyring dep above) ---
 # Windows Credential Manager
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
 
-# macOS Keychain
+# macOS Keychain and self-contained SSH/OpenSSL linkage for packaged apps
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+# Preserve the existing system/default SSH native dependency behavior outside
+# macOS. Global vendoring breaks common Windows/MSYS development environments.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ssh2 = "0.9"
 
 # Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
 # don't require a system OpenSSL/Perl build toolchain.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
@@ -128,9 +221,11 @@ winapi = { version = "0.3", features = [
     "ntdef",
 ] }
 
-# Termul patch: vendored copy of agent-client-protocol 0.12.1 with one change —
-# spawn_process sets CREATE_NO_WINDOW on Windows so ACP agent subprocesses do
-# not flash a console window. See vendor/agent-client-protocol/src/acp_agent.rs.
-# Keep the `= "0.12"` requirement above; this only redirects where it resolves.
-[patch.crates-io]
-agent-client-protocol = { path = "vendor/agent-client-protocol" }
+# The vendored copy of agent-client-protocol and the [patch.crates-io]
+# redirect were removed when we upgraded to 1.3.0 — the Windows
+# CREATE_NO_WINDOW console-hiding patch landed upstream in 0.15.1 (#215).
+
+
+
+
+

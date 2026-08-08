@@ -26,6 +26,7 @@ import {
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { getColorClasses } from '@/lib/colors'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import type { Project, ProjectColor } from '@/types/project'
 
@@ -264,7 +265,7 @@ export function CommandPalette({
             }
           ]
         : []),
-      ...(onSSHConnect && sshProfiles
+      ...(isTauriContext() && onSSHConnect && sshProfiles
         ? sshProfiles.map((profile) => ({
             id: `ssh-${profile.id}`,
             category: 'tools' as const,
@@ -463,7 +464,7 @@ export function CommandPalette({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: -8 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+            className="w-full max-w-[100vw] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:max-w-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Command

@@ -1,58 +1,118 @@
-import { act, renderHook } from '@testing-library/react'
+import type { Terminal } from '@xterm/xterm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSessionRecovery } from './use-session-recovery'
+import { clearRegistry, registerTerminal } from '@/utils/terminal-registry'
+import { toTerminalSession } from './use-session-recovery'
 
-const mocks = vi.hoisted(() => ({
-  save: vi.fn(),
-  restore: vi.fn()
-}))
-
-vi.mock('@/lib/api', () => ({
-  sessionApi: {
-    save: mocks.save,
-    restore: mocks.restore,
-    clear: vi.fn(),
-    flush: vi.fn(),
-    hasSession: vi.fn()
+/**
+ * Mock xterm terminal exposing the public `parser.registerCsiHandler` API so
+ * the mode tracker (registered via registerTerminal) can capture DEC modes.
+ */
+function createMockParserTerminal(id: string): Terminal {
+  const handlers: Array<{
+    prefix: string | undefined
+    final: string
+    cb: (params: (number | number[])[]) => boolean
+    disposed: boolean
+  }> = []
+  const terminal = {
+    parser: {
+      registerCsiHandler: (
+        idf: { prefix?: string; intermediates?: string; final: string },
+        cb: (params: (number | number[])[]) => boolean
+      ) => {
+        const entry = { prefix: idf.prefix, final: idf.final, cb, disposed: false }
+        handlers.push(entry)
+        return {
+          dispose: () => {
+            entry.disposed = true
+          }
+        }
+      }
+    },
+    write: vi.fn()
+  } as unknown as Terminal
+  // Expose an invoke helper on the mock for the test to drive the set handler.
+  ;(terminal as unknown as Record<string, unknown>).__invokeCsi = (
+    prefix: string | undefined,
+    final: string,
+    params: (number | number[])[]
+  ) => {
+    for (const h of handlers.filter((h) => !h.disposed)) {
+      if (h.prefix === prefix && h.final === final) h.cb(params)
+    }
   }
-}))
+  void id
+  return terminal
+}
 
-vi.mock('@/stores/project-store', () => ({
-  useProjectStore: {
-    getState: vi.fn(() => ({ projects: [], activeProjectId: '' })),
-    subscribe: vi.fn((listener: () => void) => {
-      return () => void listener
-    })
-  }
-}))
-
-vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: {
-    getState: vi.fn(() => ({ terminals: [], activeTerminalId: '' })),
-    subscribe: vi.fn((listener: () => void) => {
-      return () => void listener
-    })
-  }
-}))
-
-describe('useSessionRecovery', () => {
+describe('toTerminalSession — R3 mode capture at save time', () => {
   beforeEach(() => {
-    mocks.save.mockReset()
-    mocks.restore.mockReset()
-    mocks.save.mockResolvedValue({ success: true, data: undefined })
-    mocks.restore.mockResolvedValue({
-      success: false,
-      error: 'No saved session found',
-      code: 'SESSION_NOT_FOUND'
-    })
+    clearRegistry()
   })
 
-  it('saves a crash-recovery session immediately on mount', async () => {
-    renderHook(() => useSessionRecovery())
-    await act(async () => {
-      await Promise.resolve()
-    })
+  it('captures the live tracked DEC modes keyed by ptyId', () => {
+    const ptyId = 'pty-vim'
+    const terminal = createMockParserTerminal(ptyId)
+    registerTerminal(ptyId, terminal)
+    // Drive the captured set handler: enter alt-screen + bracketed paste.
+    const invoke = (
+      terminal as unknown as {
+        __invokeCsi: (p: string | undefined, f: string, params: (number | number[])[]) => void
+      }
+    ).__invokeCsi
+    invoke('?', 'h', [1049])
+    invoke('?', 'h', [2004])
 
-    expect(mocks.save).toHaveBeenCalled()
+    const session = toTerminalSession({
+      id: 'store-1',
+      ptyId,
+      name: 'Terminal 1',
+      projectId: 'proj-1',
+      shell: 'bash',
+      cwd: '/repo'
+    } as Parameters<typeof toTerminalSession>[0])
+
+    expect(session.modes).toEqual(
+      expect.objectContaining({ alternateScreen: true, bracketedPaste: true })
+    )
+    // history still derived from pendingScrollback/transcript.
+    expect(session.history).toEqual([])
+    expect(session.id).toBe('store-1')
+  })
+
+  it('falls back to ptyId ?? id when ptyId is absent', () => {
+    const id = 'id-only'
+    const terminal = createMockParserTerminal(id)
+    registerTerminal(id, terminal)
+    const invoke = (
+      terminal as unknown as {
+        __invokeCsi: (p: string | undefined, f: string, params: (number | number[])[]) => void
+      }
+    ).__invokeCsi
+    invoke('?', 'h', [1]) // application-cursor
+
+    const session = toTerminalSession({
+      id,
+      name: 'Terminal 1',
+      projectId: 'proj-1',
+      shell: 'bash',
+      cwd: '/repo'
+    } as Parameters<typeof toTerminalSession>[0])
+
+    expect(session.modes?.applicationCursor).toBe(true)
+  })
+
+  it('degrades to no modes when no tracker is registered (best-effort)', () => {
+    const session = toTerminalSession({
+      id: 'ghost',
+      ptyId: 'pty-ghost',
+      name: 'Terminal 1',
+      projectId: 'proj-1',
+      shell: 'bash',
+      cwd: '/repo',
+      pendingScrollback: ['$ ls', 'out.txt']
+    } as Parameters<typeof toTerminalSession>[0])
+    expect(session.modes).toBeUndefined()
+    expect(session.history).toEqual(['$ ls', 'out.txt'])
   })
 })

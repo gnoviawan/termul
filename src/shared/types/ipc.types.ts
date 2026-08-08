@@ -1,4 +1,7 @@
 // IPC Result pattern from architecture.md
+import type { AcpCatalog } from './acp-catalog.types'
+import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
+
 export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code: string }
@@ -21,6 +24,13 @@ export interface TerminalSpawnOptions {
   args?: string[]
   /** Descriptive marker for the session type. Defaults to 'shell'. */
   kind?: 'shell' | 'agent'
+  /**
+   * Project-scoping id. The web/remote terminal server (terminal_ws.rs)
+   * requires a non-empty projectId on every spawn (project-scoped security);
+   * desktop treats it as optional (SpawnOptions.project_id is Option<String>
+   * with #[serde(default)]). Renderers populate it at project-scoped call sites.
+   */
+  projectId?: string
   // Index signature to satisfy Tauri's InvokeArgs constraint
   [key: string]: unknown
 }
@@ -32,12 +42,105 @@ export interface TerminalInfo {
   cwd: string
 }
 
+/**
+ * CAP-3 spawn response: terminal info PLUS the issued claim credential.
+ * Same flattened camelCase shape on both transports (desktop `terminal_spawn`
+ * IpcResult data and web `spawn` reply data). Spawn is the ONLY issuance path.
+ * Mirrors the Rust `SpawnedTerminal` serde shape exactly (id/shell/cwd/pid/
+ * cols/rows/claim — pinned by the Rust serde shape tests).
+ */
+export interface SpawnedTerminal extends TerminalInfo {
+  pid: number
+  cols: number
+  rows: number
+  /** Unguessable host-issued lease credential (64 hex chars). Present only in
+   * the spawn/rotate responses — never echoed by any other operation. */
+  claim: string
+}
+
+/**
+ * CAP-3 attach response — byte-identical camelCase shape on both transports
+ * (desktop `terminal_attach` IpcResult data; web `attach` reply data).
+ * Carries the replay cursor (`latestSeq`) + `gap` flag. NEVER carries a
+ * claim: attach consumes the credential, it never issues one.
+ */
+export interface TerminalAttachResult {
+  id: string
+  shell: string
+  cwd: string
+  pid: number
+  cols: number
+  rows: number
+  latestSeq: number
+  gap: boolean
+}
+
+/** CAP-3 rotate response: the fresh credential. */
+export interface RotatedClaim {
+  claim: string
+}
+
 // IPC channel definitions
 export type TerminalIpcChannels = {
-  'terminal:spawn': (options: TerminalSpawnOptions) => IpcResult<TerminalInfo>
+  'terminal:spawn': (options: TerminalSpawnOptions) => IpcResult<SpawnedTerminal>
+  'terminal:attach': (
+    terminalId: string,
+    claim: string,
+    lastSeq: number
+  ) => IpcResult<TerminalAttachResult>
+  'terminal:rotate_claim': (terminalId: string, claim: string) => IpcResult<RotatedClaim>
+  'terminal:revoke_claim': (terminalId: string, claim: string) => IpcResult<void>
   'terminal:write': (terminalId: string, data: string) => IpcResult<void>
   'terminal:resize': (terminalId: string, cols: number, rows: number) => IpcResult<void>
   'terminal:kill': (terminalId: string) => IpcResult<void>
+}
+
+// CAP-5 / Story 5: Workspace manifest IPC channels. Mirrors the three Tauri
+// commands (`workspace_manifest_get` / `_write` / `_delete`) and the three
+// HTTP routes (`GET /workspace/:projectId`, `POST /workspace/:projectId/write`,
+// `POST /workspace/:projectId/delete`) — both transports return the SAME
+// `IpcResult<...>` shape byte-for-byte. Conflict is a SUCCESS body variant of
+// `WriteOutcome` (NOT an error code); an excluded-field payload (`envVars`,
+// raw `claim`, `fullscreenPaneId`) fails serde `deny_unknown_fields` and maps
+// to `VALIDATION_ERROR` with no state change.
+//
+// Patch 11: the channel keys use the colon-separated pattern
+// (`workspace:manifest:get`, etc.) to mirror the existing
+// `TerminalIpcChannels` (`terminal:spawn`, `terminal:attach`, …). The Tauri
+// adapter's IPC_COMMANDS map uses the underscored Rust command names
+// (`workspace_manifest_get`); the channel map keys are a documentation /
+// type-safety surface, not the literal invoke() strings.
+export type WorkspaceManifestIpcChannels = {
+  'workspace:manifest:get': (projectId: string) => IpcResult<WorkspaceManifest | null>
+  'workspace:manifest:write': (
+    projectId: string,
+    basedRevision: number | null,
+    manifest: WorkspaceManifest
+  ) => IpcResult<WriteOutcome>
+  'workspace:manifest:delete': (projectId: string) => IpcResult<void>
+}
+
+// CAP-6 / Story 8: ACP catalog IPC channels. Mirrors the two Tauri commands
+// (`acp_list_catalog` / `acp_set_catalog_opt_in`) and the two HTTP routes
+// (`GET /acp/catalog` / `POST /acp/catalog/opt-in`) — both transports return
+// the SAME `IpcResult<...>` shape byte-for-byte. The catalog is
+// credential-free, path-free, read-only host introspection. The opt-in is a
+// single boolean that gates CDN registry augmentation.
+export type AcpCatalogIpcChannels = {
+  'acp:catalog:list': (refresh?: boolean) => IpcResult<AcpCatalog>
+  'acp:catalog:set_opt_in': (enabled: boolean) => IpcResult<void>
+}
+
+// CAP-6 / Story 9: ACP install IPC channel. Mirrors the Tauri command
+// `acp_install_agent` and the HTTP route `POST /acp/install` — both transports
+// return the SAME `IpcResult<InstallOutcome>` shape byte-for-byte. The request
+// is `{ agentId }` only; the host resolves everything from the trusted catalog.
+// The declared channel type is honest about the actual invoke payload shape:
+// the Tauri adapter wraps `agentId` in a `request` object (Tauri's convention
+// for single-struct-arg commands), so the channel signature reflects that.
+import type { InstallOutcome } from './acp-install.types'
+export type AcpInstallIpcChannels = {
+  'acp:install:install_agent': (request: { agentId: string }) => IpcResult<InstallOutcome>
 }
 
 // Event types for main -> renderer communication
@@ -132,7 +235,22 @@ export interface GitApi {
 
 // Terminal API exposed via preload
 export interface TerminalApi {
-  spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<TerminalInfo>>
+  spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<SpawnedTerminal>>
+  /**
+   * CAP-3: attach to a terminal's output stream with terminalId + claim +
+   * lastSeq. Verification is the gate — any failure (unknown terminal,
+   * missing/wrong/revoked credential) resolves to the same generic
+   * UNAUTHORIZED error with no terminal metadata or output.
+   */
+  attach: (
+    terminalId: string,
+    claim: string,
+    lastSeq: number
+  ) => Promise<IpcResult<TerminalAttachResult>>
+  /** CAP-3: possession-based rotation — old credential invalidated atomically. */
+  rotateClaim: (terminalId: string, claim: string) => Promise<IpcResult<RotatedClaim>>
+  /** CAP-3: revoke the credential; the PTY keeps running. */
+  revokeClaim: (terminalId: string, claim: string) => Promise<IpcResult<void>>
   write: (terminalId: string, data: string) => Promise<IpcResult<void>>
   resize: (terminalId: string, cols: number, rows: number) => Promise<IpcResult<void>>
   kill: (terminalId: string) => Promise<IpcResult<void>>
@@ -335,27 +453,8 @@ export interface RemoteStatus {
   bindMode: RemoteBindMode | null
   /** `127.0.0.1` or `0.0.0.0` while running. */
   bindHost: string | null
-}
-
-// One terminal entry within a remote project tree (mirrors Rust RemoteTerminal)
-export interface RemoteTerminalEntry {
-  ptyId: string
-  name: string
-  cwd?: string
-}
-
-// One project with its terminals (mirrors Rust RemoteProject)
-export interface RemoteProjectEntry {
-  id: string
-  name: string
-  terminals: RemoteTerminalEntry[]
-}
-
-// Full project tree published to the remote server (mirrors Rust ProjectTree)
-export interface RemoteProjectTree {
-  projects: RemoteProjectEntry[]
-  // Index signature to satisfy Tauri's InvokeArgs constraint
-  [key: string]: unknown
+  /** Ephemeral `https://*.trycloudflare.com` tunnel URL (QR-encoded). */
+  tunnelUrl: string | null
 }
 
 // Remote terminal server control API
@@ -363,7 +462,6 @@ export interface RemoteServerApi {
   start: (options?: { bindMode?: RemoteBindMode }) => Promise<IpcResult<RemoteStatus>>
   stop: () => Promise<IpcResult<RemoteStatus>>
   status: () => Promise<IpcResult<RemoteStatus>>
-  publishProjects: (tree: RemoteProjectTree) => Promise<IpcResult<void>>
 }
 
 // Filesystem types re-exported for convenience
@@ -372,7 +470,8 @@ import type {
   FileChangeEvent,
   FileContent,
   FileInfo,
-  FileSearchResponse
+  FileSearchResponse,
+  SearchFileHit
 } from './filesystem.types'
 
 export type FileChangeCallback = (event: FileChangeEvent) => void
@@ -424,11 +523,13 @@ export interface FilesystemApi {
     searchId: string,
     scopeRoot: string,
     rootPath: string,
-    query: string
+    query: string,
+    /** When true, surface ignored/hidden files with `ignored: true` (ADR 0003). */
+    includeIgnored?: boolean
   ) => Promise<IpcResult<void>>
   searchFileNamesStreamCancel: (searchId: string) => Promise<IpcResult<void>>
   onSearchFileNamesBatch: (
-    callback: (event: { searchId: string; files: string[]; truncated?: boolean }) => void
+    callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
   ) => () => void
   onSearchFileNamesDone: (
     callback: (event: {
@@ -461,11 +562,42 @@ export interface FilesystemApi {
   onFileDeleted: (callback: FileChangeCallback) => () => void
 }
 
-export type { DirectoryEntry, FileChangeEvent, FileContent, FileInfo, FileSearchResponse }
+export type {
+  DirectoryEntry,
+  FileChangeEvent,
+  FileContent,
+  FileInfo,
+  FileSearchResponse,
+  SearchFileHit
+}
 
 // ============================================================================
 // Session Persistence Types
 // ============================================================================
+
+/**
+ * Captured DEC private-mode state for terminal rehydration across refresh (R3).
+ *
+ * Mirrors Orca's `buildRehydrateSequences` mode set. Only the modes currently ON
+ * are replayed (via `buildRehydrateSequences`) before the captured scrollback
+ * content, so an alt-screen TUI (vim/tmux/less/htop) restores identically.
+ * Modes are optional everywhere — absence degrades to content-only restore
+ * (the pre-R3 behavior).
+ */
+export interface TerminalModes {
+  /** Alt-screen on (DEC 1049/1047/47). Replay emits `\x1b[?1049h` (attrs reset first). */
+  alternateScreen: boolean
+  /** Bracketed-paste on (DEC 2004). Replay emits `\x1b[?2004h`. */
+  bracketedPaste: boolean
+  /** Application-cursor keys on (DEC 1). Replay emits `\x1b[?1h`. */
+  applicationCursor: boolean
+  /** Mouse tracking mode: `x10` (1000), `drag` (1002), `any` (1003); null = off. */
+  mouseTracking?: 'x10' | 'drag' | 'any' | null
+  /** SGR mouse encoding (DEC 1006). Replay emits `\x1b[?1006h`. */
+  sgrMouseMode?: boolean
+  /** SGR pixel mouse encoding (DEC 1016). Replay emits `\x1b[?1016h`. */
+  sgrMousePixelsMode?: boolean
+}
 
 /**
  * Terminal session data for persistence
@@ -477,6 +609,12 @@ export interface TerminalSession {
   cwd: string
   history: string[]
   env?: Record<string, string>
+  /**
+   * Captured DEC private-mode snapshot (R3). Replayed before `history` on
+   * restore so an alt-screen TUI screen/modes survive refresh. Optional:
+   * absence (old save or capture unavailable) degrades to content-only restore.
+   */
+  modes?: TerminalModes
 }
 
 /**

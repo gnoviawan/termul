@@ -2,12 +2,18 @@ import { BlockNoteViewRaw } from '@blocknote/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useShallow } from 'zustand/shallow'
+import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
+import {
+  composeFullMarkdown,
+  type FrontmatterMap,
+  splitFrontmatter
+} from '@/lib/markdown-frontmatter'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import { TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
 import { TocPanel } from './TocPanel'
@@ -55,30 +61,100 @@ export function MarkdownEditor({
   isVisible,
   onChange
 }: MarkdownEditorProps): React.JSX.Element {
-  // Track whether the last content change came from this editor's onChange
-  const isLocalChangeRef = useRef(false)
+  // Count of local emits still awaiting acknowledgment from the content prop sync.
+  const pendingLocalEmitsRef = useRef(0)
   const prevContentRef = useRef(content)
   const prevFilePathRef = useRef(filePath)
+  // Bumped on external reload / file switch / unmount to cancel in-flight FM emits.
+  const contentGenerationRef = useRef(0)
 
-  const wrappedOnChange = useCallback(
-    (newContent: string) => {
-      isLocalChangeRef.current = true
-      prevContentRef.current = newContent
-      onChange(newContent)
+  const initialParsedRef = useRef(splitFrontmatter(content))
+  const [hasFrontmatter, setHasFrontmatter] = useState(initialParsedRef.current.hasFrontmatter)
+  const [frontmatter, setFrontmatter] = useState<FrontmatterMap>(initialParsedRef.current.data)
+  const frontmatterRef = useRef(frontmatter)
+  frontmatterRef.current = frontmatter
+  const hasFrontmatterRef = useRef(hasFrontmatter)
+  hasFrontmatterRef.current = hasFrontmatter
+  const bodyRef = useRef(initialParsedRef.current.body)
+
+  const emitFullContent = useCallback(
+    (body: string) => {
+      bodyRef.current = body
+      const full = composeFullMarkdown(hasFrontmatterRef.current, frontmatterRef.current, body)
+      // Serialize failure → keep last-good store content (muted).
+      if (full === null) return
+
+      pendingLocalEmitsRef.current += 1
+      prevContentRef.current = full
+      onChange(full)
     },
     [onChange]
   )
 
-  const { editor, replaceContent, flushPendingContent, getHeadings, scrollToBlock } = useBlockNote({
+  const {
+    editor,
+    replaceContent,
+    flushPendingContent,
+    capturePendingContent,
+    getHeadings,
+    scrollToBlock
+  } = useBlockNote({
     filePath,
-    initialMarkdown: content,
-    onChange: wrappedOnChange
+    initialMarkdown: initialParsedRef.current.body,
+    onChange: emitFullContent
   })
 
+  const flushFullContent = useCallback(async (): Promise<void> => {
+    // Flush BlockNote body through emitFullContent so the store receives rejoined FM+body.
+    await flushPendingContent()
+  }, [flushPendingContent])
+
   useEffect(() => {
-    registerEditorContentFlusher(filePath, flushPendingContent)
+    registerEditorContentFlusher(filePath, flushFullContent)
     return () => unregisterEditorContentFlusher(filePath)
-  }, [filePath, flushPendingContent])
+  }, [filePath, flushFullContent])
+
+  const applyExternalContent = useCallback(
+    (nextContent: string) => {
+      contentGenerationRef.current += 1
+      pendingLocalEmitsRef.current = 0
+      const parsed = splitFrontmatter(nextContent)
+      setHasFrontmatter(parsed.hasFrontmatter)
+      setFrontmatter(parsed.data)
+      frontmatterRef.current = parsed.data
+      hasFrontmatterRef.current = parsed.hasFrontmatter
+      bodyRef.current = parsed.body
+      void replaceContent(parsed.body)
+    },
+    [replaceContent]
+  )
+
+  const handleFrontmatterChange = useCallback(
+    (next: FrontmatterMap) => {
+      frontmatterRef.current = next
+      hasFrontmatterRef.current = true
+      setFrontmatter(next)
+      setHasFrontmatter(true)
+
+      const generation = contentGenerationRef.current
+      void (async () => {
+        // Capture latest body without emitting, then emit exactly once with new FM.
+        const captured = await capturePendingContent()
+        if (generation !== contentGenerationRef.current) return
+        if (captured !== null) {
+          bodyRef.current = captured
+        }
+        emitFullContent(bodyRef.current)
+      })()
+    },
+    [capturePendingContent, emitFullContent]
+  )
+
+  useEffect(() => {
+    return () => {
+      contentGenerationRef.current += 1
+    }
+  }, [])
 
   const isDark = useIsDark()
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -128,24 +204,27 @@ export function MarkdownEditor({
   // Sync content only for external changes (e.g., file reload from disk)
   useEffect(() => {
     if (filePath !== prevFilePathRef.current) {
-      isLocalChangeRef.current = false
+      pendingLocalEmitsRef.current = 0
       prevFilePathRef.current = filePath
       prevContentRef.current = content
-      void replaceContent(content)
+      applyExternalContent(content)
       return
     }
 
-    if (content !== prevContentRef.current) {
-      if (isLocalChangeRef.current) {
-        // This change came from the editor itself, don't push it back
-        isLocalChangeRef.current = false
-      } else {
-        // External change - replace editor content
-        void replaceContent(content)
-      }
-      prevContentRef.current = content
+    // Verbatim store echo of our emit: content already matches prevContentRef
+    // (set in emitFullContent). Still clear pending so a later genuine external
+    // update is not consumed as a leftover local emit.
+    if (content === prevContentRef.current) {
+      pendingLocalEmitsRef.current = 0
+      return
     }
-  }, [content, filePath, replaceContent])
+
+    // Distinct content → external. Never burn pending on a mismatch; that used
+    // to drop real reloads after a same-content echo left the counter elevated.
+    pendingLocalEmitsRef.current = 0
+    applyExternalContent(content)
+    prevContentRef.current = content
+  }, [applyExternalContent, content, filePath])
 
   useEffect(() => {
     setBlockNoteContainer(blockNoteScrollRootRef.current)
@@ -204,18 +283,28 @@ export function MarkdownEditor({
       <div ref={layoutRef} className="h-full w-full">
         <ResizablePanelGroup ref={panelGroupRef} direction="horizontal">
           <ResizablePanel defaultSize={canRenderToc ? 100 - tocPanelDefaultSize : 100} minSize={60}>
-            <div ref={blockNoteScrollRootRef} className="h-full overflow-auto">
-              <BlockNoteViewRaw
-                editor={editor}
-                theme={isDark ? 'dark' : 'light'}
-                formattingToolbar={false}
-                linkToolbar={false}
-                slashMenu={false}
-                emojiPicker={false}
-                sideMenu={false}
-                filePanel={false}
-                tableHandles={false}
-              />
+            <div
+              ref={blockNoteScrollRootRef}
+              className="markdown-editor flex h-full flex-col overflow-auto"
+            >
+              <div className="markdown-editor-document flex min-h-full w-full flex-col">
+                {hasFrontmatter && (
+                  <FrontmatterProperties data={frontmatter} onChange={handleFrontmatterChange} />
+                )}
+                <div className="min-h-0 flex-1">
+                  <BlockNoteViewRaw
+                    editor={editor}
+                    theme={isDark ? 'dark' : 'light'}
+                    formattingToolbar={false}
+                    linkToolbar={false}
+                    slashMenu={false}
+                    emojiPicker={false}
+                    sideMenu={false}
+                    filePanel={false}
+                    tableHandles={false}
+                  />
+                </div>
+              </div>
             </div>
           </ResizablePanel>
 

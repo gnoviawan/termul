@@ -1,10 +1,10 @@
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use regex::Regex;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+
+use super::{TerminalEvent, TerminalEventHub};
 
 // OSC 133;D;{exit_code} escape sequence pattern (shell integration protocol)
 lazy_static! {
@@ -27,26 +27,18 @@ struct ExitCodeState {
     last_exit_code: Option<i32>,
 }
 
-/// Event emitted when exit code changes
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExitCodeChangedEvent {
-    pub terminal_id: String,
-    pub exit_code: i32,
-}
-
 /// Tracks exit codes from terminal output
 pub struct ExitCodeTracker {
     terminal_states: Arc<RwLock<HashMap<String, ExitCodeState>>>,
-    app_handle: AppHandle,
+    events: TerminalEventHub,
 }
 
 impl ExitCodeTracker {
     /// Create a new ExitCodeTracker
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(events: TerminalEventHub) -> Self {
         Self {
             terminal_states: Arc::new(RwLock::new(HashMap::new())),
-            app_handle,
+            events,
         }
     }
 
@@ -134,11 +126,10 @@ impl ExitCodeTracker {
 
     /// Emit exit code changed event
     fn emit_exit_code_changed(&self, terminal_id: &str, exit_code: i32) {
-        let event = ExitCodeChangedEvent {
+        self.events.emit(TerminalEvent::ExitCodeChanged {
             terminal_id: terminal_id.to_string(),
             exit_code,
-        };
-        let _ = self.app_handle.emit("terminal-exit-code-changed", event);
+        });
     }
 
     /// Shutdown the tracker
@@ -153,7 +144,7 @@ impl Clone for ExitCodeTracker {
     fn clone(&self) -> Self {
         Self {
             terminal_states: self.terminal_states.clone(),
-            app_handle: self.app_handle.clone(),
+            events: self.events.clone(),
         }
     }
 }

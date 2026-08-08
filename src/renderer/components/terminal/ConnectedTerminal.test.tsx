@@ -288,6 +288,7 @@ const mockTerminalStoreState = {
   reorderTerminals: vi.fn(),
   setTerminals: vi.fn(),
   setTerminalPtyId: vi.fn(),
+  setTerminalClaim: vi.fn(),
   findTerminalByPtyId: vi.fn(),
   updateTerminalCwd: vi.fn(),
   updateTerminalGitBranch: vi.fn(),
@@ -399,7 +400,13 @@ describe('ConnectedTerminal', () => {
 
     vi.mocked(terminalApi).spawn.mockResolvedValue({
       success: true,
-      data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
+      // CAP-3: spawn is the only claim issuance path — the fixture carries it.
+      data: {
+        id: 'terminal-123',
+        shell: 'bash',
+        cwd: '/home/user',
+        claim: 'lease-claim-connected'
+      }
     })
     vi.mocked(terminalApi).write.mockResolvedValue({ success: true, data: undefined })
     vi.mocked(terminalApi).resize.mockResolvedValue({ success: true, data: undefined })
@@ -430,6 +437,14 @@ describe('ConnectedTerminal', () => {
     // Wait for async spawn
     await vi.waitFor(() => {
       expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+    })
+
+    // CAP-3: the claim issued by the spawn response lands in the terminal store.
+    await vi.waitFor(() => {
+      expect(mockTerminalStoreState.setTerminalClaim).toHaveBeenCalledWith(
+        'terminal-123',
+        'lease-claim-connected'
+      )
     })
   })
 
@@ -1195,6 +1210,60 @@ describe('ConnectedTerminal', () => {
       // Should prevent xterm from handling
       expect(result).toBe(false)
       expect(mockTerminalInstance.selectAll).toHaveBeenCalled()
+    })
+
+    it('should send a newline (LF) on Shift+Enter instead of CR', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      // Wait for spawn so the PTY id is bound before the key is dispatched.
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      })
+
+      const result = handler(event)
+
+      // Must prevent xterm's default (\r) so the app receives a newline.
+      expect(result).toBe(false)
+      expect(event.defaultPrevented).toBe(true)
+
+      // The same byte Ctrl+J produces (LF) is written to the PTY.
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('terminal-123', '\n')
+      })
+    })
+
+    it('should not remap Shift+Enter when another modifier is held', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      // Ctrl+Shift+Enter must NOT be swallowed — it may be an app shortcut.
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      expect(result).toBe(true)
     })
 
     it('should handle Cmd key on macOS for copy/paste', async () => {

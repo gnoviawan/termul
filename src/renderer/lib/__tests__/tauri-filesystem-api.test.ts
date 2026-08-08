@@ -8,6 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type WatchCallback = (event: unknown) => void
 
+// These tests exercise the DESKTOP path (`@tauri-apps/plugin-fs`). The renderer
+// facade branches to the web-server client when `!isTauriContext()`, and jsdom
+// has no `__TAURI_INTERNALS__` so that branch would fire by default. Pin the
+// context to true here so the desktop path is under test; the web branch is
+// covered by `web-server-api.test.ts` + `tauri-filesystem-api.web.test.ts`.
+const { mockIsTauriContext } = vi.hoisted(() => ({
+  mockIsTauriContext: vi.fn(() => true)
+}))
+
+vi.mock('../tauri-runtime', () => ({
+  isTauriContext: mockIsTauriContext
+}))
+
 const defaultStat: FileInfo = {
   isFile: true,
   isDirectory: false,
@@ -120,6 +133,12 @@ describe('tauriFilesystemApi', () => {
         expect(result.data![1].name).toBe('file1.txt')
         expect(result.data![1].type).toBe('file')
       }
+      // Patch H (byte-identical desktop guarantee): the desktop branch must
+      // actually call the @tauri-apps/plugin-fs `readDir` mock — not silently
+      // fall through to a web/server client. The mock fires once with the
+      // raw directory path.
+      expect(vi.mocked(readDir)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(readDir)).toHaveBeenCalledWith('/test')
     })
 
     it('should flag ALWAYS_IGNORE patterns as ignored but still include them', async () => {
@@ -353,6 +372,19 @@ describe('tauriFilesystemApi', () => {
         expect(result.code).toBe('CREATE_ERROR')
       }
     })
+
+    // Patch H (byte-identical desktop guarantee): when isTauriContext() is
+    // true, createFile MUST call the @tauri-apps/plugin-fs `writeTextFile`
+    // mock (not the web/server client).
+    it('calls the @tauri-apps/plugin-fs writeTextFile mock on the desktop branch (Patch H)', async () => {
+      vi.mocked(writeTextFile).mockClear()
+      vi.mocked(writeTextFile).mockResolvedValue(undefined)
+
+      await tauriFilesystemApi.createFile('/test/desktop-create.txt', 'body')
+
+      expect(vi.mocked(writeTextFile)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(writeTextFile)).toHaveBeenCalledWith('/test/desktop-create.txt', 'body')
+    })
   })
 
   describe('createDirectory', () => {
@@ -374,6 +406,23 @@ describe('tauriFilesystemApi', () => {
       if (!result.success) {
         expect(result.code).toBe('MKDIR_ERROR')
       }
+    })
+
+    // Patch H (byte-identical desktop guarantee): when isTauriContext() is
+    // true, createDirectory MUST call the @tauri-apps/plugin-fs `mkdir` mock
+    // (not the web/server client). The three methods moved to the web branch
+    // (createDirectory, createFile, readDirectory) must keep their desktop
+    // path byte-identical — this pins it.
+    it('calls the @tauri-apps/plugin-fs mkdir mock on the desktop branch (Patch H)', async () => {
+      vi.mocked(mkdir).mockClear()
+      vi.mocked(mkdir).mockResolvedValue(undefined)
+
+      await tauriFilesystemApi.createDirectory('/test/desktop-mkdir')
+
+      expect(vi.mocked(mkdir)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(mkdir)).toHaveBeenCalledWith('/test/desktop-mkdir', {
+        recursive: true
+      })
     })
   })
 
@@ -536,6 +585,147 @@ describe('tauriFilesystemApi', () => {
       const cleanup = tauriFilesystemApi.onFileChanged(callback)
       cleanupFirst()
       cleanup()
+    })
+  })
+
+  describe('watch event dispatch (typed subscriptions, GH-539)', () => {
+    // Captures the single callback handed to watchImmediate so tests can emit
+    // raw notify-style events exactly as the Tauri plugin would.
+    async function watchAndCapture(): Promise<(event: unknown) => void> {
+      let captured: WatchCallback | null = null
+      vi.mocked(watchImmediate).mockImplementation(async (_paths, callback) => {
+        captured = callback as WatchCallback
+        return vi.fn()
+      })
+
+      const result = await tauriFilesystemApi.watchDirectory('/test')
+      expect(result.success).toBe(true)
+      expect(captured).not.toBeNull()
+
+      return (event: unknown) => {
+        captured?.(event)
+      }
+    }
+
+    function emitEvent(kindType: string, path: string): unknown {
+      return { type: { type: kindType }, paths: [path] }
+    }
+
+    it('routes create events only to onFileCreated subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('create', '/test/new.txt'))
+
+      expect(onCreated).toHaveBeenCalledTimes(1)
+      expect(onCreated).toHaveBeenCalledWith({ type: 'add', path: '/test/new.txt' })
+      expect(onChanged).not.toHaveBeenCalled()
+      expect(onDeleted).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('routes modify events only to onFileChanged subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('modify', '/test/saved.txt'))
+
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      expect(onChanged).toHaveBeenCalledWith({ type: 'change', path: '/test/saved.txt' })
+      expect(onCreated).not.toHaveBeenCalled()
+      expect(onDeleted).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('routes remove events only to onFileDeleted subscribers', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const onCreated = vi.fn()
+      const onDeleted = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(onCreated)
+      const cleanupDeleted = tauriFilesystemApi.onFileDeleted(onDeleted)
+
+      emit(emitEvent('remove', '/test/gone.txt'))
+
+      expect(onDeleted).toHaveBeenCalledTimes(1)
+      expect(onDeleted).toHaveBeenCalledWith({ type: 'unlink', path: '/test/gone.txt' })
+      expect(onChanged).not.toHaveBeenCalled()
+      expect(onCreated).not.toHaveBeenCalled()
+
+      cleanupChanged()
+      cleanupCreated()
+      cleanupDeleted()
+    })
+
+    it('fires a callback subscribed for all types exactly once per event', async () => {
+      // Mirrors callers that pass one function to all three subscriptions
+      // (e.g. use-composer-mentions cache invalidation).
+      const emit = await watchAndCapture()
+      const invalidate = vi.fn()
+      const cleanups = [
+        tauriFilesystemApi.onFileChanged(invalidate),
+        tauriFilesystemApi.onFileCreated(invalidate),
+        tauriFilesystemApi.onFileDeleted(invalidate)
+      ]
+
+      emit(emitEvent('create', '/test/a.txt'))
+      emit(emitEvent('modify', '/test/a.txt'))
+      emit(emitEvent('remove', '/test/a.txt'))
+
+      expect(invalidate).toHaveBeenCalledTimes(3)
+      expect(invalidate.mock.calls.map((call) => call[0].type)).toEqual(['add', 'change', 'unlink'])
+
+      for (const cleanup of cleanups) cleanup()
+    })
+
+    it('stops dispatching to a callback after its subscription cleanup runs', async () => {
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+
+      emit(emitEvent('modify', '/test/one.txt'))
+      expect(onChanged).toHaveBeenCalledTimes(1)
+
+      cleanupChanged()
+      emit(emitEvent('modify', '/test/one.txt'))
+      emit(emitEvent('create', '/test/two.txt'))
+      emit(emitEvent('remove', '/test/one.txt'))
+
+      expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps other event types when only one subscription is cleaned up', async () => {
+      const emit = await watchAndCapture()
+      const shared = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(shared)
+      const cleanupCreated = tauriFilesystemApi.onFileCreated(shared)
+
+      cleanupChanged()
+
+      emit(emitEvent('modify', '/test/a.txt'))
+      emit(emitEvent('create', '/test/b.txt'))
+
+      expect(shared).toHaveBeenCalledTimes(1)
+      expect(shared).toHaveBeenCalledWith({ type: 'add', path: '/test/b.txt' })
+
+      cleanupCreated()
     })
   })
 })

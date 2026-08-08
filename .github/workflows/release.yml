@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: Stable version to promote an Insider manifest to (without leading v)
+        required: true
+        type: string
+      rc_version:
+        description: Insider RC version the manifest currently points at (without leading v)
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,6 +25,7 @@ permissions:
 jobs:
   changelog:
     name: Generate Changelog
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       changelog: ${{ steps.cliff.outputs.content }}
@@ -41,20 +52,16 @@ jobs:
         id: version
         shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          if [[ -z "$VERSION" ]]; then
-            echo "Tag must include a version" >&2
-            exit 1
-          fi
+          source scripts/release/homebrew.sh
+          VERSION="$(normalize_release_version "$GITHUB_REF_NAME")"
           echo "normalized_version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check prerelease
         id: check
         shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          if [[ "$TAG" =~ (-[0-9A-Za-z]+|alpha|beta|rc) ]]; then
+          source scripts/release/homebrew.sh
+          if is_release_prerelease "$GITHUB_REF_NAME"; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
@@ -63,6 +70,7 @@ jobs:
   create_release:
     name: Create Draft Release
     needs: changelog
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -95,7 +103,6 @@ jobs:
                 repo: context.repo.repo,
                 tag: tagName,
               })
-
               release = await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -107,10 +114,7 @@ jobs:
                 prerelease,
               })
             } catch (error) {
-              if (error.status !== 404) {
-                throw error
-              }
-
+              if (error.status !== 404) throw error
               release = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -121,15 +125,13 @@ jobs:
                 prerelease,
               })
             }
-
             core.setOutput('releaseId', String(release.data.id))
 
   build:
     name: Build (${{ matrix.platform }})
-    needs: [changelog, create_release]
+    needs: changelog
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -138,22 +140,18 @@ jobs:
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc
-
           - platform: linux-x64
             runner: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu
-
           - platform: macos-aarch64
             runner: macos-latest
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-
           - platform: macos-x64
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
-
     steps:
       - name: Harden runner
         if: matrix.runner == 'ubuntu-22.04'
@@ -165,6 +163,41 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Preflight Apple and updater credentials
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            TAURI_SIGNING_PUBLIC_KEY \
+            TAURI_SIGNING_PRIVATE_KEY \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -ne 0 ]]; then
+            printf 'Missing required macOS release credential categories:\n' >&2
+            printf '  - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
 
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
@@ -202,26 +235,274 @@ jobs:
           TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
         run: bun scripts/align-version.ts
 
-      - name: Build and publish release artifacts
+      # Build the Vite WEB bundle (dist-web/) BEFORE the desktop release build so
+      # rust-embed embeds it into the desktop binary (the desktop's in-process
+      # shared-live server serves this embedded bundle in a release install
+      # without dist-web/ on disk). tauri-action's beforeBuildCommand only builds
+      # the tauri renderer (dist-tauri/); dist-web/ is separate + gitignored, so
+      # it must be built here. A missing dist-web/ fails the release build
+      # clearly via the web_embed_missing compile_error in assets.rs.
+      - name: Build web client (dist-web/)
+        run: bun run build:web
+
+      - name: Assert dist-web/index.html exists
+        shell: bash
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      - name: Build platform artifacts locally
+        id: tauri
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Termul Manager ${{ github.ref_name }}'
-          releaseBody: ${{ needs.changelog.outputs.changelog }}
-          releaseId: ${{ needs.create_release.outputs.release_id }}
-          releaseDraft: true
-          prerelease: ${{ needs.changelog.outputs.is_prerelease }}
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
 
+      - name: Persist Tauri artifact paths
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: printf '%s\n' "$ARTIFACT_PATHS" > tauri-artifact-paths.json
+
+      - name: Require updater signatures
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          node - <<'NODE'
+          const paths = JSON.parse(process.env.ARTIFACT_PATHS || '[]')
+          if (!Array.isArray(paths) || !paths.some((path) => path.endsWith('.sig'))) {
+            throw new Error('Tauri produced no updater signatures; check the updater signing secrets.')
+          }
+          NODE
+
+      - name: Verify macOS bundle library portability and signing
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          bundle_dir="src-tauri/target/$RUST_TARGET/release/bundle"
+          app_bundles=("$bundle_dir/macos"/*.app)
+          dmgs=("$bundle_dir/dmg"/*.dmg)
+          if [[ "${#app_bundles[@]}" -ne 1 || "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS app and one DMG before verification." >&2
+            exit 1
+          fi
+
+          app="${app_bundles[0]}"
+          dmg="${dmgs[0]}"
+          info_plist="$app/Contents/Info.plist"
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
+          if [[ -z "$executable_name" || "$executable_name" == */* ]]; then
+            echo "Invalid CFBundleExecutable in $info_plist: ${executable_name:-empty}" >&2
+            exit 1
+          fi
+          executable="$app/Contents/MacOS/$executable_name"
+          if [[ ! -f "$executable" || ! -x "$executable" ]]; then
+            echo "Declared bundle executable is missing or not executable: $executable" >&2
+            exit 1
+          fi
+
+          dependencies="$(otool -L "$executable")"
+          rpaths="$(otool -l "$executable" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+          ')"
+          printf '%s\n' "$dependencies"
+          printf 'LC_RPATH entries:\n%s\n' "${rpaths:-  (none)}"
+
+          forbidden=()
+          while IFS= read -r dependency; do
+            [[ -z "$dependency" ]] && continue
+            case "$dependency" in
+              /System/Library/*|/usr/lib/*|@rpath/*|@loader_path/*|@executable_path/*) ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$dependency (Homebrew/local prefix)") ;;
+              /*)
+                forbidden+=("$dependency (runner-local absolute path)") ;;
+              *)
+                forbidden+=("$dependency (unexpected relative load path)") ;;
+            esac
+          done < <(
+            printf '%s\n' "$dependencies" |
+              tail -n +2 |
+              sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/'
+          )
+
+          while IFS= read -r rpath; do
+            [[ -z "$rpath" ]] && continue
+            case "$rpath" in
+              /System/Library/*|/usr/lib/*|@loader_path/*|@executable_path/*) ;;
+              /usr/local/*|/opt/homebrew/*)
+                forbidden+=("$rpath (Homebrew/local LC_RPATH)") ;;
+              *)
+                forbidden+=("$rpath (non-portable LC_RPATH)") ;;
+            esac
+          done <<< "$rpaths"
+
+          if [[ "${#forbidden[@]}" -ne 0 ]]; then
+            printf 'Forbidden Mach-O paths in %s:\n' "$executable" >&2
+            printf '  %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          codesign --verify --strict --verbose=2 "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          xcrun stapler validate "$dmg"
+
+      - name: Collect platform release assets and updater manifest
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release/prepare-platform-artifacts.mjs \
+            --platform "$PLATFORM" \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --artifacts tauri-artifact-paths.json \
+            --output collected
+
+      - name: Upload platform workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: release-${{ matrix.platform }}
+          path: collected/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Standalone headless server for VPS deploy (Story 1.2 scaffold).
+  # Build sequencing: bun run build:web MUST run before the cargo release
+  # build so rust-embed embeds dist-web/ into the binary (Story 1.11 - a
+  # missing/stale dist-web/ now fails the release build clearly via the
+  # web_embed_missing compile_error in assets.rs; the ordering here keeps the
+  # embed non-empty).
+  standalone-server:
+    name: Build termul-server (linux-x64)
+    needs: changelog
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            patchelf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Align app versions with tag
+        env:
+          TAG_VERSION: ${{ needs.changelog.outputs.normalized_version }}
+        run: bun scripts/align-version.ts
+
+      # ORDER MATTERS: web bundle before termul-server release build (rust-embed).
+      - name: Build web client (dist-web/)
+        run: bun run build:web
+
+      - name: Assert dist-web/index.html exists
+        run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      - name: Build termul-server (linux-x64 release)
+        working-directory: src-tauri
+        # Bake the signing pubkey into the binary at compile time so the opt-in
+        # self-update subsystem can verify downloaded binaries (option_env!).
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: >
+          cargo build --release --bin termul-server
+          --features standalone-server
+          --target x86_64-unknown-linux-gnu
+
+      - name: Sign termul-server binary
+        working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bun run tauri signer sign target/x86_64-unknown-linux-gnu/release/termul-server
+          test -f target/x86_64-unknown-linux-gnu/release/termul-server.sig
+
+      - name: Prepare server manifest fragment
+        shell: bash
+        env:
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release/prepare-server-artifacts.mjs \
+            --signature src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --output server-collected/server-manifest.json
+
+      - name: Stage termul-server binary + signature
+        shell: bash
+        run: |
+          mkdir -p server-collected
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server server-collected/termul-server
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig server-collected/termul-server.sig
+
+      - name: Upload termul-server workflow artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: release-standalone-server
+          # Single root so upload-artifact's least-common-ancestor doesn't
+          # collapse to the workspace root (which would re-prefix every path).
+          path: server-collected/
+          if-no-files-found: error
+          retention-days: 1
+
   publish_release:
-    name: Publish Release
-    needs: [changelog, create_release, build]
+    name: Validate, upload, and publish release
+    needs: [changelog, create_release, build, standalone-server]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -231,65 +512,120 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Verify updater assets before publish
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
-          RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const releaseId = Number(process.env.RELEASE_ID)
-            const isPrerelease = process.env.IS_PRERELEASE === 'true'
-            const stableManifestPath =
-              '/releases/latest/download/latest.json'
-            const channelPolicy = isPrerelease
-              ? 'stable clients intentionally ignore prerelease tags'
-              : 'stable clients consume the stable latest.json manifest'
+          # `persist-credentials: true` so the insider moving-tag push below can
+          # authenticate with the GITHUB_TOKEN (contents: write).
+          persist-credentials: true
 
-            core.info(`Updater channel policy: ${channelPolicy}`)
+      - name: Download all platform workflow artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: release-*
+          path: release-inputs
 
-            const { data: assets } = await github.rest.repos.listReleaseAssets({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId,
-              per_page: 100,
-            })
+      - name: Validate and merge release inputs
+        env:
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.changelog }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
+        run: |
+          expected=(windows-x64 linux-x64 macos-aarch64 macos-x64)
+          manifests=()
+          mkdir -p release-assets
+          printf '%s' "$RELEASE_BODY" > release-notes.md
 
-            const assetNames = assets.map((asset) => asset.name)
-            core.info(`Draft release assets: ${assetNames.join(', ')}`)
+          for platform in "${expected[@]}"; do
+            root="release-inputs/release-$platform"
+            manifest="$root/platform-manifest.json"
+            if [[ ! -s "$manifest" || ! -d "$root/assets" ]]; then
+              echo "Missing collected release input for $platform" >&2
+              exit 1
+            fi
+            manifests+=("$manifest")
+            while IFS= read -r -d '' asset; do
+              name="$(basename "$asset")"
+              if [[ -e "release-assets/$name" ]] && ! cmp -s "$asset" "release-assets/$name"; then
+                echo "Conflicting duplicate release asset: $name" >&2
+                exit 1
+              fi
+              cp "$asset" "release-assets/$name"
+            done < <(find "$root/assets" -maxdepth 1 -type f -print0)
+          done
 
-            if (isPrerelease) {
-              core.notice(
-                [
-                  'This tag is marked as a prerelease.',
-                  'Stable clients intentionally ignore prerelease tags',
-                  `because they only check ${stableManifestPath}.`,
-                ].join(' ')
-              )
-              return
-            }
+          cp release-inputs/release-standalone-server/server-collected/termul-server release-assets/termul-server
+          cp release-inputs/release-standalone-server/server-collected/termul-server.sig release-assets/termul-server.sig
+          manifests+=("release-inputs/release-standalone-server/server-collected/server-manifest.json")
 
-            const hasLatestJson = assetNames.includes('latest.json')
-            const hasSigFiles = assetNames.some((name) => name.endsWith('.sig'))
+          # Channel selection: stable (`v*` tag) vs Insider RC (`v*-rc.*` tag).
+          # The merge validator derives the asset URL tag from the channel:
+          # stable/insider → `v<version>` (the triggering tag), nightly → `nightly`.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            CHANNEL="insider"
+            MANIFEST_NAME="latest-insider.json"
+          else
+            CHANNEL="stable"
+            MANIFEST_NAME="latest-stable.json"
+          fi
 
-            if (!hasLatestJson || !hasSigFiles) {
-              const publishedAssets = assetNames.join(', ')
-              core.setFailed(
-                [
-                  `Stable release is missing required updater assets.`,
-                  `  - latest.json present: ${hasLatestJson}`,
-                  `  - .sig files present: ${hasSigFiles}`,
-                  `Draft assets: ${publishedAssets}`,
-                  ``,
-                  `To fix this, ensure:`,
-                  `  1. 'bundle.createUpdaterArtifacts' is true in tauri.conf.json`,
-                  `  2. TAURI_SIGNING_PRIVATE_KEY is configured in GitHub secrets`,
-                  `  3. The tauri-action build step receives the signing env vars.`,
-                ].join('\n')
-              )
-              return
-            }
+          PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          node scripts/release/merge-updater-manifests.mjs \
+            --channel "$CHANNEL" \
+            "$MANIFEST_NAME" "$VERSION" release-notes.md "$PUB_DATE" "${manifests[@]}"
+
+          # Stable publishes a `latest.json` alias so the Tauri updater plugin's
+          # build-time endpoint (which cannot be overridden per check from the
+          # renderer) keeps resolving for stable users.
+          if [[ "$CHANNEL" == "stable" ]]; then
+            cp "$MANIFEST_NAME" latest.json
+          fi
+
+          release_file_count=0
+          while IFS= read -r -d '' _release_file; do
+            release_file_count=$((release_file_count + 1))
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+          if [[ "$release_file_count" -eq 0 ]]; then
+            echo "No validated release assets were collected." >&2
+            exit 1
+          fi
+
+      - name: Upload all validated release assets and updater manifest once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.changelog.outputs.is_prerelease }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("$asset")
+          done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            assets+=(latest-insider.json)
+          else
+            assets+=(latest-stable.json latest.json)
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber
+
+          # Mirror the Insider manifest under the moving `insider` tag so the
+          # desktop facade's `releases/download/insider/latest-insider.json`
+          # URL resolves. The bundles themselves stay under the versioned RC tag.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            SHA="$(git rev-parse HEAD)"
+            if gh release view insider >/dev/null 2>&1; then
+              # `gh release edit --target` only updates release.target_commitish,
+              # not the git tag that `releases/download/insider/...` resolves via.
+              git tag -f insider "$SHA"
+              git push origin insider --force
+              gh release edit insider --target "$SHA" --prerelease
+            else
+              gh release create insider --target "$SHA" \
+                --title "Termul Insider" \
+                --notes "Latest Insider (release candidate) channel. See the versioned RC release for asset details." \
+                --prerelease
+            fi
+            gh release upload insider latest-insider.json --clobber
+          fi
 
       - name: Publish draft release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -300,19 +636,122 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const releaseId = Number(process.env.RELEASE_ID)
             const tagName = context.ref.replace('refs/tags/', '')
-            const releaseName = `Termul Manager ${tagName}`
-            const releaseBody = process.env.RELEASE_BODY || ''
-            const prerelease = process.env.IS_PRERELEASE === 'true'
-
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: releaseId,
+              release_id: Number(process.env.RELEASE_ID),
               tag_name: tagName,
-              name: releaseName,
-              body: releaseBody,
+              name: `Termul Manager ${tagName}`,
+              body: process.env.RELEASE_BODY || '',
               draft: false,
-              prerelease,
+              prerelease: process.env.IS_PRERELEASE === 'true',
             })
+
+  publish_homebrew:
+    name: Publish checksums and Homebrew metadata
+    needs: [changelog, publish_release]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-homebrew.yml
+    with:
+      version: ${{ needs.changelog.outputs.normalized_version }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # Manual Insider→Stable promotion. Copies the moving-tag Insider manifest,
+  # rewrites its version + asset URLs to a stable tag (whose release must
+  # already exist from a normal `v*` tag push), and publishes `latest-stable.json`
+  # + the `latest.json` alias for stable users.
+  promote:
+    name: Promote Insider manifest to Stable
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Promote Insider manifest to Stable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABLE_VERSION: ${{ inputs.stable_version }}
+          RC_VERSION: ${{ inputs.rc_version }}
+        run: |
+          STABLE_TAG="v$STABLE_VERSION"
+          RC_TAG="v$RC_VERSION"
+          if ! gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            echo "Stable release $STABLE_TAG does not exist. Push the stable tag first." >&2
+            exit 1
+          fi
+          if ! gh release view insider >/dev/null 2>&1; then
+            echo "Insider release (moving 'insider' tag) does not exist. Publish an RC first." >&2
+            exit 1
+          fi
+          mkdir -p promote
+          # (patch 16) Verify the stable release's assets are uploaded before
+          # pointing the stable manifest at them — a manifest referencing missing
+          # assets would 404 the updater.
+          gh release view "$STABLE_TAG" --json assets -q '.assets[].name' > promote/stable-assets.txt
+          gh release download insider --pattern latest-insider.json --dir promote
+          node -e '
+            const fs = require("fs");
+            const stable = process.env.STABLE_VERSION;
+            const rc = process.env.RC_VERSION;
+            const stableAssets = new Set(
+              fs.readFileSync("promote/stable-assets.txt", "utf8")
+                .split("\n").map((s) => s.trim()).filter(Boolean)
+            );
+            const from = `/releases/download/v${rc}/`;
+            const to = `/releases/download/v${stable}/`;
+            const m = JSON.parse(fs.readFileSync("promote/latest-insider.json", "utf8"));
+            if (!m.platforms || typeof m.platforms !== "object" || Array.isArray(m.platforms)) {
+              throw new Error("promote: latest-insider.json has no platforms object");
+            }
+            m.version = stable;
+            // (patch 15) Refresh pub_date to the promotion timestamp and replace
+            // the RC-flavored notes so the stable manifest does not advertise a
+            // stale RC build time / RC release notes.
+            m.pub_date = new Date().toISOString();
+            m.notes = `Stable ${stable} (promoted from Insider ${rc}).`;
+            for (const key of Object.keys(m.platforms)) {
+              const url = String(m.platforms[key].url || "");
+              // (patch 14) Refuse to ship a URL that does not reference the RC
+              // tag — a mismatched URL would point the stable manifest at the
+              // wrong release asset.
+              if (!url.includes(from)) {
+                throw new Error(
+                  `promote: platform ${key} url ${url} does not reference RC tag v${rc}; refusing to ship a mismatched URL`
+                );
+              }
+              const rewritten = url.split(from).join(to);
+              // (patch 16) The rewritten URL must target an asset that actually
+              // exists in the stable release.
+              let assetName;
+              try {
+                assetName = decodeURIComponent(new URL(rewritten).pathname.split("/").pop());
+              } catch (e) {
+                throw new Error(`promote: platform ${key} url ${rewritten} is not a valid URL: ${e.message}`);
+              }
+              if (!stableAssets.has(assetName)) {
+                throw new Error(
+                  `promote: stable release v${stable} is missing asset ${assetName} (referenced by ${key}); upload assets before promoting`
+                );
+              }
+              m.platforms[key].url = rewritten;
+            }
+            fs.writeFileSync("latest-stable.json", JSON.stringify(m, null, 2) + "\n");
+            fs.copyFileSync("latest-stable.json", "latest.json");
+          '
+          gh release upload "$STABLE_TAG" latest-stable.json latest.json --clobber
+          echo "Promoted Insider $RC_TAG manifest to Stable $STABLE_TAG."

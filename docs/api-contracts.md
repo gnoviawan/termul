@@ -170,6 +170,46 @@ Returns registered migrations.
 ### `data_migration_rollback`
 Runs rollback logic for a migration.
 
+## Desktop ACP Chat History Commands
+
+Desktop renderer chat history is stored under the Tauri app-data directory by a
+Rust-owned, versioned file store. The commands preserve the existing renderer
+`SessionIndexEntry` / `SessionPayload` JSON shape. `SessionPayload` carries
+`{ metadata, messages, toolCalls? }`: `toolCalls` is an optional mirror of the
+session's ACP tool calls so history reopens and post-reload resumes restore the
+tool cards in the timeline. Persisted tool calls drop `rawOutput` and unknown
+fields, normalize mid-flight statuses to `failed`, keep only the most recent
+calls, and are bounded per call by a serialized byte budget
+(`sanitizeToolCallsForPersistence`); payloads written before the field existed
+omit it.
+
+- `acp_history_list` returns `{ sessions, legacyImportComplete }`.
+- `acp_history_get` returns one full payload or `null` when absent.
+- `acp_history_save` atomically replaces one payload and its lightweight index entry.
+- `acp_history_delete` removes the payload and index entry with serialized ordering.
+- `acp_history_flush` is the close-path durability barrier.
+- `acp_history_mark_legacy_import_complete` records verified legacy import completion.
+
+The legacy Tauri Store is read only by the one-shot renderer migration. ACP keys
+are deleted only after Rust list/get verification; unrelated preferences remain.
+Desktop-hosted browser `list_persisted_sessions` and `get_session_payload` read
+this durable provider directly, while the standalone server keeps its existing
+persistence path and wire format.
+
+## Web Terminal WebSocket
+
+`GET /terminal/ws` upgrades to the browser terminal transport and is isolated from ACP `/ws`.
+
+Client request envelope:
+
+```json
+{ "id": "terminal-1", "type": "resize", "payload": { "terminalId": "...", "cols": 100, "rows": 30 } }
+```
+
+Supported request types are `spawn`, `write`, `resize`, `kill`, `attach`, `get_cwd`, `get_git_branch`, `get_git_status`, `get_exit_code`, `add_renderer_ref`, `remove_renderer_ref`, `set_protected`, and `update_orphan_detection`. Replies use the existing `IpcResult` shape with the request `id`. Output frames are `{ "type": "data", "terminalId": "...", "data": [byte...] }`; event frames contain the transport-neutral exit/cwd/git/exit-code payload. `attach` sends bounded retained scrollback before subscribed live output.
+
+The service deliberately does not log request data, terminal bytes, environment values, or secrets. Authentication, authorization, TLS, and sandboxing are not provided; this endpoint is unsafe for public or untrusted network exposure.
+
 ## Event Contracts
 
 ### Terminal Event Flow
@@ -196,6 +236,55 @@ Renderer browser adapters subscribe to:
 
 ### Updater/Menu Event Flow
 The app also emits menu/updater-related events such as the updater check trigger from the native menu.
+
+### ACP Agent Setup & Authentication Flow
+
+ACP provider setup follows the stable ACP handshake ordering. The renderer facade
+(`src/renderer/lib/acp-api.ts`) → Tauri command → ACP manager
+(`src-tauri/src/acp/manager.rs`) boundary is preserved end to end.
+
+**1. Initialize → auth-method propagation.** When an agent completes `initialize`,
+the manager forwards **every** advertised authentication method to the renderer on
+the `acp:agent_spawned` event as an opaque descriptor:
+
+- `authMethods: { id: string; name: string; description?: string }[]`
+
+Methods are propagated verbatim — there is no agent-type filtering. An agent that
+advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
+types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
+the stable `id`/`name`/optional `description` surface is carried.
+
+**2. Authenticate before `session/new`.** The store retains the advertised methods
+and, before creating a session (`acp_new_session`), runs `acp_authenticate`
+(`authenticate(methodId)`) when the agent advertises auth:
+
+- exactly one method → authenticate that method, then create the session;
+- more than one method → **do not choose one**; surface an actionable
+  "multiple sign-in methods" failure that lists the method names (there is no
+  automatic "unambiguous default" pick);
+- no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
+
+For the default `agent` auth type the provider owns the login UX (it may open its
+own browser); Termul never invents a client-side login-URL redirect and never
+stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**3. Recoverable setup failures.** Setup failures are classified deterministically
+(`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with
+distinct, actionable launcher labels — order: `multi-auth` → `spawn` → `transport`
+→ `auth` → `timeout` → `unknown`:
+
+- `transport` (destroyed stream / refused / reset connection, incl. "connection
+  timed out"): the live process is **killed and evicted** from reuse before a
+  retry, so exactly one fresh spawn follows;
+- `auth`: the launcher shows "Authentication required" plus the diagnostic and a
+  Sign-in action (only when exactly one method is advertised); a failed
+  session/new that is auth-classified clears the authenticated flag so a manual
+  Sign-in + retry can re-authenticate;
+- `timeout`: "Session setup timed out" (the alive-but-slow agent is not killed);
+- `spawn`: a missing/unresolvable binary (ENOENT), rewritten into actionable
+  guidance;
+- only a genuine empty-model state uses the neutral model pill / "Model
+  unavailable" text — a setup failure never masquerades as a model-list problem.
 
 ## Shared TypeScript Contracts
 
@@ -224,6 +313,71 @@ Representative error codes include:
 - `SESSION_INVALID`
 - `MIGRATION_*`
 - `ROLLBACK_FAILED`
+
+## ACP Agent Chat Events
+
+ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/acp/events.rs` and `src/renderer/lib/acp-api.ts`).
+
+### `acp:plan_update`
+
+**Purpose:** Agent execution plan changed ([Agent Plan spec](https://agentclientprotocol.com/protocol/v1/agent-plan)).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  plan: {
+    entries: Array<{
+      content: string
+      priority?: 'high' | 'medium' | 'low'
+      status?: 'pending' | 'in_progress' | 'completed'
+    }>
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent sends `session/update` with `sessionUpdate: "plan"`.
+- Each event replaces the session plan entirely (full list).
+- Empty `entries` clears the plan in the renderer (`PlanPanel` hidden).
+
+See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
+
+### `acp:usage_update`
+
+**Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).
+
+**Payload:**
+
+```ts
+{
+  agentId: string
+  sessionId: string
+  used: number
+  size: number
+  cost?: {
+    amount: number
+    currency: string
+  }
+}
+```
+
+**Semantics:**
+
+- Emitted when the agent pushes a usage update; Rust forwards `used`/`size`/`cost` without additional gating (`UsageUpdateEvent` in `src-tauri/src/acp/events.rs`).
+- Each event **replaces** the renderer’s current usage state for that session (`used`/`size`; optional `cost` when accepted).
+- Renderer validation (`_onUsageUpdate` in `acp-store.ts`):
+  - Drops the update when `used` or `size` is non-finite, or when `used <= 0` or `size <= 0`.
+  - Ignores updates for unknown sessions.
+  - Keeps optional `cost` only when `amount` is finite and `> 0` and `currency` is non-empty; otherwise omits cost (zero/placeholder costs are not stored).
+- TypeScript mirror: `UsageUpdateEvent` / `ACP_EVENTS.usageUpdate` in `src/renderer/lib/acp-api.ts`. Keep Rust and TypeScript field names (`agentId`, `sessionId`, `used`, `size`, `cost`) aligned.
+
+### `acp_send_prompt` errors
+
+When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
 
 ## Notes
 

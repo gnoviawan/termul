@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(),
   kill: vi.fn(),
   connect: vi.fn(),
+  disconnect: vi.fn(),
+  sftpListDir: vi.fn(),
   createAskpassScript: vi.fn()
 }))
 
@@ -21,7 +23,8 @@ vi.mock('@/lib/api', () => ({
   },
   sshApi: {
     connect: mocks.connect,
-    sftpListDir: vi.fn().mockResolvedValue({ success: true, data: [] })
+    disconnect: mocks.disconnect,
+    sftpListDir: mocks.sftpListDir
   },
   createAskpassScript: mocks.createAskpassScript
 }))
@@ -64,9 +67,10 @@ describe('useSSHConnection', () => {
       ptyIdIndex: new Map()
     })
 
+    // CAP-3: spawn is the only claim issuance path — the fixture carries it.
     mocks.spawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'ssh', cwd: '/' }
+      data: { id: 'pty-1', shell: 'ssh', cwd: '/', claim: 'lease-claim-ssh' }
     })
     mocks.write.mockResolvedValue({ success: true, data: undefined })
     mocks.connect.mockResolvedValue({
@@ -80,6 +84,8 @@ describe('useSSHConnection', () => {
         reconnectAttempts: 0
       }
     })
+    mocks.disconnect.mockResolvedValue({ success: true, data: undefined })
+    mocks.sftpListDir.mockResolvedValue({ success: true, data: [] })
   })
 
   afterEach(() => {
@@ -147,6 +153,10 @@ describe('useSSHConnection', () => {
     expect(conn?.status).toBe('connected')
     expect(conn?.id).toBe('conn-1') // swapped to the backend id
     expect(result.current.sftpReady).toBe(true)
+
+    // CAP-3: the issued claim from the spawn response lands in the terminal store.
+    const storedTerminal = useTerminalStore.getState().terminals.find((t) => t.ptyId === 'pty-1')
+    expect(storedTerminal?.claim).toBe('lease-claim-ssh')
   })
 
   it('does NOT report connected when the backend SSH connect fails', async () => {
@@ -256,5 +266,79 @@ describe('useSSHConnection', () => {
     const conn = useSSHStore.getState().connections.find((c) => c.profileId === 'profile-1')
     expect(conn?.status).toBe('connected')
     expect(result.current.sftpReady).toBe(true)
+  })
+
+  it('resets profile-local terminal state when switching between SSH profiles', async () => {
+    const secondProfile: SSHProfile = {
+      ...baseProfile,
+      id: 'profile-2',
+      name: 'Staging',
+      host: 'staging.example.com'
+    }
+
+    const { result, rerender } = renderHook(({ profile }) => useSSHConnection(profile), {
+      initialProps: { profile: baseProfile as SSHProfile | null }
+    })
+
+    mocks.connect.mockResolvedValueOnce({
+      success: false,
+      error: 'auth failed',
+      code: 'SSH_CONNECT_ERROR'
+    })
+
+    await act(async () => {
+      await result.current.handleConnect()
+    })
+
+    expect(result.current.localTerminalPtyId).toBe('pty-1')
+
+    rerender({ profile: secondProfile })
+
+    expect(result.current.localTerminalPtyId).toBeNull()
+    expect(result.current.isConnecting).toBe(false)
+    expect(result.current.sftpReady).toBe(false)
+  })
+
+  it('ignores and cleans up stale async work after switching SSH profiles', async () => {
+    const secondProfile: SSHProfile = {
+      ...baseProfile,
+      id: 'profile-2',
+      name: 'Staging',
+      host: 'staging.example.com'
+    }
+    let resolveSpawn: (value: Awaited<ReturnType<typeof mocks.spawn>>) => void = () => {}
+    mocks.spawn.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSpawn = resolve
+      })
+    )
+
+    const { result, rerender } = renderHook(({ profile }) => useSSHConnection(profile), {
+      initialProps: { profile: baseProfile as SSHProfile | null }
+    })
+
+    let connectPromise: Promise<void>
+    act(() => {
+      connectPromise = result.current.handleConnect()
+    })
+
+    act(() => {
+      rerender({ profile: secondProfile })
+    })
+
+    await act(async () => {
+      resolveSpawn({ success: true, data: { id: 'stale-pty', shell: 'ssh', cwd: '/' } })
+      await connectPromise
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    expect(mocks.kill).toHaveBeenCalledWith('stale-pty')
+    expect(mocks.write).not.toHaveBeenCalledWith('stale-pty', expect.any(String))
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(result.current.localTerminalPtyId).toBeNull()
+    expect(result.current.isConnecting).toBe(false)
+    expect(result.current.sftpReady).toBe(false)
   })
 })

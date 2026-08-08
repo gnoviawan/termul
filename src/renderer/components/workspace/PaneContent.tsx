@@ -1,4 +1,5 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
+import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
@@ -10,6 +11,7 @@ import { EditorPanel } from '@/components/editor/EditorPanel'
 import { GitHistoryPanel } from '@/components/git/GitHistoryPanel'
 import { GitPanel } from '@/components/git/GitPanel'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
@@ -73,6 +75,7 @@ export function PaneContent({
 
   const { setTerminalPtyId } = useTerminalActions()
   const { isDragging, previewTarget } = usePaneDnd()
+  const isMobileWebShell = useMobileWebShell()
 
   const isFullscreenPane = fullscreenPaneId === pane.id
   const isActivePane = activePaneId === pane.id
@@ -170,6 +173,15 @@ export function PaneContent({
             ? '-translate-y-2'
             : ''
 
+  const handleAddTerminalForPane = useMemo(
+    () => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
+    [onAddTerminal, pane.id]
+  )
+  const handleAddBrowserTabForPane = useMemo(
+    () => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
+    [onAddBrowserTab, pane.id]
+  )
+
   return (
     <div
       className={cn(
@@ -180,24 +192,20 @@ export function PaneContent({
       onMouseDown={handleFocus}
       onKeyDownCapture={handleKeyDownCapture}
     >
-      <WorkspaceTabBar
-        paneId={pane.id}
-        tabs={pane.tabs}
-        activeTabId={pane.activeTabId}
-        closingTerminalIds={closingTerminalIds}
-        onAddTerminal={useMemo(
-          () => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
-          [onAddTerminal, pane.id]
-        )}
-        onAddBrowserTab={useMemo(
-          () => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
-          [onAddBrowserTab, pane.id]
-        )}
-        onCloseTerminal={onCloseTerminal}
-        onRenameTerminal={onRenameTerminal}
-        onCloseEditorTab={onCloseEditorTab}
-        defaultShell={defaultShell}
-      />
+      {!isMobileWebShell && (
+        <WorkspaceTabBar
+          paneId={pane.id}
+          tabs={pane.tabs}
+          activeTabId={pane.activeTabId}
+          closingTerminalIds={closingTerminalIds}
+          onAddTerminal={handleAddTerminalForPane}
+          onAddBrowserTab={handleAddBrowserTabForPane}
+          onCloseTerminal={onCloseTerminal}
+          onRenameTerminal={onRenameTerminal}
+          onCloseEditorTab={onCloseEditorTab}
+          defaultShell={defaultShell}
+        />
+      )}
 
       <div className="flex-1 overflow-hidden bg-terminal-bg relative h-full">
         <div
@@ -305,6 +313,7 @@ export function PaneContent({
                         }
                       }}
                       initialScrollback={terminal.pendingScrollback}
+                      initialModes={terminal.pendingModes}
                       className="w-full h-full"
                       isVisible={isVisible}
                     />
@@ -394,7 +403,7 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <AgentChatPanel sessionId={tab.sessionId} />
+                    <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
                   </div>
                 )
               })}
@@ -422,6 +431,15 @@ export function PaneContent({
             if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
           }}
         >
+          <button
+            type="button"
+            className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            title="Close agent launcher (Esc)"
+            aria-label="Close agent launcher"
+            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+          >
+            <X className="h-4 w-4" />
+          </button>
           <AgentLauncher paneId={pane.id} />
         </div>
       ) : null}

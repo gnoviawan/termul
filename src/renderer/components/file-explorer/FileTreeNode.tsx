@@ -91,8 +91,9 @@ export function FileTreeNode({
   return (
     <>
       <div
+        data-path={entry.path}
         className={cn(
-          'group relative flex items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
+          'group relative flex min-w-0 items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
           isIgnored && 'opacity-50',
           isSelected && 'bg-accent text-accent-foreground'
         )}
@@ -105,28 +106,30 @@ export function FileTreeNode({
         draggable={!isDir}
         onDragStart={handleDragStart}
       >
-        {isDir && (
-          <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
-            {isLoading ? (
-              <Loader2 size={12} className="animate-spin text-muted-foreground" />
-            ) : isExpanded ? (
-              <ChevronDown size={12} className="text-muted-foreground" />
-            ) : (
-              <ChevronRight size={12} className="text-muted-foreground" />
-            )}
-          </span>
-        )}
-        {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
-        <MaterialFileIcon
-          name={entry.name}
-          extension={entry.extension}
-          isDirectory={isDir}
-          isExpanded={isExpanded}
-          depth={depth}
-          size={14}
-          className="mr-1.5"
-        />
-        <span className="truncate">{entry.name}</span>
+        <div className="flex min-w-0 flex-1 items-center overflow-hidden">
+          {isDir && (
+            <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
+              {isLoading ? (
+                <Loader2 size={12} className="animate-spin text-muted-foreground" />
+              ) : isExpanded ? (
+                <ChevronDown size={12} className="text-muted-foreground" />
+              ) : (
+                <ChevronRight size={12} className="text-muted-foreground" />
+              )}
+            </span>
+          )}
+          {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
+          <MaterialFileIcon
+            name={entry.name}
+            extension={entry.extension}
+            isDirectory={isDir}
+            isExpanded={isExpanded}
+            depth={depth}
+            size={14}
+            className="mr-1.5"
+          />
+          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        </div>
 
         {showTooltip && (
           <div className="pointer-events-none absolute left-2 top-[calc(100%+2px)] z-50 max-w-[420px] rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">

@@ -19,15 +19,32 @@ const {
   mockPersistenceRead,
   mockPersistenceWrite,
   mockPersistenceWriteDebounced,
-  mockUpdateOrphanDetection
+  mockUpdateOrphanDetection,
+  mockSetTurnTimeout,
+  mockSetTurnIdleTimeout,
+  mockSetSessionNewTimeout,
+  mockSetSessionReopenTimeout,
+  mockSetFirstPromptWarmupTimeout
 } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
   mockPersistenceWriteDebounced: vi.fn(),
-  mockUpdateOrphanDetection: vi.fn()
+  mockUpdateOrphanDetection: vi.fn(),
+  mockSetTurnTimeout: vi.fn(),
+  mockSetTurnIdleTimeout: vi.fn(),
+  mockSetSessionNewTimeout: vi.fn(),
+  mockSetSessionReopenTimeout: vi.fn(),
+  mockSetFirstPromptWarmupTimeout: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
+  acpApi: {
+    setTurnTimeout: mockSetTurnTimeout,
+    setTurnIdleTimeout: mockSetTurnIdleTimeout,
+    setSessionNewTimeout: mockSetSessionNewTimeout,
+    setSessionReopenTimeout: mockSetSessionReopenTimeout,
+    setFirstPromptWarmupTimeout: mockSetFirstPromptWarmupTimeout
+  },
   persistenceApi: {
     read: mockPersistenceRead,
     write: mockPersistenceWrite,
@@ -54,6 +71,11 @@ describe('use-app-settings', () => {
     mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
     mockPersistenceWriteDebounced.mockResolvedValue({ success: true, data: undefined })
     mockUpdateOrphanDetection.mockResolvedValue({ success: true, data: undefined })
+    mockSetTurnTimeout.mockResolvedValue(undefined)
+    mockSetTurnIdleTimeout.mockResolvedValue(undefined)
+    mockSetSessionNewTimeout.mockResolvedValue(undefined)
+    mockSetSessionReopenTimeout.mockResolvedValue(undefined)
+    mockSetFirstPromptWarmupTimeout.mockResolvedValue(undefined)
   })
 
   it('hydrates sidebar and file explorer visibility from persisted app settings', async () => {
@@ -72,6 +94,31 @@ describe('use-app-settings', () => {
       expect(useAppSettingsStore.getState().isLoaded).toBe(true)
       expect(useSidebarStore.getState().isVisible).toBe(false)
       expect(useFileExplorerStore.getState().isVisible).toBe(true)
+    })
+  })
+
+  it('pushes the ACP timeout overrides to the backend on load', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...DEFAULT_APP_SETTINGS,
+        acpTurnTimeoutSecs: 7200,
+        acpTurnIdleTimeoutSecs: 1800,
+        acpSessionNewTimeoutSecs: 120,
+        acpSessionReopenTimeoutSecs: 300,
+        acpFirstPromptWarmupSecs: 0
+      }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+      expect(mockSetTurnTimeout).toHaveBeenCalledWith(7200)
+      expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(1800)
+      expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(120)
+      expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(300)
+      expect(mockSetFirstPromptWarmupTimeout).toHaveBeenCalledWith(0)
     })
   })
 
@@ -298,6 +345,30 @@ describe('use-app-settings', () => {
     expect(useSidebarStore.getState().isVisible).toBe(DEFAULT_APP_SETTINGS.sidebarVisible)
     expect(useFileExplorerStore.getState().isVisible).toBe(DEFAULT_APP_SETTINGS.fileExplorerVisible)
     expect(mockPersistenceWrite).toHaveBeenCalledWith(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+  })
+
+  it('clears all ACP timeout overrides in the backend when app settings are reset', async () => {
+    useAppSettingsStore.setState({
+      settings: {
+        ...DEFAULT_APP_SETTINGS,
+        acpTurnTimeoutSecs: 7200,
+        acpTurnIdleTimeoutSecs: 1800,
+        acpSessionNewTimeoutSecs: 120,
+        acpSessionReopenTimeoutSecs: 300,
+        acpFirstPromptWarmupSecs: 15
+      },
+      isLoaded: true
+    })
+
+    const { result } = renderHook(() => useResetAppSettings())
+
+    await result.current()
+
+    expect(mockSetTurnTimeout).toHaveBeenCalledWith(null)
+    expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(null)
+    expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(null)
+    expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(null)
+    expect(mockSetFirstPromptWarmupTimeout).toHaveBeenCalledWith(null)
   })
 
   it('waits for queued panel writes before close-flow synchronization', async () => {

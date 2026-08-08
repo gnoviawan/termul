@@ -139,3 +139,5 @@ Depending on the task, use these generated documents:
 * Prefer the generated docs in `docs/` as the primary project knowledge base for AI-assisted work.
 
 * All PRs must pass CI and resolve code review comments before being considered for merge.
+
+* Use this for ACP docs: <https://agentclientprotocol.com/llms.txt>, <https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json>

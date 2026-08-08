@@ -3,7 +3,8 @@
 //! This module provides terminal spawning, I/O, and lifecycle management
 //! ported from the Electron implementation.
 
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker};
+use crate::pty::claims::ClaimError;
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub};
 use parking_lot::RwLock;
 use portable_pty::{Child, MasterPty, PtySize};
 
@@ -73,7 +74,6 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 }
 
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
 use tauri::ipc::{Channel, Response};
 
 /// ADR-004.2: Result of resolving a program path, possibly with leading argv
@@ -475,6 +475,54 @@ pub struct TerminalInfo {
     pub rows: u16,
 }
 
+/// Spawn response carrying the terminal info PLUS the issued claim credential.
+///
+/// Serializes FLATTENED — `{id, shell, cwd, pid, cols, rows, claim}` — so both
+/// transports (desktop `terminal_spawn` IpcResult data and the web `spawn`
+/// reply data) expose the same top-level camelCase shape. This is the only
+/// issuance path for the credential.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnedTerminal {
+    #[serde(flatten)]
+    pub info: TerminalInfo,
+    pub claim: String,
+}
+
+/// Shared attach response — byte-identical camelCase shape on both transports
+/// (desktop `terminal_attach` IpcResult data; web `attach` reply data).
+///
+/// Carries the live terminal metadata plus the replay cursor (`latestSeq`) and
+/// `gap` flag. It NEVER carries a claim key: attach is credential-consuming,
+/// never credential-issuing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalAttachResult {
+    pub id: String,
+    pub shell: String,
+    pub cwd: String,
+    pub pid: u32,
+    pub cols: u16,
+    pub rows: u16,
+    pub latest_seq: u64,
+    pub gap: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOutputChunk {
+    pub seq: u64,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct TerminalReplay {
+    pub chunks: Vec<TerminalOutputChunk>,
+    pub gap: bool,
+    pub latest_seq: u64,
+    pub receiver: tokio::sync::broadcast::Receiver<TerminalOutputChunk>,
+}
+
 /// Broadcast channel capacity (number of buffered output batches per terminal).
 /// Each batch is up to READ_BUF (16KB) bytes. 1024 slots ≈ 16MB max buffered output.
 /// Slow receivers will receive `RecvError::Lagged` — acceptable; they miss bytes
@@ -493,6 +541,8 @@ pub struct SpawnOptions {
     pub shell: Option<String>,
     pub cwd: Option<String>,
     pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     // ADR-004.2: terminal-native agent launch.
@@ -513,6 +563,7 @@ impl Default for SpawnOptions {
             shell: None,
             cwd: None,
             env: None,
+            project_id: None,
             cols: Some(80),
             rows: Some(24),
             program: None,
@@ -525,6 +576,7 @@ impl Default for SpawnOptions {
 /// A running terminal instance
 pub struct TerminalInstance {
     pub id: String,
+    pub project_id: Option<String>,
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
@@ -549,12 +601,12 @@ pub struct TerminalInstance {
     /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
     /// Each flusher batch is sent as a `Vec<u8>` message. Tauri frontend keeps using
     /// its dedicated Channel — this field is only consumed by the remote module.
-    pub broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
-    /// Rolling scrollback buffer of recent raw PTY output (VT100 bytes).
-    /// Replayed to remote web clients on connect so they see prior output
-    /// (persistence + parity with the desktop terminal). Capped at
-    /// `SCROLLBACK_CAP` bytes; oldest bytes are dropped first.
-    pub scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
+    pub broadcast_tx: Arc<tokio::sync::broadcast::Sender<TerminalOutputChunk>>,
+    /// Bounded sequence-aware output log. Oldest chunks are evicted first while
+    /// keeping whole chunks, so reconnect cursors can detect replay gaps.
+    pub output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
+    pub output_log_bytes: Arc<AtomicUsize>,
+    pub next_output_seq: Arc<AtomicU64>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -630,27 +682,32 @@ impl TerminalInstance {
         self.protected.store(protected, Ordering::Relaxed);
     }
 
-    /// Subscribe to live PTY output. Returns a receiver that yields raw byte batches.
-    /// Use this from the remote WebSocket module to forward output to web clients.
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
-        self.broadcast_tx.subscribe()
+    pub fn project_matches(&self, project_id: &str) -> bool {
+        self.project_id.as_deref() == Some(project_id)
     }
 
-    /// Atomically snapshot the current scrollback AND subscribe to the live
-    /// broadcast, under the scrollback write lock.
-    ///
-    /// Holding the lock across both operations guarantees no output is lost or
-    /// duplicated at the seam: any batch appended to scrollback before this call
-    /// is in the returned snapshot, and any batch after is delivered via the
-    /// receiver. The flusher takes the same lock when appending, so the two
-    /// cannot interleave.
-    pub fn subscribe_with_backlog(
-        &self,
-    ) -> (Vec<u8>, tokio::sync::broadcast::Receiver<Vec<u8>>) {
-        let guard = self.scrollback.write();
-        let rx = self.broadcast_tx.subscribe();
-        let snapshot: Vec<u8> = guard.iter().copied().collect();
-        (snapshot, rx)
+    /// Atomically snapshot unseen sequenced chunks and subscribe to live output.
+    pub fn subscribe_from(&self, last_seq: u64) -> TerminalReplay {
+        let guard = self.output_log.write();
+        let receiver = self.broadcast_tx.subscribe();
+        let earliest = guard.front().map(|chunk| chunk.seq);
+        let latest_seq = guard.back().map(|chunk| chunk.seq).unwrap_or(last_seq);
+        // Gap if the client's cursor is behind the earliest retained chunk,
+        // OR if the log is empty but the client expected prior output.
+        let gap = earliest
+            .map(|first| last_seq.saturating_add(1) < first)
+            .unwrap_or(last_seq > 0);
+        let chunks = guard
+            .iter()
+            .filter(|chunk| chunk.seq > last_seq)
+            .cloned()
+            .collect();
+        TerminalReplay {
+            chunks,
+            gap,
+            latest_seq,
+            receiver,
+        }
     }
 }
 
@@ -677,15 +734,6 @@ fn should_reap_orphan(
         Some(elapsed) => elapsed > timeout,
         None => inactive_for > timeout,
     }
-}
-
-/// Event emitted when a terminal exits
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TerminalExitEvent {
-    id: String,
-    exit_code: Option<i32>,
-    signal: Option<i32>,
 }
 
 struct TerminalSlotReservation {
@@ -726,18 +774,45 @@ impl Drop for TerminalSlotReservation {
     }
 }
 
+/// RAII rollback for a claim issued before PTY creation: if any spawn step
+/// fails, the guard's drop removes the dangling claim record so no terminal
+/// exists with a live credential but no PTY (and vice versa).
+struct ClaimRollbackGuard<'a> {
+    claims: &'a crate::pty::claims::TerminalClaimRegistry,
+    terminal_id: String,
+    active: bool,
+}
+
+impl ClaimRollbackGuard<'_> {
+    fn commit(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for ClaimRollbackGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.claims.remove(&self.terminal_id);
+        }
+    }
+}
+
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
     active_terminal_slots: Arc<AtomicUsize>,
     id_counter: Arc<AtomicU64>,
-    app_handle: AppHandle,
+    terminal_events: TerminalEventHub,
     orphan_detection_enabled: Arc<AtomicBool>,
     orphan_timeout_ms: Arc<AtomicU64>,
     orphan_detection_started: Arc<AtomicBool>,
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
     exit_code_tracker: Arc<ExitCodeTracker>,
+    /// Claim credential registry (CAP-3). Single ownership here keeps the
+    /// claim lifecycle coupled to the terminal lifecycle: issued at spawn,
+    /// removed at kill/reap.
+    claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
     /// When true, orphan detection and kill operations are deferred.
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
@@ -747,7 +822,7 @@ pub struct PtyManager {
 impl PtyManager {
     /// Create a new PtyManager
     pub fn new(
-        app_handle: AppHandle,
+        terminal_events: TerminalEventHub,
         cwd_tracker: Arc<CwdTracker>,
         git_tracker: Arc<GitTracker>,
         exit_code_tracker: Arc<ExitCodeTracker>,
@@ -756,7 +831,7 @@ impl PtyManager {
             terminals: Arc::new(RwLock::new(HashMap::new())),
             active_terminal_slots: Arc::new(AtomicUsize::new(0)),
             id_counter: Arc::new(AtomicU64::new(0)),
-            app_handle,
+            terminal_events,
             orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
             orphan_timeout_ms: Arc::new(AtomicU64::new(ORPHAN_TIMEOUT_MS)),
             orphan_detection_started: Arc::new(AtomicBool::new(false)),
@@ -764,6 +839,7 @@ impl PtyManager {
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
+            claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
         }
     }
 
@@ -780,23 +856,49 @@ impl PtyManager {
         // a) Drop writer first to close PTY input stream cleanly.
         let _ = instance.writer.blocking_lock().take();
 
-        // b) Wait flusher thread to finish naturally (max 2s)
+        // b) Kill the child FIRST and wait briefly for it to exit. Once the
+        //    child exits, the OS closes the PTY slave end and the reader
+        //    thread's blocking `reader.read()` returns Ok(0) (EOF), so it
+        //    exits naturally and the joins below complete fast.
+        //
+        //    The previous order (join reader, THEN kill child) left the reader
+        //    blocked because the child was still alive holding the PTY open.
+        //    Every cleanup hit the 3s join timeout, leaking the detached
+        //    watcher thread spawned by `join_reader_with_timeout` plus the
+        //    stuck reader thread. With N terminals, those leaked threads kept
+        //    the process alive in the task manager and spinning CPU after the
+        //    window was closed (issue #390).
+        if let Some(mut child) = instance.child.blocking_lock().take() {
+            let _ = child.kill();
+            // Best-effort wait: give the child up to ~2s to exit so the PTY
+            // EOF propagates to the reader before we join. If it doesn't exit
+            // (stubborn grandchild / ConPTY edge case), proceed anyway — the
+            // join timeout below is the safety net.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
+        }
+
+        // c) Wait flusher thread to finish naturally (max 2s). It observes the
+        //    reader's done_flag, which is set once the reader exits on EOF.
         if let Some(flusher_handle) = instance.flusher_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(flusher_handle, Duration::from_secs(2));
             }
         }
 
-        // c) Wait reader thread to finish naturally (max 3s)
+        // d) Wait reader thread to finish naturally (max 3s). With the child
+        //    already killed above, the reader should have hit EOF and exited;
+        //    this join is a safety net for slow/edge-case exits.
         if let Some(reader_handle) = instance.reader_handle.blocking_lock().take() {
             if wait_reader_thread {
                 Self::join_reader_with_timeout(reader_handle, Duration::from_secs(3));
             }
-        }
-
-        // d) Kill child process
-        if let Some(mut child) = instance.child.blocking_lock().take() {
-            let _ = child.kill();
         }
 
         // e) Drop ConPTY handles last
@@ -828,10 +930,11 @@ impl PtyManager {
         }
 
         let terminals = self.terminals.clone();
-        let _app_handle = self.app_handle.clone();
+        let _terminal_events = self.terminal_events.clone();
         let cwd_tracker = self.cwd_tracker.clone();
         let git_tracker = self.git_tracker.clone();
         let exit_code_tracker = self.exit_code_tracker.clone();
+        let claims = self.claims.clone();
         let active_slots = self.active_terminal_slots.clone();
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
@@ -886,6 +989,7 @@ impl PtyManager {
                         cwd_tracker.stop_tracking(&id);
                         git_tracker.remove_terminal(&id);
                         exit_code_tracker.remove_terminal(&id);
+                        claims.remove(&id);
                     }
                 }
             }
@@ -902,12 +1006,19 @@ impl PtyManager {
         format!("terminal-{}-{}", timestamp, counter)
     }
 
-    /// Spawn a new terminal (with binary channel IPC)
+    /// Spawn a new terminal (with binary channel IPC).
+    ///
+    /// CAP-3: the claim credential is issued BEFORE PTY creation, bound to the
+    /// same `project_id` that is co-derived onto the [`TerminalInstance`]
+    /// (write-once; the verify side reads the instance binding, so issuance and
+    /// verification can never diverge). Any failure path rolls the issuance
+    /// back via the RAII guard, so a credential never outlives its terminal.
+    /// Returns the shared [`SpawnedTerminal`] shape feeding both transports.
     pub async fn spawn(
         &self,
         options: SpawnOptions,
         on_data: Option<Channel<Response>>,
-    ) -> Result<TerminalInfo, String> {
+    ) -> Result<SpawnedTerminal, String> {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
@@ -917,6 +1028,35 @@ impl PtyManager {
 
         let id = self.generate_id();
 
+        let claim = self.claims.issue(&id, options.project_id.as_deref());
+        let mut claim_guard = ClaimRollbackGuard {
+            claims: &self.claims,
+            terminal_id: id.clone(),
+            active: true,
+        };
+
+        let info = match self.spawn_pty(id.clone(), options, on_data).await {
+            Ok(info) => info,
+            Err(e) => {
+                // claim_guard drops here and removes the dangling record.
+                return Err(e);
+            }
+        };
+
+        claim_guard.commit();
+        slot_reservation.commit();
+        Ok(SpawnedTerminal { info, claim })
+    }
+
+    /// Platform-specific PTY creation (the former `spawn` body). `id` and the
+    /// claim lifecycle are owned by [`spawn`](Self::spawn); slot reservation
+    /// commits there too, so a failure on any branch rolls everything back.
+    async fn spawn_pty(
+        &self,
+        id: String,
+        options: SpawnOptions,
+        on_data: Option<Channel<Response>>,
+    ) -> Result<TerminalInfo, String> {
         // ADR-004.2: Resolve the program to run. When `program` is set we run
         // that executable directly (terminal-native agent launch); otherwise we
         // resolve a login shell exactly as before. `program == None` keeps the
@@ -1004,6 +1144,7 @@ impl PtyManager {
             // Create terminal instance
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
+                project_id: options.project_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
@@ -1019,7 +1160,9 @@ impl PtyManager {
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
-                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                output_log_bytes: Arc::new(AtomicUsize::new(0)),
+                next_output_seq: Arc::new(AtomicU64::new(0)),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -1028,7 +1171,7 @@ impl PtyManager {
             let done_flag = Arc::new(AtomicBool::new(false));
 
             let reader_instance = instance.clone();
-            let app_handle = self.app_handle.clone();
+            let terminal_events = self.terminal_events.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
 
@@ -1038,11 +1181,22 @@ impl PtyManager {
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
             let flusher_broadcast = instance.broadcast_tx.clone();
-            let flusher_scrollback = instance.scrollback.clone();
+            let flusher_output_log = instance.output_log.clone();
+            let flusher_output_log_bytes = instance.output_log_bytes.clone();
+            let flusher_next_seq = instance.next_output_seq.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
+                Self::flusher_loop(
+                    flusher_pending,
+                    flusher_done,
+                    flusher_broadcast,
+                    flusher_output_log,
+                    flusher_output_log_bytes,
+                    flusher_next_seq,
+                    flusher_channel,
+                    flusher_id,
+                );
             });
 
             // Spawn reader thread
@@ -1054,7 +1208,7 @@ impl PtyManager {
                 Self::reader_loop(
                     reader_instance,
                     reader,
-                    app_handle,
+                    terminal_events,
                     exit_code_tracker,
                     terminal_id,
                     pending_buf,
@@ -1072,8 +1226,6 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
-
-            slot_reservation.commit();
 
             Ok(TerminalInfo {
                 id,
@@ -1142,6 +1294,7 @@ impl PtyManager {
 
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
+                project_id: options.project_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
@@ -1157,7 +1310,9 @@ impl PtyManager {
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
-                scrollback: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                output_log_bytes: Arc::new(AtomicUsize::new(0)),
+                next_output_seq: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -1172,16 +1327,27 @@ impl PtyManager {
             let flusher_channel = on_data.clone();
             let flusher_id = id.clone();
             let flusher_broadcast = instance.broadcast_tx.clone();
-            let flusher_scrollback = instance.scrollback.clone();
+            let flusher_output_log = instance.output_log.clone();
+            let flusher_output_log_bytes = instance.output_log_bytes.clone();
+            let flusher_next_seq = instance.next_output_seq.clone();
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
-                Self::flusher_loop(flusher_pending, flusher_done, flusher_broadcast, flusher_scrollback, flusher_channel, flusher_id);
+                Self::flusher_loop(
+                    flusher_pending,
+                    flusher_done,
+                    flusher_broadcast,
+                    flusher_output_log,
+                    flusher_output_log_bytes,
+                    flusher_next_seq,
+                    flusher_channel,
+                    flusher_id,
+                );
             });
 
             // Spawn reader thread
             let reader_instance = instance.clone();
-            let app_handle = self.app_handle.clone();
+            let terminal_events = self.terminal_events.clone();
             let exit_code_tracker = self.exit_code_tracker.clone();
             let terminal_id = id.clone();
 
@@ -1189,7 +1355,7 @@ impl PtyManager {
                 Self::reader_loop(
                     reader_instance,
                     reader,
-                    app_handle,
+                    terminal_events,
                     exit_code_tracker,
                     terminal_id,
                     pending_buf,
@@ -1205,8 +1371,6 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
-
-            slot_reservation.commit();
 
             Ok(TerminalInfo {
                 id,
@@ -1226,7 +1390,7 @@ impl PtyManager {
     fn reader_loop(
         instance: Arc<TerminalInstance>,
         mut reader: Box<dyn Read + Send>,
-        app_handle: AppHandle,
+        terminal_events: TerminalEventHub,
         exit_code_tracker: Arc<ExitCodeTracker>,
         terminal_id: String,
         pending_buf: Arc<Mutex<Vec<u8>>>,
@@ -1316,16 +1480,11 @@ impl PtyManager {
             Err(_) => None,
         };
 
-        // Emit terminal-exit event via app_handle (backward compat)
-        let exit_event = TerminalExitEvent {
-            id: id.clone(),
+        terminal_events.emit(TerminalEvent::Exit {
+            terminal_id: id.clone(),
             exit_code,
             signal: None,
-        };
-
-        if let Err(e) = app_handle.emit("terminal-exit", exit_event) {
-            log::error!("[PTY {}] Failed to emit terminal-exit event: {}", id, e);
-        }
+        });
 
         log::info!("[PTY {}] Reader thread ended", id);
     }
@@ -1338,15 +1497,16 @@ impl PtyManager {
     /// batch is also sent so remote WebSocket clients receive live output.
     /// Send failures are ignored (no active remote subscribers is normal).
     ///
-    /// scrollback: rolling history buffer. Each batch is appended (under its
-    /// write lock, capped at `SCROLLBACK_CAP`) BEFORE broadcasting, so a remote
-    /// client calling `subscribe_with_backlog` sees a consistent seam between
-    /// replayed history and live output.
+    /// output_log: sequence-aware bounded history. Each batch is appended before
+    /// broadcasting, so attach can snapshot and subscribe under the same lock.
+    #[allow(clippy::too_many_arguments)]
     fn flusher_loop(
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
-        broadcast_tx: Arc<tokio::sync::broadcast::Sender<Vec<u8>>>,
-        scrollback: Arc<RwLock<std::collections::VecDeque<u8>>>,
+        broadcast_tx: Arc<tokio::sync::broadcast::Sender<TerminalOutputChunk>>,
+        output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
+        output_log_bytes: Arc<AtomicUsize>,
+        next_output_seq: Arc<AtomicU64>,
         on_data: Option<Channel<Response>>,
         terminal_id: String,
     ) {
@@ -1355,14 +1515,26 @@ impl PtyManager {
 
         let channel_ref: Option<&Channel<Response>> = on_data.as_ref();
 
-        // Append a batch to the capped scrollback ring buffer (oldest bytes evicted first).
-        fn push_scrollback(buf: &Arc<RwLock<std::collections::VecDeque<u8>>>, data: &[u8]) {
-            let mut guard = buf.write();
-            guard.extend(data.iter().copied());
-            let overflow = guard.len().saturating_sub(SCROLLBACK_CAP);
-            if overflow > 0 {
-                guard.drain(0..overflow);
+        fn publish(
+            data: Vec<u8>,
+            tx: &tokio::sync::broadcast::Sender<TerminalOutputChunk>,
+            log: &Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
+            bytes: &Arc<AtomicUsize>,
+            next_seq: &Arc<AtomicU64>,
+        ) {
+            let chunk = TerminalOutputChunk {
+                seq: next_seq.fetch_add(1, Ordering::Relaxed) + 1,
+                data,
+            };
+            let mut guard = log.write();
+            let mut total = bytes.load(Ordering::Relaxed) + chunk.data.len();
+            guard.push_back(chunk.clone());
+            while total > SCROLLBACK_CAP {
+                let Some(evicted) = guard.pop_front() else { break };
+                total = total.saturating_sub(evicted.data.len());
             }
+            bytes.store(total, Ordering::Relaxed);
+            let _ = tx.send(chunk);
         }
 
         loop {
@@ -1374,11 +1546,13 @@ impl PtyManager {
             };
 
             if let Some(data) = chunk {
-                // Record into scrollback FIRST so subscribe_with_backlog sees a clean seam.
-                push_scrollback(&scrollback, &data);
-
-                // Broadcast to remote WebSocket subscribers (best-effort; ignore Lagged/NoReceivers)
-                let _ = broadcast_tx.send(data.clone());
+                publish(
+                    data.clone(),
+                    &broadcast_tx,
+                    &output_log,
+                    &output_log_bytes,
+                    &next_output_seq,
+                );
 
                 // Forward to Tauri frontend channel (may be None for detached terminals)
                 if let Some(ch) = channel_ref {
@@ -1393,8 +1567,13 @@ impl PtyManager {
                 if let Ok(mut guard) = pending_buf.lock() {
                     if !guard.is_empty() {
                         let final_data = std::mem::take(&mut *guard);
-                        push_scrollback(&scrollback, &final_data);
-                        let _ = broadcast_tx.send(final_data.clone());
+                        publish(
+                            final_data.clone(),
+                            &broadcast_tx,
+                            &output_log,
+                            &output_log_bytes,
+                            &next_output_seq,
+                        );
                         if let Some(ch) = channel_ref {
                             if let Err(e) = ch.send(Response::new(final_data)) {
                                 log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
@@ -1526,6 +1705,37 @@ impl PtyManager {
         self.cwd_tracker.stop_tracking(id);
         self.git_tracker.remove_terminal(id);
         self.exit_code_tracker.remove_terminal(id);
+        self.terminal_events.remove(id);
+        self.claims.remove(id);
+
+        Ok(())
+    }
+
+    /// Force-kill bypassing the desktop `is_hidden` deferral. Used by the web
+    /// handler so that closing a terminal from a browser actually terminates
+    /// the process even when the desktop window is minimized. Desktop callers
+    /// continue to use [`kill`](Self::kill) which preserves the hide behavior.
+    pub async fn force_kill(&self, id: &str) -> Result<(), String> {
+        let instance = self
+            .terminals
+            .write()
+            .remove(id)
+            .ok_or_else(|| format!("Terminal not found: {}", id))?;
+
+        self.release_terminal_slot();
+
+        let instance_clone = instance.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::cleanup_terminal_resources_sync(instance_clone, true);
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking failed for terminal {}: {}", id, e))?;
+
+        self.cwd_tracker.stop_tracking(id);
+        self.git_tracker.remove_terminal(id);
+        self.exit_code_tracker.remove_terminal(id);
+        self.terminal_events.remove(id);
+        self.claims.remove(id);
 
         Ok(())
     }
@@ -1559,6 +1769,90 @@ impl PtyManager {
     pub fn set_protected(&self, id: &str, protected: bool) {
         if let Some(instance) = self.terminals.read().get(id) {
             instance.set_protected(protected);
+        }
+    }
+
+    pub fn terminal_events(&self) -> TerminalEventHub {
+        self.terminal_events.clone()
+    }
+
+    pub fn cwd_tracker(&self) -> Arc<CwdTracker> {
+        Arc::clone(&self.cwd_tracker)
+    }
+
+    pub fn git_tracker(&self) -> Arc<GitTracker> {
+        Arc::clone(&self.git_tracker)
+    }
+
+    pub fn exit_code_tracker(&self) -> Arc<ExitCodeTracker> {
+        Arc::clone(&self.exit_code_tracker)
+    }
+
+    /// Verify a claim credential for a terminal.
+    ///
+    /// The project binding checked is the terminal's OWN write-once
+    /// `project_id` (co-derived with the issuance binding at spawn), so
+    /// issuance and verification can never diverge. Every failure mode —
+    /// unknown terminal, oversized probe, wrong/revoked credential, binding
+    /// mismatch — collapses to the same [`crate::pty::claims::ClaimError`].
+    pub fn verify_claim(&self, terminal_id: &str, claim: &str) -> Result<(), ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .verify(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Rotate a claim: possession of the current credential yields a fresh
+    /// credential and atomically invalidates the old one. The generation bump
+    /// is the signal for credential-derived access (desktop attach forwarders)
+    /// to terminate.
+    pub fn rotate_claim(&self, terminal_id: &str, claim: &str) -> Result<String, ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .rotate(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Revoke a claim credential. The PTY itself is untouched — revocation
+    /// only severs credential-derived access (never-clause).
+    pub fn revoke_claim(&self, terminal_id: &str, claim: &str) -> Result<(), ClaimError> {
+        let binding = self
+            .get(terminal_id)
+            .and_then(|instance| instance.project_id.clone());
+        self.claims
+            .revoke(terminal_id, claim, binding.as_deref())
+    }
+
+    /// Current claim generation for a terminal, if a claim record exists.
+    /// Desktop attach forwarders capture this at attach time and terminate
+    /// when it changes (rotate/revoke) or disappears (kill/reap).
+    pub fn claim_generation(&self, terminal_id: &str) -> Option<u64> {
+        self.claims.generation(terminal_id)
+    }
+
+    /// Build the shared attach result (byte-identical camelCase shape on both
+    /// transports). Resolves the terminal's LIVE cwd from the `CwdTracker`,
+    /// falling back to the spawn-time cwd when no tracked value exists.
+    pub fn build_attach_result(
+        &self,
+        instance: &TerminalInstance,
+        replay: &TerminalReplay,
+    ) -> TerminalAttachResult {
+        let cwd = self
+            .cwd_tracker
+            .get_cwd(&instance.id)
+            .unwrap_or_else(|| instance.cwd.clone());
+        TerminalAttachResult {
+            id: instance.id.clone(),
+            shell: instance.shell.clone(),
+            cwd,
+            pid: instance.pid,
+            cols: *instance.cols.read(),
+            rows: *instance.rows.read(),
+            latest_seq: replay.latest_seq,
+            gap: replay.gap,
         }
     }
 
@@ -1615,6 +1909,8 @@ impl PtyManager {
             cwd_tracker.stop_tracking(&id);
             git_tracker.remove_terminal(&id);
             exit_code_tracker.remove_terminal(&id);
+            self.terminal_events.remove(&id);
+            self.claims.remove(&id);
         }
     }
 
@@ -2206,8 +2502,8 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
             // KILL_ON_JOB_CLOSE only fires when the LAST handle closes, so an
             // extra duplicate is safe and does not terminate the tree early.
             let mut dup_job: *mut winapi::ctypes::c_void = std::ptr::null_mut();
-            if !self.job_handle.is_null() {
-                if winapi::um::handleapi::DuplicateHandle(
+            if !self.job_handle.is_null()
+                && winapi::um::handleapi::DuplicateHandle(
                     winapi::um::processthreadsapi::GetCurrentProcess(),
                     self.job_handle,
                     winapi::um::processthreadsapi::GetCurrentProcess(),
@@ -2216,14 +2512,13 @@ impl portable_pty::ChildKiller for WindowsConPtyChild {
                     0,
                     winapi::um::winnt::DUPLICATE_SAME_ACCESS,
                 ) == 0
-                {
-                    log::warn!(
-                        "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
-                        self.pid,
-                        std::io::Error::last_os_error()
-                    );
-                    dup_job = std::ptr::null_mut();
-                }
+            {
+                log::warn!(
+                    "[WindowsConPtyChild:{}] DuplicateHandle(job) failed, clone loses tree-kill: {}",
+                    self.pid,
+                    std::io::Error::last_os_error()
+                );
+                dup_job = std::ptr::null_mut();
             }
 
             Box::new(WindowsConPtyChild {
@@ -2782,6 +3077,88 @@ mod tests {
         assert_eq!(options.rows, Some(40));
     }
 
+    // ========== CAP-3 serde shape tests ==========
+    // Pin the golden wire shapes so cross-language drift (serde flatten /
+    // camelCase) cannot ship untested: clients rely on byte-identical shapes
+    // across the desktop IPC and web WS surfaces.
+
+    #[test]
+    fn test_spawned_terminal_serializes_flat_with_claim() {
+        let spawned = SpawnedTerminal {
+            info: TerminalInfo {
+                id: "terminal-123-0".to_string(),
+                shell: "pwsh".to_string(),
+                cwd: "C:\\work".to_string(),
+                pid: 42,
+                cols: 120,
+                rows: 32,
+            },
+            claim: "f3a9".to_string(),
+        };
+
+        let value: serde_json::Value = serde_json::to_value(&spawned).unwrap();
+        let obj = value.as_object().expect("spawn reply is an object");
+
+        // FLATTENS to top-level info fields — no nested `info` key.
+        assert!(
+            !obj.contains_key("info"),
+            "SpawnedTerminal must flatten info, not nest it"
+        );
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("terminal-123-0"));
+        assert_eq!(obj.get("shell").and_then(|v| v.as_str()), Some("pwsh"));
+        assert_eq!(obj.get("cwd").and_then(|v| v.as_str()), Some("C:\\work"));
+        assert_eq!(obj.get("pid").and_then(|v| v.as_u64()), Some(42));
+        assert_eq!(obj.get("cols").and_then(|v| v.as_u64()), Some(120));
+        assert_eq!(obj.get("rows").and_then(|v| v.as_u64()), Some(32));
+        assert_eq!(obj.get("claim").and_then(|v| v.as_str()), Some("f3a9"));
+
+        // Exactly the golden shape — no extra keys may sneak in.
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["cols", "cwd", "id", "pid", "rows", "shell", "claim"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<&str>>()
+        );
+    }
+
+    #[test]
+    fn test_terminal_attach_result_serializes_camelcase_without_claim() {
+        let result = TerminalAttachResult {
+            id: "terminal-123-0".to_string(),
+            shell: "pwsh".to_string(),
+            cwd: "C:\\work".to_string(),
+            pid: 42,
+            cols: 120,
+            rows: 32,
+            latest_seq: 87,
+            gap: false,
+        };
+
+        let value: serde_json::Value = serde_json::to_value(&result).unwrap();
+        let obj = value.as_object().expect("attach reply is an object");
+
+        // camelCase seq fields — never snake_case.
+        assert_eq!(obj.get("latestSeq").and_then(|v| v.as_u64()), Some(87));
+        assert_eq!(obj.get("gap").and_then(|v| v.as_bool()), Some(false));
+        assert!(!obj.contains_key("latest_seq"));
+        assert!(!obj.contains_key("latestseq"));
+
+        // Attach NEVER issues a credential.
+        assert!(
+            !obj.contains_key("claim"),
+            "TerminalAttachResult must never carry a claim key"
+        );
+
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["id", "shell", "cwd", "pid", "cols", "rows", "latestSeq", "gap"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<&str>>()
+        );
+    }
+
     // ========== Git Bash resolution tests ==========
 
     #[cfg(target_os = "windows")]
@@ -2791,8 +3168,8 @@ mod tests {
         // the candidates in lib.rs get_available_shells()
         // This test ensures the git_bash_paths constants stay in sync
 
-        // Verify primary paths are non-empty and well-formed
-        assert!(!git_bash_paths::PRIMARY_PATHS.is_empty());
+        // Verify primary paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::PRIMARY_PATHS.is_empty()) };
         for path in git_bash_paths::PRIMARY_PATHS {
             assert!(
                 path.contains("bash.exe"),
@@ -2801,8 +3178,8 @@ mod tests {
             );
         }
 
-        // Verify fallback paths are non-empty and well-formed
-        assert!(!git_bash_paths::FALLBACK_PATHS.is_empty());
+        // Verify fallback paths are non-empty (compile-time guard) and well-formed
+        const { assert!(!git_bash_paths::FALLBACK_PATHS.is_empty()) };
         for path in git_bash_paths::FALLBACK_PATHS {
             assert!(
                 path.contains("bash.exe"),

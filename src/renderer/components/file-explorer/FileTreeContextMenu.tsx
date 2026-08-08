@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { ContextMenuItem } from '@/components/ContextMenu'
 import { ContextMenu } from '@/components/ContextMenu'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 interface FileTreeContextMenuProps {
   entry: DirectoryEntry
@@ -127,8 +128,12 @@ export function FileTreeContextMenu({
     }
   )
 
-  // External operations
-  items.push({ type: 'separator' })
+  // External operations — separator only when at least one following item is
+  // visible (Open in Terminal on any platform, or the desktop-only
+  // reveal/open-external items).
+  if (isDir || isTauriContext()) {
+    items.push({ type: 'separator' })
+  }
 
   // Open in Terminal (directories only)
   if (isDir) {
@@ -139,8 +144,8 @@ export function FileTreeContextMenu({
     })
   }
 
-  // Open with External App (files only)
-  if (!isDir) {
+  // Open with External App (files only, desktop-only — no browser equivalent)
+  if (isTauriContext() && !isDir) {
     items.push({
       label: 'Open with External App',
       icon: <ExternalLink size={14} />,
@@ -148,12 +153,14 @@ export function FileTreeContextMenu({
     })
   }
 
-  // Show in File Manager (always visible)
-  items.push({
-    label: 'Show in File Manager',
-    icon: <FolderOpen size={14} />,
-    onClick: () => onShowInFileManager(entry.path)
-  })
+  // Show in File Manager (desktop-only — no browser equivalent)
+  if (isTauriContext()) {
+    items.push({
+      label: 'Show in File Manager',
+      icon: <FolderOpen size={14} />,
+      onClick: () => onShowInFileManager(entry.path)
+    })
+  }
 
   return <ContextMenu items={items} x={x} y={y} onClose={onClose} />
 }
