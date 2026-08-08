@@ -1,7 +1,8 @@
 name: Nightly
 
-# Builds main HEAD every night at 00:00 GMT+7 (17:00 UTC) and on manual
-# dispatch, synthesizes a `0.0.0-nightly.<YYYYMMDD>.<shortsha>` version, and
+# Builds dev HEAD every night at 00:00 GMT+7 (17:00 UTC) and on manual
+# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+# (detected from a release/v* branch, or patch-bumped from current), and
 # publishes a prerelease under the moving `nightly` tag with a per-channel
 # `latest-nightly.json` manifest covering both the desktop targets and the
 # standalone `termul-server` binary.
@@ -42,10 +43,12 @@ jobs:
           # Build dev HEAD — the integration branch receives PRs daily, so the
           # nightly is always fresh. dev → main only happens during a stable
           # release (release-stable skill); building main would be stale between
-          # releases. The 0.0.0-nightly.* version signals this is a prerelease.
+          # releases.
           ref: dev
           fetch-depth: 1
-          persist-credentials: false
+          # persist-credentials: true needed for git ls-remote (release branch
+          # detection in the version synthesis step below).
+          persist-credentials: true
 
       - name: Synthesize version
         id: version
@@ -56,7 +59,26 @@ jobs:
           NIGHTLY_DATE="$(TZ='Asia/Jakarta' date +%Y%m%d)"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           COMMIT_SHA="$(git rev-parse HEAD)"
-          NIGHTLY_VERSION="0.0.0-nightly.${NIGHTLY_DATE}.${SHORT_SHA}"
+
+          # Detect the upcoming release version from a release/v* branch on the
+          # remote. If release/v0.5.0 exists, the nightly version is
+          # 0.5.0-nightly.<date>.<sha> — more readable than 0.0.0-nightly.* and
+          # correctly offers the nightly to stable users (0.5.0-nightly > 0.4.8).
+          # If no release branch exists, bump the patch from the current
+          # package.json version as a best guess (0.4.8 -> 0.4.9-nightly.*).
+          RELEASE_VERSION="$(git ls-remote --heads origin 'release/v*' 2>/dev/null \
+            | sed 's|.*refs/heads/release/v||' | sort -V | tail -1)"
+
+          if [ -z "$RELEASE_VERSION" ]; then
+            RELEASE_VERSION="$(node -e \
+              "const v=require('./package.json').version.split('.').map(Number); \
+               console.log(v[0]+'.'+v[1]+'.'+(v[2]+1))")"
+            echo "No release/v* branch found; using patch-bump ${RELEASE_VERSION} as nightly base."
+          else
+            echo "Detected release/v${RELEASE_VERSION} branch; using as nightly base."
+          fi
+
+          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${SHORT_SHA}"
           echo "nightly_version=$NIGHTLY_VERSION" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "nightly_date=$NIGHTLY_DATE" >> "$GITHUB_OUTPUT"

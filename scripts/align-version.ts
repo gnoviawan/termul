@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 
-// Nightly builds synthesize `0.0.0-nightly.<YYYYMMDD>.<shortsha>` from main HEAD
-// and may write it to only a subset of the three version sources (or pass it via
+// Nightly builds synthesize a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+// (detected from a release/v* branch, or patch-bumped from current) and may
+// write it to only a subset of the three version sources (or pass it via
 // Tauri config overrides), so the strict 3-source equality guard is bypassed
 // for nightly. Stable and Insider RC tags keep the strict guard.
 const nightlyBypass =
