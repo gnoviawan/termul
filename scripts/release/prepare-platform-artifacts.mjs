@@ -78,7 +78,7 @@ function releaseAssetName(artifact) {
     const appName = basename(artifact.path, artifact.ext).replaceAll(' ', '.')
     return `${appName}_${artifact.arch}${artifact.ext}`
   }
-  return basename(artifact.path)
+  return basename(artifact.path).replaceAll(' ', '.')
 }
 
 function assertNonEmptyString(value, description) {
