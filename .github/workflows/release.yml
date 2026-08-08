@@ -453,7 +453,14 @@ jobs:
         run: >
           cargo build --release --bin termul-server
           --features standalone-server
-          --target x86_64-unknown-linux-gnu
+
+      - name: Locate termul-server binary
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          echo "Searching for termul-server binary in target/..."
+          find target -name 'termul-server' -type f -print || true
+          ls -la target/release/termul-server 2>/dev/null || echo "target/release/termul-server NOT FOUND"
 
       - name: Sign termul-server binary
         working-directory: src-tauri
@@ -461,8 +468,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          bun run tauri signer sign target/x86_64-unknown-linux-gnu/release/termul-server
-          test -f target/x86_64-unknown-linux-gnu/release/termul-server.sig
+          bun run tauri signer sign target/release/termul-server
+          test -f target/release/termul-server.sig
 
       - name: Prepare server manifest fragment
         shell: bash
@@ -471,7 +478,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           node scripts/release/prepare-server-artifacts.mjs \
-            --signature src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig \
+            --signature src-tauri/target/release/termul-server.sig \
             --tag "$TAG" \
             --version "$VERSION" \
             --output server-collected/server-manifest.json
@@ -480,8 +487,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p server-collected
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server server-collected/termul-server
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/termul-server.sig server-collected/termul-server.sig
+          cp src-tauri/target/release/termul-server server-collected/termul-server
+          cp src-tauri/target/release/termul-server.sig server-collected/termul-server.sig
 
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
