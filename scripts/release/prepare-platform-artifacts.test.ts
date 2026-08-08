@@ -79,6 +79,22 @@ describe('preparePlatformArtifacts', () => {
     expect(manifest.platforms['windows-x86_64-nsis'].url).toMatch(/_x64-setup\.exe$/)
   })
 
+  test('collects NSIS-only Windows paths (prerelease --bundles nsis, no MSI)', async () => {
+    const root = await fixtureDir()
+    const exe = await fixtureFile(root, 'bundle/nsis/Termul.Manager_1.2.3_x64-setup.exe')
+    const exeSig = await fixtureFile(
+      root,
+      'bundle/nsis/Termul.Manager_1.2.3_x64-setup.exe.sig',
+      'nsis-signature'
+    )
+
+    const { manifest } = await prepare('windows-x64', [exe, exeSig], root)
+    expect(manifest.platforms['windows-x86_64'].url).toMatch(/_x64-setup\.exe$/)
+    expect(manifest.platforms['windows-x86_64'].signature).toBe('nsis-signature')
+    expect(manifest.platforms['windows-x86_64-nsis'].url).toMatch(/_x64-setup\.exe$/)
+    expect(manifest.platforms['windows-x86_64-msi']).toBeUndefined()
+  })
+
   test('collects Linux AppImage, deb, and rpm paths', async () => {
     const root = await fixtureDir()
     const paths = []
