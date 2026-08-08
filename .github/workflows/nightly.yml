@@ -308,6 +308,14 @@ jobs:
           cargo build --release --bin termul-server
           --features standalone-server
 
+      - name: Locate termul-server binary
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          echo "Searching for termul-server binary in target/..."
+          find target -name 'termul-server' -type f -print || true
+          ls -la target/release/termul-server 2>/dev/null || echo "target/release/termul-server NOT FOUND"
+
       - name: Sign termul-server binary
         working-directory: src-tauri
         env:
