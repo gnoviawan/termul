@@ -39,6 +39,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          # Build main HEAD, not the default branch (dev). GitHub scheduled
+          # workflows fire on the default branch, but the nightly targets the
+          # latest production code on main for contributor automated builds.
+          ref: main
           fetch-depth: 1
           persist-credentials: false
 
