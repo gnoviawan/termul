@@ -226,6 +226,16 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
+
+  it('surfaces a read-only banner when a closed session has history and no reopen context (CAP-4)', () => {
+    // Remap failed or strategy was 'local' → session lands closed with a
+    // history entry and no discovered reopen context → explicit read-only hint.
+    seedLiveSession('s1')
+    indexRef.current = [{ id: 's1' }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByText(/read-only/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+  })
 })
 
 // Story 5.3 (AC1, AC3, AC4) — OSK spacer + reconnect overlay.

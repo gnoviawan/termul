@@ -3355,6 +3355,46 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-closed'].configOptions).toEqual([])
   })
 
+  it('openHistorySession sets replaying=streaming for resume strategy to accept gap-replay chunks', async () => {
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessions: {}
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-resume',
+        agentId: 'agent-1',
+        title: 'Resume',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    const reopen = deferred<unknown>()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValueOnce(reopen.promise)
+    const opening = useAcpStore.getState().openHistorySession('s-resume')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
+    )
+    expect(useAcpStore.getState().sessions['s-resume'].replaying).toBe('streaming')
+    reopen.resolve({})
+    await opening
+    expect(useAcpStore.getState().sessions['s-resume'].status).toBe('active')
+    expect(useAcpStore.getState().sessions['s-resume'].replaying).toBeNull()
+  })
+
   it('openHistorySession restores the local transcript if load fails (P5)', async () => {
     // A non-live session whose agent process is still connected with loadSession
     // -> 'load' strategy; if the reload fails the local transcript is restored.

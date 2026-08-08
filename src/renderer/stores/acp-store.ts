@@ -2020,7 +2020,12 @@ async function openHistorySessionInner(
         [id]: {
           ...session,
           agentId: liveAgentId,
-          replaying: strategy === 'load' ? ('pending' as const) : null
+          replaying:
+            strategy === 'load'
+              ? ('pending' as const)
+              : strategy === 'resume'
+                ? ('streaming' as const)
+                : null
         }
       }
     }
@@ -2074,9 +2079,18 @@ async function openHistorySessionInner(
   } else if (strategy === 'resume') {
     try {
       const outcome = (await acpApi.resumeSession(liveAgentId, id, meta.cwd)) ?? {}
-      if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+      if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
+        if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
+        return
+      }
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
-      set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return { sessions: s.sessions }
+        return {
+          sessions: { ...s.sessions, [id]: { ...session, status: 'active', replaying: null, lastError: null } }
+        }
+      })
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
       set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))

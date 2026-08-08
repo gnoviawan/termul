@@ -448,7 +448,7 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected.</span>
+            <span>Chat disconnected (read-only).</span>
             <button
               type="button"
               onClick={() => {
