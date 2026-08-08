@@ -555,9 +555,9 @@ jobs:
             done < <(find "$root/assets" -maxdepth 1 -type f -print0)
           done
 
-          cp release-inputs/release-standalone-server/server-collected/termul-server release-assets/termul-server
-          cp release-inputs/release-standalone-server/server-collected/termul-server.sig release-assets/termul-server.sig
-          manifests+=("release-inputs/release-standalone-server/server-collected/server-manifest.json")
+          cp release-inputs/release-standalone-server/termul-server release-assets/termul-server
+          cp release-inputs/release-standalone-server/termul-server.sig release-assets/termul-server.sig
+          manifests+=("release-inputs/release-standalone-server/server-manifest.json")
 
           # Channel selection: stable (`v*` tag) vs Insider RC (`v*-rc.*` tag).
           # The merge validator derives the asset URL tag from the channel:
