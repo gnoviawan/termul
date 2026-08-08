@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Preflight Apple and updater credentials
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && secrets.APPLE_CERTIFICATE != ''
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -285,7 +285,7 @@ jobs:
           NODE
 
       - name: Verify macOS bundle library portability and signing
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && secrets.APPLE_CERTIFICATE != ''
         shell: bash
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
