@@ -132,6 +132,8 @@ jobs:
     needs: changelog
     if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
       fail-fast: false
       matrix:
@@ -165,7 +167,7 @@ jobs:
           persist-credentials: false
 
       - name: Preflight Apple and updater credentials
-        if: startsWith(matrix.platform, 'macos-') && secrets.APPLE_CERTIFICATE != ''
+        if: startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE != ''
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -285,7 +287,7 @@ jobs:
           NODE
 
       - name: Verify macOS bundle library portability and signing
-        if: startsWith(matrix.platform, 'macos-') && secrets.APPLE_CERTIFICATE != ''
+        if: startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE != ''
         shell: bash
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
