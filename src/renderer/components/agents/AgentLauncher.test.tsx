@@ -1264,3 +1264,46 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     expect(textarea).toHaveValue('')
   })
 })
+
+describe('AgentLauncher mobile empty-state overflow', () => {
+  // CAP-5 / ship-blocker P2: at a 390px mobile viewport the empty-state
+  // launcher (hero + suggestion cards + composer) must not clip past the
+  // right viewport edge. jsdom cannot measure layout, so this is a structural
+  // regression guard asserting the width-constraining Tailwind utilities are
+  // present on the launcher root, hero heading, composer column, and
+  // suggestion grid. Real-device no-clip is the production signal (see the
+  // spec's Verification section).
+  it('clamps horizontal overflow via overflow-x-hidden + width constraints', () => {
+    renderLauncher()
+
+    // The hero <h1> is the stable entry point (role + level). From it we walk
+    // the rendered tree to the hero div, launcher root, composer column, and
+    // suggestion grid — jsdom preserves the className strings exactly.
+    const heading = screen.getByRole('heading', {
+      level: 1,
+      name: /what should we do in/i
+    })
+    // Hero div wraps the logo + heading.
+    const hero = heading.parentElement!
+    // Launcher root is the hero's parent (the absolute inset-0 container).
+    const launcherRoot = hero.parentElement!
+    // Composer column is the sibling div after the hero, inside the launcher
+    // root. It carries `max-w-4xl` + the new `min-w-0`.
+    const composerColumn = Array.from(launcherRoot.children).find(
+      (el) => el !== hero && el.tagName === 'DIV'
+    )!
+    // Suggestion grid is the grid child inside the composer column.
+    const suggestionGrid = composerColumn.querySelector('div.grid')!
+
+    // Launcher root: `overflow-x-hidden` backstop + responsive padding.
+    expect(launcherRoot.className).toContain('overflow-x-hidden')
+    expect(launcherRoot.className).toContain('p-4')
+    expect(launcherRoot.className).toContain('sm:p-8')
+    // Hero div spans the content box; heading wraps instead of forcing width.
+    expect(hero.className).toContain('w-full')
+    expect(heading.className).toContain('break-words')
+    // Composer column + suggestion grid allow flex/grid children to shrink.
+    expect(composerColumn.className).toContain('min-w-0')
+    expect(suggestionGrid.className).toContain('min-w-0')
+  })
+})

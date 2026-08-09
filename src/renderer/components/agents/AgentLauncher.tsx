@@ -809,16 +809,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   return (
     <div
-      className={cn('absolute inset-0 flex flex-col items-center justify-center p-8', className)}
+      className={cn(
+        'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden p-4 sm:p-8',
+        className
+      )}
     >
-      <div className="mb-8 flex flex-col items-center gap-4 text-center">
+      <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
         <TermulMark size={48} className="text-foreground" />
-        <h1 className="text-3xl font-medium tracking-tight text-foreground md:text-4xl">
+        <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
           {`What should we do in ${projectLabel}?`}
         </h1>
       </div>
 
-      <div className="flex w-full max-w-4xl flex-col gap-4">
+      <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
         <div className="relative">
           {slashOpen && (
             <SlashCommandMenu
@@ -1049,7 +1052,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           </div>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid min-w-0 gap-2 md:grid-cols-3">
           {SUGGESTIONS.map((suggestion) => (
             <button
               key={suggestion.title}
