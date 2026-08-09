@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
@@ -42,7 +43,6 @@ import NotFound from './pages/NotFound'
 import ProjectSettings from './pages/ProjectSettings'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
-import { ChatRoute } from '@/components/ChatRoute'
 
 const queryClient = new QueryClient()
 
