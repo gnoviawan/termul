@@ -1603,23 +1603,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <>
               <ChatRoute />
               <motion.div
-              key={fullscreenPaneId ? 'fullscreen' : 'normal'}
-              initial={{ opacity: 0.85, scale: 0.97 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="h-full min-h-0 flex-1 overflow-hidden"
-            >
-              <PaneRenderer
-                node={fullscreenPane ?? paneRoot}
-                onAddTerminal={handleAddTerminal}
-                onAddBrowserTab={handleNewBrowserTab}
-                onCloseTerminal={handleCloseTerminal}
-                onRenameTerminal={renameTerminal}
-                onCloseEditorTab={handleCloseEditorTab}
-                closingTerminalIds={closingTerminalIds}
-                defaultShell={activeProject?.defaultShell || appDefaultShell}
-              />
-            </motion.div>
+                key={fullscreenPaneId ? 'fullscreen' : 'normal'}
+                initial={{ opacity: 0.85, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="h-full min-h-0 flex-1 overflow-hidden"
+              >
+                <PaneRenderer
+                  node={fullscreenPane ?? paneRoot}
+                  onAddTerminal={handleAddTerminal}
+                  onAddBrowserTab={handleNewBrowserTab}
+                  onCloseTerminal={handleCloseTerminal}
+                  onRenameTerminal={renameTerminal}
+                  onCloseEditorTab={handleCloseEditorTab}
+                  closingTerminalIds={closingTerminalIds}
+                  defaultShell={activeProject?.defaultShell || appDefaultShell}
+                />
+              </motion.div>
             </>
           ) : (
             <div className="relative flex-1 overflow-hidden bg-background rounded-xl">

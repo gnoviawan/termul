@@ -2088,7 +2088,10 @@ async function openHistorySessionInner(
         const session = s.sessions[id]
         if (!session) return { sessions: s.sessions }
         return {
-          sessions: { ...s.sessions, [id]: { ...session, status: 'active', replaying: null, lastError: null } }
+          sessions: {
+            ...s.sessions,
+            [id]: { ...session, status: 'active', replaying: null, lastError: null }
+          }
         }
       })
     } catch (err) {
