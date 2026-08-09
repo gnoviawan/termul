@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { clearChatRoute } from '@/lib/router-navigate'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
@@ -57,10 +58,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   selectProject: (id: string): void => {
+    const prev = get().activeProjectId
     set((state) => ({
       activeProjectId: id,
       projects: state.projects.map((p) => ({ ...p, isActive: p.id === id }))
     }))
+    if (prev !== id) clearChatRoute()
   },
 
   addProject: (

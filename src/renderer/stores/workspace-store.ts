@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { navigateToChatSession } from '@/lib/router-navigate'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type {
   DropPosition,
@@ -827,7 +828,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const { root, activePaneId, agentLauncherPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
-      // Check if already exists in any pane — activate it
+      navigateToChatSession(sessionId)
+
       const existing = findPaneContainingTab(root, id)
       if (existing) {
         const { fullscreenPaneId } = get()
@@ -882,6 +884,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         activePaneId: resolveActivePaneId(fullscreenPaneId, pane.id),
         agentLauncherPaneId: agentLauncherPaneId === pane.id ? null : agentLauncherPaneId
       })
+      navigateToChatSession(toSessionId)
     },
 
     removeTab: (tabId: string): void => {

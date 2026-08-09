@@ -28,6 +28,7 @@ import NotFound from './pages/NotFound'
 import ProjectSettings from './pages/ProjectSettings'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
+import { ChatRoute } from '@/components/ChatRoute'
 
 // PRODUCTION GUARDRAIL: This branch targets xterm 6.1-beta (the line VS Code
 // ships in production). The 6.1 beta track includes memory leak fixes
@@ -145,6 +146,7 @@ const router = createHashRouter(
       element: <WorkspaceLayout />,
       children: [
         { index: true, element: <WorkspaceDashboard /> },
+        { path: 'c/:sessionId', element: <ChatRoute /> },
         { path: 'snapshots', element: <WorkspaceSnapshots /> },
         { path: 'settings', element: <ProjectSettings /> },
         { path: 'preferences', element: <AppPreferences /> }

@@ -42,6 +42,7 @@ import NotFound from './pages/NotFound'
 import ProjectSettings from './pages/ProjectSettings'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
+import { ChatRoute } from '@/components/ChatRoute'
 
 const queryClient = new QueryClient()
 
@@ -106,6 +107,7 @@ const router = createHashRouter(
       element: <WorkspaceLayout />,
       children: [
         { index: true, element: <WorkspaceDashboard /> },
+        { path: 'c/:sessionId', element: <ChatRoute /> },
         { path: 'snapshots', element: <WorkspaceSnapshots /> },
         { path: 'settings', element: <ProjectSettings /> },
         { path: 'preferences', element: <AppPreferences /> }

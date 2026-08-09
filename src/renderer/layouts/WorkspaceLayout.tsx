@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
+import { ChatRoute } from '@/components/ChatRoute'
 import { CommandHistoryModal } from '@/components/CommandHistoryModal'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -65,6 +66,7 @@ import {
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
+import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
@@ -187,6 +189,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+
+  useEffect(() => {
+    setRouterNavigate(navigate)
+    return () => setRouterNavigate(null)
+  }, [navigate])
   // Agent chat entry point (moved from the pane tab bar to the Activity Rail).
   // The dialogs are owned here so the rail button can open them globally; the
 
@@ -913,7 +920,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/'
+  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(
@@ -1593,7 +1600,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       ) : (
         <>
           {isWorkspaceRoute ? (
-            <motion.div
+            <>
+              <ChatRoute />
+              <motion.div
               key={fullscreenPaneId ? 'fullscreen' : 'normal'}
               initial={{ opacity: 0.85, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1611,6 +1620,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 defaultShell={activeProject?.defaultShell || appDefaultShell}
               />
             </motion.div>
+            </>
           ) : (
             <div className="relative flex-1 overflow-hidden bg-background rounded-xl">
               <div className="h-full w-full">
