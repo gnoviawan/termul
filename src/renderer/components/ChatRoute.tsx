@@ -20,7 +20,6 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
 export function ChatRoute(): null {
   const location = useLocation()
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
-  const sessionIndex = useAcpStore((s) => s.sessionIndex)
 
   const sessionId = useMemo(() => {
     const match = location.pathname.match(/^\/c\/(.+)$/)
