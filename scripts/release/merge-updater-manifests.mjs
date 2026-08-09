@@ -141,7 +141,11 @@ export async function mergeUpdaterManifests({
     }
   }
 
-  const missing = requiredPlatformKeys.filter((key) => !platforms[key])
+  const requiredKeys =
+    channel === 'nightly' || channel === 'insider'
+      ? requiredPlatformKeys.filter((key) => key !== 'windows-x86_64-msi')
+      : requiredPlatformKeys
+  const missing = requiredKeys.filter((key) => !platforms[key])
   if (missing.length > 0) {
     throw new Error(`Missing required updater platforms: ${missing.join(', ')}`)
   }

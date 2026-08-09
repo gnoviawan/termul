@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 
 const platformDefinitions = {
   'windows-x64': {
-    requiredKeys: ['windows-x86_64', 'windows-x86_64-msi', 'windows-x86_64-nsis'],
+    requiredKeys: ['windows-x86_64', 'windows-x86_64-nsis'],
     primaryBundle: 'msi'
   },
   'linux-x64': {
@@ -78,7 +78,7 @@ function releaseAssetName(artifact) {
     const appName = basename(artifact.path, artifact.ext).replaceAll(' ', '.')
     return `${appName}_${artifact.arch}${artifact.ext}`
   }
-  return basename(artifact.path)
+  return basename(artifact.path).replaceAll(' ', '.')
 }
 
 function assertNonEmptyString(value, description) {
@@ -164,8 +164,12 @@ export async function preparePlatformArtifacts({
   }
 
   if (platform === 'windows-x64') {
-    platforms['windows-x86_64'] = await entryForBundle(definition.primaryBundle)
-    platforms['windows-x86_64-msi'] = await entryForBundle('msi')
+    const msiSignatures = signatures.filter((artifact) => artifact.bundle === 'msi')
+    const primaryBundle = msiSignatures.length > 0 ? definition.primaryBundle : 'nsis'
+    platforms['windows-x86_64'] = await entryForBundle(primaryBundle)
+    if (msiSignatures.length > 0) {
+      platforms['windows-x86_64-msi'] = await entryForBundle('msi')
+    }
     platforms['windows-x86_64-nsis'] = await entryForBundle('nsis')
   } else if (platform === 'linux-x64') {
     platforms['linux-x86_64'] = await entryForBundle(definition.primaryBundle)

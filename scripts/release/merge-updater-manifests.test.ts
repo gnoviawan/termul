@@ -226,6 +226,40 @@ describe('mergeUpdaterManifests', () => {
       expect(JSON.parse(await readFile(outputPath, 'utf8'))).toEqual(merged)
     })
 
+    test('accepts a nightly manifest without windows-x86_64-msi (NSIS-only build)', async () => {
+      const dir = await fixtureDir()
+      const nightlyVersion = '0.0.0-nightly.20260807.abc1234'
+      const nightlyKeys = requiredPlatformKeys.filter((key: string) => key !== 'windows-x86_64-msi')
+      const nightlyAssetNames = nightlyKeys.flatMap((key: string) => [
+        assetName(key),
+        `${assetName(key)}.sig`
+      ])
+      const nightlyPlatforms = Object.fromEntries(
+        nightlyKeys.map((key: string) => [
+          key,
+          {
+            url: `https://github.com/gnoviawan/termul/releases/download/nightly/${assetName(key)}`,
+            signature: `signature-${key}`
+          }
+        ])
+      )
+      const input = join(dir, 'manifest.json')
+      await writeManifest(input, nightlyPlatforms, nightlyVersion, nightlyAssetNames)
+
+      const outputPath = join(dir, 'latest-nightly.json')
+      const merged = await mergeUpdaterManifests({
+        inputPaths: [input],
+        outputPath,
+        version: nightlyVersion,
+        notes: 'nightly nsis-only notes',
+        pubDate: '2026-08-07T00:00:00.000Z',
+        channel: 'nightly'
+      })
+
+      expect(merged.platforms['windows-x86_64-nsis']).toBeDefined()
+      expect(merged.platforms['windows-x86_64-msi']).toBeUndefined()
+    })
+
     test('rejects a nightly manifest that targets the versioned tag instead of the nightly tag', async () => {
       const dir = await fixtureDir()
       const nightlyVersion = '0.0.0-nightly.20260807.abc1234'
