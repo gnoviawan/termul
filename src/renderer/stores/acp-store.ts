@@ -2084,16 +2084,8 @@ async function openHistorySessionInner(
         return
       }
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
-      set((s) => {
-        const session = s.sessions[id]
-        if (!session) return { sessions: s.sessions }
-        return {
-          sessions: {
-            ...s.sessions,
-            [id]: { ...session, status: 'active', replaying: null, lastError: null }
-          }
-        }
-      })
+      set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+      scheduleReplayEnd(set, id, reopenGeneration)
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
       set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))

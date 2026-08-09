@@ -3392,7 +3392,7 @@ describe('acp-store', () => {
     reopen.resolve({})
     await opening
     expect(useAcpStore.getState().sessions['s-resume'].status).toBe('active')
-    expect(useAcpStore.getState().sessions['s-resume'].replaying).toBeNull()
+    expect(useAcpStore.getState().sessions['s-resume'].lastError).toBeNull()
   })
 
   it('openHistorySession restores the local transcript if load fails (P5)', async () => {

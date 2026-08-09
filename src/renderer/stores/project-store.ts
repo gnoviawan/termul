@@ -73,6 +73,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     defaultShell?: string,
     envVars?: EnvVariable[]
   ): Project => {
+    const prev = get().activeProjectId
     const newProject: Project = {
       id: crypto.randomUUID(),
       name,
@@ -86,6 +87,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: [...state.projects, newProject],
       activeProjectId: newProject.id
     }))
+    if (prev !== newProject.id) clearChatRoute()
     return newProject
   },
 
@@ -99,22 +101,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { projects, activeProjectId, groups } = get()
     const remaining = projects.filter((p) => p.id !== id)
 
-    // Also remove from any group it belongs to
     const updatedGroups = groups.map((g) => ({
       ...g,
       projectIds: g.projectIds.filter((pid) => pid !== id)
     }))
 
+    const wasActive = activeProjectId === id
     set({
       projects: remaining,
       groups: updatedGroups,
       activeProjectId:
-        activeProjectId === id && remaining.length > 0
-          ? remaining[0].id
-          : activeProjectId === id
-            ? ''
-            : activeProjectId
+        wasActive && remaining.length > 0 ? remaining[0].id : wasActive ? '' : activeProjectId
     })
+    if (wasActive) clearChatRoute()
   },
 
   archiveProject: (id: string): void => {
