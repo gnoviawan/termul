@@ -885,7 +885,11 @@ describe('WorkspaceLayout - Empty States', () => {
 
       await waitFor(() => expect(backendShortcut).toBeDefined())
       act(() => backendShortcut?.('colorThemePicker'))
-      expect(await screen.findByRole('dialog', { name: 'Color theme picker' })).toBeInTheDocument()
+      // ThemePicker is React.lazy — allow extra time for the chunk to resolve
+      // under full-suite resource contention (passes instantly in isolation).
+      expect(
+        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 5000 })
+      ).toBeInTheDocument()
     })
   })
 

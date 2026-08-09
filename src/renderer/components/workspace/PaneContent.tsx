@@ -1,16 +1,11 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import { X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
-import { BrowserPanel } from '@/components/browser/BrowserPanel'
-import { AgentChatPanel } from '@/components/chat/AgentChatPanel'
-import { EditorPanel } from '@/components/editor/EditorPanel'
-import { GitHistoryPanel } from '@/components/git/GitHistoryPanel'
-import { GitPanel } from '@/components/git/GitPanel'
-import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
@@ -24,6 +19,30 @@ import { WorkspaceTabBar } from './WorkspaceTabBar'
 
 /** Inactive tabs stay mounted but must not intercept clicks on the active tab beneath. */
 const INACTIVE_TAB_PANE_CLASS = 'w-full h-full absolute inset-0 invisible pointer-events-none'
+
+const AgentChatPanel = lazy(() =>
+  import('@/components/chat/AgentChatPanel').then((m) => ({ default: m.AgentChatPanel }))
+)
+const BrowserPanel = lazy(() =>
+  import('@/components/browser/BrowserPanel').then((m) => ({ default: m.BrowserPanel }))
+)
+const ConnectedTerminal = lazy(() =>
+  import('@/components/terminal/ConnectedTerminal').then((m) => ({ default: m.ConnectedTerminal }))
+)
+const EditorPanel = lazy(() =>
+  import('@/components/editor/EditorPanel').then((m) => ({ default: m.EditorPanel }))
+)
+const GitHistoryPanel = lazy(() =>
+  import('@/components/git/GitHistoryPanel').then((m) => ({ default: m.GitHistoryPanel }))
+)
+const GitPanel = lazy(() =>
+  import('@/components/git/GitPanel').then((m) => ({ default: m.GitPanel }))
+)
+
+/** Lightweight Suspense fallback for lazy-loaded panes (reuses Skeleton). */
+function PaneSkeleton(): React.JSX.Element {
+  return <Skeleton className="h-full w-full" />
+}
 
 interface PaneContentProps {
   pane: LeafNode
@@ -302,21 +321,23 @@ export function PaneContent({
                         'rounded-sm ring-2 ring-inset ring-amber-400/70 animate-pulse motion-reduce:animate-none'
                     )}
                   >
-                    <ConnectedTerminal
-                      terminalId={terminal.ptyId}
-                      storeTerminalId={terminal.id}
-                      autoSpawn={false}
-                      spawnOptions={connectedTerminalSpawnOptions}
-                      onBoundToStoreTerminal={(ptyId) => {
-                        if (terminal.ptyId !== ptyId) {
-                          setTerminalPtyId(terminal.id, ptyId)
-                        }
-                      }}
-                      initialScrollback={terminal.pendingScrollback}
-                      initialModes={terminal.pendingModes}
-                      className="w-full h-full"
-                      isVisible={isVisible}
-                    />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <ConnectedTerminal
+                        terminalId={terminal.ptyId}
+                        storeTerminalId={terminal.id}
+                        autoSpawn={false}
+                        spawnOptions={connectedTerminalSpawnOptions}
+                        onBoundToStoreTerminal={(ptyId) => {
+                          if (terminal.ptyId !== ptyId) {
+                            setTerminalPtyId(terminal.id, ptyId)
+                          }
+                        }}
+                        initialScrollback={terminal.pendingScrollback}
+                        initialModes={terminal.pendingModes}
+                        className="w-full h-full"
+                        isVisible={isVisible}
+                      />
+                    </Suspense>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches
 											the renderer (rendererAttachmentCount flips to 1). Covers the
 											xterm div with a centered pulsing icon so the user sees feedback. */}
@@ -347,7 +368,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <EditorPanel filePath={tab.filePath} isVisible={isVisible} />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <EditorPanel filePath={tab.filePath} isVisible={isVisible} />
+                    </Suspense>
                   </div>
                 )
               })}
@@ -361,7 +384,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <BrowserPanel browserTabId={tab.browserTabId} isVisible={isVisible} />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <BrowserPanel browserTabId={tab.browserTabId} isVisible={isVisible} />
+                    </Suspense>
                   </div>
                 )
               })}
@@ -375,7 +400,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <GitPanel cwd={tab.cwd} isVisible={isVisible} />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <GitPanel cwd={tab.cwd} isVisible={isVisible} />
+                    </Suspense>
                   </div>
                 )
               })}
@@ -389,7 +416,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
+                    </Suspense>
                   </div>
                 )
               })}
@@ -403,7 +432,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
+                    </Suspense>
                   </div>
                 )
               })}

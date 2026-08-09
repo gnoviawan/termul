@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -24,11 +25,16 @@ import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
-import AppPreferences from './pages/AppPreferences'
-import NotFound from './pages/NotFound'
-import ProjectSettings from './pages/ProjectSettings'
-import WorkspaceDashboard from './pages/WorkspaceDashboard'
-import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
+
+const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
+const ProjectSettings = lazy(() => import('./pages/ProjectSettings'))
+const AppPreferences = lazy(() => import('./pages/AppPreferences'))
+const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
+const NotFound = lazy(() => import('./pages/NotFound'))
+
+function RouteFallback(): React.JSX.Element {
+  return <Skeleton className="h-full w-full" />
+}
 
 // PRODUCTION GUARDRAIL: This branch targets xterm 6.1-beta (the line VS Code
 // ships in production). The 6.1 beta track includes memory leak fixes
@@ -145,14 +151,49 @@ const router = createHashRouter(
       path: '/',
       element: <WorkspaceLayout />,
       children: [
-        { index: true, element: <WorkspaceDashboard /> },
+        {
+          index: true,
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <WorkspaceDashboard />
+            </Suspense>
+          )
+        },
         { path: 'c/:sessionId', element: <ChatRoute /> },
-        { path: 'snapshots', element: <WorkspaceSnapshots /> },
-        { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> }
+        {
+          path: 'snapshots',
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <WorkspaceSnapshots />
+            </Suspense>
+          )
+        },
+        {
+          path: 'settings',
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <ProjectSettings />
+            </Suspense>
+          )
+        },
+        {
+          path: 'preferences',
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <AppPreferences />
+            </Suspense>
+          )
+        }
       ]
     },
-    { path: '*', element: <NotFound /> }
+    {
+      path: '*',
+      element: (
+        <Suspense fallback={<RouteFallback />}>
+          <NotFound />
+        </Suspense>
+      )
+    }
   ],
   {
     future: {

@@ -2,25 +2,17 @@ import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
 import { ChatRoute } from '@/components/ChatRoute'
-import { CommandHistoryModal } from '@/components/CommandHistoryModal'
-import { CommandPalette } from '@/components/CommandPalette'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { FileExplorer } from '@/components/file-explorer/FileExplorer'
-import { GitPanel } from '@/components/git/GitPanel'
-import { MobileChatShell } from '@/components/mobile/MobileChatShell'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ResizeEdges } from '@/components/ResizeEdges'
 import { SidebarTabs } from '@/components/SidebarTabs'
 import { StatusBar } from '@/components/StatusBar'
-import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
-import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
-import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
 import {
   FileExplorerToggleButton,
@@ -28,6 +20,7 @@ import {
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
 import {
@@ -121,6 +114,38 @@ import {
   useWorkspaceStore
 } from '@/stores/workspace-store'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
+
+const SSHWorkspace = lazy(() =>
+  import('@/components/ssh/SSHWorkspace').then((m) => ({ default: m.SSHWorkspace }))
+)
+const CommandHistoryModal = lazy(() =>
+  import('@/components/CommandHistoryModal').then((m) => ({
+    default: m.CommandHistoryModal
+  }))
+)
+const CommandPalette = lazy(() =>
+  import('@/components/CommandPalette').then((m) => ({ default: m.CommandPalette }))
+)
+const GitPanel = lazy(() =>
+  import('@/components/git/GitPanel').then((m) => ({ default: m.GitPanel }))
+)
+const ThemePicker = lazy(() =>
+  import('@/components/ThemePicker').then((m) => ({ default: m.ThemePicker }))
+)
+const FileExplorer = lazy(() =>
+  import('@/components/file-explorer/FileExplorer').then((m) => ({ default: m.FileExplorer }))
+)
+const MobileChatShell = lazy(() =>
+  import('@/components/mobile/MobileChatShell').then((m) => ({ default: m.MobileChatShell }))
+)
+const SSHFileExplorer = lazy(() =>
+  import('@/components/ssh/SSHFileExplorer').then((m) => ({ default: m.SSHFileExplorer }))
+)
+
+/** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
+function ShellSkeleton(): React.JSX.Element {
+  return <Skeleton className="h-full w-full" />
+}
 
 function getShortcutTargetContext(target: EventTarget | null): {
   isInEditor: boolean
@@ -1571,7 +1596,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const workspaceMain = (
     <>
       {activeSSHProfile ? (
-        <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+        <Suspense fallback={<ShellSkeleton />}>
+          <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+        </Suspense>
       ) : projects.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 rounded-xl">
           <motion.div
@@ -1641,38 +1668,42 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateProject={addProject}
       />
 
-      <ThemePicker />
+      <Suspense fallback={<ShellSkeleton />}>
+        <ThemePicker />
+      </Suspense>
 
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        projects={projects}
-        onSwitchProject={selectProject}
-        onAddTerminal={() => handleAddTerminal(undefined)}
-        onShowAgentLauncher={() => {
-          const paneId = useWorkspaceStore.getState().activePaneId
-          if (paneId) {
-            useWorkspaceStore.getState().showAgentLauncher(paneId)
-          }
-        }}
-        onLaunchAgent={handleLaunchAgent}
-        onNewBrowserTab={handleNewBrowserTab}
-        onSaveSnapshot={handleOpenSnapshotModal}
-        onOpenProjectSettings={handleOpenProjectSettings}
-        onOpenAppPreferences={handleOpenAppPreferences}
-        onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-        onOpenShortcutMenu={handleOpenShortcutMenu}
-        onOpenThemePicker={handleOpenThemePicker}
-        onSSHConnect={handleSSHConnect}
-        sshProfiles={sshProfiles.map((p) => ({
-          id: p.id,
-          name: p.name,
-          host: p.host,
-          username: p.username
-        }))}
-        getShortcutLabel={getShortcutLabel}
-        getProjectShortcutLabel={getProjectShortcutLabel}
-      />
+      <Suspense fallback={<ShellSkeleton />}>
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          projects={projects}
+          onSwitchProject={selectProject}
+          onAddTerminal={() => handleAddTerminal(undefined)}
+          onShowAgentLauncher={() => {
+            const paneId = useWorkspaceStore.getState().activePaneId
+            if (paneId) {
+              useWorkspaceStore.getState().showAgentLauncher(paneId)
+            }
+          }}
+          onLaunchAgent={handleLaunchAgent}
+          onNewBrowserTab={handleNewBrowserTab}
+          onSaveSnapshot={handleOpenSnapshotModal}
+          onOpenProjectSettings={handleOpenProjectSettings}
+          onOpenAppPreferences={handleOpenAppPreferences}
+          onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+          onOpenShortcutMenu={handleOpenShortcutMenu}
+          onOpenThemePicker={handleOpenThemePicker}
+          onSSHConnect={handleSSHConnect}
+          sshProfiles={sshProfiles.map((p) => ({
+            id: p.id,
+            name: p.name,
+            host: p.host,
+            username: p.username
+          }))}
+          getShortcutLabel={getShortcutLabel}
+          getProjectShortcutLabel={getProjectShortcutLabel}
+        />
+      </Suspense>
 
       <CreateSnapshotModal
         isOpen={isCreateSnapshotModalOpen}
@@ -1680,14 +1711,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateSnapshot={handleCreateSnapshot}
       />
 
-      <CommandHistoryModal
-        isOpen={isCommandHistoryOpen}
-        onClose={() => setIsCommandHistoryOpen(false)}
-        entries={commandHistory}
-        allEntries={allCommandHistory}
-        onSelectCommand={handleInsertCommand}
-        onClearHistory={handleClearCommandHistory}
-      />
+      <Suspense fallback={<ShellSkeleton />}>
+        <CommandHistoryModal
+          isOpen={isCommandHistoryOpen}
+          onClose={() => setIsCommandHistoryOpen(false)}
+          entries={commandHistory}
+          allEntries={allCommandHistory}
+          onSelectCommand={handleInsertCommand}
+          onClearHistory={handleClearCommandHistory}
+        />
+      </Suspense>
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
@@ -1794,39 +1827,43 @@ export default function WorkspaceLayout(): React.JSX.Element {
   if (isMobileWebShell) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <MobileChatShell
-          onNewChat={handleOpenAgentChat}
-          canNewChat={Boolean(activeProject?.path)}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-          onOpenGitChanges={() => setGitSheetOpen(true)}
-          onOpenGitHistory={() => handleAddGitHistoryTab()}
-          onNewTerminal={() => handleAddTerminal(undefined)}
-          onCloseTerminal={handleCloseTerminal}
-          onRenameTerminal={renameTerminal}
-          onRestartTerminal={(terminalId) => {
-            // Restart: kill the PTY, close the old tab, then re-spawn.
-            const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId)
-            if (!terminal?.ptyId) return
-            const root = useWorkspaceStore.getState().root
-            const pane = findPaneContainingTab(root, `term-${terminalId}`)
-            void terminalApi.kill(terminal.ptyId).then(() => {
-              closeTerminal(terminalId, activeProjectId)
-              if (pane) {
-                useWorkspaceStore.getState().closeTab(pane.id, `term-${terminalId}`)
-              }
-              handleCreateTerminalInPane(
-                pane?.id ?? useWorkspaceStore.getState().activePaneId ?? '',
-                terminal.shell ?? undefined
-              )
-            })
-          }}
-        >
-          <PaneDndProvider>
-            <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-              {workspaceMain}
-            </main>
-          </PaneDndProvider>
-        </MobileChatShell>
+        <Suspense fallback={<ShellSkeleton />}>
+          <MobileChatShell
+            onNewChat={handleOpenAgentChat}
+            canNewChat={Boolean(activeProject?.path)}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenGitChanges={() => setGitSheetOpen(true)}
+            onOpenGitHistory={() => handleAddGitHistoryTab()}
+            onNewTerminal={() => handleAddTerminal(undefined)}
+            onCloseTerminal={handleCloseTerminal}
+            onRenameTerminal={renameTerminal}
+            onRestartTerminal={(terminalId) => {
+              // Restart: kill the PTY, close the old tab, then re-spawn.
+              const terminal = useTerminalStore
+                .getState()
+                .terminals.find((t) => t.id === terminalId)
+              if (!terminal?.ptyId) return
+              const root = useWorkspaceStore.getState().root
+              const pane = findPaneContainingTab(root, `term-${terminalId}`)
+              void terminalApi.kill(terminal.ptyId).then(() => {
+                closeTerminal(terminalId, activeProjectId)
+                if (pane) {
+                  useWorkspaceStore.getState().closeTab(pane.id, `term-${terminalId}`)
+                }
+                handleCreateTerminalInPane(
+                  pane?.id ?? useWorkspaceStore.getState().activePaneId ?? '',
+                  terminal.shell ?? undefined
+                )
+              })
+            }}
+          >
+            <PaneDndProvider>
+              <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+                {workspaceMain}
+              </main>
+            </PaneDndProvider>
+          </MobileChatShell>
+        </Suspense>
 
         {/* Mobile-only full-width Git Changes sheet. GitPanel branches on
             useMobileWebShell() internally to render a single-column stacked
@@ -1839,7 +1876,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
           <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
             {activeProject?.path ? (
-              <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+              <Suspense fallback={<ShellSkeleton />}>
+                <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+              </Suspense>
             ) : null}
           </SheetContent>
         </Sheet>
@@ -1906,7 +1945,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
                       {isExplorerVisible && activeProject?.path && (
                         <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                          <FileExplorer side="right" />
+                          <Suspense fallback={<ShellSkeleton />}>
+                            <FileExplorer side="right" />
+                          </Suspense>
                         </div>
                       )}
                       {activeSSHProfile && (
@@ -1916,26 +1957,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
                             !(isExplorerVisible && activeProject?.path) && 'w-64'
                           )}
                         >
-                          <SSHFileExplorer
-                            connectionId={sshConn.connectionId ?? ''}
-                            isConnected={sshConn.isConnected}
-                            sftpReady={sshConn.sftpReady}
-                            entries={sshConn.entries}
-                            currentPath={sshConn.currentPath}
-                            expandedDirs={sshConn.expandedDirs}
-                            childEntries={sshConn.childEntries}
-                            loadingDirs={sshConn.loadingDirs}
-                            isLoadingRoot={sshConn.isLoadingRoot}
-                            profileName={activeSSHProfile.name}
-                            onConnect={sshConn.handleConnect}
-                            onBrowseFiles={sshConn.handleBrowseFiles}
-                            onToggleDir={sshConn.toggleDirectory}
-                            onLoadDir={sshConn.loadDirectory}
-                            onMkdir={handleSSHMkdir}
-                            onCreateFile={handleSSHCreateFile}
-                            onDelete={handleSSHDelete}
-                            onRename={handleSSHRename}
-                          />
+                          <Suspense fallback={<ShellSkeleton />}>
+                            <SSHFileExplorer
+                              connectionId={sshConn.connectionId ?? ''}
+                              isConnected={sshConn.isConnected}
+                              sftpReady={sshConn.sftpReady}
+                              entries={sshConn.entries}
+                              currentPath={sshConn.currentPath}
+                              expandedDirs={sshConn.expandedDirs}
+                              childEntries={sshConn.childEntries}
+                              loadingDirs={sshConn.loadingDirs}
+                              isLoadingRoot={sshConn.isLoadingRoot}
+                              profileName={activeSSHProfile.name}
+                              onConnect={sshConn.handleConnect}
+                              onBrowseFiles={sshConn.handleBrowseFiles}
+                              onToggleDir={sshConn.toggleDirectory}
+                              onLoadDir={sshConn.loadDirectory}
+                              onMkdir={handleSSHMkdir}
+                              onCreateFile={handleSSHCreateFile}
+                              onDelete={handleSSHDelete}
+                              onRename={handleSSHRename}
+                            />
+                          </Suspense>
                         </div>
                       )}
                     </div>

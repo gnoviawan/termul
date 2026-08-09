@@ -1,7 +1,12 @@
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { buildHunkPatches, type HunkPatch } from '@/lib/build-hunk-patch'
-import { getLanguageForFile, tokenizeLine } from '@/lib/diff-syntax-highlight'
+import {
+  getLanguageForFile,
+  isParserReady,
+  preloadParser,
+  tokenizeLine
+} from '@/lib/diff-syntax-highlight'
 import {
   type GitDiffViewMode,
   type ParsedDiffLine,
@@ -461,9 +466,7 @@ export function GitDiffView({
 
   useEffect(() => {
     if (language) {
-      void import('@/lib/diff-syntax-highlight').then((mod) => {
-        void mod.preloadParser(filePath ?? '')
-      })
+      void preloadParser(filePath ?? '')
     }
   }, [language, filePath])
 
@@ -473,13 +476,11 @@ export function GitDiffView({
     let mounted = true
     const checkReady = (): void => {
       if (!mounted) return
-      void import('@/lib/diff-syntax-highlight').then((mod) => {
-        if (mod.isParserReady(language)) {
-          setRenderTick((n) => n + 1)
-        } else {
-          setTimeout(checkReady, 50)
-        }
-      })
+      if (isParserReady(language)) {
+        setRenderTick((n) => n + 1)
+      } else {
+        setTimeout(checkReady, 50)
+      }
     }
     setTimeout(checkReady, 50)
     return () => {
