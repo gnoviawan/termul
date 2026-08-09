@@ -1668,42 +1668,46 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateProject={addProject}
       />
 
-      <Suspense fallback={<ShellSkeleton />}>
-        <ThemePicker />
-      </Suspense>
+      {isThemePickerOpen && (
+        <Suspense fallback={null}>
+          <ThemePicker />
+        </Suspense>
+      )}
 
-      <Suspense fallback={<ShellSkeleton />}>
-        <CommandPalette
-          isOpen={isCommandPaletteOpen}
-          onClose={() => setIsCommandPaletteOpen(false)}
-          projects={projects}
-          onSwitchProject={selectProject}
-          onAddTerminal={() => handleAddTerminal(undefined)}
-          onShowAgentLauncher={() => {
-            const paneId = useWorkspaceStore.getState().activePaneId
-            if (paneId) {
-              useWorkspaceStore.getState().showAgentLauncher(paneId)
-            }
-          }}
-          onLaunchAgent={handleLaunchAgent}
-          onNewBrowserTab={handleNewBrowserTab}
-          onSaveSnapshot={handleOpenSnapshotModal}
-          onOpenProjectSettings={handleOpenProjectSettings}
-          onOpenAppPreferences={handleOpenAppPreferences}
-          onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-          onOpenShortcutMenu={handleOpenShortcutMenu}
-          onOpenThemePicker={handleOpenThemePicker}
-          onSSHConnect={handleSSHConnect}
-          sshProfiles={sshProfiles.map((p) => ({
-            id: p.id,
-            name: p.name,
-            host: p.host,
-            username: p.username
-          }))}
-          getShortcutLabel={getShortcutLabel}
-          getProjectShortcutLabel={getProjectShortcutLabel}
-        />
-      </Suspense>
+      {isCommandPaletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            isOpen={isCommandPaletteOpen}
+            onClose={() => setIsCommandPaletteOpen(false)}
+            projects={projects}
+            onSwitchProject={selectProject}
+            onAddTerminal={() => handleAddTerminal(undefined)}
+            onShowAgentLauncher={() => {
+              const paneId = useWorkspaceStore.getState().activePaneId
+              if (paneId) {
+                useWorkspaceStore.getState().showAgentLauncher(paneId)
+              }
+            }}
+            onLaunchAgent={handleLaunchAgent}
+            onNewBrowserTab={handleNewBrowserTab}
+            onSaveSnapshot={handleOpenSnapshotModal}
+            onOpenProjectSettings={handleOpenProjectSettings}
+            onOpenAppPreferences={handleOpenAppPreferences}
+            onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+            onOpenShortcutMenu={handleOpenShortcutMenu}
+            onOpenThemePicker={handleOpenThemePicker}
+            onSSHConnect={handleSSHConnect}
+            sshProfiles={sshProfiles.map((p) => ({
+              id: p.id,
+              name: p.name,
+              host: p.host,
+              username: p.username
+            }))}
+            getShortcutLabel={getShortcutLabel}
+            getProjectShortcutLabel={getProjectShortcutLabel}
+          />
+        </Suspense>
+      )}
 
       <CreateSnapshotModal
         isOpen={isCreateSnapshotModalOpen}
@@ -1711,16 +1715,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateSnapshot={handleCreateSnapshot}
       />
 
-      <Suspense fallback={<ShellSkeleton />}>
-        <CommandHistoryModal
-          isOpen={isCommandHistoryOpen}
-          onClose={() => setIsCommandHistoryOpen(false)}
-          entries={commandHistory}
-          allEntries={allCommandHistory}
-          onSelectCommand={handleInsertCommand}
-          onClearHistory={handleClearCommandHistory}
-        />
-      </Suspense>
+      {isCommandHistoryOpen && (
+        <Suspense fallback={null}>
+          <CommandHistoryModal
+            isOpen={isCommandHistoryOpen}
+            onClose={() => setIsCommandHistoryOpen(false)}
+            entries={commandHistory}
+            allEntries={allCommandHistory}
+            onSelectCommand={handleInsertCommand}
+            onClearHistory={handleClearCommandHistory}
+          />
+        </Suspense>
+      )}
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
