@@ -1851,6 +1851,9 @@ mod tests {
             "acp:tool_call",
             &TestPayload::new("a", "sess-coll", "first"),
         );
+        // Flush so the async durable writer processes the enqueued event
+        // before we assert on `last_seq`.
+        persistence.flush_session("sess-coll").await.unwrap();
         assert_eq!(relay.session_watermark("sess-coll"), 1);
         assert_eq!(persistence.last_seq("sess-coll").unwrap(), 1);
 
@@ -1879,6 +1882,9 @@ mod tests {
             "acp:session_info_update",
             &TestPayload::new("a", "sess-coll", "title-sync"),
         );
+        // Flush so the async durable writer processes the enqueued event
+        // before we assert on `last_seq`.
+        persistence.flush_session("sess-coll").await.unwrap();
         assert_eq!(
             relay.session_watermark("sess-coll"),
             3,
@@ -1922,6 +1928,8 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
         let persistence = SessionPersistence::open(root.join("sessions"))
             .await
             .unwrap();
@@ -1931,7 +1939,7 @@ mod tests {
                 stable_agent_namespace: None,
                 runtime_agent_id: None,
                 project_id: None,
-                cwd: root.join("cwd"),
+                cwd,
                 ..Default::default()
             })
             .await
