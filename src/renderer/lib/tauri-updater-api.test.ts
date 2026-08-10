@@ -1,6 +1,23 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Use vi.hoisted so the mock fns exist when vi.mock factories run (before any
+// import of the module under test).
+const { mockInvoke, mockGetVersion } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  mockGetVersion: vi.fn()
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke
+}))
+
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: mockGetVersion
+}))
 
 import {
+  _resetUpdaterStateForTesting,
+  checkForUpdates,
   compareVersions,
   DEFAULT_UPDATE_CHANNEL,
   getChannelManifestUrl,
@@ -107,5 +124,56 @@ describe('channel URL selection', () => {
   it('defaults the UpdateChannel type to stable', () => {
     const channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL
     expect(channel).toBe('stable')
+  })
+})
+
+describe('fetchChannelManifest via invoke (CSP/CORS-free server-side fetch)', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset()
+    mockGetVersion.mockReset()
+    _resetUpdaterStateForTesting()
+  })
+
+  it('routes the nightly manifest fetch through updater_fetch_channel_manifest', async () => {
+    mockInvoke.mockResolvedValue({
+      success: true,
+      data: {
+        version: '0.9.0',
+        notes: 'nightly build',
+        pub_date: '2026-08-09T00:00:00Z',
+        platforms: {}
+      }
+    })
+    mockGetVersion.mockResolvedValue('0.4.8')
+
+    const update = await checkForUpdates('nightly')
+
+    expect(mockInvoke).toHaveBeenCalledWith('updater_fetch_channel_manifest', {
+      channel: 'nightly'
+    })
+    expect(update).not.toBeNull()
+    expect(update?.version).toBe('0.9.0')
+    expect(update?.releaseNotes).toBe('nightly build')
+    expect(update?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+  })
+
+  it('surfaces an IpcResult error as createUpdaterCheckError naming the manifest URL', async () => {
+    mockInvoke.mockResolvedValue({
+      success: false,
+      error: 'channel manifest returned HTTP 404',
+      code: 'UPDATE_CHECK_FAILED'
+    })
+
+    await expect(checkForUpdates('nightly')).rejects.toThrow(
+      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json: channel manifest returned HTTP 404'
+    )
+  })
+
+  it('surfaces an invoke rejection as createUpdaterCheckError naming the manifest URL', async () => {
+    mockInvoke.mockRejectedValue(new Error('network down'))
+
+    await expect(checkForUpdates('nightly')).rejects.toThrow(
+      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json: network down'
+    )
   })
 })

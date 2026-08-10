@@ -17,6 +17,9 @@ mod secure_storage;
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
 mod shell_paths;
+// Desktop-side channel manifest fetch for the insider/nightly updater path.
+// Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
+mod updater_api;
 mod skills;
 mod ssh;
 mod trackers;
@@ -1614,6 +1617,9 @@ pub fn run() {
             acp::commands::acp_install_agent,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
+            // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
+            // reqwest for the insider/nightly paths).
+            updater_api::updater_fetch_channel_manifest,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,

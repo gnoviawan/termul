@@ -6,6 +6,7 @@ import {
   type UpdateState
 } from '@shared/types/updater.types'
 import { getVersion } from '@tauri-apps/api/app'
+import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
@@ -32,6 +33,9 @@ export type UpdateChannel = 'stable' | 'insider' | 'nightly'
 
 export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'stable'
 
+// The fetch source of truth is `server_update::UpdateChannel::manifest_url()`
+// (src-tauri/src/server_update.rs); this constant is now only the error-message
+// + release-page source. Keep them in sync when editing.
 const CHANNEL_MANIFEST_URLS: Record<UpdateChannel, string> = {
   stable: 'https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json',
   insider: 'https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json',
@@ -370,33 +374,19 @@ interface ChannelManifest {
 }
 
 async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelManifest> {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => {
-    controller.abort()
-  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
-
-  try {
-    const response = await fetch(getChannelManifestUrl(channel), {
-      headers: {
-        Accept: 'application/json'
-      },
-      signal: controller.signal
-    })
-    if (!response.ok) {
-      throw new Error(`Channel manifest returned HTTP ${response.status}`)
-    }
-    const body = (await response.json()) as unknown
-    if (typeof body !== 'object' || body === null) {
-      throw new Error('Channel manifest is not a JSON object')
-    }
-    const manifest = body as ChannelManifest
-    if (manifest.version !== undefined && typeof manifest.version !== 'string') {
-      throw new Error('Channel manifest `version` is not a string')
-    }
-    return manifest
-  } finally {
-    window.clearTimeout(timeoutId)
+  const result = await invoke<IpcResult<unknown>>('updater_fetch_channel_manifest', { channel })
+  if (!result.success) {
+    throw new Error(result.error)
   }
+  const body = result.data
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Channel manifest is not a JSON object')
+  }
+  const manifest = body as ChannelManifest
+  if (manifest.version !== undefined && typeof manifest.version !== 'string') {
+    throw new Error('Channel manifest `version` is not a string')
+  }
+  return manifest
 }
 
 /**
