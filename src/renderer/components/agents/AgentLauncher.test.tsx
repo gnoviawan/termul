@@ -1502,6 +1502,14 @@ describe('AgentLauncher worktree isolation', () => {
       }
     )
     await screen.findByRole('option', { name: /feat\/x/ })
+
+    for (const name of ['Isolation mode', 'Base branch']) {
+      expect(screen.getByRole('combobox', { name })).toHaveClass(
+        'focus-visible:ring-2',
+        'focus-visible:ring-ring',
+        'focus-visible:ring-offset-2'
+      )
+    }
   })
 
   it('renders worktree controls in a separate context strip below the composer', () => {

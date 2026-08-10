@@ -1282,7 +1282,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               >
                 <SelectTrigger
                   aria-label="Isolation mode"
-                  className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
+                  className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
                 >
                   {isolationMode === 'worktree' ? (
                     <FolderGit2 className="size-3.5 shrink-0" />
@@ -1307,7 +1307,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
                     <SelectTrigger
                       aria-label="Base branch"
-                      className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
+                      className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
                     >
                       <GitBranch className="size-3.5 shrink-0" />
                       <SelectValue placeholder="Base branch" />
