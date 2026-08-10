@@ -5,6 +5,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
+import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -591,6 +592,7 @@ export function useProjectsAutoSave(): void {
       // `projects_changed` so connected web clients refetch `GET /projects`.
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
       if (useRemoteStatusStore.getState().status?.running) {
+        const projectSwitched = state.activeProjectId !== prevState.activeProjectId
         syncProjects(
           toProjectSummaries(state.projects, state.activeProjectId),
           state.activeProjectId || null
@@ -598,6 +600,18 @@ export function useProjectsAutoSave(): void {
           .then((result) => {
             if (!result.success) {
               console.warn('[projects] remote sync unsuccessful:', result.error)
+            }
+            // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
+            // project root) reflects the new default, mirror the MCP registry to
+            // the new project's `.termul/mcp-servers.json`. Best-effort +
+            // non-fatal — the action logs failures and never throws, so a
+            // switch still completes even if the sync write fails. Only on a
+            // real project switch (not a projects/groups-only mutation), and
+            // only when the upstream sync succeeded (a failed syncProjects
+            // leaves the backend on the old default — syncing then would write
+            // to the wrong project's file).
+            if (projectSwitched && result.success) {
+              void useAcpStore.getState().syncMcpRegistryToProjectFile()
             }
           })
           .catch((err: unknown) => {

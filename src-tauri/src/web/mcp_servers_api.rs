@@ -9,10 +9,15 @@ use crate::acp::atomic_file;
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 
-const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
-const FILE_NAME: &str = "mcp-servers.json";
+pub(crate) const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
+pub(crate) const FILE_NAME: &str = "mcp-servers.json";
 
-fn registry_path(project_root: &Path) -> PathBuf {
+/// Resolve `{project_root}/.termul/mcp-servers.json`.
+///
+/// Shared by the web `PUT /mcp-servers` handler and the desktop
+/// `remote_sync_mcp_registry` Tauri command so the desktop→project-file sync
+/// writes the exact file the web route reads (CAP-7 — registry sync gap).
+pub(crate) fn registry_path(project_root: &Path) -> PathBuf {
     project_root.join(".termul").join(FILE_NAME)
 }
 

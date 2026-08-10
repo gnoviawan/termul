@@ -1630,6 +1630,7 @@ pub fn run() {
             commands::remote_sync_projects,
             commands::set_host_default_project,
             commands::remote_sync_chat_history,
+            commands::remote_sync_mcp_registry,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,
