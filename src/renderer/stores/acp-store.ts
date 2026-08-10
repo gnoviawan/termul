@@ -3260,13 +3260,32 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (pending.modelId) {
       const hasNative =
         session.models?.availableModels.some((m) => m.modelId === pending.modelId) ?? false
+      let applied = false
       if (hasNative) {
         await get().setModel(sessionId, pending.modelId)
+        applied = true
+      } else if (session.models) {
+        try {
+          await get().setModel(sessionId, pending.modelId)
+          applied = true
+        } catch {
+          const modelOpt = session.configOptions.find((o) => o.category === 'model')
+          if (modelOpt) {
+            await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+            applied = true
+          }
+        }
       } else {
         const modelOpt = session.configOptions.find((o) => o.category === 'model')
         if (modelOpt) {
           await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+          applied = true
         }
+      }
+      if (!applied) {
+        toast.error('Selected model is not available in this session', {
+          description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
+        })
       }
     }
     for (const [configId, valueId] of Object.entries(pending.configValues)) {
