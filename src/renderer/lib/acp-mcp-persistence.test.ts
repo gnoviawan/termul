@@ -7,8 +7,15 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: vi.fn(() => true) }))
 vi.mock('@/lib/web-server-api', () => ({
   webServerMcpServers: { get: vi.fn(), put: vi.fn() }
 }))
+vi.mock('@/lib/tauri-remote-api', () => ({
+  syncMcpRegistryToProject: vi.fn()
+}))
+vi.mock('./log-api', () => ({
+  logFrontendError: vi.fn().mockResolvedValue(undefined)
+}))
 
 import { persistenceApi } from '@/lib/api'
+import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpServers } from '@/lib/web-server-api'
 import {
@@ -22,6 +29,7 @@ import {
   transportOf,
   validateMcpServer
 } from './acp-mcp-persistence'
+import { logFrontendError } from './log-api'
 
 const registry: StoredMcpServer[] = [
   { id: 'stdio', type: 'stdio', name: 'Files', command: 'npx', enabled: true },
@@ -149,5 +157,70 @@ describe('registry persistence parity', () => {
       error: 'offline'
     })
     await expect(loadMcpServers()).rejects.toThrow('offline')
+  })
+})
+
+describe('desktop → project-file sync (CAP-7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    vi.mocked(persistenceApi.write).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(syncMcpRegistryToProject).mockResolvedValue({ success: true })
+  })
+
+  it('calls syncMcpRegistryToProject after the app-store write succeeds on desktop', async () => {
+    await saveMcpServers(registry)
+
+    // The app-store write must happen first (the source of truth).
+    expect(persistenceApi.write).toHaveBeenCalledWith(ACP_MCP_KEY, registry)
+    // Then the best-effort mirror to the project file (CAP-7), with the same
+    // normalized registry.
+    expect(syncMcpRegistryToProject).toHaveBeenCalledTimes(1)
+    expect(syncMcpRegistryToProject).toHaveBeenCalledWith(registry)
+  })
+
+  it('does not call syncMcpRegistryToProject on the web path', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    vi.mocked(webServerMcpServers.put).mockResolvedValue({ success: true, data: undefined })
+
+    await saveMcpServers(registry)
+
+    expect(webServerMcpServers.put).toHaveBeenCalledWith(registry)
+    expect(syncMcpRegistryToProject).not.toHaveBeenCalled()
+  })
+
+  it('logs and does not throw when the sync fails (non-fatal)', async () => {
+    vi.mocked(syncMcpRegistryToProject).mockResolvedValue({
+      success: false,
+      error: 'write failed',
+      code: 'MCP_REGISTRY_WRITE_ERROR'
+    })
+
+    // The app-store save must still succeed — sync is non-fatal.
+    await expect(saveMcpServers(registry)).resolves.toBeUndefined()
+    expect(persistenceApi.write).toHaveBeenCalledTimes(1)
+    expect(syncMcpRegistryToProject).toHaveBeenCalledTimes(1)
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'acp-mcp-persistence.syncMcpRegistryToProject',
+        message: expect.stringContaining('MCP registry project-file sync failed')
+      })
+    )
+  })
+
+  it('does not call sync when the app-store write fails (throws before sync)', async () => {
+    vi.mocked(persistenceApi.write).mockResolvedValue({
+      success: false,
+      error: 'disk full',
+      code: 'WRITE_ERROR'
+    })
+
+    await expect(saveMcpServers(registry)).rejects.toThrow('disk full')
+    expect(persistenceApi.write).toHaveBeenCalledTimes(1)
+    // The sync must NOT run when the source-of-truth write failed — the
+    // app-store is the canonical store, so mirroring a failed write would
+    // desync the project file from what the app store actually holds.
+    expect(syncMcpRegistryToProject).not.toHaveBeenCalled()
   })
 })

@@ -50,7 +50,8 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
   return {
     ...actual,
     loadMcpServers: vi.fn(async () => []),
-    saveMcpServers: vi.fn(async () => {})
+    saveMcpServers: vi.fn(async () => {}),
+    syncMcpRegistryToProjectBestEffort: vi.fn(async () => {})
   }
 })
 
@@ -4394,6 +4395,26 @@ describe('acp-store', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'm2' }),
         expect.objectContaining({ id: 'm3' })
+      ])
+    )
+  })
+
+  it('syncMcpRegistryToProjectFile mirrors the current registry to the project file (CAP-7)', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.syncMcpRegistryToProjectBestEffort).mockClear()
+    useAcpStore.setState({
+      mcpServers: [
+        { id: 'm1', type: 'stdio', name: 'fs', command: 'npx', enabled: true },
+        { id: 'm2', type: 'http', name: 'api', url: 'https://x.test/mcp', enabled: true }
+      ],
+      mcpServersLoaded: true
+    })
+    await useAcpStore.getState().syncMcpRegistryToProjectFile()
+    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'm1' }),
+        expect.objectContaining({ id: 'm2' })
       ])
     )
   })
