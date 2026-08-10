@@ -39,6 +39,7 @@ import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
 import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { filterWorktrees } from '@/lib/worktree-filter'
 import { groupWorktrees } from '@/lib/worktree-grouping'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
@@ -612,7 +613,7 @@ export function ProjectSidebar({
                 const existing = existingByPath.get(wt.path)
                 return (
                   existing ?? {
-                    id: crypto.randomUUID(),
+                    id: randomUUID(),
                     name: wt.name,
                     branch: wt.branch,
                     path: wt.path,

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { clearChatRoute } from '@/lib/router-navigate'
+import { randomUUID } from '@/lib/uuid'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
@@ -75,7 +76,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   ): Project => {
     const prev = get().activeProjectId
     const newProject: Project = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name,
       color,
       path,
@@ -187,7 +188,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // Group Actions Implementation
   addGroup: (name: string): string => {
-    const id = crypto.randomUUID()
+    const id = randomUUID()
     const newGroup: ProjectGroup = {
       id,
       name,

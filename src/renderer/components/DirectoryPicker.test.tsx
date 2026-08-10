@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockFetch, mockIsTauriContext, registeredPicker } = vi.hoisted(() => ({
+const { mockFetch, mockIsTauriContext, mockListCatalog, registeredPicker } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
   mockIsTauriContext: vi.fn(),
+  // CAP-3: the picker resolves its initial path from the host OS via the
+  // catalog facade. Mocked here (not via fetch) so the browse fetch mocks
+  // below remain the sole source of /fs/browse responses.
+  mockListCatalog: vi.fn(),
   // Captured by the dialog-api mock when DirectoryPicker mounts; the test
   // invokes it the same way `dialogApi.selectDirectory()` would in web mode.
   registeredPicker: { current: null as null | (() => Promise<unknown>) }
@@ -11,6 +15,14 @@ const { mockFetch, mockIsTauriContext, registeredPicker } = vi.hoisted(() => ({
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
+}))
+
+vi.mock('@/lib/acp-catalog-api', () => ({
+  acpCatalogApi: {
+    listCatalog: mockListCatalog,
+    setCatalogOptIn: vi.fn(),
+    isCatalogOptedIn: vi.fn()
+  }
 }))
 
 vi.mock('@/lib/dialog-api', () => ({
@@ -67,17 +79,41 @@ function openPicker(): Promise<unknown> {
 }
 
 describe('DirectoryPicker', () => {
+  let originalPlatformDesc: PropertyDescriptor | undefined
+
   beforeEach(() => {
     vi.clearAllMocks()
     registeredPicker.current = null
     mockIsTauriContext.mockReturnValue(false)
     mockFetch.mockReset()
     vi.stubGlobal('fetch', mockFetch)
+    // Default catalog: a Linux host. Tests that need a different host OS or a
+    // catalog failure override with mockResolvedValueOnce.
+    mockListCatalog.mockResolvedValue({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: true, uvx: false, node: true, bun: false, python3: false }
+        },
+        agents: []
+      }
+    })
+    // Save navigator.platform so a CAP-3 test can stub it to 'Win32' and the
+    // afterEach restores it (jsdom's value differs per CI host).
+    originalPlatformDesc = Object.getOwnPropertyDescriptor(navigator, 'platform')
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
     registeredPicker.current = null
+    if (originalPlatformDesc) {
+      Object.defineProperty(navigator, 'platform', originalPlatformDesc)
+    } else {
+      // @ts-expect-error removing the own prop we added; restores prototype lookup
+      delete navigator.platform
+    }
   })
 
   it('does not register a picker in Tauri (desktop) context', async () => {
@@ -278,10 +314,11 @@ describe('DirectoryPicker', () => {
 
       const promise = openPicker()
 
-      // The initial browse targeted a NON-empty path (the host root), NOT
-      // the empty query string the pre-Patch-A default produced. The path is
-      // platform-dependent (`C:\` on Win32 jsdom, `/` on Linux jsdom) —
-      // either way it must NOT be empty.
+      // CAP-3: the opener awaits the host-OS catalog before browsing, so the
+      // browse fetch lands on a later microtask. Wait for it, then assert the
+      // initial browse targeted a NON-empty path (the host root from the
+      // catalog), NOT the empty query string the pre-Patch-A default produced.
+      await waitFor(() => expect(mockFetch).toHaveBeenCalled())
       const firstCall = String(mockFetch.mock.calls[0]?.[0] ?? '')
       expect(firstCall).toMatch(/\/fs\/browse\?path=/)
       // The path query param is non-empty (the encoded value is not "").
@@ -324,6 +361,126 @@ describe('DirectoryPicker', () => {
         error: 'No directory selected',
         code: 'CANCELLED'
       })
+    })
+  })
+
+  describe('host-OS initial path resolution (CAP-3 / GH-589)', () => {
+    /** Stub navigator.platform so the browser reports Windows (POSIX CI default is Linux). */
+    function stubPlatformWin32(): void {
+      Object.defineProperty(navigator, 'platform', {
+        value: 'Win32',
+        configurable: true
+      })
+    }
+
+    it('opens at / when the catalog reports a Linux host, even on a Windows browser', async () => {
+      // Windows browser — navigator.platform says Win, but the host is Linux.
+      stubPlatformWin32()
+      expect(navigator.platform).toBe('Win32')
+      // Catalog (the host-OS source of truth) reports Linux.
+      mockListCatalog.mockResolvedValueOnce({
+        success: true,
+        data: {
+          host: {
+            os: 'linux',
+            arch: 'x86_64',
+            runtimes: { npx: true, uvx: false, node: true, bun: false, python3: false }
+          },
+          agents: []
+        }
+      })
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ success: true, data: [dirEntry('home', '/home')] })
+      )
+
+      render(<DirectoryPicker />)
+      await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+
+      const promise = openPicker()
+
+      // Entries render — the browse succeeded against the Linux root.
+      await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument())
+
+      // The browse targeted '/', NOT 'C:\' — the catalog (host OS) is the
+      // source of truth, not the client browser's navigator.platform.
+      const firstCall = String(mockFetch.mock.calls[0]?.[0] ?? '')
+      expect(firstCall).toContain('/fs/browse?path=')
+      expect(firstCall).toContain(encodeURIComponent('/'))
+      // 'C:' must NOT appear in the encoded query (would mean the Windows
+      // platform fallback was used instead of the catalog).
+      expect(firstCall).not.toMatch(/C%3A|C:\\/i)
+
+      fireEvent.click(screen.getByText('Cancel'))
+      await promise
+    })
+
+    it('opens at C:\\ when the catalog reports a Windows host', async () => {
+      mockListCatalog.mockResolvedValueOnce({
+        success: true,
+        data: {
+          host: {
+            os: 'windows',
+            arch: 'x86_64',
+            runtimes: { npx: true, uvx: false, node: true, bun: false, python3: false }
+          },
+          agents: []
+        }
+      })
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [dirEntry('Users', 'C:/Users')]
+        })
+      )
+
+      render(<DirectoryPicker />)
+      await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+
+      const promise = openPicker()
+
+      await waitFor(() => expect(screen.getByText('Users')).toBeInTheDocument())
+
+      // The browse targeted the Windows drive root 'C:\'.
+      const firstCall = String(mockFetch.mock.calls[0]?.[0] ?? '')
+      expect(firstCall).toContain('/fs/browse?path=')
+      // The encoded path is 'C:\' (encoded as 'C%3A%5C' or 'C%3A\\').
+      expect(firstCall.toLowerCase()).toContain('c%3a')
+
+      fireEvent.click(screen.getByText('Cancel'))
+      await promise
+    })
+
+    it('falls back to navigator.platform when the catalog is unavailable (picker still opens)', async () => {
+      // Catalog fails — the picker must still open (graceful degrade).
+      mockListCatalog.mockResolvedValueOnce({
+        success: false,
+        error: 'catalog unavailable',
+        code: 'ACP_CATALOG_UNAVAILABLE'
+      })
+      // Windows platform fallback → 'C:\'.
+      stubPlatformWin32()
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [dirEntry('Users', 'C:/Users')]
+        })
+      )
+
+      render(<DirectoryPicker />)
+      await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+
+      const promise = openPicker()
+
+      await waitFor(() => expect(screen.getByText('Users')).toBeInTheDocument())
+
+      // The browse used the navigator.platform fallback ('C:\' on Windows),
+      // NOT '/' — proves the degrade path still seeds a non-empty root.
+      const firstCall = String(mockFetch.mock.calls[0]?.[0] ?? '')
+      expect(firstCall).toContain('/fs/browse?path=')
+      expect(firstCall.toLowerCase()).toContain('c%3a')
+
+      fireEvent.click(screen.getByText('Cancel'))
+      await promise
     })
   })
 

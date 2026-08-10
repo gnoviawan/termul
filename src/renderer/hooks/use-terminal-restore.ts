@@ -9,6 +9,7 @@ import {
   beginProjectContinuityCorrelation,
   recordTerminalContinuityEvent as emitTerminalContinuityEvent
 } from '@/lib/terminal-continuity-instrumentation'
+import { randomUUID } from '@/lib/uuid'
 import { isVisibleReady } from '@/lib/visibility-signal'
 import { ensureWorktreeSymlinks, getDefaultCwdForProject } from '@/lib/worktree-context'
 import type { Terminal as TerminalRecord } from '@/types/project'
@@ -289,7 +290,7 @@ export function useTerminalRestore(): void {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityRetry intentionally retriggers restore attempts
   useEffect(() => {
-    const callId = crypto.randomUUID().slice(0, 7)
+    const callId = randomUUID().slice(0, 7)
     RESTORE_CALL_STACK.push(callId)
 
     debugLog('useTerminalRestore', `EFFECT RUN [callId: ${callId}]`, {
@@ -781,7 +782,7 @@ async function restoreFromLayout(
   layout: PersistedTerminalLayout,
   isCancelled: () => boolean
 ): Promise<RestoreExecutionResult> {
-  const restoreId = `restore-${crypto.randomUUID().slice(0, 5)}`
+  const restoreId = `restore-${randomUUID().slice(0, 5)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(restoreId)) {
@@ -858,7 +859,7 @@ async function restoreFromLayout(
         return { status: 'cancelled', path: 'persisted-replay' }
       }
 
-      const terminalCallId = `${restoreId}-${persistedTerminal.name}-${crypto.randomUUID().slice(0, 3)}`
+      const terminalCallId = `${restoreId}-${persistedTerminal.name}-${randomUUID().slice(0, 3)}`
       SPAWN_TRACKER.set(terminalCallId, (SPAWN_TRACKER.get(terminalCallId) || 0) + 1)
       let spawnTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -869,7 +870,7 @@ async function restoreFromLayout(
         spawnCount: SPAWN_TRACKER.get(terminalCallId)
       })
 
-      const newId = crypto.randomUUID()
+      const newId = randomUUID()
       TERMINALS_PENDING_PTY_ASSIGNMENT.add(newId)
 
       try {
@@ -1092,7 +1093,7 @@ async function createDefaultTerminal(
   projectId: string,
   isCancelled: () => boolean
 ): Promise<RestoreExecutionResult> {
-  const defaultId = `default-${crypto.randomUUID().slice(0, 5)}`
+  const defaultId = `default-${randomUUID().slice(0, 5)}`
 
   // FIX #2: Use proper lock acquire/release with owner tracking
   if (!acquireGlobalSpawnLock(defaultId)) {

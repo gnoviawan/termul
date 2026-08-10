@@ -9,6 +9,7 @@ import {
   writeBytesToTempFile
 } from '@/lib/composer-attachments-io'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import {
   basename,
   guessMimeType,
@@ -22,7 +23,7 @@ import {
 import type { MentionMatch } from './mention-menu-model'
 
 function attachmentId(): string {
-  return `att-${crypto.randomUUID()}`
+  return `att-${randomUUID()}`
 }
 
 /** Read a browser image File into an inline base64 `image` attachment. */

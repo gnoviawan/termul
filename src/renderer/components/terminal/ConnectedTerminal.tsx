@@ -657,7 +657,18 @@ function ConnectedTerminalComponent({
             return true
 
           case 'v':
-            // Paste: read clipboard and paste to terminal
+            // Paste: read clipboard and paste to terminal. In a non-secure
+            // context (HTTP+bare-IP — GH-588), `navigator.clipboard` is
+            // undefined and the facade's paste-event fallback can't fire
+            // because preventDefault() here would suppress the very paste
+            // event it waits on. Degrade to xterm's native paste (the browser
+            // paste event on xterm's helper textarea) in that case; the
+            // secure-context path keeps the bracketed + sanitized paste via
+            // the facade (pasteFromClipboard).
+            if (typeof navigator !== 'undefined' && typeof navigator.clipboard === 'undefined') {
+              lastClipboardOpRef.current = now
+              return true
+            }
             event.preventDefault()
             lastClipboardOpRef.current = now
             // Use the hook's pasteFromClipboard for consistency
@@ -1590,6 +1601,17 @@ function ConnectedTerminalComponent({
             }
             return true
           case 'v':
+            // F1: same non-secure-context guard as the primary handler — in a
+            // non-secure context (HTTP+bare-IP — GH-588), `navigator.clipboard`
+            // is undefined and the facade's paste-event fallback can't fire
+            // because preventDefault() here would suppress the very paste event
+            // it waits on. Degrade to xterm's native paste (the browser paste
+            // event on xterm's helper textarea); the secure-context path keeps
+            // the bracketed + sanitized paste via the facade (pasteFromClipboard).
+            if (typeof navigator !== 'undefined' && typeof navigator.clipboard === 'undefined') {
+              lastClipboardOpRef.current = now
+              return true
+            }
             event.preventDefault()
             lastClipboardOpRef.current = now
             void pasteFromClipboardRef.current()

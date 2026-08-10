@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { randomUUID } from '@/lib/uuid'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -224,7 +225,7 @@ function normalizePaneTree(root: PaneNode): PaneNode {
 
   return {
     type: 'leaf',
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     tabs: [],
     activeTabId: null
   }

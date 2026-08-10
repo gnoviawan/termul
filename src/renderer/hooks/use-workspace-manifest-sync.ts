@@ -35,6 +35,7 @@ import type {
 import { useEffect } from 'react'
 import { isTerminalRestoreInProgress } from '@/hooks/useTerminalAutoSave'
 import { logFrontendError } from '@/lib/log-api'
+import { randomUUID } from '@/lib/uuid'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -59,24 +60,18 @@ const MANIFEST_WRITE_DEBOUNCE_MS = 500
 let updateIdentityCache: string | null = null
 function getUpdateIdentity(): string {
   if (updateIdentityCache === null) {
-    updateIdentityCache = `renderer-${crypto.randomUUID()}`
+    updateIdentityCache = `renderer-${randomUUID()}`
   }
   return updateIdentityCache
 }
 
 /**
- * Generate a leaf id without relying on `crypto.randomUUID()` (undefined in
- * non-HTTPS web mode, e.g. an `http://` dev preview).
+ * Generate a leaf id. Delegates to the safe-uuid helper (CAP-1) so a non-secure
+ * web context (`crypto.randomUUID` undefined) still produces a valid RFC-4122
+ * v4 id rather than a bespoke fallback shape.
  */
 function generateLeafId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  // Fallback for non-HTTPS contexts where crypto.randomUUID is undefined.
-  // crypto.getRandomValues is available in all browser contexts (HTTP + HTTPS).
-  const bytes = new Uint8Array(8)
-  crypto.getRandomValues(bytes)
-  return `leaf-${Date.now()}-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
+  return randomUUID()
 }
 
 function collectLeafIds(node: PaneNode): string[] {

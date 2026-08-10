@@ -64,6 +64,7 @@ import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1021,7 +1022,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleNewBrowserTab = useCallback((paneId?: string) => {
     const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
     if (resolvedPaneId) {
-      const browserTabId = crypto.randomUUID()
+      const browserTabId = randomUUID()
       useBrowserSessionStore.getState().createTab(browserTabId)
       useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId)
     }
@@ -1049,7 +1050,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (resolvedPaneId && activeProject?.path) {
         useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
           type: 'git',
-          id: `git-${crypto.randomUUID()}`,
+          id: `git-${randomUUID()}`,
           cwd: activeProject.path
         })
       }
@@ -1075,7 +1076,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (!resolvedCwd) return
       useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
         type: 'git-history',
-        id: `git-history-${crypto.randomUUID()}`,
+        id: `git-history-${randomUUID()}`,
         cwd: resolvedCwd
       })
     },

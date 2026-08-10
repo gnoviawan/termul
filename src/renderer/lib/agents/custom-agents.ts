@@ -16,6 +16,7 @@ import {
   type TerminalAgentDefinition
 } from '@/lib/agents/agent-registry'
 import { persistenceApi } from '@/lib/api'
+import { randomUUID } from '@/lib/uuid'
 
 let customAgentsById = new Map<string, TerminalAgentDefinition>()
 let customAgentsCacheVersion = 0
@@ -90,7 +91,7 @@ export function validateCustomAgent(input: CustomAgentInput): string | null {
 /** Normalize a validated input into a stored `TerminalAgentDefinition`. */
 export function toAgentDefinition(input: CustomAgentInput): TerminalAgentDefinition {
   return {
-    id: input.id ?? `custom-${crypto.randomUUID().slice(0, 8)}`,
+    id: input.id ?? `custom-${randomUUID().slice(0, 8)}`,
     name: input.name.trim(),
     command: input.command.trim(),
     baseArgs: input.baseArgs ?? [],

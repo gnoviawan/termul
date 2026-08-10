@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
+import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
 
 type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
@@ -137,7 +138,7 @@ export function McpServersSettings(): React.JSX.Element {
     }
     const batch = parsedServers.map((parsed) => ({
       ...parsed,
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       enabled: true
     }))
     try {

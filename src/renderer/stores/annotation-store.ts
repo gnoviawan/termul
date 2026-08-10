@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { randomUUID } from '@/lib/uuid'
 
 export type AnnotationType = 'note' | 'region' | 'element'
 export type Intent = 'fix' | 'change' | 'question' | 'approve'
@@ -234,7 +235,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   selectedAnnotationIdByUrl: new Map(),
 
   addAnnotation: (annotationData) => {
-    const id = crypto.randomUUID()
+    const id = randomUUID()
     const now = Date.now()
     const sanitizedAnnotationData = sanitizeAnnotationData(annotationData)
     const annotation: Annotation = {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { navigateToChatSession } from '@/lib/router-navigate'
+import { randomUUID } from '@/lib/uuid'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type {
   DropPosition,
@@ -64,7 +65,7 @@ export function findPaneContainingTab(root: PaneNode, tabId: string): LeafNode |
 }
 
 function generateId(): string {
-  return crypto.randomUUID()
+  return randomUUID()
 }
 
 function createLeaf(tabs: WorkspaceTab[] = [], activeTabId: string | null = null): LeafNode {

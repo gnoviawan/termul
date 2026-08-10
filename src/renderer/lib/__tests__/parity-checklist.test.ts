@@ -900,4 +900,107 @@ describe('Parity Checklist Automation', () => {
       expect(content).not.toMatch(/localStorage(?:\.|\[)/)
     })
   })
+
+  // GH-587/588/589: Web non-secure-context + cross-OS parity. The shared
+  // `dist-web` bundle is served by `termul-server` over plain HTTP on a bare
+  // IP, where `crypto.randomUUID` / `navigator.clipboard` are unavailable and
+  // `navigator.platform` reflects the client browser, not the host. These
+  // static assertions pin the three fallback seams so a regression (re-adding a
+  // direct `crypto.randomUUID()` / `navigator.clipboard.readText()` call, or
+  // re-pinning the picker's initial path to `navigator.platform`) surfaces
+  // here. The runtime behavior of each fallback is pinned by its colocated
+  // unit test (uuid.test.ts, clipboard-api.web.test.ts, DirectoryPicker.test.tsx).
+  describe('Web non-secure-context + cross-OS parity (GH-587/588/589)', () => {
+    const UuidHelper = join(LIB_DIR, 'uuid.ts')
+    const ClipboardFacade = join(LIB_DIR, 'clipboard-api.ts')
+    const DirectoryPicker = join(LIB_DIR, '..', 'components', 'DirectoryPicker.tsx')
+    const AcpTransport = join(LIB_DIR, 'acp-transport.ts')
+
+    it('CAP-1: lib/uuid.ts exists and exports the safe-uuid helper', () => {
+      expect(existsSync(UuidHelper), 'lib/uuid.ts should exist').toBe(true)
+      const content = readFileSync(UuidHelper, 'utf-8')
+      expect(content).toMatch(/export\s+function\s+\brandomUUID\b/)
+    })
+
+    it('CAP-1: uuid helper uses native crypto.randomUUID when present, else a getRandomValues fallback', () => {
+      const content = readFileSync(UuidHelper, 'utf-8')
+      // Prefers the native API when available (secure context).
+      expect(content).toMatch(/crypto\.randomUUID/)
+      // Falls back to the CSPRNG available in ALL browser contexts (HTTP+HTTPS).
+      expect(content).toMatch(/getRandomValues/)
+      // Sets the RFC-4122 v4 version + variant bits so server-side id matching
+      // (turn:<uuid>, WS frame ids) stays valid — NOT a Math.random() call.
+      expect(content).toMatch(/0x40/)
+      expect(content).toMatch(/0x80/)
+      expect(content).not.toMatch(/Math\.random\s*\(/)
+    })
+
+    it('CAP-1: acp-transport.ts no longer calls crypto.randomUUID directly (uses the helper)', () => {
+      expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
+      const content = readFileSync(AcpTransport, 'utf-8')
+      // The helper import must be present.
+      expect(content).toMatch(/from\s+['"]@\/lib\/uuid['"]/)
+      // No direct crypto.randomUUID() call remains in the transport hot path.
+      expect(content).not.toMatch(/crypto\.randomUUID\(\)/)
+    })
+
+    it('CAP-2: clipboard-api.ts browser path has a non-navigator.clipboard fallback', () => {
+      expect(existsSync(ClipboardFacade), 'clipboard-api.ts should exist').toBe(true)
+      const content = readFileSync(ClipboardFacade, 'utf-8')
+      // Structured logging for the fallback trigger (not raw console.*).
+      expect(content).toMatch(/logFrontendError/)
+      // readText fallback: a document-level paste-event capture.
+      expect(content).toMatch(/['"]paste['"]/)
+      expect(content).toMatch(/clipboardData/)
+      // writeText fallback: a hidden textarea + the legacy synchronous copy.
+      expect(content).toMatch(/createElement\(['"]textarea['"]\)/)
+      expect(content).toMatch(/execCommand\(['"]copy['"]\)/)
+      // The desktop tauriClipboardApi path is preserved (facade boundary).
+      expect(content).toMatch(/tauriClipboardApi/)
+      expect(content).toMatch(/isTauriContext\(\)/)
+    })
+
+    it('CAP-2: ConnectedTerminal Ctrl+V degrades to native xterm paste when navigator.clipboard is undefined', () => {
+      // In a non-secure context the facade's paste-event fallback can't fire
+      // for the terminal Ctrl+V — the keydown handler would preventDefault the
+      // very paste event it waits on. The handler must detect the missing Async
+      // Clipboard API and let xterm handle the key natively (return true) so the
+      // browser paste event reaches xterm's helper textarea. The secure-context
+      // path keeps the bracketed + sanitized paste via pasteFromClipboard.
+      const ConnectedTerminal = join(
+        LIB_DIR,
+        '..',
+        'components',
+        'terminal',
+        'ConnectedTerminal.tsx'
+      )
+      expect(existsSync(ConnectedTerminal), 'ConnectedTerminal.tsx should exist').toBe(true)
+      const content = readFileSync(ConnectedTerminal, 'utf-8')
+      expect(content).toMatch(/case ['"]v['"]/)
+      // Pins the non-secure branch exists (specific to the degrade path); the
+      // bare `return true` check was too coarse (matched any return in the file).
+      expect(content).toMatch(/typeof navigator\.clipboard === ['"]undefined['"]/)
+    })
+
+    it('CAP-3: DirectoryPicker sources the initial path from the host catalog (acpCatalogApi.listCatalog), not navigator.platform', () => {
+      expect(existsSync(DirectoryPicker), 'DirectoryPicker.tsx should exist').toBe(true)
+      const content = readFileSync(DirectoryPicker, 'utf-8')
+      // Imports the catalog facade (host-OS source of truth).
+      expect(content).toMatch(/from\s+['"]@\/lib\/acp-catalog-api['"]/)
+      expect(content).toMatch(/acpCatalogApi/)
+      // Resolves the initial path by awaiting listCatalog() and reading host.os.
+      expect(content).toMatch(/listCatalog\(\)/)
+      expect(content).toMatch(/host\.os|host\?\.os/)
+      // Maps the known host OS values to filesystem roots.
+      expect(content).toMatch(/['"]windows['"]/)
+      expect(content).toMatch(/['"]linux['"]/)
+      expect(content).toMatch(/C:\\\\/)
+      // The navigator.platform fallback is preserved ONLY for the
+      // catalog-unavailable degrade path (picker never fails to open).
+      expect(content).toMatch(/navigator\.platform/)
+      // The module-level INITIAL_PATH const that sourced from navigator.platform
+      // at import-time is gone (replaced by an async resolveInitialPath).
+      expect(content).not.toMatch(/const\s+INITIAL_PATH\s*=/)
+    })
+  })
 })

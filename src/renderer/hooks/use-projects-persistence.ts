@@ -3,6 +3,7 @@ import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
+import { randomUUID } from '@/lib/uuid'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { useAcpStore } from '@/stores/acp-store'
@@ -329,7 +330,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
     if (!storedByPath.has(gitWt.path)) {
       const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
       updatedWorktrees.push({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: gitWt.name,
         branch: gitWt.branch,
         path: gitWt.path,

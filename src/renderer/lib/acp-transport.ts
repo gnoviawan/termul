@@ -53,6 +53,7 @@ import type {
 } from '@/lib/acp-api'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
@@ -877,7 +878,7 @@ export class WsAcpTransport implements AcpTransport {
     // block differences (issue: the echo rendered a second user bubble because
     // the optimistic id (`newId('msg')`) never matched the echo's `turn:<uuid>`).
     // Fall back to a fresh UUID for callers that omit it (backward-compat / tests).
-    const id = turnId ?? crypto.randomUUID()
+    const id = turnId ?? randomUUID()
     return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId: id })
   }
 
@@ -888,7 +889,7 @@ export class WsAcpTransport implements AcpTransport {
     turnId?: string
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId)
-    const id = turnId ?? crypto.randomUUID()
+    const id = turnId ?? randomUUID()
     return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId: id })
   }
 
@@ -1384,7 +1385,7 @@ export class WsAcpTransport implements AcpTransport {
   /** Send a request assuming the socket is already OPEN (used during auth handshake). */
   private sendWhenOpen<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const id = crypto.randomUUID()
+      const id = randomUUID()
       const frame: WsRequest = { id, type, payload }
       const payloadRecord =
         payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null
