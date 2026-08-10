@@ -49,7 +49,7 @@ function firstNumber(obj: Record<string, unknown> | null, keys: string[]): numbe
   return undefined
 }
 
-const PATH_KEYS = [
+export const PATH_KEYS = [
   'path',
   'filePath',
   'file_path',

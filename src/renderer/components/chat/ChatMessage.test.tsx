@@ -278,22 +278,32 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.animate-caret-blink')).toBeInTheDocument()
   })
 
-  it('opens file citations only on Ctrl/Cmd-click', async () => {
+  it('opens file citations on regular click (no Ctrl/Cmd gate)', async () => {
     const message: ChatMessageType = {
       ...agentMessage(false),
       blocks: [{ type: 'text', text: 'FILE_PATH:src/renderer/App.tsx:42' }]
     }
     render(<ChatMessage message={message} filePathContext={{ cwd: '/project' }} />)
 
-    const filePathLink = screen.getByTitle('Ctrl/Cmd-click to open in editor')
+    const filePathLink = screen.getByTitle('Open in editor')
     fireEvent.click(filePathLink)
-    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
-
-    fireEvent.click(filePathLink, { ctrlKey: true })
     await act(async () => undefined)
     expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx:42', {
       cwd: '/project'
     })
+  })
+
+  it('does not open file citations on shift-click (allow text selection)', async () => {
+    const message: ChatMessageType = {
+      ...agentMessage(false),
+      blocks: [{ type: 'text', text: 'FILE_PATH:src/renderer/App.tsx:42' }]
+    }
+    render(<ChatMessage message={message} filePathContext={{ cwd: '/project' }} />)
+
+    const filePathLink = screen.getByTitle('Open in editor')
+    fireEvent.click(filePathLink, { shiftKey: true })
+    await act(async () => undefined)
+    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {

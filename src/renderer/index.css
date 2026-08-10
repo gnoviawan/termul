@@ -764,6 +764,14 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
+  /* Streamdown code-block action buttons: pin to 24px so the size="sm"
+     IconActionButton stays compact even when streamdown's own CSS sizes
+     the action slot. Mirrors the table-toolbar override below. */
+  .chat-streamdown [data-streamdown="code-block-actions"] button {
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+  }
 
   /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
   .chat-streamdown [data-streamdown="table-toolbar"] .relative {

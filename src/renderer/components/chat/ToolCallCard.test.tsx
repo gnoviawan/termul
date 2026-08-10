@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -11,6 +11,14 @@ vi.mock('framer-motion', async () => {
   }
 })
 
+const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
+
+vi.mock('@/lib/file-path-links', () => ({
+  openFilePathFromTerminal: (...args: unknown[]) => openFilePathFromTerminal(...args)
+}))
+
+import { TooltipProvider } from '@/components/ui/tooltip'
+
 function toolCall(status: ToolCallStatus, content: ToolCall['content'] = []): ToolCall {
   return {
     toolCallId: 'tool-1',
@@ -19,6 +27,10 @@ function toolCall(status: ToolCallStatus, content: ToolCall['content'] = []): To
     status,
     content
   }
+}
+
+function withTooltip(ui: React.JSX.Element): React.JSX.Element {
+  return <TooltipProvider>{ui}</TooltipProvider>
 }
 
 describe('ToolCallCard', () => {
@@ -178,5 +190,83 @@ describe('ToolCallCard', () => {
     expect(screen.queryByText('content')).not.toBeInTheDocument()
     const detail = container.querySelector('[class*="border-l"]')
     expect(detail).toBeEmptyDOMElement()
+  })
+
+  describe('open file action', () => {
+    beforeEach(() => {
+      openFilePathFromTerminal.mockClear()
+    })
+
+    it('renders an "Open file" button when rawInput has a path and filePathContext is set', () => {
+      const call: ToolCall = {
+        ...toolCall('completed'),
+        rawInput: { path: 'src/foo.ts' }
+      }
+      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />))
+
+      expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument()
+    })
+
+    it('does not render an "Open file" button when no path is present in rawInput', () => {
+      const call: ToolCall = {
+        ...toolCall('completed'),
+        rawInput: { query: 'foo' },
+        kind: 'search'
+      }
+      const { container } = render(
+        withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />)
+      )
+
+      expect(screen.queryByRole('button', { name: 'Open file' })).not.toBeInTheDocument()
+      // Only the disclosure button (when hasDetail) — here there is no
+      // content/resultText so no disclosure button either.
+      expect(container.querySelector('button')).toBeNull()
+    })
+
+    it('does not render an "Open file" button when filePathContext is absent', () => {
+      const call: ToolCall = {
+        ...toolCall('completed'),
+        rawInput: { path: 'src/foo.ts' }
+      }
+      render(<ToolCallCard toolCall={call} />)
+
+      expect(screen.queryByRole('button', { name: 'Open file' })).not.toBeInTheDocument()
+    })
+
+    it('calls openFilePathFromTerminal when the "Open file" button is clicked', () => {
+      const call: ToolCall = {
+        ...toolCall('completed'),
+        rawInput: { path: 'src/foo.ts' }
+      }
+      const context = { cwd: '/proj' }
+      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={context} />))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open file' }))
+
+      expect(openFilePathFromTerminal).toHaveBeenCalledTimes(1)
+      expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/foo.ts', context)
+    })
+
+    it('shows a toast when openFilePathFromTerminal fails', async () => {
+      const { toast } = await import('sonner')
+      const toastError = vi.spyOn(toast, 'error').mockImplementation(() => 'mocked')
+      openFilePathFromTerminal.mockResolvedValueOnce({
+        ok: false,
+        reason: 'not-found' as const,
+        message: 'File not found: src/foo.ts'
+      })
+      const call: ToolCall = {
+        ...toolCall('completed'),
+        rawInput: { path: 'src/foo.ts' }
+      }
+      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open file' }))
+
+      await waitFor(() => {
+        expect(toastError).toHaveBeenCalledWith('File not found: src/foo.ts')
+      })
+      toastError.mockRestore()
+    })
   })
 })

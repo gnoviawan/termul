@@ -54,6 +54,32 @@ describe('IconActionButton', () => {
     expect(button).toHaveClass('disabled:text-muted-foreground/50')
     expect(button).not.toHaveClass('disabled:opacity-50')
   })
+
+  it('renders a 24px (size-6) slot when size="sm"', () => {
+    render(
+      <TooltipProvider>
+        <IconActionButton label="Copy" onClick={() => {}} size="sm">
+          <span>icon</span>
+        </IconActionButton>
+      </TooltipProvider>
+    )
+    const button = screen.getByRole('button', { name: 'Copy' })
+    expect(button).toHaveClass('size-6')
+    expect(button).not.toHaveClass('size-11')
+  })
+
+  it('defaults to the 44px (size-11) slot when size is omitted', () => {
+    render(
+      <TooltipProvider>
+        <IconActionButton label="Copy" onClick={() => {}}>
+          <span>icon</span>
+        </IconActionButton>
+      </TooltipProvider>
+    )
+    const button = screen.getByRole('button', { name: 'Copy' })
+    expect(button).toHaveClass('size-11')
+    expect(button).not.toHaveClass('size-6')
+  })
 })
 
 describe('IconActionGroup', () => {
@@ -65,5 +91,24 @@ describe('IconActionGroup', () => {
     )
     expect(container.firstElementChild).toHaveClass('rounded-md')
     expect(container.firstElementChild).toHaveClass('border-sidebar')
+  })
+
+  it('applies dense (px-1 py-0.5) padding when dense is true', () => {
+    const { container } = render(
+      <IconActionGroup dense>
+        <span>child</span>
+      </IconActionGroup>
+    )
+    expect(container.firstElementChild).toHaveClass('px-1', 'py-0.5')
+    expect(container.firstElementChild).not.toHaveClass('px-1.5', 'py-1')
+  })
+
+  it('uses default (px-1.5 py-1) padding when dense is omitted', () => {
+    const { container } = render(
+      <IconActionGroup>
+        <span>child</span>
+      </IconActionGroup>
+    )
+    expect(container.firstElementChild).toHaveClass('px-1.5', 'py-1')
   })
 })

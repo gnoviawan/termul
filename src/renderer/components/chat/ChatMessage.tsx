@@ -358,9 +358,9 @@ function AgentProse({
               props.className,
               'cursor-pointer appearance-none text-left font-medium text-primary underline'
             )}
-            title="Ctrl/Cmd-click to open in editor"
+            title="Open in editor"
             onClick={(event) => {
-              if (!event.ctrlKey && !event.metaKey) return
+              if (event.button !== 0 || event.shiftKey) return
               event.preventDefault()
               void openFilePathFromTerminal(candidate, context)
                 .then((result) => {
