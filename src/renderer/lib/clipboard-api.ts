@@ -75,8 +75,12 @@ function warnClipboardFallbackOnce(): void {
  * `readText()` doesn't return this paste as stale buffered data.
  */
 function onPasteCapture(event: ClipboardEvent): void {
-  const text = event.clipboardData?.getData('text/plain') ?? ''
-  if (!text) return
+  const cd = event.clipboardData
+  if (!cd) return // no clipboard data on the event — nothing to capture
+  // A valid paste may carry empty text (e.g. an empty clipboard). Distinguish
+  // that from a missing clipboardData so an empty paste still resolves
+  // pending readText() waiters (CodeRabbit: don't reject empty text).
+  const text = cd.getData('text/plain') ?? ''
   pasteBuffer = text
   if (pendingPasteResolvers.length > 0) {
     const resolvers = pendingPasteResolvers

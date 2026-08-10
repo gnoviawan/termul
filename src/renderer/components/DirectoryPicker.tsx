@@ -197,11 +197,18 @@ export function DirectoryPicker(): React.JSX.Element {
   // — otherwise `dialogApi.selectDirectory()` hangs forever.
   const pendingRef = useRef<PendingSelection | null>(pending)
   pendingRef.current = pending
+  // CodeRabbit: an open/close/nav epoch so a stale async result (from
+  // resolveInitialPath or browseDirectory) cannot apply state after the
+  // picker closed/reopened/navigated. Incremented on open + each loadPath +
+  // close; captured before the await, verified after.
+  const pickerSessionRef = useRef(0)
 
   const loadPath = useCallback(async (path: string) => {
+    const session = ++pickerSessionRef.current
     setLoading(true)
     setError(null)
     const result = await webServerDialog.browseDirectory(path)
+    if (pickerSessionRef.current !== session) return // stale — a newer open/close/nav superseded this browse
     if (result.success && result.data) {
       // Directories only — files aren't selectable in a folder picker.
       const dirs = result.data.filter((e) => e.type === 'directory')
@@ -246,7 +253,9 @@ export function DirectoryPicker(): React.JSX.Element {
         // picker re-opens (it is reset to '' on close so each open re-resolves
         // the host OS rather than pinning the client browser's platform).
         void (async () => {
+          const session = ++pickerSessionRef.current
           const startPath = currentPathRef.current || (await resolveInitialPath())
+          if (pickerSessionRef.current !== session) return // closed during resolve
           void loadPath(startPath)
         })()
       })
@@ -272,6 +281,7 @@ export function DirectoryPicker(): React.JSX.Element {
 
   const close = useCallback(
     (result: IpcResult<string>) => {
+      pickerSessionRef.current++ // invalidate any in-flight resolveInitialPath/browseDirectory
       setIsOpen(false)
       setPending(null)
       // Reset navigation state for the next open. Empty so the opener

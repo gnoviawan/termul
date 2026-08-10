@@ -123,4 +123,14 @@ describe('clipboard-api browser fallback (CAP-2 / GH-588)', () => {
     expect(result.success).toBe(false)
     expect(result.code).toBe('WRITE_ERROR')
   })
+
+  it('readText resolves with an empty string when the paste event carries valid empty text (CodeRabbit)', async () => {
+    stubClipboardUndefined()
+    const promise = clipboardApi.readText()
+    // A valid paste carrying empty text — distinguish from missing clipboardData.
+    dispatchPaste('')
+    const result = await promise
+    expect(result.success).toBe(true)
+    expect(result.data).toBe('')
+  })
 })
