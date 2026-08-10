@@ -1376,6 +1376,7 @@ impl AcpManager {
                 SessionCreationContext {
                     project_id: None,
                     ephemeral: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -4359,6 +4360,7 @@ mod tests {
                 runtime_agent_id: Some("runtime-1".to_string()),
                 project_id: Some("p-1".to_string()),
                 cwd: cwd.clone(),
+                ..Default::default()
             })
             .await
             .unwrap();
