@@ -73,7 +73,11 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
   const clearPath = async (): Promise<void> => {
     setSaving(true)
     try {
-      await deleteAgentConfig(entry.configId)
+      // Delete by the persisted record's `id` (not `configId`): a custom agent
+      // pasted with an exported `configId` keeps that configId but gets a fresh
+      // stored `id`, so deleting by configId would miss it. Catalog overrides
+      // have id == configId (`acp-registry:<id>`), so this is equivalent there.
+      await deleteAgentConfig(entry.config?.id ?? entry.configId)
       toast.success(`${entry.agent.name} custom path cleared`)
     } catch (err) {
       toast.error(String(err))

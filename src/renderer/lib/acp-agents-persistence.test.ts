@@ -121,7 +121,8 @@ describe('load/save agent configs', () => {
         name: 'Gemini',
         command: 'gemini',
         args: [],
-        env: {}
+        env: {},
+        allowTerminal: false
       }
     ]
     ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -230,5 +231,34 @@ describe('load/save agent configs', () => {
     expect(loaded).toHaveLength(1)
     expect(loaded[0].id).toBe('custom-ok')
     expect(loaded[0].configId).toBe('custom-ok')
+  })
+
+  it('rejects a non-string configId and backfills from id without crashing', async () => {
+    // CodeRabbit: a persisted record with configId: 123 (number) must not throw
+    // at startup when loadAgentConfigs calls .trim(). Validate the type before
+    // trimming; treat a non-string configId as missing and backfill from id.
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: [{ id: 'custom-1', name: 'H', command: 'node', args: [], env: {}, configId: 123 }]
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].configId).toBe('custom-1')
+  })
+
+  it('normalizes omitted/legacy optional fields to safe defaults on load', async () => {
+    // A legacy persisted record may omit args/env/allowTerminal. The loader
+    // normalizes them to their established defaults so downstream consumers
+    // (merge, spawn) never see `undefined`.
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: [{ id: 'legacy-1', name: 'Legacy', command: 'legacy-bin' }]
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].args).toEqual([])
+    expect(loaded[0].env).toEqual({})
+    expect(loaded[0].allowTerminal).toBe(false)
+    expect(loaded[0].configId).toBe('legacy-1')
   })
 })

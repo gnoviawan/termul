@@ -64,21 +64,41 @@ export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
   const res = await persistenceApi.read<StoredAgentConfig[]>(ACP_AGENTS_KEY)
   if (res.success) {
     if (!Array.isArray(res.data)) return []
-    // Filter out malformed (null/non-object/id-less) elements before the
-    // configId backfill so a corrupt entry can never crash the load or the
-    // downstream merge (`resolveSupportedAcpAgents` calls `.startsWith` on
-    // `config.id`). Malformed entries are silently dropped here; the merge
-    // layer is the no-crash boundary.
+    // Filter out malformed records before the configId backfill so a corrupt
+    // entry can never crash the load or the downstream merge
+    // (`resolveSupportedAcpAgents` calls `.startsWith` on `config.id`).
+    // Require the non-optional StoredAgentConfig primitives (id/name/command)
+    // to be non-empty strings; drop otherwise. The map below normalizes
+    // optional/legacy fields (args/env/allowTerminal/configId) to safe
+    // defaults instead of trusting persisted JSON shapes.
     const clean = res.data.filter(
       (c): c is StoredAgentConfig =>
-        c !== null && typeof c === 'object' && typeof c.id === 'string' && c.id.length > 0
+        c !== null &&
+        typeof c === 'object' &&
+        typeof c.id === 'string' &&
+        c.id.length > 0 &&
+        typeof c.name === 'string' &&
+        c.name.length > 0 &&
+        typeof c.command === 'string' &&
+        c.command.length > 0
     )
     // Migration: backfill `configId = id` for persisted configs saved before
     // configId was required (pre-feature catalog overrides + custom agents
-    // both need a non-empty configId on the spawn path).
-    return clean.map((cfg) =>
-      cfg.configId && cfg.configId.trim().length > 0 ? cfg : { ...cfg, configId: cfg.id }
-    )
+    // both need a non-empty configId on the spawn path). Validate the
+    // configId type before trimming — a non-string value (e.g. `123`) must
+    // not crash startup; treat it as missing and backfill from `id`. Also
+    // normalize omitted/legacy optional fields to their established defaults.
+    return clean.map((cfg) => ({
+      ...cfg,
+      configId:
+        typeof cfg.configId === 'string' && cfg.configId.trim().length > 0 ? cfg.configId : cfg.id,
+      args: Array.isArray(cfg.args) ? (cfg.args as string[]) : [],
+      env:
+        cfg.env !== null && typeof cfg.env === 'object' && !Array.isArray(cfg.env)
+          ? (cfg.env as Record<string, string>)
+          : {},
+      allowTerminal: typeof cfg.allowTerminal === 'boolean' ? cfg.allowTerminal : false
+    }))
   }
   // A missing key is the normal empty state; any other failure is a real
   // storage/backend error and must not be silently collapsed to [].
