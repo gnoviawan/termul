@@ -361,15 +361,30 @@ export async function resolveSupportedAcpAgents(
   // agent's `configId` (e.g. a user pasted `configId: "acp-registry:gemini"`)
   // is found here and wins over the catalog version (status 'ready', user's
   // command/args/env). This also finds catalog overrides (whose configId IS
-  // `acp-registry:<id>`). When two persisted configs share a configId (a
-  // custom agent + a catalog override for the same registry id), the custom
-  // agent (explicitly pasted) takes precedence — it is later in the input
-  // list, so the `Map` constructor lets it overwrite the catalog override.
-  const persistedByConfigId = new Map(
-    persistedConfigs
-      .filter((c) => typeof c.id === 'string' && c.id.length > 0)
-      .map((c) => [c.configId && c.configId.trim().length > 0 ? c.configId : c.id, c])
-  )
+  // `acp-registry:<id>`). Precedence is deterministic regardless of input
+  // order: a custom record (id NOT starting with `acp-registry:`) always wins
+  // over a registry-backed record sharing the same configId; when two records
+  // of the same kind collide on configId, the first-encountered one wins
+  // (stable tie-breaker). The selected record then participates in the
+  // catalog loop below (it is not suppressed by `seenConfigIds`, which only
+  // prevents `customAgentEntriesFromPersisted` from double-appending).
+  const persistedByConfigId = new Map<string, StoredAgentConfig>()
+  for (const c of persistedConfigs) {
+    if (typeof c.id !== 'string' || c.id.length === 0) continue
+    const key = c.configId && c.configId.trim().length > 0 ? c.configId : c.id
+    const existing = persistedByConfigId.get(key)
+    if (!existing) {
+      persistedByConfigId.set(key, c)
+      continue
+    }
+    const existingIsCustom = !existing.id.startsWith('acp-registry:')
+    const candidateIsCustom = !c.id.startsWith('acp-registry:')
+    // Custom always overrides registry-backed (regardless of input order).
+    // Same-kind collisions keep the first-encountered record (deterministic).
+    if (candidateIsCustom && !existingIsCustom) {
+      persistedByConfigId.set(key, c)
+    }
+  }
   const entries: SupportedAcpAgentEntry[] = []
   const seenConfigIds = new Set<string>()
 

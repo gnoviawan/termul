@@ -168,8 +168,11 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
       toast.error('No saved config to copy.')
       return
     }
-    const json = exportAgentConfig(entry.config)
     try {
+      // `exportAgentConfig` can throw (e.g. a missing `configId` guard) — keep
+      // it inside the try so serialization failures hit the same error path as
+      // clipboard failures (log + toast), not an uncaught rejection.
+      const json = exportAgentConfig(entry.config)
       await navigator.clipboard.writeText(json)
       toast.success(`Copied ${entry.agent.name} config JSON`)
     } catch (err) {

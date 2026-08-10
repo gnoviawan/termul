@@ -618,4 +618,76 @@ describe('resolveSupportedAcpAgents', () => {
     expect(entries[0]?.status).toBe('ready')
     expect(entries[0]?.config).toBe(custom)
   })
+
+  it('custom record wins over a registry override on configId collision regardless of input order', async () => {
+    // CodeRabbit: precedence must be deterministic, not input-order-dependent.
+    // A registry-backed override (id starts with `acp-registry:`) listed BEFORE
+    // a custom agent sharing the same configId must NOT shadow the custom one.
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+        agents: [
+          {
+            id: 'gemini',
+            name: 'Gemini',
+            version: '1.0.0',
+            description: 'catalog',
+            source: 'bundled',
+            distribution: { npx: { package: 'gemini' } },
+            runtimeRequirements: ['npx'],
+            status: 'needs-runtime',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+    const registryOverride: StoredAgentConfig = {
+      id: registryConfigId('gemini'),
+      configId: registryConfigId('gemini'),
+      name: 'Gemini Override',
+      command: 'gemini-bin',
+      args: [],
+      env: {},
+      allowTerminal: false
+    }
+    const custom: StoredAgentConfig = {
+      id: 'custom-wins',
+      configId: registryConfigId('gemini'),
+      name: 'Internal Helper',
+      command: 'node',
+      args: ['/agent.js'],
+      env: {},
+      allowTerminal: false
+    }
+
+    // Registry override FIRST, custom SECOND — custom must still win.
+    const entriesSecond = await resolveSupportedAcpAgents([registryOverride, custom])
+    const matchSecond = entriesSecond.find((e) => e.configId === registryConfigId('gemini'))
+    expect(matchSecond?.config).toBe(custom)
+
+    // Custom FIRST, registry override SECOND — custom still wins.
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+        agents: [
+          {
+            id: 'gemini',
+            name: 'Gemini',
+            version: '1.0.0',
+            description: 'catalog',
+            source: 'bundled',
+            distribution: { npx: { package: 'gemini' } },
+            runtimeRequirements: ['npx'],
+            status: 'needs-runtime',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+    const entriesFirst = await resolveSupportedAcpAgents([custom, registryOverride])
+    const matchFirst = entriesFirst.find((e) => e.configId === registryConfigId('gemini'))
+    expect(matchFirst?.config).toBe(custom)
+  })
 })

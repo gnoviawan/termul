@@ -261,4 +261,45 @@ describe('load/save agent configs', () => {
     expect(loaded[0].allowTerminal).toBe(false)
     expect(loaded[0].configId).toBe('legacy-1')
   })
+
+  it('rejects whitespace-only id/name/command and trims accepted identifiers (CodeRabbit)', async () => {
+    // A record with a whitespace-only id/name/command is meaningless and must
+    // be dropped (not just `length > 0`). Accepted identifiers are trimmed.
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: [
+        { id: '   ', name: 'Ws', command: 'c', args: [], env: {} },
+        { id: 'ok', name: '  ', command: 'c', args: [], env: {} },
+        { id: 'trim-me', name: ' Trim Me ', command: ' trim-bin ', args: [], env: {} }
+      ]
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].id).toBe('trim-me')
+    expect(loaded[0].name).toBe('Trim Me')
+    expect(loaded[0].command).toBe('trim-bin')
+  })
+
+  it('defaults args to [] when an element is not a string, instead of casting (CodeRabbit)', async () => {
+    // args = [123, "ok"] has a non-string element — the loader must NOT cast it
+    // to string[] (the number would reach the Rust serde spawn path as a
+    // confusing type error). Default to [] instead.
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: [{ id: 'a', name: 'A', command: 'c', args: [123, 'ok'], env: {} }]
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded[0].args).toEqual([])
+  })
+
+  it('defaults env to {} when a value is not a string, instead of casting (CodeRabbit)', async () => {
+    // env = { K: 123 } has a non-string value — default to {} instead of
+    // casting the number through to the spawn path.
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: [{ id: 'a', name: 'A', command: 'c', args: [], env: { K: 123, OK: 'v' } }]
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded[0].env).toEqual({})
+  })
 })
