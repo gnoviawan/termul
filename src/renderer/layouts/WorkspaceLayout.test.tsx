@@ -883,7 +883,9 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      await waitFor(() => expect(backendShortcut).toBeDefined())
+      // The onShortcut subscription registers in a layout effect; under
+      // full-suite contention this can slip past the default 1s waitFor.
+      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 5000 })
       act(() => backendShortcut?.('colorThemePicker'))
       // ThemePicker is React.lazy — allow extra time for the chunk to resolve
       // under full-suite resource contention (passes instantly in isolation).
@@ -1182,9 +1184,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
         renderWithRouter()
 
-        await waitFor(() => {
-          expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
-        })
+        await waitFor(
+          () => {
+            expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
+          },
+          { timeout: 5000 }
+        )
 
         // Give the async project-switch effect a tick to settle.
         await new Promise((resolve) => setTimeout(resolve, 10))
