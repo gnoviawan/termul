@@ -417,6 +417,8 @@ mod tests {
                 "messageCount": 0,
                 "lastSeq": 0,
                 "status": "active",
+                "worktreePath": "/work/project/.termul/worktrees/chat/abc123",
+                "worktreeBranch": "chat/abc123",
             })
         );
     }
