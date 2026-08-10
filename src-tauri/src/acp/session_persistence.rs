@@ -65,6 +65,13 @@ pub struct SessionMetadata {
     pub message_count: u64,
     pub tool_count: u64,
     pub last_seq: u64,
+    /// Worktree path the agent runs in (CAP-3). Additive: old entries
+    /// deserialize with `None`. State isolation still keys on `cwd`; this
+    /// field powers the CAP-6 indicator + the deleted-worktree fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +93,10 @@ pub struct SessionIndexEntry {
     pub tool_count: u64,
     pub last_seq: u64,
     pub resume_eligible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 impl From<&SessionMetadata> for SessionIndexEntry {
@@ -105,6 +116,8 @@ impl From<&SessionMetadata> for SessionIndexEntry {
             tool_count: metadata.tool_count,
             last_seq: metadata.last_seq,
             resume_eligible: metadata.stable_agent_namespace.is_some(),
+            worktree_path: metadata.worktree_path.clone(),
+            worktree_branch: metadata.worktree_branch.clone(),
         }
     }
 }
@@ -116,13 +129,15 @@ pub struct SessionIndexFile {
     pub sessions: Vec<SessionIndexEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SessionRegistration {
     pub session_id: String,
     pub stable_agent_namespace: Option<String>,
     pub runtime_agent_id: Option<String>,
     pub project_id: Option<String>,
     pub cwd: PathBuf,
+    pub worktree_path: Option<String>,
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug)]
@@ -304,6 +319,8 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            worktree_path: registration.worktree_path,
+            worktree_branch: registration.worktree_branch,
         };
         self.persist_metadata(&metadata)?;
         self.install_runtime(metadata.clone())?;
@@ -356,6 +373,8 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            worktree_path: registration.worktree_path,
+            worktree_branch: registration.worktree_branch,
         };
         self.persist_metadata(&metadata)?;
         self.install_runtime(metadata.clone())?;
@@ -1177,6 +1196,7 @@ mod tests {
                 runtime_agent_id: Some("runtime-1".to_string()),
                 project_id: Some("project-1".to_string()),
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -1273,6 +1293,7 @@ mod tests {
                 runtime_agent_id: None,
                 project_id: None,
                 cwd: cwd2,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -1508,6 +1529,7 @@ mod tests {
                 runtime_agent_id: None,
                 project_id: None,
                 cwd: cwd2,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -1867,6 +1889,7 @@ mod tests {
                     runtime_agent_id: Some(format!("runtime-{session_id}")),
                     project_id: project.map(str::to_string),
                     cwd: cwd.clone(),
+                    ..Default::default()
                 })
                 .await
                 .unwrap();

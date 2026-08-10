@@ -565,7 +565,13 @@ export async function acpNewSession(
   agentId: AgentId,
   cwd: string,
   mcpServers?: McpServer[],
-  options?: { ephemeral?: boolean; projectId?: string }
+  options?: {
+    ephemeral?: boolean
+    projectId?: string
+    /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
+    worktreePath?: string
+    worktreeBranch?: string
+  }
 ): Promise<NewSessionOutcome> {
   return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
 }

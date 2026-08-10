@@ -118,7 +118,13 @@ export interface AcpTransport {
     agentId: AgentId,
     cwd: string,
     mcpServers?: McpServer[],
-    options?: { ephemeral?: boolean; projectId?: string }
+    options?: {
+      ephemeral?: boolean
+      projectId?: string
+      /** Worktree path + branch (CAP-3) — desktop-only; ignored on the WS path. */
+      worktreePath?: string
+      worktreeBranch?: string
+    }
   ): Promise<NewSessionOutcome>
   loadSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
@@ -247,7 +253,9 @@ function createTauriAcpTransport(): AcpTransport {
         cwd,
         mcpServers,
         ...(options?.ephemeral ? { ephemeral: true } : {}),
-        ...(options?.projectId ? { projectId: options.projectId } : {})
+        ...(options?.projectId ? { projectId: options.projectId } : {}),
+        ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
+        ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
       }),
     loadSession: (agentId, sessionId, cwd) =>
       invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd }),
@@ -775,10 +783,17 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     cwd: string,
     mcpServers?: McpServer[],
-    options?: { ephemeral?: boolean; projectId?: string }
+    options?: {
+      ephemeral?: boolean
+      projectId?: string
+      worktreePath?: string
+      worktreeBranch?: string
+    }
   ): Promise<NewSessionOutcome> {
     // Web/remote: the host attributes the session to a project by resolving
     // `cwd` against its registry (CAP-2), so no explicit projectId is sent.
+    // Worktree fields are desktop-only (CAP-3) and ignored on the WS path —
+    // the host-owned durable record keys state isolation on `cwd` regardless.
     const outcome = await this.request<NewSessionOutcome>('create_session', {
       agentId,
       cwd,

@@ -47,8 +47,11 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
 
 /// Create a new session. `mcpServers` is passed through to `session/new` as-is.
 /// `projectId` (CAP-2 attribution) is optional; the renderer passes the owning
-/// project so the host-owned durable record is project-scoped.
+/// project so the host-owned durable record is project-scoped. `worktreePath` +
+/// `worktreeBranch` (CAP-3) are persisted for the chat indicator + the
+/// deleted-worktree fallback; state isolation still keys on `cwd`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_new_session(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
@@ -56,6 +59,8 @@ pub async fn acp_new_session(
     mcp_servers: Option<Vec<McpServer>>,
     ephemeral: Option<bool>,
     project_id: Option<String>,
+    worktree_path: Option<String>,
+    worktree_branch: Option<String>,
 ) -> Result<NewSessionOutcome, String> {
     manager
         .new_session_with_context(
@@ -65,6 +70,8 @@ pub async fn acp_new_session(
             SessionCreationContext {
                 project_id: project_id.filter(|id| !id.trim().is_empty()),
                 ephemeral: ephemeral.unwrap_or(false),
+                worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
+                worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
             },
         )
         .await

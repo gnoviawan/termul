@@ -499,6 +499,14 @@ pub struct NewSessionOutcome {
 pub struct SessionCreationContext {
     pub project_id: Option<String>,
     pub ephemeral: bool,
+    /// Worktree path the agent runs in (CAP-3). When set, the durable record
+    /// carries it so relaunch reattaches without a second `git worktree add`
+    /// and the chat indicator (CAP-6) survives reload. State isolation still
+    /// keys on `cwd` (the worktree path) — this field is for the indicator +
+    /// deleted-worktree fallback only.
+    pub worktree_path: Option<String>,
+    /// Worktree branch (`chat/{id}`) — paired with `worktree_path`.
+    pub worktree_branch: Option<String>,
 }
 
 /// The `_session/question` ACP extension request (issue #411).
@@ -581,6 +589,8 @@ enum AcpCommand {
         runtime_agent_id: String,
         project_id: Option<String>,
         ephemeral: bool,
+        worktree_path: Option<String>,
+        worktree_branch: Option<String>,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
@@ -970,6 +980,8 @@ impl AcpManager {
             runtime_agent_id: agent_id.0.clone(),
             project_id: context.project_id,
             ephemeral: context.ephemeral,
+            worktree_path: context.worktree_path,
+            worktree_branch: context.worktree_branch,
             reply,
         })
         .await
@@ -2208,6 +2220,8 @@ async fn run_command_loop(
                 runtime_agent_id,
                 project_id,
                 ephemeral,
+                worktree_path,
+                worktree_branch,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -2237,6 +2251,8 @@ async fn run_command_loop(
                                         runtime_agent_id: Some(runtime_agent_id),
                                         project_id,
                                         cwd: PathBuf::from(&cwd),
+                                        worktree_path,
+                                        worktree_branch,
                                     };
                                     if let Err(error) =
                                         persistence.register_session(registration).await

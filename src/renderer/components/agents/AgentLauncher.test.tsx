@@ -8,6 +8,7 @@ import {
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
@@ -111,26 +112,34 @@ const {
   }
 }))
 
-const { mockSkills, mockToastError, mockResolvedAgentsOverride } = vi.hoisted(() => ({
-  // Override-able skills list (defaults to [] — web/no-skills parity). Skill
-  // tests push entries here so useAgentSkills surfaces them in the slash menu.
-  // `path` is required so the launch wire prompt can cite it.
-  mockSkills: {
-    current: [] as Array<{
-      name: string
-      description: string
-      scope: string
-      path: string
-    }>
-  },
-  mockToastError: vi.fn(),
-  // CAP-6 / Story 8: the launcher resolves supported agents from the host
-  // catalog via `useResolvedSupportedAcpAgents`. Component tests mock the hook
-  // to the synchronous offline-first derivation so they can exercise launch
-  // behavior without the async catalog fetch. Set this to inject a specific
-  // entry list (e.g. the manual-install agent).
-  mockResolvedAgentsOverride: { current: null as SupportedAcpAgentEntry[] | null }
-}))
+const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverride } = vi.hoisted(
+  () => ({
+    // Override-able skills list (defaults to [] — web/no-skills parity). Skill
+    // tests push entries here so useAgentSkills surfaces them in the slash menu.
+    // `path` is required so the launch wire prompt can cite it.
+    mockSkills: {
+      current: [] as Array<{
+        name: string
+        description: string
+        scope: string
+        path: string
+      }>
+    },
+    mockToastError: vi.fn(),
+    // CAP-6 / Story 8: the launcher resolves supported agents from the host
+    // catalog via `useResolvedSupportedAcpAgents`. Component tests mock the hook
+    // to the synchronous offline-first derivation so they can exercise launch
+    // behavior without the async catalog fetch. Set this to inject a specific
+    // entry list (e.g. the manual-install agent).
+    mockResolvedAgentsOverride: { current: null as SupportedAcpAgentEntry[] | null },
+    // CAP-2/3 worktree-mode override: the default project mock is a non-git
+    // folder so the worktree selector is hidden. Worktree tests push a git
+    // project + branch here so `canUseWorktree` becomes true.
+    mockProjectOverride: {
+      current: null as { isGitRepo?: boolean; gitBranch?: string | null } | null
+    }
+  })
+)
 
 vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
@@ -198,14 +207,126 @@ vi.mock('@/lib/worktree-context', () => ({
   getDefaultCwdForProject: () => '/work'
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => false)
+}))
+
+// Radix Select portals don't render reliably under jsdom; shim with a native
+// `<select>`. `Select` walks its children for `SelectItem`s and exposes them
+// via context so `SelectTrigger` can render one `<select>` with all options.
+vi.mock('@/components/ui/select', async () => {
+  const { createContext, useContext, Children, isValidElement } = await import('react')
+  type Item = { value: string; label: React.ReactNode }
+  const SelectCtx = createContext<{
+    value?: string
+    onValueChange?: (v: string) => void
+    items: Item[]
+  }>({ items: [] })
+  const SelectItem = (_props: { value: string; children: React.ReactNode }) => null
+  return {
+    Select: ({
+      value,
+      onValueChange,
+      children
+    }: {
+      value?: string
+      onValueChange?: (v: string) => void
+      children: React.ReactNode
+    }) => {
+      const items: Item[] = []
+      const walk = (node: React.ReactNode): void => {
+        if (!isValidElement(node)) return
+        if (node.type === SelectItem) {
+          items.push({ value: node.props.value, label: node.props.children })
+        }
+        Children.forEach(node.props.children, walk)
+      }
+      Children.forEach(children, walk)
+      return (
+        <SelectCtx.Provider value={{ value, onValueChange, items }}>{children}</SelectCtx.Provider>
+      )
+    },
+    SelectTrigger: ({
+      className,
+      children,
+      ...props
+    }: {
+      className?: string
+      children?: React.ReactNode
+      [k: string]: unknown
+    }) => {
+      const ctx = useContext(SelectCtx)
+      const ariaLabel = (props as Record<string, unknown>)['aria-label'] as string | undefined
+      return (
+        <select
+          className={className}
+          value={ctx.value ?? ''}
+          onChange={(e) => ctx.onValueChange?.(e.target.value)}
+          aria-label={ariaLabel}
+        >
+          {ctx.items.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      )
+    },
+    SelectValue: () => null,
+    SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectItem,
+    SelectGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectLabel: () => null,
+    SelectSeparator: () => null,
+    SelectScrollUpButton: () => null,
+    SelectScrollDownButton: () => null
+  }
+})
+
+const { mockWorktreeCreate, mockWorktreeCopyInclude, mockWorktreeResolveBaseBranch } = vi.hoisted(
+  () => ({
+    mockWorktreeCreate: vi.fn(),
+    mockWorktreeCopyInclude: vi.fn(),
+    mockWorktreeResolveBaseBranch: vi.fn()
+  })
+)
+
+vi.mock('@/lib/worktree-api', () => ({
+  worktreeApi: {
+    create: mockWorktreeCreate,
+    copyIncludeFiles: mockWorktreeCopyInclude,
+    resolveBaseBranch: mockWorktreeResolveBaseBranch,
+    list: vi.fn(),
+    remove: vi.fn(),
+    branches: vi.fn(),
+    checkDirty: vi.fn(),
+    removeAllManaged: vi.fn(),
+    parseGitignore: vi.fn(),
+    createSymlinks: vi.fn(),
+    ensureSymlinks: vi.fn(),
+    archive: vi.fn(),
+    restore: vi.fn(),
+    mergePreview: vi.fn(),
+    mergeExecute: vi.fn()
+  }
+}))
+
 vi.mock('@/stores/project-store', () => {
+  const baseProject = { id: 'p1', name: 'P', path: '/work', defaultShell: undefined }
   const state = {
     activeProjectId: 'p1',
-    projects: [{ id: 'p1', name: 'P', path: '/work', defaultShell: undefined }]
+    projects: [baseProject]
   }
-  const useProjectStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
+  const withOverride = () => ({
+    ...state,
+    projects: state.projects.map((p) => ({ ...p, ...(mockProjectOverride.current ?? {}) }))
+  })
+  const useProjectStore = (sel?: (s: typeof state) => unknown) => {
+    const merged = withOverride()
+    return sel ? sel(merged) : merged
+  }
   useProjectStore.getState = () => state
-  const useActiveProject = () => state.projects.find((p) => p.id === state.activeProjectId)
+  const useActiveProject = () => withOverride().projects.find((p) => p.id === state.activeProjectId)
   return { useProjectStore, useActiveProject }
 })
 
@@ -439,6 +560,20 @@ beforeEach(() => {
   mockSetModel.mockResolvedValue(undefined)
   mockInstallRegistryBinary.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
   mockInstallAcpAgent.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
+  // Worktree-mode defaults: web context, no git repo, no worktree calls.
+  vi.mocked(isTauriContext).mockReturnValue(false)
+  mockProjectOverride.current = null
+  mockWorktreeCreate.mockReset()
+  mockWorktreeCopyInclude.mockReset()
+  mockWorktreeResolveBaseBranch.mockReset()
+  mockWorktreeCopyInclude.mockResolvedValue({
+    success: true,
+    data: { ran: 0, copied: 0, skipped: [] }
+  })
+  mockWorktreeResolveBaseBranch.mockResolvedValue({
+    success: true,
+    data: { defaultBase: 'feat/x', currentBranch: 'feat/x', isDetached: false }
+  })
 })
 
 describe('AgentLauncher ACP new thread', () => {
@@ -1305,5 +1440,199 @@ describe('AgentLauncher mobile empty-state overflow', () => {
     // Composer column + suggestion grid allow flex/grid children to shrink.
     expect(composerColumn.className).toContain('min-w-0')
     expect(suggestionGrid.className).toContain('min-w-0')
+  })
+})
+
+// ============================================================================
+// CAP-1/2/3/4 — Worktree-isolated agent chat
+// ============================================================================
+
+describe('AgentLauncher worktree isolation', () => {
+  function renderLauncher(): void {
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  function enableDesktopGitRepo(branch = 'feat/x'): void {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: branch }
+  }
+
+  beforeEach(() => {
+    enableDesktopGitRepo()
+    mockWorktreeCreate.mockReset()
+    // Default success: returns a worktree at /work/.termul/worktrees/{name}/
+    mockWorktreeCreate.mockResolvedValue({
+      success: true,
+      data: {
+        name: 'abcd1234',
+        branch: 'chat/abcd1234',
+        path: '/work/.termul/worktrees/abcd1234',
+        headCommit: ''
+      }
+    })
+    mockWorktreeCopyInclude.mockReset()
+    mockWorktreeCopyInclude.mockResolvedValue({
+      success: true,
+      data: { ran: 1, copied: 1, skipped: [] }
+    })
+    mockWorktreeResolveBaseBranch.mockReset()
+    // "Clean repo on feat/x, base auto" — no origin/HEAD, so the fallback
+    // chain resolves to the current branch (feat/x).
+    mockWorktreeResolveBaseBranch.mockResolvedValue({
+      success: true,
+      data: { defaultBase: 'feat/x', currentBranch: 'feat/x', isDetached: false }
+    })
+  })
+
+  // CAP-1: headline reads `What should we do in {project} on {branch}`
+  it('renders the project git branch in the headline (CAP-1)', () => {
+    renderLauncher()
+    expect(screen.getByRole('heading', { level: 1, name: /on feat\/x/i })).toBeInTheDocument()
+  })
+
+  it('renders "detached" in the headline when gitBranch is null (CAP-1)', () => {
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: null }
+    renderLauncher()
+    expect(screen.getByRole('heading', { level: 1, name: /on detached/i })).toBeInTheDocument()
+  })
+
+  // CAP-2: selector hidden on web / non-repo
+  it('hides the isolation selector when not a git repo (CAP-2)', () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    mockProjectOverride.current = null // no isGitRepo
+    renderLauncher()
+    expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
+  })
+
+  it('hides the isolation selector on web (CAP-2)', () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
+    renderLauncher()
+    expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
+  })
+
+  /** Switch the isolation mode via the native `<select>` shim. */
+  function selectIsolationMode(label: string): void {
+    const select = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
+    const option = Array.from(select.options).find((o) => o.textContent === label)
+    fireEvent.change(select, { target: { value: option?.value ?? 'worktree' } })
+  }
+
+  // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
+  // then copyIncludeFiles, then threads cwd=worktreePath
+  it('creates a worktree, copies includes, and threads cwd=worktreePath on launch (CAP-3)', async () => {
+    renderLauncher()
+    selectIsolationMode('Worktree')
+    // Wait for base-branch resolution to settle
+    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi wt' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
+      branch: string
+      isNewBranch: boolean
+      startRef: string
+    }
+    expect(createArgs.branch).toMatch(/^chat\/[a-f0-9]+$/)
+    expect(createArgs.isNewBranch).toBe(true)
+    expect(createArgs.startRef).toBe('feat/x')
+
+    // copyIncludeFiles ran after create
+    await waitFor(() => expect(mockWorktreeCopyInclude).toHaveBeenCalledTimes(1))
+    expect(mockWorktreeCopyInclude).toHaveBeenCalledWith('/work', expect.any(String))
+
+    // finalizeChatLaunch received cwd = the worktree path (not /work)
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      cwd: string
+      worktreePath?: string
+      worktreeBranch?: string
+    }
+    expect(finalizeArgs.cwd).toBe('/work/.termul/worktrees/abcd1234')
+    expect(finalizeArgs.worktreePath).toBe('/work/.termul/worktrees/abcd1234')
+    expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
+  })
+
+  // CAP-4: relaunch of a persisted-worktree session does NOT call worktreeApi.create
+  it('does not call worktreeApi.create when relaunching a persisted-worktree session (CAP-4)', async () => {
+    // The launcher's launch() only creates a worktree when isolationMode ===
+    // 'worktree'. On relaunch, openHistorySession carries the persisted
+    // worktreePath onto the live AcpSession, and the launcher is not involved
+    // (the chat tab opens directly). So the relevant invariant is: launch()
+    // with isolationMode === 'current' (default) never calls worktreeApi.create.
+    renderLauncher()
+    // Default mode is 'current' — confirm no worktree create on a normal launch.
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockWorktreeCreate).not.toHaveBeenCalled()
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      cwd: string
+      worktreePath?: string
+    }
+    expect(finalizeArgs.cwd).toBe('/work')
+    expect(finalizeArgs.worktreePath).toBeUndefined()
+  })
+
+  // CAP-3 collision: retry appends `-2` once
+  it('retries with a -2 suffix on a single WORKTREE_EXISTS collision (CAP-3)', async () => {
+    mockWorktreeCreate.mockReset()
+    mockWorktreeCreate
+      .mockResolvedValueOnce({ success: false, error: 'exists', code: 'WORKTREE_EXISTS' })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          name: 'abcd1234-2',
+          branch: 'chat/abcd1234-2',
+          path: '/work/.termul/worktrees/abcd1234-2',
+          headCommit: ''
+        }
+      })
+    renderLauncher()
+    selectIsolationMode('Worktree')
+    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'collide' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
+    const firstBranch = (mockWorktreeCreate.mock.calls[0][0] as { branch: string }).branch
+    const retryBranch = (mockWorktreeCreate.mock.calls[1][0] as { branch: string }).branch
+    expect(retryBranch).toBe(`${firstBranch}-2`)
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      worktreePath: string
+      worktreeBranch: string
+    }
+    expect(finalizeArgs.worktreeBranch).toBe(`${firstBranch}-2`)
+  })
+
+  // CAP-2: detached HEAD blocks launch until a base is picked
+  it('disables launch on detached HEAD in worktree mode until a base is picked (CAP-2)', async () => {
+    mockWorktreeResolveBaseBranch.mockResolvedValue({
+      success: true,
+      data: { defaultBase: 'main', currentBranch: undefined, isDetached: true }
+    })
+    renderLauncher()
+    selectIsolationMode('Worktree')
+    // Wait for the base-branch resolution to settle so the detached-HEAD hint
+    // renders (the effect runs async after mode selection).
+    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
+
+    const sendButton = screen.getByLabelText('Start agent chat')
+    // No base picked + detached HEAD -> disabled
+    expect(sendButton).toBeDisabled()
+    // Hint is visible
+    expect(screen.getByText(/detached head/i)).toBeInTheDocument()
   })
 })

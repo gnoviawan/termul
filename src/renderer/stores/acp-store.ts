@@ -202,6 +202,14 @@ export interface AcpSession {
    * Absent/null means no replay is in flight.
    */
   replaying?: 'pending' | 'streaming' | null
+  /**
+   * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
+   * current-branch-mode sessions. When set, the chat indicator (CAP-6) shows
+   * `{worktreePath} · {worktreeBranch}`; relaunch reattaches to the stored
+   * path (no second `git worktree add`). State isolation still keys on `cwd`.
+   */
+  worktreePath?: string
+  worktreeBranch?: string
 }
 
 export interface PendingPermission {
@@ -371,7 +379,13 @@ interface AcpState {
     cwd: string,
     mcpServers: McpServer[] | undefined,
     projectId: string,
-    opts?: { ephemeral?: boolean; backendEphemeral?: boolean }
+    opts?: {
+      ephemeral?: boolean
+      backendEphemeral?: boolean
+      /** Worktree path + branch (CAP-3) — persisted onto the durable record. */
+      worktreePath?: string
+      worktreeBranch?: string
+    }
   ) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
@@ -409,7 +423,8 @@ interface AcpState {
     configId: string,
     cwd: string,
     mcpServers: McpServer[] | undefined,
-    projectId: string
+    projectId: string,
+    opts?: { worktreePath?: string; worktreeBranch?: string }
   ) => Promise<SessionId>
   /**
    * Take ownership of a prepared session so launcher unmount cleanup cannot
@@ -429,6 +444,9 @@ interface AcpState {
     configOptions?: SessionConfigOption[]
     /** Optimistic first-turn content so the chat looks like a normal send. */
     initialUserBlocks?: ContentBlock[]
+    /** Worktree path + branch (CAP-3) — painted on the placeholder immediately. */
+    worktreePath?: string
+    worktreeBranch?: string
   }) => SessionId
   /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
   discardLaunchPlaceholder: (sessionId: SessionId) => void
@@ -455,6 +473,12 @@ interface AcpState {
     initialBlocks?: ContentBlock[] | null
     /** Remap the workspace tab as soon as the real session exists (before send). */
     adoptSession?: (fromSessionId: SessionId, toSessionId: SessionId) => void
+    /**
+     * Worktree path + branch (CAP-3). When set, the durable record carries
+     * them (CAP-4 relaunch + CAP-6 indicator) and `cwd` is the worktree path.
+     */
+    worktreePath?: string
+    worktreeBranch?: string
   }) => Promise<SessionId>
   /** Apply launcher pending model/mode/config selections to a live session. */
   applyPendingLauncherOptions: (
@@ -1145,7 +1169,9 @@ function persistSession(
       (max, m) => Math.max(max, typeof m.seq === 'number' ? m.seq : 0),
       0
     ),
-    status: session.status
+    status: session.status,
+    worktreePath: session.worktreePath,
+    worktreeBranch: session.worktreeBranch
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
@@ -1926,7 +1952,9 @@ async function openHistorySessionInner(
         configOptions: existingControls?.configOptions ?? [],
         lastError: null,
         createdAt: meta.createdAt,
-        replaying: null
+        replaying: null,
+        worktreePath: meta.worktreePath,
+        worktreeBranch: meta.worktreeBranch
       }
     },
     messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
@@ -2579,7 +2607,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers, {
         ephemeral: opts?.backendEphemeral ?? false,
-        ...(projectId ? { projectId } : {})
+        ...(projectId ? { projectId } : {}),
+        ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
+        ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
       })
       const sessionId = outcome.sessionId
       invalidateSessionReopen(sessionId)
@@ -2605,7 +2635,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
               lastError: existing?.lastError ?? null,
               createdAt: existing?.createdAt ?? Date.now(),
-              replaying: null
+              replaying: null,
+              worktreePath: opts?.worktreePath ?? existing?.worktreePath,
+              worktreeBranch: opts?.worktreeBranch ?? existing?.worktreeBranch
             }
           },
           messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
@@ -3039,7 +3071,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  startChat: async (configId, cwd, mcpServers, projectId) => {
+  startChat: async (configId, cwd, mcpServers, projectId, opts) => {
     const trimmedCwd = cwd.trim()
     const config = get().agentConfigs.find((c) => c.id === configId)
     if (!config) throw new Error(`unknown agent config ${configId}`)
@@ -3063,7 +3095,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     const agentId = await ensureLiveAgent(get, set, configId, trimmedCwd)
     if (!agentId) throw new Error(`failed to spawn agent for config ${configId}`)
-    return get().createSession(agentId, trimmedCwd, mcpServers, projectId)
+    return get().createSession(agentId, trimmedCwd, mcpServers, projectId, opts)
   },
 
   claimPreparedChat: (key, projectId) => {
@@ -3079,7 +3111,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     models,
     modes,
     configOptions,
-    initialUserBlocks
+    initialUserBlocks,
+    worktreePath,
+    worktreeBranch
   }) => {
     const sessionId = newId('launch')
     const blocks = initialUserBlocks ?? []
@@ -3112,7 +3146,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           configOptions: configOptions ?? [],
           lastError: null,
           createdAt: Date.now(),
-          replaying: null
+          replaying: null,
+          worktreePath,
+          worktreeBranch
         }
       },
       messages: {
@@ -3230,10 +3266,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     pending,
     initialText,
     initialBlocks,
-    adoptSession
+    adoptSession,
+    worktreePath,
+    worktreeBranch
   }) => {
     try {
-      const sessionId = await get().startChat(configId, cwd, mcpServers, projectId)
+      const sessionId = await get().startChat(configId, cwd, mcpServers, projectId, {
+        worktreePath,
+        worktreeBranch
+      })
 
       // Move optimistic UI onto the real session, then remap the tab before send
       // so the user stays on one chat (never a blank disconnected placeholder).
@@ -3260,7 +3301,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               configOptions:
                 real.configOptions.length > 0
                   ? real.configOptions
-                  : (placeholder.configOptions ?? [])
+                  : (placeholder.configOptions ?? []),
+              worktreePath: real.worktreePath ?? placeholder.worktreePath,
+              worktreeBranch: real.worktreeBranch ?? placeholder.worktreeBranch
             }
           }
           delete sessions[placeholderId]
@@ -3588,6 +3631,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           configOptions: [],
           lastError: null,
           createdAt: meta.createdAt,
+          worktreePath: meta.worktreePath,
+          worktreeBranch: meta.worktreeBranch,
           // 'streaming' (not null): the session stays 'closed' until resume
           // resolves, but gap-replay chunks arriving during the
           // `acpApi.resumeSession` window (web subscribe-from-watermark) must

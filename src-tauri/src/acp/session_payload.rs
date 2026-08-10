@@ -255,6 +255,8 @@ mod tests {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            worktree_path: None,
+            worktree_branch: None,
         }
     }
 

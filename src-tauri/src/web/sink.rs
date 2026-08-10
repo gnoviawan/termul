@@ -1425,6 +1425,7 @@ mod tests {
                 runtime_agent_id: None,
                 project_id: None,
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();

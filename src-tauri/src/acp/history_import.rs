@@ -157,6 +157,7 @@ async fn import_session(
         runtime_agent_id: (!agent_id.is_empty()).then(|| agent_id.clone()),
         project_id: project_id.map(str::to_string),
         cwd: PathBuf::from(cwd),
+        ..Default::default()
     };
     persistence
         .register_imported_session(registration, created_at, title)

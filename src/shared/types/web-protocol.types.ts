@@ -282,6 +282,13 @@ export interface PersistedSessionSummary {
   toolCount: number
   lastSeq: number
   resumeEligible: boolean
+  /**
+   * Worktree path the agent runs in (CAP-3). Additive: absent on pre-feature
+   * sessions. Used by the CAP-6 indicator + the deleted-worktree fallback.
+   * State isolation still keys on `cwd`; this field is for display only.
+   */
+  worktreePath?: string
+  worktreeBranch?: string
 }
 
 export interface UserPromptEvent {

@@ -1520,6 +1520,9 @@ pub fn run() {
             commands::worktree_restore,
             commands::worktree_merge_preview,
             commands::worktree_merge_execute,
+            // Worktree-isolated agent chat (CAP-2 base resolution + CAP-5 include carry-over)
+            commands::worktree_resolve_base_branch,
+            commands::worktree_copy_include_files,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,

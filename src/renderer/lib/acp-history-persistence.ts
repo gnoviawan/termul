@@ -34,6 +34,13 @@ export interface SessionIndexEntry {
    */
   lastSeq?: number
   status: SessionStatus
+  /**
+   * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
+   * pre-feature sessions. Powers the CAP-6 indicator + the deleted-worktree
+   * fallback; state isolation still keys on `cwd`.
+   */
+  worktreePath?: string
+  worktreeBranch?: string
 }
 
 export interface SessionPayload {
@@ -217,7 +224,9 @@ export function toPersistedSessionSummaries(
     messageCount: entry.messageCount,
     toolCount: 0,
     lastSeq: entry.lastSeq ?? 0,
-    resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
+    resumeEligible: Boolean(entry.agentConfigId || entry.agentId),
+    worktreePath: entry.worktreePath,
+    worktreeBranch: entry.worktreeBranch
   }))
 }
 
@@ -288,7 +297,9 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
       lastActivityAt: entry.lastActivityAt,
       messageCount: entry.messageCount,
       lastSeq: entry.lastSeq,
-      status: entry.status
+      status: entry.status,
+      worktreePath: entry.worktreePath,
+      worktreeBranch: entry.worktreeBranch
     }))
   }
   if (mode === 'live_only') return []

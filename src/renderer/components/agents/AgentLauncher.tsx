@@ -36,6 +36,13 @@ import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
@@ -61,8 +68,11 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
   type AcpSession,
@@ -123,6 +133,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const activeProject = useActiveProject()
   const projectLabel = activeProject?.name ?? 'this folder'
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
+  const projectIsGitRepo = Boolean(activeProject?.isGitRepo)
+  const projectGitBranch = activeProject?.gitBranch ?? null
+  // CAP-2: isolation mode + base-branch picker. Worktree mode is desktop-only
+  // and requires a git repo; on web or non-repo projects the selector is
+  // hidden and `current` is forced.
+  const canUseWorktree = isTauriContext() && projectIsGitRepo
+  const [isolationMode, setIsolationMode] = useState<'current' | 'worktree'>('current')
+  const [baseBranch, setBaseBranch] = useState<string | null>(null)
+  const [baseBranchInfo, setBaseBranchInfo] = useState<BaseBranchInfo | null>(null)
+  const [worktreeCreating, setWorktreeCreating] = useState(false)
   const { skills } = useAgentSkills(projectRoot)
   const supportedAgents = useResolvedSupportedAcpAgents(acpConfigs)
 
@@ -434,6 +454,48 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [persistSelection, selectedConfigId, supportedAgents])
 
+  // CAP-2: when worktree mode is selected on a desktop git project, resolve
+  // the origin-aware default base branch once so the picker can default to it.
+  // Detached HEAD is surfaced so the launcher can force a base pick.
+  useEffect(() => {
+    if (!canUseWorktree || isolationMode !== 'worktree' || !projectRoot) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await worktreeApi.resolveBaseBranch(projectRoot)
+        if (cancelled) return
+        if (result.success && result.data) {
+          setBaseBranchInfo(result.data)
+          // Default the picker to the resolved base only when the user has
+          // not yet picked AND the repo is NOT in detached HEAD. On detached
+          // HEAD the user must explicitly pick a base (CAP-2 constraint).
+          setBaseBranch((prev) => {
+            if (prev) return prev
+            if (result.data!.isDetached) return null
+            return result.data!.defaultBase
+          })
+        } else {
+          void logFrontendError({
+            level: 'warn',
+            source: 'agentLauncher.resolveBaseBranch',
+            message: `resolveBaseBranch failed: ${result.success ? '' : result.error}`
+          })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'agentLauncher.resolveBaseBranch',
+            message: `resolveBaseBranch threw: ${String(err)}`
+          })
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [canUseWorktree, isolationMode, projectRoot])
+
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
       return
@@ -650,10 +712,102 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     const { wireWithCommand, displayWithCommand } = parts
 
+    // CAP-3: when worktree mode is selected, create the isolated worktree
+    // BEFORE opening the chat placeholder so the agent's cwd is the worktree
+    // path from the first turn. Branch is `chat/{id}` (deterministic, id-scoped
+    // — collision-retry-friendly). Collision-retry appends `-2` once.
+    let worktreePath: string | undefined
+    let worktreeBranch: string | undefined
+    let launchCwd = projectRootSnapshot
+    if (isolationMode === 'worktree' && canUseWorktree) {
+      if (!baseBranch) {
+        toast.error('Pick a base branch for the worktree')
+        launchInFlightRef.current = false
+        return
+      }
+      setWorktreeCreating(true)
+      try {
+        const chatId = crypto.randomUUID().slice(0, 8)
+        const branchName = `chat/${chatId}`
+        const createResult = await worktreeApi.create({
+          projectPath: projectRootSnapshot,
+          name: chatId,
+          branch: branchName,
+          isNewBranch: true,
+          startRef: baseBranch
+        })
+        let worktreePathResult: string | null =
+          createResult.success && createResult.data ? createResult.data.path : null
+        let worktreeBranchResult: string = branchName
+        if (!worktreePathResult) {
+          const failCode = createResult.success ? 'UNKNOWN' : createResult.code
+          if (failCode === 'WORKTREE_EXISTS' || failCode === 'BRANCH_ALREADY_HAS_WORKTREE') {
+            // Collision-retry: append `-2` suffix once (stale state from a
+            // prior crashed run). Never deadlock — a second collision surfaces
+            // an error.
+            const retryId = `${chatId}-2`
+            const retryBranch = `${branchName}-2`
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.worktreeCreate',
+              message: `collision on ${branchName}, retrying as ${retryBranch}`
+            })
+            const retryResult = await worktreeApi.create({
+              projectPath: projectRootSnapshot,
+              name: retryId,
+              branch: retryBranch,
+              isNewBranch: true,
+              startRef: baseBranch
+            })
+            if (retryResult.success && retryResult.data) {
+              worktreePathResult = retryResult.data.path
+              worktreeBranchResult = retryBranch
+            } else {
+              const retryErr = retryResult.success ? 'unknown' : retryResult.error
+              throw new Error(`Worktree creation failed: ${retryErr}`)
+            }
+          } else {
+            const createErr = createResult.success ? 'unknown' : createResult.error
+            throw new Error(`Worktree creation failed: ${createErr}`)
+          }
+        }
+        if (worktreePathResult) {
+          worktreePath = worktreePathResult
+          worktreeBranch = worktreeBranchResult
+          launchCwd = worktreePathResult
+          // CAP-5: carry over untracked files listed in `.worktree-include`.
+          // Symlink/path-escape/already-present defenses run on the host.
+          const includeResult = await worktreeApi.copyIncludeFiles(
+            projectRootSnapshot,
+            worktreePathResult
+          )
+          if (!includeResult.success) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.worktreeInclude',
+              message: `copyIncludeFiles failed: ${includeResult.success ? '' : includeResult.error}`
+            })
+          } else if (includeResult.data) {
+            // Boundary log (info-level): not an error, so console.info is
+            // appropriate (logFrontendError is error/warn only).
+            console.info(
+              `[agentLauncher.worktreeInclude] carry-over ran=${includeResult.data.ran} copied=${includeResult.data.copied} skipped=${includeResult.data.skipped.length}`
+            )
+          }
+        }
+      } catch (err) {
+        setWorktreeCreating(false)
+        toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+        launchInFlightRef.current = false
+        return
+      }
+      setWorktreeCreating(false)
+    }
+
     // Open the chat immediately; ACP spawn/session/send continue in the chat view.
     const store = useAcpStore.getState()
     let sessionId =
-      preparedKeySnapshot != null
+      preparedKeySnapshot != null && isolationMode !== 'worktree'
         ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
         : null
     let usedPlaceholder = false
@@ -673,12 +827,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     if (!sessionId) {
       sessionId = store.createLaunchPlaceholder({
-        cwd: projectRootSnapshot,
+        cwd: launchCwd,
         projectId: projectIdSnapshot,
         models: modelsSnapshot,
         modes: modesSnapshot,
         configOptions: configOptionsSnapshot,
-        initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined
+        initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined,
+        worktreePath,
+        worktreeBranch
       })
       usedPlaceholder = true
       seededOptimistic = syncBlocks.length > 0
@@ -720,7 +876,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           realId = await liveStore.finalizeChatLaunch({
             placeholderId: sessionId,
             configId: configSnapshot.id,
-            cwd: projectRootSnapshot,
+            cwd: launchCwd,
             projectId: projectIdSnapshot,
             mcpServers: undefined,
             pending: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null,
@@ -728,7 +884,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             initialBlocks: blocks.length > 0 ? blocks : null,
             adoptSession: (from, to) => {
               useWorkspaceStore.getState().remapAgentChatSession(from, to, paneSnapshot)
-            }
+            },
+            worktreePath,
+            worktreeBranch
           })
         } else {
           await liveStore.applyPendingLauncherOptions(
@@ -770,7 +928,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveConfigOptions,
     buildPromptParts,
     skillPathsRef,
-    setActiveCommand
+    setActiveCommand,
+    isolationMode,
+    canUseWorktree,
+    baseBranch
   ])
 
   const handleKeyDown = useCallback(
@@ -802,7 +963,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null)
+    (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null) &&
+    // CAP-2: detached HEAD blocks worktree launch until a base is picked.
+    !(isolationMode === 'worktree' && baseBranchInfo?.isDetached && !baseBranch) &&
+    !worktreeCreating
   // `hasSkillToken` comes from `useChatComposer` (destructured above) — the
   // transparent-textarea overlay is only needed when the value carries a skill
   // token; otherwise the textarea text stays visible.
@@ -817,7 +981,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
         <TermulMark size={48} className="text-foreground" />
         <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          {`What should we do in ${projectLabel}?`}
+          {`What should we do in ${projectLabel} on ${projectGitBranch ?? 'detached'}?`}
         </h1>
       </div>
 
@@ -908,6 +1072,64 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               onRemove={removeAttachment}
               className="px-5 pt-4"
             />
+            {canUseWorktree && (
+              <div className="flex items-center gap-2 px-5 pb-1 pt-3 text-xs text-muted-foreground">
+                <Select
+                  value={isolationMode}
+                  onValueChange={(value) =>
+                    value === 'current' || value === 'worktree'
+                      ? setIsolationMode(value)
+                      : undefined
+                  }
+                >
+                  <SelectTrigger
+                    aria-label="Isolation mode"
+                    className="h-7 w-[140px] gap-1 px-2 text-xs"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="current">Current branch</SelectItem>
+                    <SelectItem value="worktree">Worktree</SelectItem>
+                  </SelectContent>
+                </Select>
+                {isolationMode === 'worktree' && (
+                  <Select
+                    value={baseBranch ?? undefined}
+                    onValueChange={(value) => setBaseBranch(value)}
+                  >
+                    <SelectTrigger
+                      aria-label="Worktree base branch"
+                      className="h-7 w-[180px] gap-1 px-2 text-xs"
+                    >
+                      <SelectValue placeholder={baseBranchInfo?.defaultBase ?? 'base branch'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {baseBranchInfo?.currentBranch && (
+                        <SelectItem value={baseBranchInfo.currentBranch}>
+                          {baseBranchInfo.currentBranch} (current)
+                        </SelectItem>
+                      )}
+                      {baseBranchInfo &&
+                        baseBranchInfo.currentBranch !== baseBranchInfo.defaultBase && (
+                          <SelectItem value={baseBranchInfo.defaultBase}>
+                            {baseBranchInfo.defaultBase}
+                          </SelectItem>
+                        )}
+                      {projectGitBranch &&
+                        !baseBranchInfo?.currentBranch?.includes(projectGitBranch) && (
+                          <SelectItem value={projectGitBranch}>{projectGitBranch}</SelectItem>
+                        )}
+                    </SelectContent>
+                  </Select>
+                )}
+                {isolationMode === 'worktree' && baseBranchInfo?.isDetached && !baseBranch && (
+                  <span className="text-destructive">
+                    Detached HEAD — pick a base branch to launch
+                  </span>
+                )}
+              </div>
+            )}
             <div className="px-5 pb-2 pt-4">
               {/* Transparent-textarea overlay: mirrors the value with inline
                   SkillChip pills. The textarea text is transparent with a

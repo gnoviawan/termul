@@ -1678,6 +1678,7 @@ async fn handle_create_session(
             SessionCreationContext {
                 project_id,
                 ephemeral: parsed.ephemeral,
+                ..Default::default()
             },
         )
         .await
@@ -2053,6 +2054,7 @@ async fn execute_project_switch(
                     SessionCreationContext {
                         project_id: Some(target.project_id.clone()),
                         ephemeral: false,
+                        ..Default::default()
                     },
                 )
                 .await?;
@@ -3161,6 +3163,7 @@ mod tests {
                 runtime_agent_id: Some("agent-a".to_string()),
                 project_id: None,
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -3417,6 +3420,7 @@ mod tests {
                 runtime_agent_id: Some("agent-cross".to_string()),
                 project_id: None,
                 cwd: cwd.clone(),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -5041,6 +5045,7 @@ mod tests {
                 runtime_agent_id: Some("agent-1".to_string()),
                 project_id: Some("p-1".to_string()),
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -5100,6 +5105,7 @@ mod tests {
                 runtime_agent_id: Some("runtime-p".to_string()),
                 project_id: Some("p-1".to_string()),
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -5219,6 +5225,7 @@ mod tests {
                 runtime_agent_id: None,
                 project_id: None,
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -5269,6 +5276,7 @@ mod tests {
                 runtime_agent_id: None,
                 project_id: None,
                 cwd,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -5361,6 +5369,7 @@ mod tests {
                 runtime_agent_id: Some("agent-1".to_string()),
                 project_id: Some("p-1".to_string()),
                 cwd: cwd.clone(),
+                ..Default::default()
             })
             .await
             .unwrap();

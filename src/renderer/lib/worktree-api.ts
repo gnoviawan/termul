@@ -34,6 +34,33 @@ export interface MergePreviewInfo {
 }
 
 /**
+ * Origin-aware default base branch + detached-HEAD guard (CAP-2). The launcher
+ * uses `defaultBase` as the initial base-branch picker value; `isDetached`
+ * forces an explicit pick before a worktree launch.
+ */
+export interface BaseBranchInfo {
+  defaultBase: string
+  currentBranch?: string
+  isDetached: boolean
+}
+
+/**
+ * Result of `.worktree-include` carry-over (CAP-5). `ran` is the number of
+ * patterns that matched at least one file; `copied` is files actually copied;
+ * `skipped` carries per-file reasons (symlink / path-escape / already-present).
+ */
+export interface IncludeSkipReason {
+  path: string
+  reason: string
+}
+
+export interface IncludeCopyResult {
+  ran: number
+  copied: number
+  skipped: IncludeSkipReason[]
+}
+
+/**
  * Invoke a worktree Tauri command, returning the `IpcResult<T>` shape callers
  * expect. On web/remote mode (`!isTauriContext()`), returns an explicit
  * `WEB_UNSUPPORTED` result instead of letting the stubbed `invoke()` reject
@@ -176,5 +203,27 @@ export const worktreeApi = {
    * Execute a merge from the worktree's current branch to target_branch.
    */
   mergeExecute: (worktreePath: string, targetBranch: string): Promise<IpcResult<string>> =>
-    worktreeInvoke<string>('worktree_merge_execute', { worktreePath, targetBranch })
+    worktreeInvoke<string>('worktree_merge_execute', { worktreePath, targetBranch }),
+
+  /**
+   * Resolve the default base branch for a new chat worktree (CAP-2). Returns
+   * the origin/HEAD default with a `main`/`master`/current fallback chain and
+   * a detached-HEAD flag so the launcher can force a base pick.
+   */
+  resolveBaseBranch: (projectPath: string): Promise<IpcResult<BaseBranchInfo>> =>
+    worktreeInvoke<BaseBranchInfo>('worktree_resolve_base_branch', { projectPath }),
+
+  /**
+   * Carry over untracked files listed in `.worktree-include` into a fresh
+   * worktree (CAP-5). Symlink/path-escape/already-present defenses run per
+   * file; the result reports `ran`/`copied`/`skipped` with per-file reasons.
+   */
+  copyIncludeFiles: (
+    projectPath: string,
+    worktreePath: string
+  ): Promise<IpcResult<IncludeCopyResult>> =>
+    worktreeInvoke<IncludeCopyResult>('worktree_copy_include_files', {
+      projectPath,
+      worktreePath
+    })
 }

@@ -18,6 +18,7 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
@@ -120,6 +121,17 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
+  // CAP-6: worktree/branch indicator. Worktree mode shows the session's
+  // worktree path + branch; current-branch mode falls back to the project's
+  // reactive `gitBranch`. Switching chats re-renders via `session`.
+  const projectGitBranch = useProjectStore(
+    (s) =>
+      s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? (session.cwd ? null : null)
+  )
+  const isolationLabel =
+    session.worktreePath && session.worktreeBranch
+      ? `${session.worktreePath} · ${session.worktreeBranch}`
+      : (session.worktreeBranch ?? projectGitBranch ?? null)
   const {
     model,
     thoughtLevel,
@@ -779,10 +791,17 @@ export function ChatInputBar({
         </ComposerBeamShell>
         <div
           className={cn(
-            'flex items-center px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
+            'flex items-center justify-between gap-2 px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
             focused ? 'opacity-100' : 'opacity-0'
           )}
         >
+          {isolationLabel ? (
+            <span className="truncate" title={isolationLabel}>
+              {isolationLabel}
+            </span>
+          ) : (
+            <span />
+          )}
           {showStop ? (
             <>
               <KbdHint k="Esc" /> to stop

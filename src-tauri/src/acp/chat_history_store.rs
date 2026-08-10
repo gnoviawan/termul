@@ -42,6 +42,14 @@ pub struct ChatHistoryIndexEntry {
     pub last_activity_at: u64,
     pub message_count: u64,
     pub status: ChatHistoryStatus,
+    /// Worktree path the agent runs in (CAP-3). Additive: old entries
+    /// deserialize with `None` (the renderer-authored metadata payload omits
+    /// it for pre-feature sessions). Used by the CAP-4 relaunch lookup +
+    /// CAP-6 indicator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
