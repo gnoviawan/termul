@@ -821,6 +821,13 @@ function withSessionResumeError(
  * End a session/load replay after the macrotask queue drains, so replayed
  * chunks that lose the IPC race against the `acp_load_session` response are
  * still accepted (mirrors `scheduleTurnEnd`). Idempotent when already cleared.
+ *
+ * After clearing `replaying`, projects a title that arrived during replay into
+ * the session index: a `session_info_update` that landed while `replaying` was
+ * truthy set `session.title` but was skipped by `persistSession` (which guards
+ * on `session.replaying`). Now that replay has cleared, `persistSession` can
+ * safely project the title so the sidebar converges without a partial
+ * transcript projection.
  */
 function scheduleReplayEnd(
   set: TurnEndSetter,
@@ -829,14 +836,26 @@ function scheduleReplayEnd(
 ): void {
   setTimeout(() => {
     if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
+    let replayCleared = false
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current?.replaying) return {}
+      replayCleared = true
       return {
         messages: finalizeStreaming(s.messages, sessionId),
         sessions: { ...s.sessions, [sessionId]: { ...current, replaying: null } }
       }
     })
+    // Project a replay-time title into the index once replay has cleared.
+    // Gate on `sessionIndex` membership like the other projection calls so an
+    // un-promoted (ephemeral) session is never persisted by a replay event.
+    if (replayCleared) {
+      const state = useAcpStore.getState()
+      const session = state.sessions[sessionId]
+      if (session?.title && state.sessionIndex.some((e) => e.id === sessionId)) {
+        persistSession(state, sessionId, (entries) => set({ sessionIndex: entries }))
+      }
+    }
   }, 0)
 }
 
@@ -1191,6 +1210,54 @@ function persistSession(
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
+}
+
+/**
+ * Merge a host session-index response with the locally-known projection so a
+ * stale async load cannot remove a just-created row or revert a
+ * freshly-titled session to `Untitled Chat`. Preserves local entries that are
+ * newer than the host response (match by id, keep the one with the newer
+ * `lastActivityAt`) or absent from it but belonging to a live session (created
+ * locally and not yet flushed to the durable index). The initial empty-load
+ * case (no local entries) applies the host response verbatim.
+ */
+function mergeSessionIndexEntries(
+  local: SessionIndexEntry[],
+  host: SessionIndexEntry[],
+  liveSessionIds: Set<SessionId>
+): SessionIndexEntry[] {
+  if (local.length === 0) return host
+  const hostById = new Map(host.map((e) => [e.id, e] as const))
+  const merged: SessionIndexEntry[] = [...host]
+  const mergedIds = new Set(host.map((e) => e.id))
+  for (const entry of local) {
+    const hostEntry = hostById.get(entry.id)
+    if (hostEntry) {
+      // Host has this entry: keep the newer projection. On ties, prefer
+      // local (the source of the freshest title) so a same-millisecond
+      // host flush cannot revert a just-set title to `Untitled Chat`.
+      if ((entry.lastActivityAt ?? 0) >= (hostEntry.lastActivityAt ?? 0)) {
+        const idx = merged.findIndex((e) => e.id === entry.id)
+        if (idx >= 0) {
+          // Field-level merge: carry forward host-only durable fields
+          // (messageCount, lastSeq) so the local projection does not
+          // regress durable-advanced metadata while preserving the
+          // local title/activity.
+          merged[idx] = {
+            ...hostEntry,
+            ...entry,
+            messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
+            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0)
+          }
+        }
+      }
+    } else if (liveSessionIds.has(entry.id) && !mergedIds.has(entry.id)) {
+      // Host omits it but it is a live session (created/restored locally and
+      // not yet flushed to the durable index): keep the local projection.
+      merged.push(entry)
+    }
+  }
+  return merged
 }
 
 /**
@@ -1574,6 +1641,14 @@ const inFlightDiscoveredOpens = new Map<SessionId, InFlightDiscoveredOpen>()
  */
 const sessionReopenGenerations = new Map<SessionId, number>()
 
+/**
+ * Monotonic generation counter for `loadSessionIndex`. An older async index
+ * request that resolves after a local session/title mutation must not replace
+ * or downgrade the local projection; the stale response is discarded when the
+ * generation is no longer current.
+ */
+let sessionIndexLoadGeneration = 0
+
 /** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
 const inFlightCrashedRetries = new Set<SessionId>()
@@ -1655,6 +1730,11 @@ export function _resetInFlightHistoryOpensForTesting(): void {
     if (tracker.timer) clearTimeout(tracker.timer)
   }
   restorePreloadTrackers.clear()
+}
+
+/** Test-only: reset the index load generation counter between tests. */
+export function _resetSessionIndexLoadGenerationForTesting(): void {
+  sessionIndexLoadGeneration = 0
 }
 
 type EnsureLiveAgentOptions = {
@@ -3565,11 +3645,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   loadSessionIndex: async () => {
+    // Bump the monotonic generation so a stale response that resolves after a
+    // local session/title mutation is discarded rather than overwriting the
+    // newer projection.
+    const generation = ++sessionIndexLoadGeneration
     const entries = await loadSessionIndexFromDisk()
+    if (generation !== sessionIndexLoadGeneration) return
     // Continue the placeholder counter from the highest persisted suffix so a
     // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
     rebaseUntitledCounter(entries)
-    set({ sessionIndex: entries })
+    // Merge with the locally-known projection so a stale response cannot
+    // remove a just-created row or revert a freshly-titled session. The
+    // initial empty-load case (no local entries) applies the host response
+    // verbatim.
+    const current = get().sessionIndex
+    const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
+    const merged = mergeSessionIndexEntries(current, entries, liveSessionIds)
+    set({ sessionIndex: merged })
   },
 
   openHistorySession: async (id) => {

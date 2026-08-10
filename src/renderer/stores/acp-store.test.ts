@@ -80,6 +80,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   _clearPayloadCacheForTesting,
   getCachedSessionPayload,
+  loadSessionIndex,
   setCachedSessionPayload
 } from '@/lib/acp-history-persistence'
 import {
@@ -97,6 +98,7 @@ import {
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
   _resetLoadingOlderForTesting,
+  _resetSessionIndexLoadGenerationForTesting,
   agentReuseKey,
   type ChatMessage,
   collectProjectsWithActiveAgentChat,
@@ -264,6 +266,7 @@ describe('acp-store', () => {
     _resetInFlightPreparedForTesting()
     _resetCoalesceForTesting()
     _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -3899,6 +3902,178 @@ describe('acp-store', () => {
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s-replay'].replaying).toBeNull()
     vi.mocked(invoke).mockReset()
+  })
+
+  it('projects a title that arrived during session/load replay once the replay window closes', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessionIndex: [
+        {
+          id: 's-replay-title',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-1',
+          title: 'Untitled Chat',
+          cwd: '/w',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          lastSeq: 1,
+          status: 'closed'
+        }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-replay-title',
+        agentId: 'agent-1',
+        title: 'Untitled Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'q' }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_load_session') {
+        throw new Error(`unexpected invoke command in replay-title test: ${cmd}`)
+      }
+      // Replay a chunk (flips replaying to 'streaming' so the replay window
+      // stays open one macrotask past the response).
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: 's-replay-title',
+        role: 'user',
+        content: { type: 'text', text: 'replayed q' }
+      })
+      // During replay, a session_info_update arrives with a real title. The
+      // live session title updates immediately, but persistSession must be
+      // skipped (replaying is truthy) so the index stays Untitled.
+      useAcpStore.getState()._onSessionInfoUpdate({
+        agentId: 'agent-1',
+        sessionId: 's-replay-title',
+        title: 'Agent Title'
+      })
+      return undefined
+    })
+    await useAcpStore.getState().openHistorySession('s-replay-title')
+    // Title is set on the session during replay.
+    expect(useAcpStore.getState().sessions['s-replay-title'].title).toBe('Agent Title')
+    // Index still shows Untitled (persistSession skipped during replay).
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 's-replay-title')?.title).toBe(
+      'Untitled Chat'
+    )
+    // Replay window still open.
+    expect(useAcpStore.getState().sessions['s-replay-title'].replaying).toBe('streaming')
+    await flushTurnEnd()
+    // Replay cleared -> persistSession projects the title into the index.
+    expect(useAcpStore.getState().sessions['s-replay-title'].replaying).toBeNull()
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 's-replay-title')?.title).toBe(
+      'Agent Title'
+    )
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('does not remove a locally-created session or revert a title when a stale index load resolves', async () => {
+    const localActivity = Date.now()
+    useAcpStore.setState({
+      sessions: {
+        's-local': {
+          id: 's-local',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: 'Important Title',
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: localActivity
+        },
+        's-titled': {
+          id: 's-titled',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: 'My Title',
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: localActivity
+        }
+      },
+      messages: { 's-local': [], 's-titled': [] },
+      sessionIndex: [
+        {
+          id: 's-local',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-1',
+          title: 'Important Title',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: localActivity,
+          lastActivityAt: localActivity,
+          messageCount: 0,
+          status: 'active'
+        },
+        {
+          id: 's-titled',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-1',
+          title: 'My Title',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: localActivity,
+          lastActivityAt: localActivity,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    // Stale host response: omits s-local entirely; s-titled present but with
+    // an Untitled fallback + older activity (the request predates the local
+    // title mutation).
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      {
+        id: 's-titled',
+        agentId: 'agent-1',
+        agentConfigId: 'cfg-1',
+        title: 'Untitled Chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: localActivity,
+        lastActivityAt: localActivity - 1000,
+        messageCount: 0,
+        status: 'active'
+      }
+    ])
+    await useAcpStore.getState().loadSessionIndex()
+    const index = useAcpStore.getState().sessionIndex
+    // s-local preserved (live session, absent from stale host response).
+    expect(index.some((e) => e.id === 's-local')).toBe(true)
+    expect(index.find((e) => e.id === 's-local')?.title).toBe('Important Title')
+    // s-titled keeps the newer local title (not reverted to Untitled).
+    expect(index.find((e) => e.id === 's-titled')?.title).toBe('My Title')
   })
 
   it('openHistorySession accepts straggler chunks of an in-progress replay after load resolves', async () => {

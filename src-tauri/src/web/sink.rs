@@ -440,7 +440,18 @@ impl WsRelaySink {
                 snapshot_events: Vec::new(),
                 base_seq: 1,
             });
-        state.last_seq = state.last_seq.saturating_add(1);
+        // Reconcile the cached frontier with the durable frontier before
+        // incrementing. Background title generation
+        // (`maybe_generate_background_title`) writes a durable
+        // `local_title_generated` event directly through
+        // `SessionPersistence::enqueue_event` (advancing durable `last_seq`
+        // past the relay's cached value) BEFORE the synthetic
+        // `session_info_update` reaches the relay. Without this
+        // reconciliation the relay would assign a seq that collides with the
+        // durable record, tripping the fail-closed `record.seq <=
+        // current.last_seq` check in `append_record` on the next durable
+        // enqueue.
+        state.last_seq = state.last_seq.max(durable_last).saturating_add(1);
         let seq = state.last_seq;
         let se = SequencedEvent::new(Some(sid.to_string()), seq, type_, payload);
         if state.events.is_empty() {
@@ -1007,13 +1018,22 @@ impl EventSink for WsRelaySink {
             }
         }
 
-        // CAP-2: history is now host-owned. When a session is created or
-        // finalized at the host (regardless of which client drove it), notify
-        // every connected client so sidebars refetch the host index instead of
-        // depending on a desktop renderer save. Only fires when durable
-        // persistence is attached (live-only mode has nothing to refetch).
+        // CAP-2: history is now host-owned. When a session is created,
+        // finalized, or its title metadata changes at the host (regardless of
+        // which client drove it), notify every connected client so sidebars
+        // refetch the host index instead of depending on a desktop renderer
+        // save. `session_info_update` covers agent-supplied titles;
+        // `local_title_generated` covers background title generation. Only
+        // fires when durable persistence is attached (live-only mode has
+        // nothing to refetch).
         if self.persistence().is_some()
-            && matches!(type_, "session_created" | "session_closed")
+            && matches!(
+                type_,
+                "session_created"
+                    | "session_closed"
+                    | "session_info_update"
+                    | "local_title_generated"
+            )
         {
             self.notify_history_changed();
         }
@@ -1126,7 +1146,10 @@ pub fn broadcast_chat_history_changed(relay: &Arc<WsRelaySink>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::session_persistence::SessionRegistration;
+    use crate::acp::session_persistence::{
+        now_millis, PersistedEventRecord, SessionPersistence, SessionRegistration,
+        SESSION_SCHEMA_VERSION,
+    };
     use serde::Serialize;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1789,6 +1812,152 @@ mod tests {
             drained.iter().all(|event| event.type_ != "chat_history_changed"),
             "no history notification without durable persistence"
         );
+    }
+
+    /// Regression: background title generation writes a durable
+    /// `local_title_generated` event directly through
+    /// `SessionPersistence::enqueue_event` (advancing durable `last_seq`)
+    /// BEFORE the synthetic `session_info_update` reaches the relay. The relay
+    /// must reconcile its cached `last_seq` with the durable frontier so it
+    /// assigns the NEXT unique seq — not a colliding one that the fail-closed
+    /// `append_record` check would reject.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn relay_reconciles_cached_seq_with_durable_frontier_after_background_title() {
+        let root = temp_dir("seq-reconcile");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-coll".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+
+        // 1. Relay emits a session-scoped event → assigns seq 1 (durable
+        //    last_seq advances to 1 via assign_and_append's enqueue).
+        fan_out(
+            &sinks,
+            Some("sess-coll"),
+            "acp:tool_call",
+            &TestPayload::new("a", "sess-coll", "first"),
+        );
+        assert_eq!(relay.session_watermark("sess-coll"), 1);
+        assert_eq!(persistence.last_seq("sess-coll").unwrap(), 1);
+
+        // 2. Background title gen writes durable seq 2 directly through
+        //    `SessionPersistence` (mirrors `maybe_generate_background_title`).
+        //    The relay's cached `last_seq` is still 1.
+        let record = PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: "sess-coll".to_string(),
+            seq: 2,
+            type_: "local_title_generated".to_string(),
+            recorded_at: now_millis(),
+            payload: json!({"sessionId": "sess-coll", "title": "Generated Title"}),
+        };
+        persistence.enqueue_event(record).unwrap();
+        persistence.flush_session("sess-coll").await.unwrap();
+        assert_eq!(persistence.last_seq("sess-coll").unwrap(), 2);
+
+        // 3. Synthetic `session_info_update` through the relay must assign
+        //    seq 3 (reconciled: max(cached=1, durable=2) + 1 = 3), NOT a
+        //    colliding seq 2. Without reconciliation the durable enqueue
+        //    would be rejected by the fail-closed `seq > last_seq` check.
+        fan_out(
+            &sinks,
+            Some("sess-coll"),
+            "acp:session_info_update",
+            &TestPayload::new("a", "sess-coll", "title-sync"),
+        );
+        assert_eq!(
+            relay.session_watermark("sess-coll"),
+            3,
+            "relay reconciles cached frontier with durable frontier"
+        );
+        assert_eq!(
+            persistence.last_seq("sess-coll").unwrap(),
+            3,
+            "durable enqueue accepted (no collision)"
+        );
+
+        // 4. Persistence stays healthy: a subsequent flush + direct enqueue
+        //    at the next seq succeeds (proving no corrupt/gapped log).
+        persistence.flush_session("sess-coll").await.unwrap();
+        let next_record = PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: "sess-coll".to_string(),
+            seq: 4,
+            type_: "tool_call".to_string(),
+            recorded_at: now_millis(),
+            payload: json!({"sessionId": "sess-coll"}),
+        };
+        assert!(
+            persistence.enqueue_event(next_record).is_ok(),
+            "subsequent durable enqueue succeeds (healthy sequence)"
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Title metadata events (`session_info_update` for agent-supplied titles,
+    /// `local_title_generated` for background titles) fan a
+    /// `chat_history_changed` notification so connected sidebars refetch the
+    /// host index and pick up the new title. Extends the
+    /// `session_lifecycle_broadcasts_history_changed_when_persistent` coverage.
+    #[tokio::test]
+    async fn title_metadata_events_broadcast_history_changed_when_persistent() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-sink-title-broadcast-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-title".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd: root.join("cwd"),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (_client, mut rx, _replay) = relay.subscribe("sess-title", None).await;
+
+        for type_ in ["acp:session_info_update", "acp:local_title_generated"] {
+            relay.emit(&AcpEvent {
+                sid: Some("sess-title".to_string()),
+                type_,
+                payload: json!({"agentId": "a-1", "sessionId": "sess-title", "title": "T"}),
+            });
+        }
+
+        let drained = drain_rx(&mut rx);
+        let notifications = drained
+            .iter()
+            .filter(|event| event.type_ == "chat_history_changed")
+            .count();
+        assert_eq!(
+            notifications, 2,
+            "each title metadata event fans one chat_history_changed"
+        );
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// AD-4: `CapturingEventSink` accumulates only `agent_message_chunk`

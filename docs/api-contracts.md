@@ -379,6 +379,17 @@ See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent 
 
 When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
 
+### `acp_send_prompt` durability ordering
+
+Desktop prompt persistence mirrors the WS `send_prompt` handler (`src-tauri/src/web/ws.rs`) so a transport failure can never erase an accepted user message. Before dispatching through `AcpManager::send_prompt`, the command:
+
+1. verifies authoritative session ownership (`AcpManager::owns_session`) — rejects a cross-agent session id before any durable write;
+2. resolves the ephemeral flag (`AcpManager::is_ephemeral_session`) — backend-ephemeral utility sessions are skipped (no durable history or sidebar row);
+3. for non-ephemeral sessions, persists the accepted prompt through `WsRelaySink::persist_user_prompt` (the relay sequence authority + durability barrier) with the same payload shape as the web path (`{agentId, sessionId, turnId, content}`; `turnId` is `null` on the desktop path);
+4. only then dispatches through `AcpManager::send_prompt`.
+
+A persistence failure rejects dispatch (the prompt is not erased) and is logged with session context only — never prompt content. This establishes first-message title provenance on restore: a reopened chat materializes the user bubble (from the durable `user_prompt` record) and derives the title, even for agents (e.g. OpenCode) that do not reliably send a live `session_info_update` title.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.
