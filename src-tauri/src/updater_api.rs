@@ -29,16 +29,26 @@ const REQUEST_TIMEOUT_SECS: u64 = 120;
 /// Shared reqwest client (constructed once): sets a `User-Agent` so GitHub's
 /// anonymous request gate doesn't 403, and a total request timeout so a hung
 /// manifest endpoint can't stall the check indefinitely. Mirrors the
-/// `http_client()` pattern in `server_update.rs`.
-fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
+/// `embedded_public_key()` `OnceLock<Result<T>>` pattern in `server_update.rs`.
+///
+/// Returns `Result` so a `ClientBuilder::build()` failure (TLS init, resolver
+/// config) propagates as an `Err` that `fetch_channel_manifest` maps to
+/// `NETWORK_ERROR` — NOT a panic. (`reqwest::Client::new()` internally
+/// `expect`s the build result, so the previous `unwrap_or_else` fallback could
+/// unwind the periodic check on a TLS-init failure instead of surfacing an
+/// error.)
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(USER_AGENT)
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+                .build()
+                .map_err(|e| format!("network error: failed to build updater HTTP client: {e}"))
+        })
+        .as_ref()
+        .map_err(|e| e.to_string())
 }
 
 /// Fetch + parse the per-channel manifest.
@@ -60,7 +70,7 @@ pub async fn fetch_channel_manifest(channel: &str) -> Result<serde_json::Value, 
         url
     );
 
-    let response = http_client()
+    let response = http_client()?
         .get(url)
         .header("Accept", "application/json")
         .send()
