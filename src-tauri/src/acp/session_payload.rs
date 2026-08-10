@@ -249,6 +249,7 @@ mod tests {
             project_id: Some("project-1".to_string()),
             cwd: "/work/project".to_string(),
             title: Some("Chat title".to_string()),
+            title_source: None,
             created_at: 100,
             last_activity_at: 900,
             status: PersistedSessionStatus::Active,

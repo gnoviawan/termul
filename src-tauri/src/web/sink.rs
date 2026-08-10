@@ -104,6 +104,78 @@ impl EventSink for TauriEventSink {
     }
 }
 
+/// Sink that collects the agent's streamed response to a background
+/// title-generation prompt (AD-4). Constructed per background generation and
+/// passed as the SOLE sink in the spawned background agent's `sinks` list —
+/// NOT in `AcpManager::sinks` — so background session events never reach the
+/// renderer (`TauriEventSink`) or the WS relay (`WsRelaySink`). Only
+/// `acp:message_chunk` events whose `role == "agent"` and whose `content` is a
+/// text block are accumulated; every other event type (lifecycle, tool calls,
+/// user/thought chunks) is dropped — the background session is a throwaway.
+///
+/// The caller reads the accumulated text via [`CapturingEventSink::take`] after
+/// the background turn completes, then feeds it to `normalize_title`.
+pub struct CapturingEventSink {
+    buffer: Arc<Mutex<String>>,
+}
+
+impl CapturingEventSink {
+    /// Construct a fresh capturing sink with an empty buffer.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
+    /// Clone the internal buffer handle so a concurrent caller can drain the
+    /// captured text without holding the sink itself.
+    #[must_use]
+    pub fn buffer_handle(&self) -> Arc<Mutex<String>> {
+        Arc::clone(&self.buffer)
+    }
+
+    /// Take the accumulated text, leaving an empty buffer behind. The caller
+    /// normalizes the captured text into a session title via
+    /// `session_persistence::normalize_title`.
+    pub fn take(&self) -> String {
+        std::mem::take(&mut *self.buffer.lock())
+    }
+}
+
+impl Default for CapturingEventSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventSink for CapturingEventSink {
+    fn emit(&self, event: &AcpEvent) {
+        // Only collect agent_message_chunk text — the agent's streamed
+        // response to the title-gen prompt. The `role` field is serialized
+        // snake_case ("agent" | "user" | "thought"); only "agent" chunks
+        // carry the title response.
+        if event.type_ != "acp:message_chunk" {
+            return;
+        }
+        let role = event.payload.get("role").and_then(Value::as_str);
+        if role != Some("agent") {
+            return;
+        }
+        let content = event.payload.get("content");
+        let content_type = content.and_then(|c| c.get("type")).and_then(Value::as_str);
+        if content_type != Some("text") {
+            return;
+        }
+        if let Some(text) = content
+            .and_then(|c| c.get("text"))
+            .and_then(Value::as_str)
+        {
+            self.buffer.lock().push_str(text);
+        }
+    }
+}
+
 /// Live WS relay sink (Story 1.4 — replaces the Story 1.1 in-memory recorder).
 ///
 /// Owns the per-session append-only bounded event logs (the canonical replay
@@ -1716,5 +1788,92 @@ mod tests {
             drained.iter().all(|event| event.type_ != "chat_history_changed"),
             "no history notification without durable persistence"
         );
+    }
+
+    /// AD-4: `CapturingEventSink` accumulates only `agent_message_chunk`
+    /// text (role="agent", content.type="text"). User/thought chunks, tool
+    /// calls, and other event types are dropped so the background session's
+    /// noise never pollutes the captured title.
+    #[test]
+    fn capturing_sink_accumulates_only_agent_message_chunk_text() {
+        let sink = CapturingEventSink::new();
+        // Two agent text chunks — accumulated.
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"agent",
+                "content":{"type":"text","text":"Hello"},
+            }),
+        });
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"agent",
+                "content":{"type":"text","text":" world"},
+            }),
+        });
+        // User-role chunk — dropped (not the agent's response).
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"user",
+                "content":{"type":"text","text":"ignored"},
+            }),
+        });
+        // Thought chunk — dropped.
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"thought",
+                "content":{"type":"text","text":"internal"},
+            }),
+        });
+        // Non-message_chunk event — dropped.
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:tool_call",
+            payload: json!({"agentId":"bg-agent","sessionId":"bg-sess"}),
+        });
+        assert_eq!(sink.take(), "Hello world");
+        // `take` empties the buffer.
+        assert_eq!(sink.take(), "");
+    }
+
+    /// `CapturingEventSink` ignores content blocks that are not text (e.g.
+    /// images) — the title prompt asks for plain text, but a defensive guard
+    /// keeps non-text blocks from polluting the captured title.
+    #[test]
+    fn capturing_sink_skips_non_text_content_blocks() {
+        let sink = CapturingEventSink::new();
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"agent",
+                "content":{"type":"image","data":"base64-not-a-title"},
+            }),
+        });
+        sink.emit(&AcpEvent {
+            sid: Some("bg-sess".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({
+                "agentId":"bg-agent","sessionId":"bg-sess","role":"agent",
+                "content":{"type":"text","text":"real title"},
+            }),
+        });
+        assert_eq!(sink.take(), "real title");
+    }
+
+    /// `CapturingEventSink` is `Send + Sync` (required to be a `dyn EventSink`
+    /// threaded into the driver thread via `Arc<dyn EventSink>`).
+    #[test]
+    fn capturing_event_sink_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+        assert_send_sync::<CapturingEventSink>();
+        assert_send_sync::<Arc<CapturingEventSink>>();
     }
 }

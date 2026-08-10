@@ -12,6 +12,7 @@ const {
   discoveredSessionsRef,
   agentsRef,
   agentStatusRef,
+  activeSessionIdRef,
   projectRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
@@ -23,6 +24,7 @@ const {
   discoveredSessionsRef: { current: {} as Record<string, unknown[]> },
   agentsRef: { current: {} as Record<string, unknown> },
   agentStatusRef: { current: {} as Record<string, string> },
+  activeSessionIdRef: { current: null as string | null },
   projectRef: {
     current: null as {
       id: string
@@ -51,7 +53,8 @@ vi.mock('@/stores/acp-store', () => {
       agentConfigs: [],
       configToLiveAgent: {},
       discoverSessions: mockDiscover,
-      openDiscoveredSession: mockOpenDiscovered
+      openDiscoveredSession: mockOpenDiscovered,
+      activeSessionId: activeSessionIdRef.current
     })
   // Stubs for the store helpers the component imports.
   const configIdFromReuseKey = () => ''
@@ -107,6 +110,7 @@ describe('ChatHistoryTab scoping', () => {
     discoveredSessionsRef.current = {}
     agentsRef.current = {}
     agentStatusRef.current = {}
+    activeSessionIdRef.current = null
     projectRef.current = {
       id: 'p1',
       path: '/work',
@@ -202,6 +206,9 @@ describe('ChatHistoryTab scoping', () => {
         { sessionId: 'cli-1', cwd: '/work', title: 'CLI chat', updatedAt: '2026-01-01' }
       ]
     }
+    // AD-7: the discovered session is only visible when it's the active
+    // session (exemption). Set it active so the click test can reach it.
+    activeSessionIdRef.current = 'cli-1'
     let resolveOpen: (() => void) | undefined
     mockOpenDiscovered.mockImplementationOnce(
       () =>
@@ -219,6 +226,79 @@ describe('ChatHistoryTab scoping', () => {
       mockAddTab.mock.invocationCallOrder[0]
     )
     resolveOpen?.()
+  })
+
+  // AD-7: discovered sessions (agent-reported via ACP `session/list` but never
+  // recorded by termul) are hidden from the sidebar — EXCEPT the currently-
+  // active session so the open tab is never orphaned.
+  it('hides discovered sessions when no discovered session is active', () => {
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'Hidden CLI chat', updatedAt: '2026-01-01' },
+        { sessionId: 'cli-2', cwd: '/work', title: 'Another hidden', updatedAt: '2026-01-01' }
+      ]
+    }
+    // No active session — all discovered entries are filtered out.
+    activeSessionIdRef.current = null
+
+    render(<ChatHistoryTab />)
+    expect(screen.queryByText('Hidden CLI chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Another hidden')).not.toBeInTheDocument()
+  })
+
+  it('shows the active discovered session despite the filter (active-session exemption)', () => {
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'Active CLI chat', updatedAt: '2026-01-01' },
+        // A second discovered session is still hidden.
+        { sessionId: 'cli-2', cwd: '/work', title: 'Hidden other', updatedAt: '2026-01-01' }
+      ]
+    }
+    // The user opened cli-1 via `openDiscoveredSession` — it's the active tab.
+    activeSessionIdRef.current = 'cli-1'
+
+    render(<ChatHistoryTab />)
+    expect(screen.getByText('Active CLI chat')).toBeInTheDocument()
+    expect(screen.queryByText('Hidden other')).not.toBeInTheDocument()
+  })
+
+  it('does not hide local mirror sessions even when a discovered session is active', () => {
+    sessionIndexRef.current = [
+      entry('local-1', { projectId: 'p1', cwd: '/work', title: 'Local chat' })
+    ]
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'Active discovered', updatedAt: '2026-01-01' }
+      ]
+    }
+    activeSessionIdRef.current = 'cli-1'
+
+    render(<ChatHistoryTab />)
+    // Local mirror stays visible (discovered filter only targets discovered:true).
+    expect(screen.getByText('Local chat')).toBeInTheDocument()
+    // Active discovered session is exempted.
+    expect(screen.getByText('Active discovered')).toBeInTheDocument()
   })
 
   it('caps the rendered rows and lazily loads more', () => {

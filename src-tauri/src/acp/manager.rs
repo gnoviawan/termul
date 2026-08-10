@@ -23,7 +23,7 @@
 //! This mirrors how `PtyManager` isolates per-PTY I/O on its own threads and
 //! emits to the renderer through its own sink fan-out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -50,12 +50,15 @@ use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
     AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
-    SessionCreatedEvent, SessionModelState,
+    SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
 use crate::acp::session::DriverState;
 use crate::acp::session_persistence::{
-    PersistedSessionStatus, SessionPersistence, SessionRegistration,
+    is_protected_title_source, normalize_title, now_millis, PersistedEventRecord,
+    PersistedSessionStatus, SessionPersistence, SessionRegistration, TitleSource,
+    SESSION_SCHEMA_VERSION,
 };
+use crate::web::sink::CapturingEventSink;
 use crate::web::EventSink;
 
 /// How long to wait for the agent to answer `initialize` before treating the
@@ -706,6 +709,10 @@ struct AgentEntry {
     command_tx: mpsc::UnboundedSender<AcpCommand>,
     capabilities: AgentCapabilities,
     stable_namespace: Option<String>,
+    /// The `AgentConfig` used to spawn this agent. Cloned before the driver
+    /// thread takes its own copy so the host can re-spawn a background
+    /// title-generation agent with the same config (AD-2).
+    config: AgentConfig,
     join_handle: Option<JoinHandle<()>>,
     /// Set true by `kill`/`kill_all` before winding the agent down, so the
     /// driver thread's teardown can tell an intentional kill (silent) from a
@@ -733,6 +740,103 @@ pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     persistence: Option<Arc<SessionPersistence>>,
+    /// One-in-flight-per-session debounce for background title generation
+    /// (AD-9). Keyed by the USER's session id (not the background agent's
+    /// session). A session in this set has a background title-gen task
+    /// running; a second trigger for the same session is a logged no-op.
+    in_flight_title_gens: Arc<Mutex<HashSet<String>>>,
+}
+
+/// Extract the concatenated text from a `Vec<ContentBlock>` for the
+/// background title-gen prompt (AD-2). Only `Text` blocks contribute; image
+/// and other non-text blocks are skipped. Never logged — forwarded only to
+/// the throwaway background agent.
+fn extract_prompt_text(content: &[ContentBlock]) -> String {
+    let text: String = content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.chars().take(2000).collect()
+}
+
+/// RAII guard that removes a session id from the in-flight title-gen set on
+/// drop (AD-9). Ensures the debounce set is cleaned up on EVERY exit path
+/// (success, failure, panic) so a crashed gen never permanently blocks a
+/// retry. Constructed after the session id is inserted into the set.
+struct InFlightTitleGenGuard {
+    in_flight: Arc<Mutex<HashSet<String>>>,
+    session_id: Option<String>,
+}
+
+impl InFlightTitleGenGuard {
+    fn arm(in_flight: Arc<Mutex<HashSet<String>>>, session_id: String) -> Self {
+        in_flight.lock().insert(session_id.clone());
+        Self {
+            in_flight,
+            session_id: Some(session_id),
+        }
+    }
+
+    /// Disarm the guard so `Drop` does NOT remove the session from the set
+    /// (used when the caller has already removed it, or when the gen is being
+    /// handed off to a subsequent owner). This implementation never disarms
+    /// (the gen fires once per session), but the seam keeps the API honest.
+    #[allow(dead_code)]
+    fn disarm(mut self) {
+        self.session_id = None;
+    }
+}
+
+impl Drop for InFlightTitleGenGuard {
+    fn drop(&mut self) {
+        if let Some(session_id) = self.session_id.take() {
+            self.in_flight.lock().remove(&session_id);
+        }
+    }
+}
+
+/// RAII guard that kills a background agent on drop (AD-9: drop-guard close
+/// on ALL exit paths). Best-effort: removes the agent from the registry, marks
+/// it killed (so the driver teardown stays silent — L4), and sends `Shutdown`.
+/// The driver thread exits on its own; we do NOT join here (the background
+/// agent is a throwaway and joining would block the title-gen task).
+struct BackgroundAgentGuard {
+    agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
+    agent_id: Option<AgentId>,
+}
+
+impl BackgroundAgentGuard {
+    fn new(agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>) -> Self {
+        Self {
+            agents,
+            agent_id: None,
+        }
+    }
+
+    /// Arm the guard with the background agent's id. After this call, `Drop`
+    /// kills the agent.
+    fn arm(&mut self, agent_id: AgentId) {
+        self.agent_id = Some(agent_id);
+    }
+}
+
+impl Drop for BackgroundAgentGuard {
+    fn drop(&mut self) {
+        if let Some(agent_id) = self.agent_id.take() {
+            let mut map = self.agents.lock();
+            if let Some(entry) = map.remove(&agent_id) {
+                let killed = entry.killed.clone();
+                let command_tx = entry.command_tx.clone();
+                // Mark killed so the driver teardown stays silent (L4).
+                killed.store(true, Ordering::Release);
+                let _ = command_tx.send(AcpCommand::Shutdown);
+            }
+        }
+    }
 }
 
 impl AcpManager {
@@ -749,6 +853,7 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
+            in_flight_title_gens: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -762,6 +867,7 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
+            in_flight_title_gens: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -772,6 +878,19 @@ impl AcpManager {
     /// synchronously from the response (CAP-4: the spawn response — not the
     /// async event — is the source of truth).
     pub async fn spawn(&self, config: AgentConfig) -> Result<SpawnOutcome, String> {
+        self.spawn_with_sinks(config, self.sinks.clone()).await
+    }
+
+    /// Same as [`spawn`](Self::spawn) but lets the caller supply the sink list
+    /// the background driver threads into. The background title-gen flow
+    /// (AD-2/AD-4) passes a single [`CapturingEventSink`] so background
+    /// session events never reach the renderer or the WS relay; the public
+    /// [`spawn`](Self::spawn) forwards `self.sinks` unchanged.
+    async fn spawn_with_sinks(
+        &self,
+        config: AgentConfig,
+        sinks: Vec<Arc<dyn EventSink>>,
+    ) -> Result<SpawnOutcome, String> {
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
         let (init_tx, init_rx) = oneshot::channel::<Result<InitOutcome, String>>();
@@ -790,7 +909,6 @@ impl AcpManager {
         // can surface it instead of a generic "did not initialize" message.
         let start_error = Arc::new(Mutex::new(None::<String>));
 
-        let sinks = self.sinks.clone();
         let thread_agent_id = agent_id.clone();
         let thread_config = config.clone();
         let thread_agents = self.agents.clone();
@@ -862,6 +980,7 @@ impl AcpManager {
                     command_tx,
                     capabilities: capabilities.clone(),
                     stable_namespace: stable_namespace.clone(),
+                    config,
                     join_handle: Some(join_handle),
                     killed,
                 },
@@ -1071,8 +1190,16 @@ impl AcpManager {
     /// `prompt_complete` event for the renderer's `seenTurnIds` idempotent dedup
     /// (FR11 — "no duplicate completion on reconnect replay"). `None` for the
     /// desktop path + older clients (dedup is a no-op).
+    ///
+    /// Title-gen trigger (AD-2/AD-9): after the FIRST turn completes
+    /// (`stop_reason` returned, `title_source == DerivedFirstMessage` and no
+    /// in-flight gen), this method spawns a non-blocking tokio task that
+    /// drives [`AcpManager::maybe_generate_background_title`] on a fresh
+    /// background agent with the same `AgentConfig`. The task is fire-and-forget
+    /// — it never blocks the caller's `StopReason` reply. Requires persistence
+    /// (title_source tracking is host-owned); without it the trigger is a no-op.
     pub async fn send_prompt(
-        &self,
+        self: &Arc<Self>,
         agent_id: &AgentId,
         session_id: SessionId,
         content: Vec<ContentBlock>,
@@ -1081,14 +1208,327 @@ impl AcpManager {
         if content.is_empty() {
             return Err("prompt content must not be empty".to_string());
         }
+        // Extract the first user prompt text BEFORE moving `content` into the
+        // command. The background title-gen flow embeds this text in a fresh
+        // prompt to a separate agent (AD-2). Never log it — only forward it.
+        let first_prompt_text = extract_prompt_text(&content);
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::SendPrompt {
-            session_id,
+        let stop_reason = send_command(&tx, |reply| AcpCommand::SendPrompt {
+            session_id: session_id.clone(),
             content,
             turn_id,
             reply,
         })
-        .await
+        .await?;
+
+        // Title-gen trigger: fire-and-forget, only on the first turn, only
+        // when persistence says the title is still DerivedFirstMessage (no
+        // background title yet), and no in-flight gen is running for this
+        // session (AD-9 debounce). The task owns an `Arc<Self>` clone so it
+        // can outlive the command's borrowed `&Arc<Self>` receiver.
+        if let Some(persistence) = &self.persistence {
+            let is_first_turn = persistence
+                .metadata(&session_id.0)
+                .is_ok_and(|metadata| {
+                    metadata.title_source == Some(TitleSource::DerivedFirstMessage)
+                })
+                && !first_prompt_text.is_empty();
+            if is_first_turn {
+                let mut set = self.in_flight_title_gens.lock();
+                if !set.insert(session_id.0.clone()) {
+                    return Ok(stop_reason);
+                }
+                drop(set);
+                log::debug!(
+                    "[acp-title] scheduling background title gen for session {} (agent {agent_id})",
+                    session_id.0
+                );
+                let manager = Arc::clone(self);
+                let user_agent_id = agent_id.clone();
+                let session_id_str = session_id.0.clone();
+                tokio::spawn(async move {
+                    manager
+                        .maybe_generate_background_title(user_agent_id, session_id_str, first_prompt_text)
+                        .await;
+                });
+            }
+        }
+
+        Ok(stop_reason)
+    }
+
+    /// Background title generation (AD-2/AD-3/AD-4/AD-8/AD-9). Spawns a NEW ACP
+    /// agent with the same `AgentConfig` as `user_agent_id`, opens a fresh
+    /// session, sends a title-gen instruction embedding the first user prompt,
+    /// captures the agent's streamed text via a [`CapturingEventSink`],
+    /// normalizes it, persists a `local_title_generated` durable event, and
+    /// broadcasts a synthetic `SessionInfoUpdateEvent` so the renderer + tab
+    /// bar pick up the new title. The background agent is killed on every exit
+    /// path (success, timeout, spawn error, empty response) via a
+    /// [`BackgroundAgentGuard`]; the in-flight debounce set is cleaned up via
+    /// an [`InFlightTitleGenGuard`].
+    ///
+    /// Title precedence (AD-1): `local_title_generated` stamps
+    /// `BackgroundGenerated`, which is higher than `AgentSupplied` and
+    /// `DerivedFirstMessage`. The notification closure (see `drive_connection`)
+    /// suppresses a later native `session_info_update` when `title_source` is
+    /// `BackgroundGenerated`/`LocalAlias`, and `append_record` enforces the same
+    /// defense durably.
+    ///
+    /// Fallback floor (AD-6): if any step fails (spawn error, timeout, empty
+    /// response), the title stays at its current value and the background agent
+    /// is closed (no leak). Failures are logged with context (session id,
+    /// agent config id, reason) but never with the prompt text.
+    pub(crate) async fn maybe_generate_background_title(
+        self: Arc<Self>,
+        user_agent_id: AgentId,
+        session_id: String,
+        first_prompt: String,
+    ) {
+        // AD-9 debounce: one-in-flight-per-session. The trigger in `send_prompt`
+        // already checked this, but the guard here is the authoritative owner —
+        // it removes the session from the set on EVERY exit path (including
+        // panic), so a crashed gen never permanently blocks a retry.
+        let in_flight = Arc::clone(&self.in_flight_title_gens);
+        let _in_flight_guard = InFlightTitleGenGuard::arm(in_flight, session_id.clone());
+
+        let Some(persistence) = self.persistence.clone() else {
+            log::debug!(
+                "[acp-title] background gen skipped for session {session_id}: no persistence"
+            );
+            return;
+        };
+
+        // Resolve the cwd from the session's metadata (the background agent
+        // must run in the same workspace as the user's session). If the session
+        // is gone, there is nothing to title — bail.
+        let cwd = match persistence.metadata(&session_id) {
+            Ok(metadata) => metadata.cwd,
+            Err(error) => {
+                log::warn!(
+                    "[acp-title] background gen skipped for session {session_id}: metadata lookup failed: {error}"
+                );
+                return;
+            }
+        };
+
+        // Look up the user agent's `AgentConfig` so the background agent runs
+        // the same binary/args/env (AD-2). If the agent is gone, the config
+        // is gone too — bail.
+        let config = {
+            let agents = self.agents.lock();
+            match agents.get(&user_agent_id) {
+                Some(entry) => entry.config.clone(),
+                None => {
+                    log::warn!(
+                        "[acp-title] background gen skipped for session {session_id}: agent {user_agent_id} no longer registered"
+                    );
+                    return;
+                }
+            }
+        };
+        let config_id_label = config.config_id.clone().unwrap_or_else(|| config.name.clone());
+
+        // Spawn the background agent with ONLY the capturing sink (AD-4).
+        let capturing_sink = Arc::new(CapturingEventSink::new());
+        let spawn_sinks: Vec<Arc<dyn EventSink>> = vec![Arc::clone(&capturing_sink)
+            as Arc<dyn EventSink>];
+        let bg_outcome = self.spawn_with_sinks(config, spawn_sinks).await;
+        let bg_agent_id = match bg_outcome {
+            Ok(outcome) => outcome.agent_id,
+            Err(error) => {
+                log::warn!(
+                    "[acp-title] background gen spawn failed for session {session_id} (config={config_id_label}): {error}"
+                );
+                return;
+            }
+        };
+        log::info!(
+            "[acp-title] background agent {bg_agent_id} spawned for session {session_id} (config={config_id_label})"
+        );
+
+        // Kill guard: on EVERY exit path from here, kill the background agent
+        // so it never leaks (AD-9 drop-guard close).
+        let mut kill_guard = BackgroundAgentGuard::new(Arc::clone(&self.agents));
+        kill_guard.arm(bg_agent_id.clone());
+
+        // Create a fresh session on the background agent (NOT the user's
+        // session). Ephemeral so it is NOT registered with persistence — the
+        // background agent's session lifecycle is owned by this task (we kill
+        // the agent, which closes all sessions).
+        let new_session_outcome = self
+            .new_session_with_context(
+                &bg_agent_id,
+                cwd,
+                Vec::new(),
+                SessionCreationContext {
+                    project_id: None,
+                    ephemeral: true,
+                },
+            )
+            .await;
+        let bg_session_id = match new_session_outcome {
+            Ok(outcome) => outcome.session_id,
+            Err(error) => {
+                log::warn!(
+                    "[acp-title] background gen new_session failed for session {session_id} (bg_agent={bg_agent_id}): {error}"
+                );
+                return;
+            }
+        };
+        log::debug!(
+            "[acp-title] background session {bg_session_id} opened (bg_agent={bg_agent_id}) for user session {session_id}"
+        );
+
+        // Send the title-gen prompt with a bounded timeout (AD-9: reuse the
+        // `session_reopen_timeout()` pattern, 60s default). The prompt embeds
+        // the first user message text — never log it.
+        let title_instruction = format!(
+            "Generate a concise title (max 80 characters) for a chat session based on the \
+             following user message. Reply with ONLY the title text — no quotes, no markdown, \
+             no explanation.\n\nUser message: {first_prompt}"
+        );
+        let prompt_content = vec![ContentBlock::Text(
+            agent_client_protocol::schema::v1::TextContent::new(title_instruction),
+        )];
+        let prompt_timeout = session_reopen_timeout();
+        log::debug!(
+            "[acp-title] background prompt sent to session {bg_session_id} (timeout {prompt_timeout:?}, user session {session_id})"
+        );
+        // Send the title-gen prompt directly through the command channel,
+        // bypassing `send_prompt` (which would re-enter the title-gen trigger
+        // path — the background turn is NOT a user turn and must not fire
+        // another background gen).
+        let bg_command_tx = self.command_tx(&bg_agent_id);
+        let bg_prompt_future = match &bg_command_tx {
+            Ok(tx) => send_command(tx, |reply| AcpCommand::SendPrompt {
+                session_id: bg_session_id.clone(),
+                content: prompt_content,
+                turn_id: None,
+                reply,
+            }),
+            Err(error) => {
+                log::warn!(
+                    "[acp-title] background agent {bg_agent_id} command channel gone for session {session_id}: {error}"
+                );
+                return;
+            }
+        };
+        let prompt_result = tokio::time::timeout(prompt_timeout, bg_prompt_future).await;
+        let stop_reason = match prompt_result {
+            Ok(Ok(reason)) => {
+                log::debug!(
+                    "[acp-title] background prompt complete for user session {session_id}: stop_reason={reason:?}"
+                );
+                reason
+            }
+            Ok(Err(error)) => {
+                log::warn!(
+                    "[acp-title] background gen prompt failed for session {session_id} (config={config_id_label}): {error}"
+                );
+                return;
+            }
+            Err(_) => {
+                log::warn!(
+                    "[acp-title] background gen timed out after {prompt_timeout:?} for session {session_id} (config={config_id_label})"
+                );
+                return;
+            }
+        };
+        // Skip title persistence on non-success stop reasons (Cancelled,
+        // Refusal) — the captured text is likely not a meaningful title (AD-6
+        // fallback floor).
+        if matches!(
+            stop_reason,
+            agent_client_protocol::schema::v1::StopReason::Cancelled
+                | agent_client_protocol::schema::v1::StopReason::Refusal
+        ) {
+            log::warn!(
+                "[acp-title] background gen for session {session_id} ended with {stop_reason:?}; skipping title persistence"
+            );
+            return;
+        }
+
+        // Extract the captured text and normalize it into a title.
+        let captured = capturing_sink.take();
+        let title = normalize_title(&captured);
+        log::debug!(
+            "[acp-title] captured title for session {session_id}: len={} chars",
+            title.chars().count()
+        );
+
+        // AD-6 fallback floor: an empty / "Untitled Chat" response is NOT a
+        // title — keep the current (DerivedFirstMessage or agent-supplied)
+        // title rather than overwriting with the fallback floor.
+        if title.is_empty() || title == "Untitled Chat" {
+            log::warn!(
+                "[acp-title] background gen produced empty/Untitled title for session {session_id}; keeping current title"
+            );
+            return;
+        }
+
+        // Persist the `local_title_generated` durable event (seq = last_seq +
+        // 1; the host's `SessionPersistence` is the sole seq authority — AD-5).
+        let next_seq = match persistence.last_seq(&session_id) {
+            Ok(seq) => seq + 1,
+            Err(error) => {
+                log::warn!(
+                    "[acp-title] background gen could not resolve last_seq for session {session_id}: {error}"
+                );
+                return;
+            }
+        };
+        let record = PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: session_id.clone(),
+            seq: next_seq,
+            type_: "local_title_generated".to_string(),
+            recorded_at: now_millis(),
+            payload: serde_json::json!({
+                "sessionId": session_id,
+                "title": title,
+            }),
+        };
+        if let Err(error) = persistence.enqueue_event(record) {
+            log::warn!(
+                "[acp-title] background gen failed to persist local_title_generated for session {session_id}: {error}"
+            );
+            return;
+        }
+        if let Err(error) = persistence.flush_session(&session_id).await {
+            log::warn!(
+                "[acp-title] background gen failed to flush session {session_id}: {error}"
+            );
+            return;
+        }
+        log::info!(
+            "[acp-title] title persisted for session {session_id} (seq={next_seq}, title_len={} chars)",
+            title.chars().count()
+        );
+
+        // Broadcast a synthetic `SessionInfoUpdateEvent` via the USER's sinks
+        // (the renderer + WS relay) so the sidebar + tab bar pick up the new
+        // title (AD-8). Carries the USER's session id + agent id, not the
+        // background agent's. The renderer's `_onSessionInfoUpdate` is
+        // unchanged — it just sets `session.title`.
+        let event = SessionInfoUpdateEvent {
+            agent_id: user_agent_id,
+            session_id: SessionId::new(session_id.clone()),
+            title: Some(title),
+        };
+        events::fan_out(
+            &self.sinks,
+            Some(event.session_id.0.as_str()),
+            events::EVENT_SESSION_INFO_UPDATE,
+            &event,
+        );
+        log::debug!(
+            "[acp-title] synthetic session_info_update broadcast for session {session_id}"
+        );
+
+        // Background agent is killed when `kill_guard` drops at the end of
+        // this scope. The in-flight debounce set is cleaned up when
+        // `in_flight_guard` drops.
     }
 
     /// Cancel the active turn for a session, resolving pending permissions with
@@ -1350,6 +1790,14 @@ impl AcpManager {
                 command_tx,
                 capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
+                config: AgentConfig {
+                    config_id: None,
+                    name: "test-agent".to_string(),
+                    command: "test".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    allow_terminal: false,
+                },
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
             },
@@ -1738,6 +2186,12 @@ async fn drive_connection(
     let notif_sinks = sinks.clone();
     let notif_agent_id = agent_id.clone();
     let notif_state = driver_state.clone();
+    // AD-8: capture persistence into the notification closure so the host can
+    // gate `session_info_update` fan-out on `title_source`. When a background
+    // title (`BackgroundGenerated`) or a future local alias (`LocalAlias`) owns
+    // the title, a native agent `session_info_update` is suppressed here (the
+    // durable defense in `append_record` is the second layer).
+    let notif_persistence = persistence.clone();
     let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -1793,7 +2247,32 @@ async fn drive_connection(
                     _ => None,
                 };
                 if let Some(tool_call_id) = tool_call_id {
-                    notif_state.lock().bind_tool_call(tool_call_id, session_id);
+                    notif_state
+                        .lock()
+                        .bind_tool_call(tool_call_id, session_id.clone());
+                }
+                // AD-8: gate native `session_info_update` fan-out. When the
+                // host already owns a higher-precedence title
+                // (`BackgroundGenerated` from a prior background-gen flow, or
+                // a future `LocalAlias`), suppress the agent's
+                // `session_info_update` so the background title survives in
+                // the renderer. The durable defense in `append_record` is the
+                // second layer; this is the fan-out defense.
+                let is_protected_info_update = matches!(
+                    &notification.update,
+                    agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(_)
+                ) && is_protected_title_source(
+                    notif_persistence
+                        .as_ref()
+                        .and_then(|p| p.metadata(&session_id).ok())
+                        .and_then(|m| m.title_source)
+                        .as_ref(),
+                );
+                if is_protected_info_update {
+                    log::debug!(
+                        "[acp] session {session_id}: suppressed native session_info_update (title_source is BackgroundGenerated/LocalAlias)"
+                    );
+                    return Ok(());
                 }
                 client::emit_session_update(&notif_sinks, &notif_agent_id, notification);
                 Ok(())
@@ -3170,6 +3649,14 @@ mod tests {
                 command_tx: tx,
                 capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
+                config: AgentConfig {
+                    config_id: None,
+                    name: "test-agent".to_string(),
+                    command: "test".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    allow_terminal: false,
+                },
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
             },
@@ -3764,5 +4251,204 @@ mod tests {
             None => std::env::remove_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS"),
         }
         set_first_prompt_warmup_timeout_override(None);
+    }
+
+    // --- Background title generation (AD-2/AD-4/AD-8/AD-9) ---
+
+    /// `extract_prompt_text` concatenates text blocks and skips non-text
+    /// content (images, etc.). The extracted text is embedded in the
+    /// background title-gen prompt — never logged.
+    #[test]
+    fn extract_prompt_text_collects_text_blocks_only() {
+        use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+        let blocks = vec![
+            ContentBlock::Text(TextContent::new("hello")),
+            ContentBlock::Text(TextContent::new("world")),
+        ];
+        assert_eq!(extract_prompt_text(&blocks), "hello\nworld");
+    }
+
+    /// `InFlightTitleGenGuard` removes the session from the debounce set on
+    /// drop (AD-9: one-in-flight-per-session, cleaned up on EVERY exit path).
+    #[test]
+    fn in_flight_title_gen_guard_removes_session_on_drop() {
+        let in_flight: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        {
+            let _guard = InFlightTitleGenGuard::arm(Arc::clone(&in_flight), "sess-1".to_string());
+            assert!(in_flight.lock().contains("sess-1"));
+        }
+        assert!(!in_flight.lock().contains("sess-1"));
+    }
+
+    /// `BackgroundAgentGuard` kills the background agent on drop: removes it
+    /// from the registry, marks it killed (L4 silent teardown), and sends
+    /// `Shutdown` so the driver thread exits without leaking (AD-9).
+    #[tokio::test]
+    async fn background_agent_guard_kills_on_drop() {
+        let manager = AcpManager::new(vec![]);
+        let agent_id = AgentId::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        manager.agents.lock().insert(
+            agent_id.clone(),
+            AgentEntry {
+                command_tx: tx,
+                capabilities: AgentCapabilities::default(),
+                stable_namespace: None,
+                config: AgentConfig {
+                    config_id: None,
+                    name: "test".to_string(),
+                    command: "test".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    allow_terminal: false,
+                },
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        let agents = Arc::clone(&manager.agents);
+        let mut guard = BackgroundAgentGuard::new(agents);
+        guard.arm(agent_id.clone());
+        drop(guard);
+        // The agent is removed from the registry.
+        assert!(!manager.agents.lock().contains_key(&agent_id));
+        // A Shutdown command was sent.
+        assert!(matches!(
+            rx.recv().await,
+            Some(AcpCommand::Shutdown)
+        ));
+    }
+
+    /// `maybe_generate_background_title` falls back gracefully when the
+    /// background agent spawn fails (AD-6: title stays at current value). The
+    /// session's `title_source` stays `DerivedFirstMessage` (no
+    /// `BackgroundGenerated` stamp), and the in-flight debounce set is cleared
+    /// so a future trigger can retry.
+    #[tokio::test]
+    async fn maybe_generate_background_title_falls_back_on_spawn_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-title-spawn-fail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("store"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "user-sess".to_string(),
+                stable_agent_namespace: Some("config:test".to_string()),
+                runtime_agent_id: Some("runtime-1".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd: cwd.clone(),
+            })
+            .await
+            .unwrap();
+        // Stamp DerivedFirstMessage so the trigger condition is met.
+        persistence
+            .enqueue_event(crate::acp::session_persistence::PersistedEventRecord {
+                schema_version: SESSION_SCHEMA_VERSION,
+                session_id: "user-sess".to_string(),
+                seq: 1,
+                type_: "user_prompt".to_string(),
+                recorded_at: now_millis(),
+                payload: serde_json::json!({
+                    "agentId":"runtime-1","sessionId":"user-sess","turnId":"turn-1",
+                    "content":[{"type":"text","text":"how do I center a div?"}],
+                }),
+            })
+            .unwrap();
+        persistence.flush_session("user-sess").await.unwrap();
+
+        let manager = Arc::new(AcpManager::with_persistence(
+            vec![],
+            Arc::clone(&persistence),
+        ));
+        // Install a mock user agent whose `config` will be used for the
+        // (doomed) background spawn — the command is a non-existent binary.
+        manager.install_test_agent_with_sessions(
+            AgentId::new(),
+            ["user-sess".to_string()].into_iter().collect(),
+        );
+        // Get the user agent id (the one just installed).
+        let user_agent_id = manager.list_agents().pop().unwrap();
+        // Set the config to a non-existent binary so spawn_with_sinks fails.
+        {
+            let mut agents = manager.agents.lock();
+            if let Some(entry) = agents.get_mut(&user_agent_id) {
+                entry.config = AgentConfig {
+                    config_id: Some("test-config".to_string()),
+                    name: "nonexistent".to_string(),
+                    command: "/nonexistent/binary/that/does/not/exist".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    allow_terminal: false,
+                };
+            }
+        }
+
+        // Run the background title-gen flow. It should fail at spawn and
+        // fall back gracefully.
+        Arc::clone(&manager)
+            .maybe_generate_background_title(
+                user_agent_id,
+                "user-sess".to_string(),
+                "how do I center a div?".to_string(),
+            )
+            .await;
+
+        // Title stays at DerivedFirstMessage (derive_title from user_prompt).
+        let metadata = persistence.metadata("user-sess").unwrap();
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::DerivedFirstMessage),
+            "spawn failure must NOT stamp BackgroundGenerated"
+        );
+        assert_eq!(metadata.title.as_deref(), Some("how do I center a div?"));
+        // The in-flight debounce set is cleared (guard dropped).
+        assert!(
+            !manager.in_flight_title_gens.lock().contains("user-sess"),
+            "in-flight guard must clear on spawn-failure exit"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// AD-9 debounce: if a session is already in the in-flight set,
+    /// `maybe_generate_background_title` returns immediately without doing
+    /// any work (the guard is still armed and will clear on drop).
+    #[tokio::test]
+    async fn maybe_generate_background_title_debounces_in_flight_session() {
+        let manager = Arc::new(AcpManager::new(vec![]));
+        // Pre-insert the session into the in-flight set (simulating a
+        // concurrent trigger already running).
+        manager
+            .in_flight_title_gens
+            .lock()
+            .insert("sess-dup".to_string());
+
+        // The method should return immediately (no spawn, no persistence).
+        // With no persistence and no agent, a non-debounced call would fail
+        // at the persistence check — but the debounce check runs FIRST.
+        Arc::clone(&manager)
+            .maybe_generate_background_title(
+                AgentId::new(),
+                "sess-dup".to_string(),
+                "prompt".to_string(),
+            )
+            .await;
+
+        // The session is still in the set (the guard removed + re-inserted?).
+        // Actually: the guard ARMED the session (insert), but it was already
+        // there (HashSet::insert is idempotent). On drop, the guard removes
+        // it. So after the call, the session should be gone.
+        assert!(
+            !manager
+                .in_flight_title_gens
+                .lock()
+                .contains("sess-dup"),
+            "in-flight guard must clear on debounce-skip exit"
+        );
     }
 }

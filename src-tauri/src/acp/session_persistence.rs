@@ -34,6 +34,33 @@ pub enum PersistedSessionStatus {
     Error,
 }
 
+/// Provenance of a session's title, used to enforce title precedence
+/// (AD-1): `LocalAlias > BackgroundGenerated > AgentSupplied >
+/// DerivedFirstMessage > Untitled`. Once `title_source ==
+/// BackgroundGenerated`, subsequent `session_info_update` events do NOT
+/// overwrite the title. `LocalAlias` is reserved for a future local-rename
+/// feature; it is the highest precedence so a user-chosen name always wins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    BackgroundGenerated,
+    AgentSupplied,
+    DerivedFirstMessage,
+    LocalAlias,
+}
+
+/// Returns `true` when `source` is one of the precedence tiers the host must
+/// protect from a later `session_info_update` overwrite (AD-1/AD-5). Used by
+/// both `append_record` (durable defense) and the manager's notification
+/// closure (fan-out defense).
+#[must_use]
+pub fn is_protected_title_source(source: Option<&TitleSource>) -> bool {
+    matches!(
+        source,
+        Some(TitleSource::BackgroundGenerated) | Some(TitleSource::LocalAlias)
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedEventRecord {
@@ -59,6 +86,8 @@ pub struct SessionMetadata {
     pub project_id: Option<String>,
     pub cwd: String,
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<TitleSource>,
     pub created_at: u64,
     pub last_activity_at: u64,
     pub status: PersistedSessionStatus,
@@ -79,6 +108,8 @@ pub struct SessionIndexEntry {
     pub project_id: Option<String>,
     pub cwd: String,
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<TitleSource>,
     pub created_at: u64,
     pub last_activity_at: u64,
     pub status: PersistedSessionStatus,
@@ -98,6 +129,7 @@ impl From<&SessionMetadata> for SessionIndexEntry {
             project_id: metadata.project_id.clone(),
             cwd: metadata.cwd.clone(),
             title: metadata.title.clone(),
+            title_source: metadata.title_source.clone(),
             created_at: metadata.created_at,
             last_activity_at: metadata.last_activity_at,
             status: metadata.status.clone(),
@@ -298,6 +330,7 @@ impl SessionPersistence {
             project_id: registration.project_id,
             cwd: cwd.to_string_lossy().into_owned(),
             title: None,
+            title_source: None,
             created_at: now,
             last_activity_at: now,
             status: PersistedSessionStatus::Active,
@@ -350,6 +383,7 @@ impl SessionPersistence {
             project_id: registration.project_id,
             cwd: registration.cwd.to_string_lossy().into_owned(),
             title,
+            title_source: None,
             created_at,
             last_activity_at: created_at,
             status: PersistedSessionStatus::Active,
@@ -908,13 +942,40 @@ fn append_record(
     }
     if record.type_ == "user_prompt" && current.title.is_none() {
         current.title = Some(derive_title(&record.payload));
+        current.title_source = Some(TitleSource::DerivedFirstMessage);
     }
-    if record.type_ == "session_info_update" {
-        current.title = record
+    if record.type_ == "local_title_generated" {
+        // AD-1: BackgroundGenerated wins over AgentSupplied and
+        // DerivedFirstMessage. The host's background title-gen flow is the
+        // sole emitter of this durable event (the manager enqueues it after a
+        // successful background turn). A non-empty title here always wins
+        // because the manager skips persistence when normalize_title returns
+        // the "Untitled Chat" fallback floor (AD-6).
+        let bg_title = record
             .payload
             .get("title")
             .and_then(Value::as_str)
             .map(normalize_title);
+        if let Some(title) = bg_title {
+            current.title = Some(title);
+            current.title_source = Some(TitleSource::BackgroundGenerated);
+        }
+    }
+    if record.type_ == "session_info_update" {
+        // AD-1: once BackgroundGenerated/LocalAlias owns the title, a later
+        // agent-supplied session_info_update must NOT overwrite it. Also set
+        // the provenance to AgentSupplied on the non-protected path so a
+        // subsequent background title (which DOES overwrite AgentSupplied)
+        // still wins over the agent's pick.
+        let agent_title = record
+            .payload
+            .get("title")
+            .and_then(Value::as_str)
+            .map(normalize_title);
+        if !is_protected_title_source(current.title_source.as_ref()) {
+            current.title = agent_title;
+            current.title_source = Some(TitleSource::AgentSupplied);
+        }
     }
     Ok(())
 }
@@ -1114,7 +1175,7 @@ fn is_secret_key(key: &str) -> bool {
         || normalized.contains("cookie")
 }
 
-fn normalize_title(text: &str) -> String {
+pub(crate) fn normalize_title(text: &str) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let text = text.trim();
     if text.is_empty() {
@@ -1926,6 +1987,207 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(payload.messages.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // --- TitleSource precedence (AD-1/AD-5) ---
+
+    /// Helper: enqueue a `local_title_generated` event for the default session.
+    fn enqueue_local_title(persistence: &SessionPersistence, seq: u64, title: &str) {
+        persistence
+            .enqueue_event(payload_record(
+                seq,
+                "local_title_generated",
+                json!({"sessionId":"session-1","title":title}),
+            ))
+            .unwrap();
+    }
+
+    /// Helper: enqueue a `session_info_update` event for the default session.
+    fn enqueue_session_info_update(persistence: &SessionPersistence, seq: u64, title: &str) {
+        persistence
+            .enqueue_event(payload_record(
+                seq,
+                "session_info_update",
+                json!({"sessionId":"session-1","title":title}),
+            ))
+            .unwrap();
+    }
+
+    /// `user_prompt` sets `title_source = DerivedFirstMessage` (AD-5) so the
+    /// host can detect "first turn, no background title yet" and trigger
+    /// background title generation.
+    #[tokio::test]
+    async fn user_prompt_sets_derived_first_message_title_source() {
+        let root = temp_dir("title-derived");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"how do I center a div?"}],
+                }),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("how do I center a div?"));
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::DerivedFirstMessage),
+            "user_prompt must stamp DerivedFirstMessage provenance"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `local_title_generated` sets `title_source = BackgroundGenerated` and
+    /// overwrites the DerivedFirstMessage title (AD-1 precedence).
+    #[tokio::test]
+    async fn local_title_generated_sets_background_generated() {
+        let root = temp_dir("title-bg");
+        let (persistence, _) = registered(&root).await;
+        // First user prompt stamps DerivedFirstMessage.
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"how do I center a div?"}],
+                }),
+            ))
+            .unwrap();
+        // Background title gen succeeds and durably overwrites.
+        enqueue_local_title(&persistence, 2, "Centering a div with CSS");
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Centering a div with CSS"));
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::BackgroundGenerated),
+            "local_title_generated must stamp BackgroundGenerated provenance"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// After `title_source == BackgroundGenerated`, a later
+    /// `session_info_update` from the agent must NOT overwrite the title
+    /// (AD-1: background wins over agent-supplied).
+    #[tokio::test]
+    async fn session_info_update_does_not_overwrite_background_generated() {
+        let root = temp_dir("title-protect-bg");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"how do I center a div?"}],
+                }),
+            ))
+            .unwrap();
+        enqueue_local_title(&persistence, 2, "Background title");
+        // Agent emits its own title AFTER background gen.
+        enqueue_session_info_update(&persistence, 3, "Agent's pick");
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("Background title"),
+            "BackgroundGenerated title must survive a later session_info_update"
+        );
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::BackgroundGenerated),
+            "title_source must stay BackgroundGenerated after a suppressed overwrite"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Without protection, `session_info_update` stamps `AgentSupplied` (so a
+    /// subsequent background title can still win).
+    #[tokio::test]
+    async fn session_info_update_stamps_agent_supplied_when_unprotected() {
+        let root = temp_dir("title-agent");
+        let (persistence, _) = registered(&root).await;
+        // Native agent title with no prior background title.
+        enqueue_session_info_update(&persistence, 1, "Agent title");
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Agent title"));
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::AgentSupplied),
+            "unprotected session_info_update must stamp AgentSupplied provenance"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Replay after restart reproduces the BackgroundGenerated title and a later
+    /// replayed `session_info_update` still does not overwrite it (AD-1 durable
+    /// defense survives restart).
+    #[tokio::test]
+    async fn replay_preserves_background_title_and_suppresses_later_session_info() {
+        let root = temp_dir("title-replay");
+        let store = root.join("store");
+        {
+            let (persistence, _) = registered(&root).await;
+            persistence
+                .enqueue_event(payload_record(
+                    1,
+                    "user_prompt",
+                    json!({
+                        "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                        "content":[{"type":"text","text":"orig prompt"}],
+                    }),
+                ))
+                .unwrap();
+            enqueue_local_title(&persistence, 2, "Replayed background title");
+            // A later agent session_info_update arrives before shutdown.
+            enqueue_session_info_update(&persistence, 3, "Late agent title");
+            persistence.shutdown().await.unwrap();
+        }
+        let reopened = SessionPersistence::open(store).await.unwrap();
+        let metadata = reopened.metadata("session-1").unwrap();
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("Replayed background title"),
+            "replay must surface the background-generated title, not the suppressed agent title"
+        );
+        assert_eq!(
+            metadata.title_source,
+            Some(TitleSource::BackgroundGenerated),
+            "title_source must survive restart"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `local_title_generated` is a durable event: replay returns it so a
+    /// reconnecting client can reconstruct the title history.
+    #[tokio::test]
+    async fn local_title_generated_is_durable_and_replayable() {
+        let root = temp_dir("title-durable");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"hello"}],
+                }),
+            ))
+            .unwrap();
+        enqueue_local_title(&persistence, 2, "Hello chat");
+        persistence.flush_session("session-1").await.unwrap();
+        let records = persistence.replay_after("session-1", 0).unwrap();
+        assert!(records.iter().any(|record| {
+            record.type_ == "local_title_generated"
+                && record.payload.get("title").and_then(Value::as_str) == Some("Hello chat")
+        }));
         let _ = fs::remove_dir_all(root);
     }
 }
