@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.190.0",
+    "version": "0.191.1",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.190.0",
+        "package": "droid@0.191.1",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -641,38 +641,38 @@
   {
     "id": "opencode",
     "name": "OpenCode",
-    "version": "1.18.15",
+    "version": "1.18.16",
     "description": "The open source coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-darwin-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-darwin-arm64.zip",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-darwin-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-darwin-x64.zip",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-linux-arm64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-linux-arm64.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-linux-x64.tar.gz",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-linux-x64.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-windows-arm64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-windows-arm64.zip",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./opencode.exe",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.15/opencode-windows-x64.zip",
+          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.16/opencode-windows-x64.zip",
           "args": ["acp"]
         }
       }
