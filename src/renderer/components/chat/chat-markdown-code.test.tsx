@@ -39,11 +39,11 @@ describe('ChatMarkdownCode', () => {
     expect(getByTestId('code-block').getAttribute('data-code')).toBe('line1\nline2\nline3')
   })
 
-  it('joins array children with newline when any segment carries a newline (no node value)', () => {
+  it('recurses through array children preserving embedded newlines (no node value)', () => {
     const { getByTestId } = render(
       withTooltip(
         <ChatMarkdownCode className="language-ts" data-block>
-          {['line1\nline2', 'line3']}
+          {['line1\n', 'line2\n', 'line3']}
         </ChatMarkdownCode>
       )
     )

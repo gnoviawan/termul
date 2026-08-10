@@ -803,6 +803,34 @@
     height: 0.875rem;
     flex-shrink: 0;
   }
+  /* Fullscreen table toolbar is portaled to document.body, so it's outside
+     .chat-streamdown — scope by the data attribute instead. Mirrors the
+     in-page table-toolbar override for compact 24px dropdown triggers. */
+  [data-streamdown="table-fullscreen"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  [data-streamdown="table-fullscreen"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  [data-streamdown="table-fullscreen"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  [data-streamdown="table-fullscreen"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
   .chat-streamdown [data-streamdown="table"] {
     min-width: max-content;
     font-size: 0.875rem;

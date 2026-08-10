@@ -28,14 +28,10 @@ function childrenToCode(children: ReactNode, node?: unknown): string {
 
   if (typeof children === 'string') return children
   if (isValidElement<{ children?: ReactNode }>(children)) {
-    const nested = children.props.children
-    if (typeof nested === 'string') return nested
+    return childrenToCode(children.props.children)
   }
   if (Array.isArray(children)) {
-    const parts = children.map((child) => childrenToCode(child as ReactNode))
-    // Join with '\n' only when any segment carries a newline; otherwise ''
-    // preserves the inline-code path's compact rendering.
-    return parts.some((p) => p.includes('\n')) ? parts.join('\n') : parts.join('')
+    return children.map((child) => childrenToCode(child as ReactNode)).join('')
   }
   return ''
 }

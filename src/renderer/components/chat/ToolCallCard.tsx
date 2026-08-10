@@ -30,9 +30,9 @@ import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
   describeToolCall,
   firstString,
-  PATH_KEYS,
   READABLE_TEXT_KEYS,
-  readableOutput
+  readableOutput,
+  toolCallPath
 } from './tool-call-summary'
 
 /** Common prop shape shared by lucide icons and the bundled RobotIcon. */
@@ -183,15 +183,13 @@ const FILE_OPEN_KINDS = new Set(['read', 'edit', 'delete', 'move'])
 /**
  * Best-effort extraction of a file path from a tool call's `rawInput`, using
  * the shared `PATH_KEYS` set so the chip's primary path and the open-file
- * button stay in sync. Returns undefined when no path-like field is present.
+ * button stay in sync. Falls back to `diffInfo(content).path` for edit calls
+ * whose path lives only in the diff content. Returns undefined when no
+ * path-like field is present.
  */
 function toolCallFilePath(toolCall: ToolCall): string | undefined {
   if (!FILE_OPEN_KINDS.has(toolCall.kind ?? '')) return undefined
-  const input =
-    toolCall.rawInput && typeof toolCall.rawInput === 'object'
-      ? (toolCall.rawInput as Record<string, unknown>)
-      : null
-  return firstString(input, PATH_KEYS) ?? undefined
+  return toolCallPath(toolCall)
 }
 
 function ToolCallCardComponent({

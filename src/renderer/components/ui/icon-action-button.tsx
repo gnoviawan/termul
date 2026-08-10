@@ -42,7 +42,7 @@ export function IconActionButton({
           onClick={onClick}
           className={cn(
             size === 'sm'
-              ? 'relative inline-flex size-6 shrink-0 items-center justify-center'
+              ? 'relative inline-flex size-6 shrink-0 items-center justify-center p-0'
               : 'relative inline-flex size-11 shrink-0 items-center justify-center',
             'cursor-pointer text-muted-foreground transition-colors duration-150',
             'hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50',

@@ -120,6 +120,20 @@ function diffInfo(content: ToolCallContent[]): {
   return { path, added, removed, hasDiff }
 }
 
+/**
+ * Shared best-effort file-path resolver for a tool call. Checks `rawInput`
+ * against `PATH_KEYS`, then falls back to `diffInfo(content).path`. Used by
+ * both `describeToolCall` (chip label) and `ToolCallCard`'s open-file action
+ * so they stay in sync.
+ */
+export function toolCallPath(toolCall: ToolCall): string | undefined {
+  const input = asRecord(toolCall.rawInput)
+  const fromInput = firstString(input, PATH_KEYS)
+  if (fromInput) return fromInput
+  const content = toolCall.content ?? []
+  return diffInfo(content).path
+}
+
 /** "L<start>-<end>" from common range keys, or null when not derivable. */
 function lineRange(input: Record<string, unknown> | null): string | null {
   const start = firstNumber(input, ['startLine', 'start_line', 'start', 'line', 'lineStart'])
@@ -199,13 +213,13 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
     case 'read':
     case 'delete':
     case 'move': {
-      const p = firstString(input, PATH_KEYS) ?? diffInfo(content).path
+      const p = toolCallPath(toolCall)
       const primary = p ? baseName(p) : (title ?? 'file')
       return { verb, primary, detail: toolCall.kind === 'read' ? lineRange(input) : null }
     }
     case 'edit': {
       const diff = diffInfo(content)
-      const p = firstString(input, PATH_KEYS) ?? diff.path
+      const p = toolCallPath(toolCall)
       const primary = p ? baseName(p) : (title ?? 'file')
       let detail: string | null = null
       let diffStat: { added: number; removed: number } | null = null

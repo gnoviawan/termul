@@ -361,6 +361,8 @@ function AgentProse({
             title="Open in editor"
             onClick={(event) => {
               if (event.button !== 0 || event.shiftKey) return
+              const selection = window.getSelection()
+              if (selection && !selection.isCollapsed) return
               event.preventDefault()
               void openFilePathFromTerminal(candidate, context)
                 .then((result) => {
