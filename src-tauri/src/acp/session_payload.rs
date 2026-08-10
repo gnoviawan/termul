@@ -52,6 +52,13 @@ pub struct SessionPayloadMetadata {
     pub message_count: u64,
     pub last_seq: u64,
     pub status: PersistedSessionStatus,
+    /// Worktree the chat runs in (CAP-4/6). Carried through the materialized
+    /// payload so history reopen + post-reload resume preserve the worktree
+    /// binding the agent reattaches to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 /// The renderer `ChatMessage` shape. camelCase keys; `seq` always present
@@ -108,6 +115,8 @@ pub fn materialize_session_payload(
         // lands an event between the metadata read and the replay.
         last_seq: records.last().map_or(metadata.last_seq, |record| record.seq),
         status: metadata.status.clone(),
+        worktree_path: metadata.worktree_path.clone(),
+        worktree_branch: metadata.worktree_branch.clone(),
     };
     MaterializedSessionPayload {
         metadata: payload_metadata,
@@ -255,8 +264,8 @@ mod tests {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
-            worktree_path: None,
-            worktree_branch: None,
+            worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
+            worktree_branch: Some("chat/abc123".to_string()),
         }
     }
 
@@ -591,5 +600,21 @@ mod tests {
         let first = serde_json::to_value(materialize_session_payload(&meta, &records)).unwrap();
         let second = serde_json::to_value(materialize_session_payload(&meta, &records)).unwrap();
         assert_eq!(first, second, "materialization must be deterministic");
+    }
+
+    #[test]
+    fn materialized_payload_preserves_worktree_binding() {
+        // CAP-4/6: the worktree path + branch must survive materialization
+        // so history reopen and post-reload resume reattach to the bound
+        // worktree (not the project root) and the indicator can render.
+        let payload = materialize_session_payload(&metadata(), &[]);
+        assert_eq!(
+            payload.metadata.worktree_path.as_deref(),
+            Some("/work/project/.termul/worktrees/chat/abc123")
+        );
+        assert_eq!(
+            payload.metadata.worktree_branch.as_deref(),
+            Some("chat/abc123")
+        );
     }
 }

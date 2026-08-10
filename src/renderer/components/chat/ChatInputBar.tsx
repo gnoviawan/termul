@@ -125,8 +125,7 @@ export function ChatInputBar({
   // worktree path + branch; current-branch mode falls back to the project's
   // reactive `gitBranch`. Switching chats re-renders via `session`.
   const projectGitBranch = useProjectStore(
-    (s) =>
-      s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? (session.cwd ? null : null)
+    (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
   )
   const isolationLabel =
     session.worktreePath && session.worktreeBranch

@@ -142,6 +142,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const [isolationMode, setIsolationMode] = useState<'current' | 'worktree'>('current')
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [baseBranchInfo, setBaseBranchInfo] = useState<BaseBranchInfo | null>(null)
+  // Local branch names for the base-branch picker (CAP-2). Sourced from
+  // `worktreeApi.branches` so detached-HEAD users can pick any valid branch,
+  // not just the resolved default.
+  const [branches, setBranches] = useState<string[]>([])
   const [worktreeCreating, setWorktreeCreating] = useState(false)
   const { skills } = useAgentSkills(projectRoot)
   const supportedAgents = useResolvedSupportedAcpAgents(acpConfigs)
@@ -474,6 +478,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             if (result.data!.isDetached) return null
             return result.data!.defaultBase
           })
+          // Fetch local branches so the picker lists every valid option
+          // (detached-HEAD users can pick any branch).
+          const branchResult = await worktreeApi.branches(projectRoot)
+          if (cancelled) return
+          if (branchResult.success && branchResult.data) {
+            const local = branchResult.data.filter((b) => !b.isRemote).map((b) => b.name)
+            setBranches(local)
+          }
         } else {
           void logFrontendError({
             level: 'warn',
@@ -777,22 +789,32 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           launchCwd = worktreePathResult
           // CAP-5: carry over untracked files listed in `.worktree-include`.
           // Symlink/path-escape/already-present defenses run on the host.
-          const includeResult = await worktreeApi.copyIncludeFiles(
-            projectRootSnapshot,
-            worktreePathResult
-          )
-          if (!includeResult.success) {
+          // Best-effort: a copy failure must not orphan the freshly created
+          // worktree + branch — log and continue launching into it.
+          try {
+            const includeResult = await worktreeApi.copyIncludeFiles(
+              projectRootSnapshot,
+              worktreePathResult
+            )
+            if (!includeResult.success) {
+              void logFrontendError({
+                level: 'warn',
+                source: 'agentLauncher.worktreeInclude',
+                message: `copyIncludeFiles failed: ${includeResult.success ? '' : includeResult.error}`
+              })
+            } else if (includeResult.data) {
+              // Boundary log (info-level): not an error, so console.info is
+              // appropriate (logFrontendError is error/warn only).
+              console.info(
+                `[agentLauncher.worktreeInclude] carry-over ran=${includeResult.data.ran} copied=${includeResult.data.copied} skipped=${includeResult.data.skipped.length}`
+              )
+            }
+          } catch (includeErr) {
             void logFrontendError({
               level: 'warn',
               source: 'agentLauncher.worktreeInclude',
-              message: `copyIncludeFiles failed: ${includeResult.success ? '' : includeResult.error}`
+              message: `copyIncludeFiles threw: ${includeErr instanceof Error ? includeErr.message : String(includeErr)}`
             })
-          } else if (includeResult.data) {
-            // Boundary log (info-level): not an error, so console.info is
-            // appropriate (logFrontendError is error/warn only).
-            console.info(
-              `[agentLauncher.worktreeInclude] carry-over ran=${includeResult.data.ran} copied=${includeResult.data.copied} skipped=${includeResult.data.skipped.length}`
-            )
           }
         }
       } catch (err) {
@@ -964,9 +986,31 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
     (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null) &&
-    // CAP-2: detached HEAD blocks worktree launch until a base is picked.
-    !(isolationMode === 'worktree' && baseBranchInfo?.isDetached && !baseBranch) &&
+    // CAP-2: worktree mode requires an explicit base branch before launch —
+    // covers detached HEAD (no current) and any case where the picker has
+    // not settled on a value.
+    !(isolationMode === 'worktree' && !baseBranch) &&
     !worktreeCreating
+  // Deduplicated base-branch options for the picker (CAP-2): current branch
+  // first (marked), then the resolved default, the project's reactive branch,
+  // then every local branch from `worktreeApi.branches` so detached-HEAD
+  // users can pick any valid branch. Exact-equality dedup prevents repeated
+  // SelectItem values (projectGitBranch clashing with currentBranch, etc.).
+  const baseOptions: { value: string; label: string }[] = (() => {
+    const seen = new Set<string>()
+    const out: { value: string; label: string }[] = []
+    const add = (value: string | undefined | null, isCurrent = false) => {
+      if (!value) return
+      if (seen.has(value)) return
+      seen.add(value)
+      out.push({ value, label: isCurrent ? `${value} (current)` : value })
+    }
+    add(baseBranchInfo?.currentBranch, true)
+    add(baseBranchInfo?.defaultBase)
+    add(projectGitBranch)
+    for (const b of branches) add(b)
+    return out
+  })()
   // `hasSkillToken` comes from `useChatComposer` (destructured above) — the
   // transparent-textarea overlay is only needed when the value carries a skill
   // token; otherwise the textarea text stays visible.
@@ -981,7 +1025,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
         <TermulMark size={48} className="text-foreground" />
         <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          {`What should we do in ${projectLabel} on ${projectGitBranch ?? 'detached'}?`}
+          {`What should we do in ${projectLabel} on ${
+            projectGitBranch ?? (projectIsGitRepo ? 'detached' : 'no branch')
+          }?`}
         </h1>
       </div>
 
@@ -1105,21 +1151,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                       <SelectValue placeholder={baseBranchInfo?.defaultBase ?? 'base branch'} />
                     </SelectTrigger>
                     <SelectContent>
-                      {baseBranchInfo?.currentBranch && (
-                        <SelectItem value={baseBranchInfo.currentBranch}>
-                          {baseBranchInfo.currentBranch} (current)
+                      {baseOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
                         </SelectItem>
-                      )}
-                      {baseBranchInfo &&
-                        baseBranchInfo.currentBranch !== baseBranchInfo.defaultBase && (
-                          <SelectItem value={baseBranchInfo.defaultBase}>
-                            {baseBranchInfo.defaultBase}
-                          </SelectItem>
-                        )}
-                      {projectGitBranch &&
-                        !baseBranchInfo?.currentBranch?.includes(projectGitBranch) && (
-                          <SelectItem value={projectGitBranch}>{projectGitBranch}</SelectItem>
-                        )}
+                      ))}
                     </SelectContent>
                   </Select>
                 )}

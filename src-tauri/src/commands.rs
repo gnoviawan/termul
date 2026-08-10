@@ -953,9 +953,18 @@ pub async fn worktree_copy_include_files(
 ) -> Result<IpcResult<IncludeCopyResult>, String> {
     let validated_project = validate_and_stringify!(&project_path);
     let validated_worktree = validate_and_stringify!(&worktree_path);
-    match WorktreeManager::copy_worktree_include_files(&validated_project, &validated_worktree) {
-        Ok(result) => Ok(IpcResult::success(result)),
-        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    // Filesystem walk + copy is blocking; offload from the async runtime.
+    match tokio::task::spawn_blocking(move || {
+        WorktreeManager::copy_worktree_include_files(&validated_project, &validated_worktree)
+    })
+    .await
+    {
+        Ok(Ok(result)) => Ok(IpcResult::success(result)),
+        Ok(Err(e)) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+        Err(join_err) => Ok(IpcResult::error(
+            format!("worktree_copy_include_files join failed: {join_err}"),
+            "INTERNAL_ERROR",
+        )),
     }
 }
 
