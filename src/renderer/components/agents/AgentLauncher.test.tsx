@@ -204,7 +204,8 @@ vi.mock('@/lib/acp-api', () => ({
 }))
 
 vi.mock('@/lib/worktree-context', () => ({
-  getDefaultCwdForProject: () => '/work'
+  getDefaultCwdForProject: () => '/work',
+  getProjectRootPath: () => '/work'
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({

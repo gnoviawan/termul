@@ -10,7 +10,7 @@ import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { extractSkillNames } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
@@ -79,7 +79,11 @@ export function AgentChatPanel({
   // Available skills (with paths) so retry can re-frame the wire from the
   // token names in the last user message (skill paths are not persisted with
   // the message — see the spec's Never: no new ContentBlock type).
-  const { skills: availableSkills } = useAgentSkills(session?.cwd)
+  // Skills live at {project.path}/.agents/skills/ which is gitignored and
+  // excluded from worktree symlinks, so resolve against the main project root
+  // — not session.cwd which may be a worktree path with no .agents/skills/.
+  const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
+  const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
   const imageCapable = useAcpStore((s) =>
     session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
   )
@@ -499,6 +503,7 @@ export function AgentChatPanel({
       ) : (
         <ChatInputBar
           session={session}
+          projectRoot={skillsProjectRoot}
           busy={session.activeTurn}
           disabled={isClosed}
           imageCapable={imageCapable}

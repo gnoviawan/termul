@@ -82,7 +82,7 @@ import { platform as osPlatform } from '@/lib/tauri-os'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
   type AcpSession,
   agentReuseKey,
@@ -156,7 +156,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // not just the resolved default.
   const [branches, setBranches] = useState<string[]>([])
   const [worktreeCreating, setWorktreeCreating] = useState(false)
-  const { skills } = useAgentSkills(projectRoot)
+  // Skills live at {project.path}/.agents/skills/ which is gitignored and
+  // excluded from worktree symlinks, so resolve against the main project root
+  // — not the worktree CWD which has no .agents/skills/.
+  const skillsRoot = activeProjectId ? getProjectRootPath(activeProjectId) : undefined
+  const { skills } = useAgentSkills(skillsRoot)
   const supportedAgents = useResolvedSupportedAcpAgents(acpConfigs)
 
   const selectedEntry = useMemo(
