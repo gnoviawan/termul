@@ -3549,12 +3549,26 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
 
     // Resolve the active project root (same chain as `RemoteServerState::start`):
     // registry default → canonicalize; else `default_project_root()` → canonicalize.
-    let project_root = match project_registry
-        .default_project_path()
-        .and_then(|p| {
-            crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)).ok()
-        }) {
-        Some(root) => root,
+    // A present-but-invalid default path returns an error rather than silently
+    // falling back to the home directory (which the web route never reads).
+    let project_root = match project_registry.default_project_path() {
+        Some(p) => match crate::web::config::resolve_and_validate_project_root(
+            std::path::Path::new(&p),
+        ) {
+            Ok(root) => root,
+            Err(e) => {
+                log::error!(
+                    "remote_sync_mcp_registry: default project path '{}' \
+                     failed canonicalization: {}",
+                    p,
+                    e
+                );
+                return IpcResult::error(
+                    "No active project root available for MCP registry sync",
+                    "NO_ACTIVE_PROJECT_ROOT",
+                );
+            }
+        },
         None => {
             log::warn!(
                 "remote_sync_mcp_registry: no active project path in registry; \
@@ -4947,7 +4961,11 @@ mod remote_sync_mcp_registry_tests {
     use crate::web::{ProjectRegistry, ProjectSummary};
     use serde_json::json;
     use std::path::Path;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Serializes tests that mutate `TERMUL_PROJECT_ROOT` (process-global env).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -5044,7 +5062,9 @@ mod remote_sync_mcp_registry_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn falls_back_to_default_project_root_when_registry_has_no_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_dir("fallback");
         // Point TERMUL_PROJECT_ROOT at the temp dir so the fallback path
         // resolves there instead of the real home directory.

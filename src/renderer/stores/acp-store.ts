@@ -118,6 +118,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -4131,6 +4132,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   // default. Best-effort + non-fatal — the wrapper logs failures and never
   // throws, so a switch still completes even if the sync write fails.
   syncMcpRegistryToProjectFile: async () => {
+    if (!isTauriContext()) return
     if (!get().mcpServersLoaded) return
     await syncMcpRegistryToProjectBestEffort(get().mcpServers)
   },

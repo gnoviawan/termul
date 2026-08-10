@@ -592,7 +592,10 @@ export function useProjectsAutoSave(): void {
       // `projects_changed` so connected web clients refetch `GET /projects`.
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
       if (useRemoteStatusStore.getState().status?.running) {
-        const projectSwitched = state.activeProjectId !== prevState.activeProjectId
+        const projectSwitched =
+          state.activeProjectId !== prevState.activeProjectId ||
+          state.projects.find((p) => p.isDefault === true)?.id !==
+            prevState.projects.find((p) => p.isDefault === true)?.id
         syncProjects(
           toProjectSummaries(state.projects, state.activeProjectId),
           state.activeProjectId || null
