@@ -77,7 +77,9 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
       // pasted with an exported `configId` keeps that configId but gets a fresh
       // stored `id`, so deleting by configId would miss it. Catalog overrides
       // have id == configId (`acp-registry:<id>`), so this is equivalent there.
-      await deleteAgentConfig(entry.config?.id ?? entry.configId)
+      // `entry.config` is guaranteed non-null here (AgentPathEditor returns
+      // null when it is absent).
+      await deleteAgentConfig(entry.config!.id)
       toast.success(`${entry.agent.name} custom path cleared`)
     } catch (err) {
       toast.error(String(err))
