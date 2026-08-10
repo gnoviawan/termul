@@ -1,6 +1,7 @@
-import { RefreshCw, Search } from 'lucide-react'
+import { Clipboard, Plus, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,9 +10,11 @@ import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-ac
 import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
 import {
   filterSupportedAcpAgents,
+  isCustomAgentEntry,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
 
@@ -154,6 +157,26 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
                 ? { label: 'Manual install', tone: 'warn' }
                 : { label: 'Unavailable', tone: 'muted' }
 
+  const handleCopyJson = async (): Promise<void> => {
+    if (!entry.config) {
+      toast.error('No saved config to copy.')
+      return
+    }
+    const json = exportAgentConfig(entry.config)
+    try {
+      await navigator.clipboard.writeText(json)
+      toast.success(`Copied ${entry.agent.name} config JSON`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      void logFrontendError({
+        level: 'error',
+        source: 'AcpAgentsSettings:copyJson',
+        message: `Failed to copy custom agent config "${entry.agent.name}": ${message}`
+      })
+      toast.error('Failed to copy JSON to clipboard.')
+    }
+  }
+
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -209,6 +232,14 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
             {entry.manualInstall.args.length > 0 ? ` ${entry.manualInstall.args.join(' ')}` : ''}
           </p>
         )}
+        {isCustomAgentEntry(entry) && entry.config && (
+          <div className="mt-1.5 flex items-center">
+            <Button type="button" size="sm" variant="ghost" onClick={() => void handleCopyJson()}>
+              <Clipboard size={13} className="mr-1.5" />
+              Copy JSON
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -220,6 +251,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
  */
 export function AcpAgentsSettings(): React.JSX.Element {
   const [filter, setFilter] = useState('')
+  const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const {
     usingRemoteRegistry,
     remoteAvailable,
@@ -308,6 +340,15 @@ export function AcpAgentsSettings(): React.JSX.Element {
             Use bundled registry
           </Button>
         )}
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={() => setCustomDialogOpen(true)}
+        >
+          <Plus size={14} className="mr-1.5" />
+          Add Custom Agent
+        </Button>
         {lastCheckedAt && (
           <span className="text-2xs text-muted-foreground">
             {usingRemoteRegistry
@@ -340,6 +381,8 @@ export function AcpAgentsSettings(): React.JSX.Element {
           visible.map((entry) => <AgentRow key={entry.id} entry={entry} />)
         )}
       </div>
+
+      <CustomAcpAgentDialog open={customDialogOpen} onOpenChange={setCustomDialogOpen} />
     </div>
   )
 }

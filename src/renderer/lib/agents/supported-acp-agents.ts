@@ -84,6 +84,19 @@ export function registryConfigId(registryId: string): string {
   return `acp-registry:${registryId}`
 }
 
+/**
+ * True for a custom (pasted) agent — distinguished from catalog/registry
+ * agents by the *config's* id. Catalog entries use `entry.id = agent.id` (not
+ * `acp-registry:`-prefixed at the entry level); only the persisted
+ * `StoredAgentConfig.id` carries the `acp-registry:` prefix. Custom agents
+ * have a saved `config.id` of `custom-<uuid8>`; catalog agents either have no
+ * saved config (derived/hostInstalled → `config.id` is `acp-registry:<id>`) or
+ * a catalog override whose `config.id` starts with `acp-registry:`.
+ */
+export function isCustomAgentEntry(entry: SupportedAcpAgentEntry): boolean {
+  return !!entry.config && !entry.config.id.startsWith('acp-registry:')
+}
+
 function runtimeUnavailableReason(launcher: 'npx' | 'uvx'): string {
   return launcher === 'npx'
     ? 'Install Node.js so npx is available on your PATH.'
@@ -117,6 +130,7 @@ export function installedBinaryConfig(
   target: Pick<RegistryBinaryTarget, 'env'> = {}
 ): StoredAgentConfig {
   return toStoredConfig(agent, {
+    configId: registryConfigId(agent.id),
     name: agent.name,
     command: installed.command,
     args: installed.args,
@@ -286,23 +300,84 @@ export function isSupportedAcpConfigId(configId: string): boolean {
  * sites (`useAcpAgents`, `AgentLauncher`, `AcpAgentsSettings`) switch to this
  * async wrapper.
  */
+/**
+ * CAP-5: surface persisted custom agents (outside the registry/catalog) as
+ * `SupportedAcpAgentEntry` rows alongside catalog/registry agents. A persisted
+ * config whose `id` does NOT start with `acp-registry:` is a custom agent pasted
+ * via the CustomAcpAgentDialog; it is appended verbatim with a synthesized
+ * `RegistryAgent` shell (the AgentRow uses `agent.name` / `agent.description` /
+ * `agent.version` for display). `seenConfigIds` lets the caller skip configIds
+ * already projected from the catalog loop (including a custom agent whose
+ * configId collided with a registry agent — the catalog loop's persisted-wins
+ * lookup already consumed it).
+ */
+function customAgentEntriesFromPersisted(
+  persistedConfigs: readonly StoredAgentConfig[],
+  seenConfigIds: Set<string> = new Set()
+): SupportedAcpAgentEntry[] {
+  const entries: SupportedAcpAgentEntry[] = []
+  for (const config of persistedConfigs) {
+    // Guard against malformed persisted data (null/non-object/id-less) so the
+    // merge never crashes on `.startsWith`/`.trim`.
+    if (typeof config.id !== 'string' || config.id.length === 0) continue
+    if (config.id.startsWith('acp-registry:')) continue
+    const configId =
+      config.configId && config.configId.trim().length > 0 ? config.configId : config.id
+    if (seenConfigIds.has(configId)) continue
+    seenConfigIds.add(configId)
+    entries.push({
+      id: config.id,
+      configId,
+      agent: {
+        id: config.id,
+        name: config.name,
+        version: '',
+        description: '',
+        distribution: {}
+      },
+      config,
+      status: 'ready',
+      install: null,
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    })
+  }
+  return entries
+}
+
 export async function resolveSupportedAcpAgents(
   persistedConfigs: readonly StoredAgentConfig[]
 ): Promise<SupportedAcpAgentEntry[]> {
   const result = await acpCatalogApi.listCatalog()
   if (!result.success) {
-    // Degrade gracefully: return an empty list (callers fall back to the
-    // default-agent selection which handles empty lists).
-    return []
+    // Catalog unavailable — still surface persisted custom agents so users can
+    // manage/export them without a live catalog fetch (CAP-5).
+    return customAgentEntriesFromPersisted(persistedConfigs)
   }
   const catalog = result.data
-  const persistedById = new Map(persistedConfigs.map((config) => [config.id, config]))
+  // CAP-5 / persisted-wins: look up persisted configs by `configId` (not `id`)
+  // so a persisted custom agent whose `configId` collides with a registry
+  // agent's `configId` (e.g. a user pasted `configId: "acp-registry:gemini"`)
+  // is found here and wins over the catalog version (status 'ready', user's
+  // command/args/env). This also finds catalog overrides (whose configId IS
+  // `acp-registry:<id>`). When two persisted configs share a configId (a
+  // custom agent + a catalog override for the same registry id), the custom
+  // agent (explicitly pasted) takes precedence — it is later in the input
+  // list, so the `Map` constructor lets it overwrite the catalog override.
+  const persistedByConfigId = new Map(
+    persistedConfigs
+      .filter((c) => typeof c.id === 'string' && c.id.length > 0)
+      .map((c) => [c.configId && c.configId.trim().length > 0 ? c.configId : c.id, c])
+  )
   const entries: SupportedAcpAgentEntry[] = []
+  const seenConfigIds = new Set<string>()
 
   for (const agent of catalog.agents) {
     const id = agent.id
     const configId = registryConfigId(id)
-    const persisted = persistedById.get(configId)
+    seenConfigIds.add(configId)
+    const persisted = persistedByConfigId.get(configId)
 
     // Map the host-resolved status to the existing SupportedAcpAgentEntry shape.
     // The host already computed the status (ready / install-required /
@@ -398,6 +473,13 @@ export async function resolveSupportedAcpAgents(
               : null
     })
   }
+
+  // CAP-5: append persisted custom agents (outside the registry/catalog) that
+  // the catalog loop did not project. A custom agent whose configId collided
+  // with a registry agent was already consumed by the configId-keyed persisted
+  // lookup above (persisted wins); `seenConfigIds` keeps it from being
+  // double-appended here.
+  entries.push(...customAgentEntriesFromPersisted(persistedConfigs, seenConfigIds))
 
   return entries
 }

@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 };
 use tauri::State;
 
-use crate::acp::config::{AgentConfig, AgentId, SessionId};
+use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
     AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
@@ -27,6 +27,10 @@ pub async fn acp_spawn_agent(
     manager: State<'_, Arc<AcpManager>>,
     config: AgentConfig,
 ) -> Result<SpawnOutcome, String> {
+    // OQ1: reject an AgentConfig without a non-empty `configId` so the spawn
+    // path derives a stable `config:{config_id}` namespace (no fallback hash).
+    // Shared with the WS `spawn_agent` handler via `require_config_id`.
+    require_config_id(&config)?;
     manager.spawn(config).await
 }
 

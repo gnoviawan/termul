@@ -29,6 +29,23 @@ export function validateAgentConfig(cfg: Partial<AgentConfig>): AgentConfigValid
   const errors: string[] = []
   if (!cfg.name || cfg.name.trim().length === 0) errors.push('Name is required.')
   if (!cfg.command || cfg.command.trim().length === 0) errors.push('Command is required.')
+  if (cfg.args !== undefined) {
+    if (!Array.isArray(cfg.args)) {
+      errors.push('args must be an array.')
+    } else if (cfg.args.some((a) => typeof a !== 'string')) {
+      errors.push('args must be an array of strings.')
+    }
+  }
+  if (cfg.env !== undefined) {
+    if (typeof cfg.env !== 'object' || cfg.env === null || Array.isArray(cfg.env)) {
+      errors.push('env must be an object.')
+    } else if (Object.values(cfg.env).some((v) => typeof v !== 'string')) {
+      errors.push('env values must be strings.')
+    }
+  }
+  if (cfg.allowTerminal !== undefined && typeof cfg.allowTerminal !== 'boolean') {
+    errors.push('allowTerminal must be a boolean.')
+  }
   return { valid: errors.length === 0, errors }
 }
 
@@ -46,7 +63,22 @@ export function looksLikeSecretValue(value: string): boolean {
 export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
   const res = await persistenceApi.read<StoredAgentConfig[]>(ACP_AGENTS_KEY)
   if (res.success) {
-    return Array.isArray(res.data) ? res.data : []
+    if (!Array.isArray(res.data)) return []
+    // Filter out malformed (null/non-object/id-less) elements before the
+    // configId backfill so a corrupt entry can never crash the load or the
+    // downstream merge (`resolveSupportedAcpAgents` calls `.startsWith` on
+    // `config.id`). Malformed entries are silently dropped here; the merge
+    // layer is the no-crash boundary.
+    const clean = res.data.filter(
+      (c): c is StoredAgentConfig =>
+        c !== null && typeof c === 'object' && typeof c.id === 'string' && c.id.length > 0
+    )
+    // Migration: backfill `configId = id` for persisted configs saved before
+    // configId was required (pre-feature catalog overrides + custom agents
+    // both need a non-empty configId on the spawn path).
+    return clean.map((cfg) =>
+      cfg.configId && cfg.configId.trim().length > 0 ? cfg : { ...cfg, configId: cfg.id }
+    )
   }
   // A missing key is the normal empty state; any other failure is a real
   // storage/backend error and must not be silently collapsed to [].

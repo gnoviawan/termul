@@ -1359,6 +1359,12 @@ async fn handle_spawn_agent(
             "spawn_agent requires a non-empty `config.command`",
         );
     }
+    // OQ1: require a non-empty `config.configId` (mirrors `acp_spawn_agent`)
+    // so the spawn path derives a stable `config:{config_id}` namespace on web
+    // too. Shared guard lives in `acp::config::require_config_id`.
+    if let Err(msg) = crate::acp::config::require_config_id(&parsed.config) {
+        return WsReply::err(id, WsErrorCode::Unsupported, msg);
+    }
     match acp.spawn(parsed.config).await {
         Ok(outcome) => {
             // Track the spawned agent so a later `switch_project` can reuse it
@@ -3871,15 +3877,37 @@ mod tests {
     }
 
     /// `spawn_agent` rejects empty `config.command` (mirrors create_session cwd guard).
+    /// Payload carries a `configId` so the rejection is specifically empty-command
+    /// (not the configId-required guard added for OQ1).
     #[test]
     fn handle_spawn_agent_rejects_empty_command() {
         let mut authed = true;
         let reply = handle_sync(
-            r#"{"id":"r1","type":"spawn_agent","payload":{"config":{"name":"x","command":""}}}"#,
+            r#"{"id":"r1","type":"spawn_agent","payload":{"config":{"configId":"custom-test","name":"x","command":""}}}"#,
             &mut authed,
         );
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// OQ1: `spawn_agent` rejects a config without a non-empty `configId`
+    /// (valid name + command, no configId) — mirrors the desktop
+    /// `acp_spawn_agent` guard so the spawn path derives a stable
+    /// `config:{config_id}` namespace on web too.
+    #[test]
+    fn handle_spawn_agent_rejects_missing_config_id() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"spawn_agent","payload":{"config":{"name":"x","command":"node"}}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok, "missing configId must fail");
+        let err = reply.err.expect("err present on failure");
+        assert_eq!(err.code, "unsupported");
+        assert!(
+            err.message.contains("configId"),
+            "err message should mention configId, got: {err:?}"
+        );
     }
 
     // --- CAP-6 / Story 9: install_acp_agent WS handler tests ----------------

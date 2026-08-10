@@ -71,7 +71,7 @@ impl From<&SessionId> for agent_client_protocol::schema::v1::SessionId {
 
 /// Configuration describing how to launch an ACP agent subprocess.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Stable renderer/config identity used for durable session matching. It is
     /// never used as a filesystem component and may be absent for older clients.
@@ -94,6 +94,22 @@ pub struct AgentConfig {
     /// `false`.
     #[serde(default)]
     pub allow_terminal: bool,
+}
+
+/// OQ1: the spawn path requires a non-empty `configId` so it derives a stable
+/// `config:{config_id}` session namespace (no fallback hash). Both the desktop
+/// `acp_spawn_agent` command and the WS `spawn_agent` handler route through
+/// this shared guard — the desktop path returns the `Err(String)` directly, the
+/// WS handler maps it to a `WsReply::err` with `WsErrorCode::Unsupported`.
+pub(crate) fn require_config_id(config: &AgentConfig) -> Result<(), String> {
+    let config_id = config.config_id.as_deref().map(str::trim).unwrap_or("");
+    if config_id.is_empty() {
+        return Err(
+            "spawn_agent requires a non-empty `config.configId` for durable session matching"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Resolve a bare command name against a `:`-separated PATH, returning the first
@@ -239,6 +255,96 @@ mod tests {
         let proto: agent_client_protocol::schema::v1::SessionId = (&original).into();
         let back: SessionId = proto.into();
         assert_eq!(original, back);
+    }
+
+    /// OQ1: the shared `require_config_id` guard — rejects `None`, empty, and
+    /// whitespace-only configId so the spawn path never falls back to the
+    /// name+command hash for namespace derivation.
+    #[test]
+    fn require_config_id_rejects_missing() {
+        let config = AgentConfig {
+            config_id: None,
+            name: "H".to_string(),
+            command: "node".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+        let err = require_config_id(&config).expect_err("None configId must be rejected");
+        assert!(err.contains("configId"), "err should mention configId: {err}");
+    }
+
+    #[test]
+    fn require_config_id_rejects_empty() {
+        for bad in ["", "   ", "\t"] {
+            let config = AgentConfig {
+                config_id: Some(bad.to_string()),
+                name: "H".to_string(),
+                command: "node".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+                allow_terminal: false,
+            };
+            require_config_id(&config).expect_err("empty/whitespace configId must be rejected");
+        }
+    }
+
+    #[test]
+    fn require_config_id_accepts_present() {
+        let config = AgentConfig {
+            config_id: Some("custom-abc".to_string()),
+            name: "H".to_string(),
+            command: "node".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+        require_config_id(&config).expect("a non-empty configId must pass the guard");
+    }
+
+    /// OQ3: `deny_unknown_fields` on `AgentConfig` rejects extra fields at the
+    /// serde boundary (the TS import guard is the first line; this is the
+    /// spawn-path backstop). An `id`/`templateId`-carrying paste must be
+    /// rejected here so it cannot sneak StoredAgentConfig-only fields through.
+    #[test]
+    fn agent_config_rejects_unknown_fields_at_serde_boundary() {
+        let json = r#"{
+            "configId": "custom-abc1",
+            "name": "Internal Helper",
+            "command": "node",
+            "args": ["/path/to/agent.js"],
+            "env": { "API_KEY": "$INTERNAL_API_KEY" },
+            "allowTerminal": false,
+            "id": "custom-abc1"
+        }"#;
+        let parsed: Result<AgentConfig, _> = serde_json::from_str(json);
+        let err = parsed.expect_err("unknown field `id` must be rejected");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown-field rejection, got: {err}"
+        );
+    }
+
+    /// OQ3 companion: a minimal conforming `AgentConfig` (only the 6 allowed
+    /// fields) deserializes cleanly through `deny_unknown_fields`.
+    #[test]
+    fn agent_config_accepts_conforming_payload() {
+        let json = r#"{
+            "configId": "custom-abc1",
+            "name": "Internal Helper",
+            "command": "node",
+            "args": ["/path/to/agent.js"],
+            "env": { "API_KEY": "$INTERNAL_API_KEY" },
+            "allowTerminal": false
+        }"#;
+        let parsed: AgentConfig =
+            serde_json::from_str(json).expect("conforming payload deserializes");
+        assert_eq!(parsed.config_id.as_deref(), Some("custom-abc1"));
+        assert_eq!(parsed.name, "Internal Helper");
+        assert_eq!(parsed.command, "node");
+        assert_eq!(parsed.args, vec!["/path/to/agent.js".to_string()]);
+        assert_eq!(parsed.env.get("API_KEY").map(String::as_str), Some("$INTERNAL_API_KEY"));
+        assert!(!parsed.allow_terminal);
     }
 
     #[cfg(not(target_os = "windows"))]
