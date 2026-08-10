@@ -8,9 +8,13 @@ vi.mock('streamdown', () => {
   return {
     StreamdownContext,
     Streamdown: () => null,
-    // Capture the `code` prop so tests can assert newline preservation.
-    CodeBlock: (props: { code?: string; children?: React.ReactNode }) => (
-      <div data-testid="code-block" data-code={props.code ?? ''}>
+    // Capture source and presentation props without reproducing Streamdown internals.
+    CodeBlock: (props: { code?: string; className?: string; children?: React.ReactNode }) => (
+      <div
+        data-testid="code-block"
+        data-code={props.code ?? ''}
+        data-class-name={props.className ?? ''}
+      >
         {props.children}
       </div>
     )
@@ -26,7 +30,7 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
 }
 
 describe('ChatMarkdownCode', () => {
-  it('preserves newlines in a multi-line fenced code block via the node value', () => {
+  it('preserves and visually separates multi-line fenced code via the node value', () => {
     const node = { value: 'line1\nline2\nline3' }
     const { getByTestId } = render(
       withTooltip(
@@ -36,7 +40,24 @@ describe('ChatMarkdownCode', () => {
       )
     )
 
-    expect(getByTestId('code-block').getAttribute('data-code')).toBe('line1\nline2\nline3')
+    const codeBlock = getByTestId('code-block')
+    expect(codeBlock.getAttribute('data-code')).toBe('line1\nline2\nline3')
+    expect(codeBlock.getAttribute('data-class-name')).toContain('[&_code>span]:block')
+  })
+
+  it('preserves a blank line and forwards the direct-line layout selector', () => {
+    const node = { value: 'line1\n\nline3' }
+    const { getByTestId } = render(
+      withTooltip(
+        <ChatMarkdownCode className="language-ts" data-block node={node}>
+          {['line1', '', 'line3']}
+        </ChatMarkdownCode>
+      )
+    )
+
+    const codeBlock = getByTestId('code-block')
+    expect(codeBlock.getAttribute('data-code')).toBe('line1\n\nline3')
+    expect(codeBlock.getAttribute('data-class-name')).toContain('[&_code>span]:block')
   })
 
   it('recurses through array children preserving embedded newlines (no node value)', () => {
@@ -56,6 +77,7 @@ describe('ChatMarkdownCode', () => {
 
     const code = container.querySelector('code')
     expect(code).toHaveAttribute('data-streamdown', 'inline-code')
+    expect(code).not.toHaveClass('[&_code>span]:block')
   })
 
   it('passes the compact size class to the copy/download action buttons', () => {

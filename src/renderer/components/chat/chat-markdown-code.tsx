@@ -165,7 +165,7 @@ export function ChatMarkdownCode({
     <CodeBlock
       code={code}
       language={language || 'text'}
-      className={className}
+      className={cn('[&_code>span]:block', className)}
       lineNumbers={lineNumbers}
     >
       <CodeDownloadAction code={code} language={language || 'text'} />
