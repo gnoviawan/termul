@@ -3257,29 +3257,27 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (pending.modeId) {
       await get().setMode(sessionId, pending.modeId)
     }
+    let modelConfigIdHandled: string | null = null
     if (pending.modelId) {
-      const hasNative =
-        session.models?.availableModels.some((m) => m.modelId === pending.modelId) ?? false
       let applied = false
-      if (hasNative) {
-        await get().setModel(sessionId, pending.modelId)
-        applied = true
-      } else if (session.models) {
+      if (session.models) {
         try {
           await get().setModel(sessionId, pending.modelId)
           applied = true
         } catch {
-          const modelOpt = session.configOptions.find((o) => o.category === 'model')
-          if (modelOpt) {
-            await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
-            applied = true
-          }
+          // native setModel rejected; fall through to a model config option
         }
-      } else {
+      }
+      if (!applied) {
         const modelOpt = session.configOptions.find((o) => o.category === 'model')
         if (modelOpt) {
-          await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
-          applied = true
+          try {
+            await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+            applied = true
+            modelConfigIdHandled = modelOpt.id
+          } catch {
+            // leave applied false; show toast and continue applying other options
+          }
         }
       }
       if (!applied) {
@@ -3289,6 +3287,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     }
     for (const [configId, valueId] of Object.entries(pending.configValues)) {
+      if (configId === modelConfigIdHandled) continue
       await get().setConfigOption(sessionId, configId, valueId)
     }
   },
