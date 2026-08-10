@@ -7,6 +7,7 @@ import type {
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
 import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import type { StoredMcpServer } from './acp-mcp-persistence'
 
 /**
  * Tauri IPC adapter for the desktop-hosted shared-live web server.
@@ -95,6 +96,24 @@ export async function syncProjects(
  */
 export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
   return invokeIpc<void>('set_host_default_project', { projectId })
+}
+
+/**
+ * Mirror the desktop app-store MCP registry to the active project's
+ * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
+ * `remote_sync_mcp_registry` command resolves the active project root via the
+ * shared `ProjectRegistry` (same chain `RemoteServerState::start` uses) and
+ * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
+ * route (file-based) serves the same registry the desktop app store holds.
+ *
+ * Best-effort: the result is `IpcResult<void>` (never throws — invoke errors map
+ * to `{ success: false, code: 'INVOKE_ERROR' }`). Callers log a failure but never
+ * let it block the app-store save or the project switch.
+ */
+export async function syncMcpRegistryToProject(
+  registry: StoredMcpServer[]
+): Promise<IpcResult<void>> {
+  return invokeIpc<void>('remote_sync_mcp_registry', { registry })
 }
 
 /**

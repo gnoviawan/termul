@@ -100,7 +100,8 @@ import {
   loadMcpServers as loadMcpServersFromDisk,
   type StoredMcpServer,
   saveMcpServers as saveMcpServersToDisk,
-  selectMcpServersForAgent
+  selectMcpServersForAgent,
+  syncMcpRegistryToProjectBestEffort
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 // Story 5.3 (AC3): used to register the WS reconnect listener that flips the
@@ -117,6 +118,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -308,6 +310,11 @@ interface AcpState {
 
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
+  // True once `loadMcpServers` has resolved at least once. Guards
+  // `syncMcpRegistryToProjectFile` against syncing the initial empty state
+  // (which would overwrite a project's `.termul/mcp-servers.json` with `[]`
+  // before the app-store registry is loaded — CAP-7 race guard).
+  mcpServersLoaded: boolean
 
   // MCP probe state — on-demand only (no persistent always-on connections).
   // `mcpProbeStatus` reflects Termul's own rmcp client connection, NOT the
@@ -551,6 +558,13 @@ interface AcpState {
   importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
+  /**
+   * CAP-7: mirror the app-store MCP registry to the active project's
+   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
+   * host-level project switch so the new project's file is synced with the
+   * desktop's app-store registry before the web route reads it.
+   */
+  syncMcpRegistryToProjectFile: () => Promise<void>
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**
@@ -2469,6 +2483,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   discoveringKeys: {},
   discoveredReopenContexts: {},
   mcpServers: [],
+  mcpServersLoaded: false,
   mcpProbeStatus: {},
   mcpTools: {},
   mcpToolsLoaded: {},
@@ -4069,7 +4084,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   loadMcpServers: async () => {
     try {
       const list = await loadMcpServersFromDisk()
-      set({ mcpServers: list })
+      set({ mcpServers: list, mcpServersLoaded: true })
     } catch (err) {
       void logFrontendError({
         source: 'acp-store.loadMcpServers',
@@ -4153,6 +4168,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         throw err
       }
     }),
+
+  // CAP-7: on a desktop host-level project switch, mirror the app-store MCP
+  // registry to the new project's `.termul/mcp-servers.json` so the web
+  // `GET /mcp-servers` route (file-based) serves the same registry. Invoked
+  // from `useProjectsAutoSave` AFTER `syncProjects` lands so the backend
+  // `ProjectRegistry` (and thus the resolved project root) reflects the new
+  // default. Best-effort + non-fatal — the wrapper logs failures and never
+  // throws, so a switch still completes even if the sync write fails.
+  syncMcpRegistryToProjectFile: async () => {
+    if (!isTauriContext()) return
+    if (!get().mcpServersLoaded) return
+    await syncMcpRegistryToProjectBestEffort(get().mcpServers)
+  },
 
   // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
   // concurrent probes per server id via `mcpProbing`.
