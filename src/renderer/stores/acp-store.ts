@@ -208,8 +208,9 @@ export interface AcpSession {
   /**
    * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
    * current-branch-mode sessions. When set, the chat indicator (CAP-6) shows
-   * `{worktreePath} · {worktreeBranch}`; relaunch reattaches to the stored
-   * path (no second `git worktree add`). State isolation still keys on `cwd`.
+   * `{worktreeBranch} · New worktree` (the full worktree path stays on the
+   * hover tooltip); relaunch reattaches to the stored path (no second
+   * `git worktree add`). State isolation still keys on `cwd`.
    */
   worktreePath?: string
   worktreeBranch?: string

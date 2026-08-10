@@ -16,6 +16,8 @@ interface McpBadgeProps {
   /** Number of MCP servers attached to this session (badge summary count). */
   count: number
   className?: string
+  /** Compact ghost trigger used in composer footers; popover content is unchanged. */
+  compact?: boolean
   /**
    * Per-server enable/disable popover (chatbox). When omitted (or empty), the
    * badge degrades to the read-only count pill (backward-compat — no popover).
@@ -68,6 +70,7 @@ function statusLabel(status: ProbeStatus | undefined): string {
 export function McpBadge({
   count,
   className,
+  compact = false,
   servers,
   onToggle,
   probeStatus,
@@ -83,12 +86,15 @@ export function McpBadge({
     return (
       <span
         className={cn(
-          'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground',
+          compact
+            ? 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70'
+            : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground',
           className
         )}
+        title={compact ? `${count} MCP servers attached` : undefined}
       >
         <Plug className="size-3" aria-hidden="true" />
-        <span className="tabular-nums">{count}</span>
+        <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
         <span className="sr-only">MCP servers attached</span>
       </span>
     )
@@ -104,6 +110,7 @@ export function McpBadge({
       tools={tools}
       onLoadTools={onLoadTools}
       className={className}
+      compact={compact}
     />
   )
 }
@@ -117,6 +124,7 @@ interface PopoverProps {
   tools?: Record<string, McpToolInfo[]>
   onLoadTools?: (id: string) => void
   className?: string
+  compact: boolean
 }
 
 function McpPopover({
@@ -127,7 +135,8 @@ function McpPopover({
   probeError,
   tools,
   onLoadTools,
-  className
+  className,
+  compact
 }: PopoverProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
@@ -136,13 +145,15 @@ function McpPopover({
         <button
           type="button"
           className={cn(
-            'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            compact
+              ? 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent/40 hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+              : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             className
           )}
           aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
         >
           <PlugZap className="size-3" aria-hidden="true" />
-          <span className="tabular-nums">{count}</span>
+          <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-3 text-xs">
@@ -207,6 +218,7 @@ function McpServerRow({
         {onToggle && (
           <Switch
             checked={enabled}
+            className="h-4 w-7 border [&>span]:h-3 [&>span]:w-3 [&>span[data-state=checked]]:translate-x-3"
             aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
             onCheckedChange={(checked) => {
               if (checked === enabled) return

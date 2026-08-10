@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { McpBadge } from './McpBadge'
 
@@ -9,6 +9,11 @@ function openPopover(): void {
 describe('McpBadge (Story 1.8 — read-only MCP badge in composer)', () => {
   it('is hidden when no MCP servers are attached (count <= 0) and no server list', () => {
     const { container } = render(<McpBadge count={0} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('hides the compact composer icon when no servers are configured', () => {
+    const { container } = render(<McpBadge count={0} compact />)
     expect(container).toBeEmptyDOMElement()
   })
 
@@ -33,6 +38,18 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
   it('renders at count 0 when servers exist (discoverable entry point)', () => {
     render(<McpBadge count={0} servers={servers} onToggle={vi.fn()} />)
     expect(screen.getByRole('button', { name: /mcp servers/i })).toBeInTheDocument()
+  })
+
+  it('keeps the full management popover behind the compact composer trigger', () => {
+    render(<McpBadge count={2} servers={servers} onToggle={vi.fn()} compact />)
+
+    const trigger = screen.getByRole('button', { name: /mcp servers/i })
+    expect(trigger.className).toContain('size-7')
+    expect(within(trigger).getByText('2')).toHaveClass('sr-only')
+
+    fireEvent.click(trigger)
+    expect(screen.getByText('Files')).toBeInTheDocument()
+    expect(screen.getByText('Remote')).toBeInTheDocument()
   })
 
   it('lists each server with a visible status label inside the popover', () => {

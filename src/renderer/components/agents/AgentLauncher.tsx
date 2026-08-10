@@ -1,6 +1,15 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import { ArrowUp, Check, Download, FolderOpen, Loader2 } from 'lucide-react'
+import {
+  ArrowUp,
+  Check,
+  Download,
+  Folder,
+  FolderGit2,
+  FolderOpen,
+  GitBranch,
+  Loader2
+} from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -458,11 +467,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [persistSelection, selectedConfigId, supportedAgents])
 
-  // CAP-2: when worktree mode is selected on a desktop git project, resolve
-  // the origin-aware default base branch once so the picker can default to it.
-  // Detached HEAD is surfaced so the launcher can force a base pick.
+  // CAP-2: resolve the origin-aware default base branch and local branch list
+  // once per desktop git project so the context-strip picker is ready when the
+  // user switches to worktree mode.
   useEffect(() => {
-    if (!canUseWorktree || isolationMode !== 'worktree' || !projectRoot) return
+    if (!canUseWorktree || !projectRoot) return
     let cancelled = false
     void (async () => {
       try {
@@ -470,14 +479,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         if (cancelled) return
         if (result.success && result.data) {
           setBaseBranchInfo(result.data)
-          // Default the picker to the resolved base only when the user has
-          // not yet picked AND the repo is NOT in detached HEAD. On detached
-          // HEAD the user must explicitly pick a base (CAP-2 constraint).
-          setBaseBranch((prev) => {
-            if (prev) return prev
-            if (result.data!.isDetached) return null
-            return result.data!.defaultBase
-          })
           // Fetch local branches so the picker lists every valid option
           // (detached-HEAD users can pick any branch).
           const branchResult = await worktreeApi.branches(projectRoot)
@@ -506,7 +507,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     return () => {
       cancelled = true
     }
-  }, [canUseWorktree, isolationMode, projectRoot])
+  }, [canUseWorktree, projectRoot])
+
+  // CAP-2: entering worktree mode defaults the picker to the resolved base
+  // branch. Detached HEAD skips the auto-fill so the user must pick.
+  useEffect(() => {
+    if (isolationMode !== 'worktree' || baseBranch || !baseBranchInfo || baseBranchInfo.isDetached)
+      return
+    setBaseBranch(baseBranchInfo.defaultBase)
+  }, [isolationMode, baseBranch, baseBranchInfo])
 
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
@@ -1007,7 +1016,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     add(baseBranchInfo?.currentBranch, true)
     add(baseBranchInfo?.defaultBase)
-    add(projectGitBranch)
+    add(projectGitBranch, true)
     for (const b of branches) add(b)
     return out
   })()
@@ -1025,9 +1034,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
         <TermulMark size={48} className="text-foreground" />
         <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          {`What should we do in ${projectLabel} on ${
-            projectGitBranch ?? (projectIsGitRepo ? 'detached' : 'no branch')
-          }?`}
+          {`What should we do in ${projectLabel}?`}
         </h1>
       </div>
 
@@ -1052,7 +1059,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
-            className="rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
+            data-agent-launcher-composer="true"
+            className="relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
             onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
             onDrop={
               canDropPaste
@@ -1118,54 +1126,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               onRemove={removeAttachment}
               className="px-5 pt-4"
             />
-            {canUseWorktree && (
-              <div className="flex items-center gap-2 px-5 pb-1 pt-3 text-xs text-muted-foreground">
-                <Select
-                  value={isolationMode}
-                  onValueChange={(value) =>
-                    value === 'current' || value === 'worktree'
-                      ? setIsolationMode(value)
-                      : undefined
-                  }
-                >
-                  <SelectTrigger
-                    aria-label="Isolation mode"
-                    className="h-7 w-[140px] gap-1 px-2 text-xs"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="current">Current branch</SelectItem>
-                    <SelectItem value="worktree">Worktree</SelectItem>
-                  </SelectContent>
-                </Select>
-                {isolationMode === 'worktree' && (
-                  <Select
-                    value={baseBranch ?? undefined}
-                    onValueChange={(value) => setBaseBranch(value)}
-                  >
-                    <SelectTrigger
-                      aria-label="Worktree base branch"
-                      className="h-7 w-[180px] gap-1 px-2 text-xs"
-                    >
-                      <SelectValue placeholder={baseBranchInfo?.defaultBase ?? 'base branch'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {baseOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {isolationMode === 'worktree' && baseBranchInfo?.isDetached && !baseBranch && (
-                  <span className="text-destructive">
-                    Detached HEAD — pick a base branch to launch
-                  </span>
-                )}
-              </div>
-            )}
             <div className="px-5 pb-2 pt-4">
               {/* Transparent-textarea overlay: mirrors the value with inline
                   SkillChip pills. The textarea text is transparent with a
@@ -1231,6 +1191,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onLoadTools={(id) => {
                     void loadMcpTools(id)
                   }}
+                  compact
                 />
               </div>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
@@ -1308,27 +1269,61 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="grid min-w-0 gap-2 md:grid-cols-3">
-          {SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion.title}
-              type="button"
-              onClick={() => {
-                setPrompt(suggestion.prompt)
-                setActiveCommand(null)
-                updateMentions(suggestion.prompt, suggestion.prompt.length)
-                textareaRef.current?.focus()
-              }}
-              className="rounded-2xl border border-border bg-card/60 px-4 py-3 text-left transition-colors hover:bg-muted/45"
+          {canUseWorktree && (
+            <div
+              data-agent-launcher-context-strip="true"
+              className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
             >
-              <div className="text-sm font-medium text-foreground">{suggestion.title}</div>
-              <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {suggestion.description}
-              </div>
-            </button>
-          ))}
+              <Select
+                value={isolationMode}
+                onValueChange={(value) =>
+                  value === 'current' || value === 'worktree' ? setIsolationMode(value) : undefined
+                }
+              >
+                <SelectTrigger
+                  aria-label="Isolation mode"
+                  className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
+                >
+                  {isolationMode === 'worktree' ? (
+                    <FolderGit2 className="size-3.5 shrink-0" />
+                  ) : (
+                    <Folder className="size-3.5 shrink-0" />
+                  )}
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="current">Local</SelectItem>
+                  <SelectItem value="worktree">New worktree</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {isolationMode === 'worktree' && (
+                <div className="flex min-w-0 items-center justify-end gap-2">
+                  {!baseBranch && baseBranchInfo?.isDetached && (
+                    <span className="truncate text-xs text-destructive">
+                      Detached HEAD - pick a base
+                    </span>
+                  )}
+                  <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
+                    <SelectTrigger
+                      aria-label="Base branch"
+                      className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
+                    >
+                      <GitBranch className="size-3.5 shrink-0" />
+                      <SelectValue placeholder="Base branch" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {baseOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1851,21 +1846,3 @@ const EntryGlyph = memo(function EntryGlyph({
     </span>
   )
 })
-
-const SUGGESTIONS = [
-  {
-    title: 'Find the next best task',
-    description: 'Look across the recent project work and current repo state.',
-    prompt: 'Find the next best task for this project.'
-  },
-  {
-    title: 'Do a focused quality pass',
-    description: 'Audit this project for the most likely rough edge from recent work.',
-    prompt: 'Do a focused quality pass on this project.'
-  },
-  {
-    title: 'Prepare a project handoff',
-    description: 'Summarize what matters in this project right now.',
-    prompt: 'Prepare a clean project handoff.'
-  }
-] as const

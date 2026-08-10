@@ -1412,8 +1412,8 @@ describe('AgentLauncher mobile empty-state overflow', () => {
     renderLauncher()
 
     // The hero <h1> is the stable entry point (role + level). From it we walk
-    // the rendered tree to the hero div, launcher root, composer column, and
-    // suggestion grid — jsdom preserves the className strings exactly.
+    // the rendered tree to the hero div, launcher root, and composer column —
+    // jsdom preserves the className strings exactly.
     const heading = screen.getByRole('heading', {
       level: 1,
       name: /what should we do in/i
@@ -1427,8 +1427,6 @@ describe('AgentLauncher mobile empty-state overflow', () => {
     const composerColumn = Array.from(launcherRoot.children).find(
       (el) => el !== hero && el.tagName === 'DIV'
     )!
-    // Suggestion grid is the grid child inside the composer column.
-    const suggestionGrid = composerColumn.querySelector('div.grid')!
 
     // Launcher root: `overflow-x-hidden` backstop + responsive padding.
     expect(launcherRoot.className).toContain('overflow-x-hidden')
@@ -1437,9 +1435,8 @@ describe('AgentLauncher mobile empty-state overflow', () => {
     // Hero div spans the content box; heading wraps instead of forcing width.
     expect(hero.className).toContain('w-full')
     expect(heading.className).toContain('break-words')
-    // Composer column + suggestion grid allow flex/grid children to shrink.
+    // Composer column allows flex children to shrink.
     expect(composerColumn.className).toContain('min-w-0')
-    expect(suggestionGrid.className).toContain('min-w-0')
   })
 })
 
@@ -1490,16 +1487,40 @@ describe('AgentLauncher worktree isolation', () => {
     })
   })
 
-  // CAP-1: headline reads `What should we do in {project} on {branch}`
-  it('renders the project git branch in the headline (CAP-1)', () => {
+  // CAP-1: the launcher surfaces an isolation-mode selector for git repos;
+  // the project branch appears as a worktree base option.
+  it('surfaces the project git branch as a worktree base option (CAP-1)', async () => {
     renderLauncher()
-    expect(screen.getByRole('heading', { level: 1, name: /on feat\/x/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { level: 1, name: /what should we do in/i })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
+    fireEvent.change(
+      screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement,
+      {
+        target: { value: 'worktree' }
+      }
+    )
+    await screen.findByRole('option', { name: /feat\/x/ })
   })
 
-  it('renders "detached" in the headline when gitBranch is null (CAP-1)', () => {
+  it('renders worktree controls in a separate context strip below the composer', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    const contextStrip = document.querySelector('[data-agent-launcher-context-strip="true"]')
+
+    expect(composer).toBeInTheDocument()
+    expect(contextStrip).toBeInTheDocument()
+    expect(composer).not.toContainElement(contextStrip)
+    expect(composer?.compareDocumentPosition(contextStrip as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+  })
+
+  it('shows the isolation selector when gitBranch is null (CAP-1)', () => {
     mockProjectOverride.current = { isGitRepo: true, gitBranch: null }
     renderLauncher()
-    expect(screen.getByRole('heading', { level: 1, name: /on detached/i })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
   })
 
   // CAP-2: selector hidden on web / non-repo
@@ -1507,6 +1528,7 @@ describe('AgentLauncher worktree isolation', () => {
     vi.mocked(isTauriContext).mockReturnValue(true)
     mockProjectOverride.current = null // no isGitRepo
     renderLauncher()
+    expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
   })
 
@@ -1514,23 +1536,29 @@ describe('AgentLauncher worktree isolation', () => {
     vi.mocked(isTauriContext).mockReturnValue(false)
     mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
     renderLauncher()
+    expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
   })
 
-  /** Switch the isolation mode via the native `<select>` shim. */
-  function selectIsolationMode(label: string): void {
-    const select = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
-    const option = Array.from(select.options).find((o) => o.textContent === label)
-    fireEvent.change(select, { target: { value: option?.value ?? 'worktree' } })
+  /**
+   * Switch to New worktree mode via the isolation-mode selector, then pick the
+   * base branch from the context-strip selector via the native `<select>` shim.
+   * Waits for the branch option to populate from the async base-branch
+   * resolution.
+   */
+  async function chooseWorktreeBaseBranch(branch: string): Promise<void> {
+    const mode = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
+    fireEvent.change(mode, { target: { value: 'worktree' } })
+    await screen.findByRole('option', { name: new RegExp(branch) })
+    const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
+    fireEvent.change(base, { target: { value: branch } })
   }
 
   // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
   // then copyIncludeFiles, then threads cwd=worktreePath
   it('creates a worktree, copies includes, and threads cwd=worktreePath on launch (CAP-3)', async () => {
     renderLauncher()
-    selectIsolationMode('Worktree')
-    // Wait for base-branch resolution to settle
-    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
+    await chooseWorktreeBaseBranch('feat/x')
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi wt' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
@@ -1598,8 +1626,7 @@ describe('AgentLauncher worktree isolation', () => {
         }
       })
     renderLauncher()
-    selectIsolationMode('Worktree')
-    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
+    await chooseWorktreeBaseBranch('feat/x')
 
     fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'collide' } })
     fireEvent.click(screen.getByLabelText('Start agent chat'))
@@ -1617,22 +1644,36 @@ describe('AgentLauncher worktree isolation', () => {
     expect(finalizeArgs.worktreeBranch).toBe(`${firstBranch}-2`)
   })
 
-  // CAP-2: detached HEAD blocks launch until a base is picked
-  it('disables launch on detached HEAD in worktree mode until a base is picked (CAP-2)', async () => {
+  // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch
+  // is picked from the context-strip selector.
+  it('blocks worktree launch on detached HEAD until a base branch is picked (CAP-2)', async () => {
     mockWorktreeResolveBaseBranch.mockResolvedValue({
       success: true,
       data: { defaultBase: 'main', currentBranch: undefined, isDetached: true }
     })
     renderLauncher()
-    selectIsolationMode('Worktree')
+    fireEvent.change(
+      screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement,
+      {
+        target: { value: 'worktree' }
+      }
+    )
     // Wait for the base-branch resolution to settle so the detached-HEAD hint
     // renders (the effect runs async after mode selection).
-    await waitFor(() => expect(mockWorktreeResolveBaseBranch).toHaveBeenCalled())
-
-    const sendButton = screen.getByLabelText('Start agent chat')
+    await waitFor(() => expect(screen.getByText(/detached head/i)).toBeInTheDocument())
     // No base picked + detached HEAD -> disabled
-    expect(sendButton).toBeDisabled()
-    // Hint is visible
-    expect(screen.getByText(/detached head/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Start agent chat')).toBeDisabled()
+
+    // Picking a base branch unblocks the worktree launch off that ref.
+    await screen.findByRole('option', { name: /main/ })
+    const select = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'main' } })
+
+    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    const createArgs = mockWorktreeCreate.mock.calls[0][0] as { startRef: string }
+    expect(createArgs.startRef).toBe('main')
   })
 })

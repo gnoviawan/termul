@@ -186,6 +186,28 @@ describe('ChatInputBar config controls', () => {
     vi.clearAllMocks()
   })
 
+  it('renders worktree context below the composer without keyboard helper text', () => {
+    renderInputBar({
+      session: {
+        ...session(),
+        cwd: '/work/.termul/worktrees/abcd1234',
+        worktreePath: '/work/.termul/worktrees/abcd1234',
+        worktreeBranch: 'chat/abcd1234'
+      }
+    })
+
+    const composer = document.querySelector('[data-chat-composer="true"]')
+    const contextStrip = document.querySelector('[data-chat-composer-context-strip="true"]')
+
+    expect(composer).toBeInTheDocument()
+    expect(contextStrip).toBeInTheDocument()
+    expect(composer).not.toContainElement(contextStrip)
+    expect(screen.getByText('New worktree')).toBeInTheDocument()
+    expect(screen.getByText('chat/abcd1234')).toBeInTheDocument()
+    expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/to send|to queue|newline/i)).not.toBeInTheDocument()
+  })
+
   it('uses model config and native Agent/mode picker without duplicate Agent chips', async () => {
     const s = session()
     const configOptions = [
@@ -327,10 +349,10 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     mockMcpCount.current = 0
   })
 
-  it('hides the MCP badge when no MCP servers are configured', () => {
+  it('hides the compact MCP icon when no MCP servers are configured', () => {
     mockMcpCount.current = 0
     renderInputBar()
-    // The badge returns null at count 0 — no "MCP servers attached" text.
+    expect(screen.queryByRole('img', { name: /MCP servers/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/MCP servers attached/i)).not.toBeInTheDocument()
   })
 

@@ -1,6 +1,6 @@
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowUp, Paperclip, Square } from 'lucide-react'
+import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
 import { type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
@@ -121,16 +121,26 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  // CAP-6: worktree/branch indicator. Worktree mode shows the session's
-  // worktree path + branch; current-branch mode falls back to the project's
-  // reactive `gitBranch`. Switching chats re-renders via `session`.
+  // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
+  // (worktree chats show their `chat/*` branch, not the long worktree path —
+  // the path stays on the hover tooltip). Current-branch mode falls back to
+  // the project's reactive `gitBranch`. Switching chats re-renders via
+  // `session`.
   const projectGitBranch = useProjectStore(
     (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
   )
   const isolationLabel =
     session.worktreePath && session.worktreeBranch
-      ? `${session.worktreePath} · ${session.worktreeBranch}`
-      : (session.worktreeBranch ?? projectGitBranch ?? null)
+      ? `${session.worktreeBranch} · New worktree`
+      : projectGitBranch
+        ? `${projectGitBranch} · Local`
+        : (session.worktreeBranch ?? null)
+  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const isolationBranch = session.worktreeBranch ?? projectGitBranch
+  const isolationTitle =
+    isolationLabel && session.worktreePath
+      ? `${isolationLabel} — ${session.worktreePath}`
+      : isolationLabel
   const {
     model,
     thoughtLevel,
@@ -238,7 +248,6 @@ export function ChatInputBar({
     }
   }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
-  const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
@@ -559,6 +568,7 @@ export function ChatInputBar({
       onLoadTools={(id) => {
         void loadMcpTools(id)
       }}
+      compact
     />
   )
 
@@ -596,6 +606,7 @@ export function ChatInputBar({
         <ComposerBeamShell busy={busy} reduced={reduced}>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
+            data-chat-composer="true"
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
               'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
@@ -643,13 +654,6 @@ export function ChatInputBar({
                   // let layout settle. Guarded against focus-loop thrash (the OSK
                   // can re-focus the textarea as it animates; only the first
                   // focus per OSK-open window triggers the scroll).
-                  onFocus={() => {
-                    setFocused(true)
-                    // OSK-open scroll is handled by the `osk.isOskOpen`
-                    // transition effect above (the OSK state can lag the focus
-                    // event, so reading it here was unreliable).
-                  }}
-                  onBlur={() => setFocused(false)}
                   // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
                   // Do NOT change Enter keyboard semantics — handleKeyDown still
                   // routes Enter→send only when the slash menu is closed.
@@ -675,67 +679,68 @@ export function ChatInputBar({
               </div>
             </div>
             <div
-              className="flex items-center justify-between gap-3 px-2.5 pb-2.5"
+              className="flex items-end justify-between gap-3 px-3 pb-3"
               data-composer-toolbar={toolbarMode}
             >
-              {toolbarMode === 'narrow' ? (
-                (() => {
-                  // Use the underlying availability conditions, not JSX-element
-                  // truthiness — a chip element is always truthy even when it
-                  // renders null internally, which made this empty-row guard
-                  // unreachable in narrow mode.
-                  const agentModesAvailable =
-                    session.modes != null && session.modes.availableModes.length > 0
-                  const hasRow1 = agentModesAvailable || Boolean(modelChip)
-                  const hasRow2 = hasConfigOptions || mcpCount > 0
-                  if (!hasRow1 && !hasRow2) return null
-                  return (
-                    <div className="flex min-w-0 flex-1 flex-col gap-2">
-                      {hasRow1 && (
-                        <div
-                          className="flex min-w-0 flex-wrap items-center gap-2"
-                          data-composer-toolbar-row="1"
-                        >
-                          {agentModeChip}
-                          {modelChip}
-                        </div>
-                      )}
-                      {hasRow2 && (
-                        <div
-                          className="flex min-w-0 flex-wrap items-center gap-2"
-                          data-composer-toolbar-row="2"
-                        >
-                          {thoughtChip}
-                          {fastModeToggle}
-                          {genericChips}
-                          {mcpBadge}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()
-              ) : (
-                <div
-                  className="flex min-w-0 flex-wrap items-center gap-2"
-                  data-composer-toolbar-row="single"
-                >
-                  {modelChip}
-                  {thoughtChip}
-                  {fastModeToggle}
-                  {genericChips}
-                  {agentModeChip}
-                  {mcpBadge}
-                </div>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
+                {mcpBadge}
+              </div>
               <div
                 className={cn(
-                  'flex shrink-0 items-center gap-2',
-                  toolbarMode === 'narrow' && 'self-end'
+                  'flex min-w-0 flex-wrap items-end justify-end gap-2.5',
+                  toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
+                {toolbarMode === 'narrow' ? (
+                  (() => {
+                    // Use the underlying availability conditions, not JSX-element
+                    // truthiness — a chip element is always truthy even when it
+                    // renders null internally, which made this empty-row guard
+                    // unreachable in narrow mode.
+                    const agentModesAvailable =
+                      session.modes != null && session.modes.availableModes.length > 0
+                    const hasRow1 = agentModesAvailable || Boolean(modelChip)
+                    const hasRow2 = hasConfigOptions
+                    if (!hasRow1 && !hasRow2) return null
+                    return (
+                      <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
+                        {hasRow1 && (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                            data-composer-toolbar-row="1"
+                          >
+                            {modelChip}
+                            {agentModeChip}
+                          </div>
+                        )}
+                        {hasRow2 && (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                            data-composer-toolbar-row="2"
+                          >
+                            {thoughtChip}
+                            {fastModeToggle}
+                            {genericChips}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()
+                ) : (
+                  <div
+                    className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+                    data-composer-toolbar-row="single"
+                  >
+                    {modelChip}
+                    {thoughtChip}
+                    {fastModeToggle}
+                    {genericChips}
+                    {agentModeChip}
+                  </div>
+                )}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
-                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
-                <div className="relative size-8 shrink-0 overflow-visible">
+                <div className="relative size-[34px] shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -750,7 +755,7 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-md bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
+                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
                           EMBOSSED_BUTTON
                         )}
                       >
@@ -770,7 +775,7 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-md transition-transform',
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
                           canSend
                             ? cn(
                                 'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
@@ -779,7 +784,7 @@ export function ChatInputBar({
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
                         )}
                       >
-                        <ArrowUp size={14} strokeWidth={2.5} />
+                        <ArrowUp size={18} />
                       </motion.button>
                     )}
                   </AnimatePresence>
@@ -789,38 +794,32 @@ export function ChatInputBar({
           </div>
         </ComposerBeamShell>
         <div
-          className={cn(
-            'flex items-center justify-between gap-2 px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
-            focused ? 'opacity-100' : 'opacity-0'
-          )}
+          data-chat-composer-context-strip="true"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          {isolationLabel ? (
-            <span className="truncate" title={isolationLabel}>
-              {isolationLabel}
+          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground/70">
+            {session.worktreePath ? (
+              <FolderGit2 className="size-3.5" aria-hidden="true" />
+            ) : (
+              <Folder className="size-3.5" aria-hidden="true" />
+            )}
+            {isolationModeLabel}
+          </span>
+          {isolationBranch ? (
+            <span
+              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground/70"
+              title={isolationTitle ?? undefined}
+            >
+              <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{isolationBranch}</span>
             </span>
           ) : (
             <span />
-          )}
-          {showStop ? (
-            <>
-              <KbdHint k="Esc" /> to stop
-            </>
-          ) : (
-            <>
-              <KbdHint k="Enter" /> {busy ? 'to queue' : 'to send'}
-              <span className="mx-1.5 text-border">·</span>
-              <KbdHint k="Shift+Enter" /> newline
-            </>
           )}
         </div>
       </div>
     </div>
   )
-}
-
-/** Inline keyboard-key hint used in the composer footer. */
-function KbdHint({ k }: { k: string }): React.JSX.Element {
-  return <kbd className="mr-1 font-mono text-[0.6rem] font-medium text-foreground">{k}</kbd>
 }
 
 /**
@@ -837,7 +836,7 @@ function ComposerBeamShell({
   children: React.ReactNode
 }): React.JSX.Element {
   if (reduced) {
-    return <div className="w-full">{children}</div>
+    return <div className="relative z-10 w-full">{children}</div>
   }
   return (
     <BorderBeam
@@ -846,7 +845,7 @@ function ComposerBeamShell({
       theme="auto"
       borderRadius={16}
       active={busy}
-      className="w-full"
+      className="relative z-10 w-full"
     >
       {children}
     </BorderBeam>
