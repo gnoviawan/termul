@@ -53,8 +53,10 @@ import {
   restoredToolCalls,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
+  SESSION_TITLE_MAX_CHARS,
   type SessionIndexEntry,
   type SessionPayload,
+  sanitizeSessionTitle,
   sanitizeToolCallsForPersistence,
   saveSessionPayload,
   scopeSessionIndex,
@@ -117,8 +119,12 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('agent', 'hi'), msg('user', 'Refactor auth')], 'fallback')).toBe(
       'Refactor auth'
     )
-    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(40)}…`)
+    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(
+      `${'x'.repeat(SESSION_TITLE_MAX_CHARS)}…`
+    )
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
+    expect(sanitizeSessionTitle('What can I help you with?Regenerate')).toBeNull()
+    expect(sanitizeSessionTitle('Fix login bug\n')).toBe('Fix login bug')
   })
 
   it('groups by recency and scopes by project/cwd with fallback', () => {

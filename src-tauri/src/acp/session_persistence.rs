@@ -999,9 +999,17 @@ fn append_record(
     } else {
         current.message_count += 1;
     }
-    if record.type_ == "user_prompt" && current.title.is_none() {
-        current.title = Some(derive_title(&record.payload));
-        current.title_source = Some(TitleSource::DerivedFirstMessage);
+    if record.type_ == "user_prompt" {
+        let derived = derive_title(&record.payload);
+        let replace_agent_boilerplate = current.title_source == Some(TitleSource::AgentSupplied)
+            && current
+                .title
+                .as_ref()
+                .is_some_and(|title| is_boilerplate_title(title));
+        if current.title.is_none() || replace_agent_boilerplate {
+            current.title = Some(derived);
+            current.title_source = Some(TitleSource::DerivedFirstMessage);
+        }
     }
     if record.type_ == "local_title_generated" {
         // AD-1: BackgroundGenerated wins over AgentSupplied and
@@ -1016,8 +1024,10 @@ fn append_record(
             .and_then(Value::as_str)
             .map(normalize_title);
         if let Some(title) = bg_title {
-            current.title = Some(title);
-            current.title_source = Some(TitleSource::BackgroundGenerated);
+            if !is_boilerplate_title(&title) {
+                current.title = Some(title);
+                current.title_source = Some(TitleSource::BackgroundGenerated);
+            }
         }
     }
     if record.type_ == "session_info_update" {
@@ -1031,9 +1041,13 @@ fn append_record(
             .get("title")
             .and_then(Value::as_str)
             .map(normalize_title);
-        if !is_protected_title_source(current.title_source.as_ref()) {
-            current.title = agent_title;
-            current.title_source = Some(TitleSource::AgentSupplied);
+        if let Some(title) = agent_title {
+            if !is_boilerplate_title(&title)
+                && !is_protected_title_source(current.title_source.as_ref())
+            {
+                current.title = Some(title);
+                current.title_source = Some(TitleSource::AgentSupplied);
+            }
         }
     }
     Ok(())
@@ -1234,17 +1248,90 @@ fn is_secret_key(key: &str) -> bool {
         || normalized.contains("cookie")
 }
 
+/// Max display length for session titles in tabs and the history sidebar.
+pub(crate) const MAX_TITLE_CHARS: usize = 48;
+
+/// Returns `true` when `text` looks like agent greeting/UI chrome, not a real title.
+pub(crate) fn is_boilerplate_title(text: &str) -> bool {
+    let normalized = text.trim().to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+    const PREFIXES: &[&str] = &[
+        "what can i help",
+        "how can i help",
+        "how may i help",
+        "hello",
+        "hi there",
+        "hey there",
+        "hi!",
+        "hey!",
+    ];
+    if PREFIXES.iter().any(|prefix| normalized.starts_with(prefix)) {
+        return true;
+    }
+    if normalized == "regenerate" {
+        return true;
+    }
+    if normalized.len() <= 20 && normalized.contains("regenerate") {
+        return true;
+    }
+    false
+}
+
 pub(crate) fn normalize_title(text: &str) -> String {
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let text = text.trim();
     if text.is_empty() {
         return "Untitled Chat".to_string();
     }
-    let bounded: String = text.chars().take(80).collect();
-    if text.chars().count() > 80 {
+    let first_line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(text);
+    let mut cleaned = first_line.trim_matches('"').trim_matches('\'').trim();
+    if cleaned.starts_with('#') {
+        cleaned = cleaned.trim_start_matches('#').trim();
+    }
+    let text = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return "Untitled Chat".to_string();
+    }
+    let bounded: String = text.chars().take(MAX_TITLE_CHARS).collect();
+    if text.chars().count() > MAX_TITLE_CHARS {
         format!("{bounded}…")
     } else {
         bounded
+    }
+}
+
+/// Pick the best title line from a background agent's streamed response.
+pub(crate) fn extract_generated_title(captured: &str) -> String {
+    let lines: Vec<&str> = captured
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return normalize_title(captured);
+    }
+    for line in lines.iter().rev() {
+        let candidate = normalize_title(line);
+        if candidate != "Untitled Chat" && !is_boilerplate_title(&candidate) {
+            return candidate;
+        }
+    }
+    for line in &lines {
+        let candidate = normalize_title(line);
+        if candidate != "Untitled Chat" && !is_boilerplate_title(&candidate) {
+            return candidate;
+        }
+    }
+    let fallback = normalize_title(captured);
+    if is_boilerplate_title(&fallback) {
+        "Untitled Chat".to_string()
+    } else {
+        fallback
     }
 }
 
@@ -2352,5 +2439,28 @@ mod tests {
             Err(SessionPersistenceError::SessionNotFound)
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalize_title_truncates_and_uses_first_line() {
+        let long = "x".repeat(60);
+        assert_eq!(
+            normalize_title(&format!("  {long}\nsecond line")),
+            format!("{}…", "x".repeat(MAX_TITLE_CHARS))
+        );
+        assert_eq!(normalize_title("\"Quoted title\""), "Quoted title");
+    }
+
+    #[test]
+    fn extract_generated_title_skips_greeting_and_prefers_title_line() {
+        assert!(is_boilerplate_title("What can I help you with?"));
+        assert_eq!(
+            extract_generated_title("What can I help you with?\nRefactor auth module"),
+            "Refactor auth module"
+        );
+        assert_eq!(
+            extract_generated_title("What can I help you with?Regenerate"),
+            "Untitled Chat"
+        );
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { runHistoryWipeMigration } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 
@@ -22,9 +23,19 @@ export function useAcpHistory(): void {
         // Desktop Tauri Store migration is a no-op for server/live-only providers.
         await runHistoryWipeMigration()
       } catch (err) {
-        console.error('[acp] history wipe migration failed', err)
+        void logFrontendError({
+          level: 'warn',
+          source: 'useAcpHistory.migration',
+          message: `ACP history wipe migration failed: ${String(err)}`
+        })
       }
-      await loadSessionIndex()
+      await loadSessionIndex().catch((err) => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'useAcpHistory.initialLoad',
+          message: `ACP history index refresh failed: ${String(err)}`
+        })
+      })
     })()
 
     // Web/remote: refetch the session index when the server pushes a
@@ -33,7 +44,13 @@ export function useAcpHistory(): void {
     if (isTauriContext()) return
     const transport = getAcpTransport()
     const unsubscribe = transport.onEvent('acp:chat_history_changed', () => {
-      void loadSessionIndex()
+      void loadSessionIndex().catch((err) => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'useAcpHistory.chatHistoryChanged',
+          message: `ACP history index refresh failed: ${String(err)}`
+        })
+      })
     })
     return () => {
       unsubscribe()

@@ -1150,6 +1150,38 @@ pub struct TurnWatermark {
     seen: Mutex<HashMap<String, std::collections::HashSet<String>>>,
 }
 
+/// Cancellation-safe ownership of an exact session turn claim.
+///
+/// Dropping the guard releases only the claim it acquired. Successful prompt
+/// completion records the turn id (when present), which also releases the
+/// claim, then disarms the guard.
+pub struct TurnClaimGuard<'a> {
+    watermark: &'a TurnWatermark,
+    session_id: String,
+    turn_id: Option<String>,
+    armed: bool,
+}
+
+impl TurnClaimGuard<'_> {
+    pub fn complete(mut self) {
+        if let Some(turn_id) = self.turn_id.as_deref() {
+            self.watermark.record_completed(&self.session_id, turn_id);
+        } else {
+            self.watermark.release_claim(&self.session_id, None);
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for TurnClaimGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.watermark
+                .release_claim(&self.session_id, self.turn_id.as_deref());
+        }
+    }
+}
+
 impl TurnWatermark {
     /// Create an empty watermark.
     #[must_use]
@@ -1233,6 +1265,24 @@ impl TurnWatermark {
         TurnClaim::Claimed
     }
 
+    /// Claim a turn and return a guard that releases the exact claim on every
+    /// non-completed path, including future cancellation or panic unwinding.
+    pub fn claim_guard(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+    ) -> Result<TurnClaimGuard<'_>, TurnClaim> {
+        match self.claim_turn(session_id, turn_id) {
+            TurnClaim::Claimed => Ok(TurnClaimGuard {
+                watermark: self,
+                session_id: session_id.to_string(),
+                turn_id: turn_id.map(str::to_string),
+                armed: true,
+            }),
+            other => Err(other),
+        }
+    }
+
     pub fn release_claim(&self, session_id: &str, turn_id: Option<&str>) {
         let expected = turn_id.unwrap_or_default();
         let mut in_flight = self.in_flight.lock();
@@ -1301,6 +1351,40 @@ mod tests {
         assert!(!option_id_is_valid(&json!("not-an-array"), "allow"));
         assert!(!option_id_is_valid(&json!([{}]), "allow")); // no optionId field
         assert!(!option_id_is_valid(&json!(null), "allow"));
+    }
+
+    #[test]
+    fn turn_claim_guard_releases_exact_claim_when_cancelled() {
+        let watermark = TurnWatermark::new();
+        let guard = watermark
+            .claim_guard("session-1", Some("turn-1"))
+            .expect("first claim");
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Busy
+        );
+        drop(guard);
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Claimed
+        );
+    }
+
+    #[test]
+    fn turn_claim_guard_completion_records_stale_watermark() {
+        let watermark = TurnWatermark::new();
+        watermark
+            .claim_guard("session-1", Some("turn-1"))
+            .expect("first claim")
+            .complete();
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-1")),
+            TurnClaim::Completed
+        );
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Claimed
+        );
     }
 
     // --- Rendezvous bookkeeping tests (Story 1.7 AC3) -------------------------

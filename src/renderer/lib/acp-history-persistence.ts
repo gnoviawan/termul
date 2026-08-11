@@ -230,6 +230,35 @@ export function toPersistedSessionSummaries(
   }))
 }
 
+export const SESSION_TITLE_MAX_CHARS = 48
+
+const BOILERPLATE_TITLE_RE =
+  /^(what can i help|how can i help|how may i help|hello|hi there|hey there|hi!|hey!)/i
+
+/** Normalize and reject agent greeting/UI chrome mistaken for a session title. */
+export function sanitizeSessionTitle(title: string): string | null {
+  const trimmed = title.trim()
+  if (!trimmed) return null
+  const firstLine =
+    trimmed
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean) ?? trimmed
+  const cleaned = firstLine
+    .replace(/^["']|["']$/g, '')
+    .replace(/^#+\s*/, '')
+    .trim()
+  if (!cleaned) return null
+  const lower = cleaned.toLowerCase()
+  if (BOILERPLATE_TITLE_RE.test(lower) || lower === 'regenerate') return null
+  if (lower.length <= 20 && lower.includes('regenerate')) return null
+  const normalized = cleaned.split(/\s+/).join(' ')
+  if (normalized.length > SESSION_TITLE_MAX_CHARS) {
+    return `${normalized.slice(0, SESSION_TITLE_MAX_CHARS)}…`
+  }
+  return normalized
+}
+
 export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): string {
   const firstUser = messages.find((message) => message.role === 'user')
   if (firstUser) {
@@ -237,7 +266,10 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
       .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
       .join(' ')
       .trim()
-    if (text.length > 0) return text.length > 40 ? `${text.slice(0, 40)}…` : text
+    if (text.length > 0) {
+      const sanitized = sanitizeSessionTitle(text)
+      if (sanitized) return sanitized
+    }
   }
   return fallbackTitle
 }
