@@ -1148,7 +1148,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 disabled={composerDisabled}
                 minHeight={76}
                 maxHeight={160}
-                placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
+                placeholder={
+                  composerDisabled
+                    ? 'Composer unavailable'
+                    : activeCommand
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything.. (@ for files, / for commands)'
+                }
                 ariaLabel="Agent prompt"
                 autoFocus
               />

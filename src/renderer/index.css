@@ -473,6 +473,22 @@
   }
 }
 
+/* Chat composer (Tiptap) empty-state placeholder.
+   `@tiptap/extension-placeholder` sets `data-placeholder` + the `is-empty`
+   class on the empty `<p>` node, but ships no CSS — the app must render the
+   hint via `::before { content: attr(data-placeholder) }`. Applies to both
+   the agent launcher and the existing-chat ChatInputBar (both share
+   ChatComposerEditor). */
+@layer components {
+  [data-composer-editor="true"] p.is-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    float: left;
+    pointer-events: none;
+    height: 0;
+  }
+}
+
 /* Agent chat markdown prose (ref: key-agent-chat-pane mockup) */
 @layer components {
   .chat-prose {

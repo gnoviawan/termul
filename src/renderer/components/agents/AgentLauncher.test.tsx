@@ -1745,3 +1745,100 @@ describe('AgentLauncher worktree isolation', () => {
     expect(createArgs.startRef).toBe('main')
   })
 })
+
+describe('AgentLauncher placeholder', () => {
+  it('renders the launcher default placeholder in the empty editor on a ready agent', async () => {
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    await waitFor(() => {
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Ask anything.. (@ for files, / for commands)'
+      )
+    })
+  })
+
+  it('renders the unavailable hint when the selected agent is install-required (composer disabled)', async () => {
+    const installRequiredEntry: SupportedAcpAgentEntry = {
+      id: 'install-req',
+      configId: 'acp-registry:install-req',
+      agent: {
+        id: 'install-req',
+        name: 'Install Required Agent',
+        version: '1.0.0',
+        description: 'Needs install',
+        distribution: { binary: { 'windows-x86_64': { cmd: './install-req.exe', args: ['acp'] } } }
+      },
+      config: null,
+      status: 'install-required',
+      install: {
+        archiveUrl: 'https://example.invalid/install-req.zip',
+        cmd: 'install-req',
+        args: ['acp'],
+        env: {}
+      },
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    }
+    mockResolvedAgentsOverride.current = [installRequiredEntry]
+
+    renderLauncher()
+
+    // The composer is disabled (selectedEntry.status !== 'ready'), so the
+    // Tiptap editor is non-editable. `ChatComposerEditor.tsx:237-240`
+    // configures `Placeholder` with `showOnlyWhenEditable: true`, and
+    // Tiptap's `buildPlaceholderDecorations` returns `null` when
+    // `!editor.isEditable` — so the `data-placeholder` attribute is NOT
+    // painted to the DOM while the composer is disabled. The placeholder
+    // PROP still evaluates to 'Composer unavailable' (the conditional
+    // mirrors ChatInputBar.tsx:664-670), but it is only re-emitted to the
+    // DOM once the editor becomes editable again.
+    //
+    // Non-vacuous regression guard: the attribute must be either absent
+    // (Tiptap's `showOnlyWhenEditable` suppresses the decoration when
+    // `!editor.isEditable`, so the disabled composer paints no
+    // `data-placeholder`) or exactly `'Composer unavailable'` — never the
+    // old "follow-up changes" wording, never the launcher default, never
+    // any other string.
+    await screen.findByLabelText('Agent prompt')
+    await waitFor(() => {
+      const p = document.querySelector('[data-composer-editor="true"] p')
+      const attr = p?.getAttribute('data-placeholder') ?? null
+      expect(attr).not.toBe(
+        'Ask for follow-up changes or attach files (@ for files, / for commands)'
+      )
+      expect(attr).not.toBe('Ask anything.. (@ for files, / for commands)')
+      expect([null, 'Composer unavailable']).toContain(attr)
+    })
+  })
+
+  it('renders the optional-message hint when a slash command is staged', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    acpStateRef.current.commands = {
+      'prepared-1': [{ name: 'compact', description: 'Compact the conversation' }]
+    }
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('/compact'))
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Add a message (optional)…'
+      )
+    })
+  })
+})
