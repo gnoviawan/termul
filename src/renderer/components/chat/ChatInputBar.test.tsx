@@ -443,6 +443,19 @@ function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}
   )
 }
 
+describe('ChatInputBar placeholder', () => {
+  it('prompts for commands and file mentions in the empty editor', async () => {
+    renderInputBar()
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Ask anything.. (/ for commands, @ for files )'
+      )
+    })
+  })
+})
+
 describe('ChatInputBar file mentions', () => {
   beforeEach(() => {
     vi.clearAllMocks()

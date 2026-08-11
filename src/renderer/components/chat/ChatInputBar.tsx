@@ -666,7 +666,7 @@ export function ChatInputBar({
                     ? 'Composer unavailable'
                     : activeCommand
                       ? 'Add a message (optional)…'
-                      : 'Ask anything… (/ for commands, @ for files)'
+                      : 'Ask anything.. (/ for commands, @ for files )'
                 }
               />
             </div>
