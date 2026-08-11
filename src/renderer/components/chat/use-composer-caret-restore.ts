@@ -89,7 +89,7 @@ export function useComposerMentionSelect({
     (match: MentionMatch) => {
       const editor = editorRef.current
       const caret = editor
-        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
+        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.head)
         : value.length
       const outcome = mentions.select(value, caret, match)
       if (!outcome) return
