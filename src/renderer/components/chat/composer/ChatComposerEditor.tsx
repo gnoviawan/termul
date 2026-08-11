@@ -5,6 +5,7 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef } from 'react'
 import {
+  CMD_PILL_NODE,
   docOffsetToDisplayOffset,
   docToDisplayText,
   SKILL_PILL_NODE
@@ -12,6 +13,7 @@ import {
 import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
+import { CommandPill } from './CommandPillNode'
 import { SkillPill } from './SkillPillNode'
 
 export interface ChatComposerEditorProps {
@@ -102,9 +104,11 @@ function createComposerKeymap(
               }
               // 2) Backspace-over-pill removal (editor-native). Only when the
               // selection is empty and the inline node immediately before the
-              // caret is an atom skillPill. Alt/meta/ctrl/shift excluded so macOS
-              // Option+Backspace (delete-word) doesn't slice a pill and leave
-              // orphan sentinels (mirrors the pre-refactor guard).
+              // caret is an atom skillPill/commandPill. Alt/meta/ctrl/shift
+              // excluded so macOS Option+Backspace (delete-word) doesn't slice
+              // a pill and leave orphan sentinels (mirrors the pre-refactor
+              // guard). The command pill mirrors the skill pill's atom removal
+              // (CAP — Inline command pill).
               if (
                 event instanceof KeyboardEvent &&
                 event.key === 'Backspace' &&
@@ -127,12 +131,19 @@ function createComposerKeymap(
                   if (before?.isText && before.text === ' ') {
                     const $prev = state.doc.resolve(Math.max(0, probePos - 1))
                     const prevNode = $prev.nodeBefore
-                    if (prevNode && prevNode.type.name === SKILL_PILL_NODE) {
+                    if (
+                      prevNode &&
+                      (prevNode.type.name === SKILL_PILL_NODE ||
+                        prevNode.type.name === CMD_PILL_NODE)
+                    ) {
                       before = prevNode
                       probePos = probePos - 1
                     }
                   }
-                  if (before && before.type.name === SKILL_PILL_NODE) {
+                  if (
+                    before &&
+                    (before.type.name === SKILL_PILL_NODE || before.type.name === CMD_PILL_NODE)
+                  ) {
                     event.preventDefault()
                     // Delete the pill + any trailing space the splicer appended
                     // (the caret sat after the space) — matches the pre-refactor
@@ -233,6 +244,7 @@ export function ChatComposerEditor({
       // load-bearing guarantee.
       extensions: [
         SkillPill,
+        CommandPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
@@ -276,12 +288,14 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          // 2) ONLY parse pill nodes from the `\uE000` sentinel in `text/plain`.
-          // Never parse pills from HTML (SkillPill.parseHTML returns []), so a
-          // malicious clipboard carrying `<span data-skill-pill>` cannot inject
-          // pill nodes. Plain-text paste (no sentinel) falls through to
-          // ProseMirror's default (text nodes).
-          if (!text.includes('\uE000')) return false
+          // 2) ONLY parse pill nodes from the sentinel chars in `text/plain`.
+          // Never parse pills from HTML (SkillPill/CommandPill.parseHTML return
+          // []), so a malicious clipboard carrying `<span data-skill-pill>` or
+          // `<span data-command-pill>` cannot inject pill nodes. Plain-text
+          // paste (no sentinel) falls through to ProseMirror's default (text
+          // nodes). The skill sentinel `\uE000` and the command sentinel
+          // `\uE004` both trigger the pill-paste path.
+          if (!text.includes('\uE000') && !text.includes('\uE004')) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(

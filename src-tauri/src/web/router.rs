@@ -33,6 +33,7 @@ use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
 use crate::web::terminal_ws::terminal_ws_upgrade;
 use crate::web::workspace_api;
+use crate::web::worktree_api;
 use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
@@ -165,7 +166,22 @@ pub fn router(
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
         // the SPA mount cannot shadow it. The request is `{ agentId }` only;
         // the host resolves everything from the trusted catalog.
-        .route("/acp/install", post(install_api::install));
+        .route("/acp/install", post(install_api::install))
+        // Worktree web routes (CAP — Web worktree parity). Each mirrors a
+        // desktop `#[tauri::command] worktree_*` handler; see
+        // `web/worktree_api.rs`. Registered AHEAD of the static fallback so the
+        // SPA mount cannot shadow them. Write routes (`create`/`remove`/
+        // `copy-include-files`) are loopback-guarded inside the handler; read
+        // routes (`list`/`branches`/`check-dirty`/`resolve-base-branch`)
+        // enforce containment only. Only the 7 launch-flow routes ship here;
+        // the 8 advanced ops are deferred (see deferred-work.md).
+        .route("/worktree/list", post(worktree_api::list))
+        .route("/worktree/create", post(worktree_api::create))
+        .route("/worktree/remove", post(worktree_api::remove))
+        .route("/worktree/branches", get(worktree_api::branches))
+        .route("/worktree/check-dirty", get(worktree_api::check_dirty))
+        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
+        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -274,6 +290,13 @@ pub fn router_with_static(
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/acp/install", post(install_api::install))
+        .route("/worktree/list", post(worktree_api::list))
+        .route("/worktree/create", post(worktree_api::create))
+        .route("/worktree/remove", post(worktree_api::remove))
+        .route("/worktree/branches", get(worktree_api::branches))
+        .route("/worktree/check-dirty", get(worktree_api::check_dirty))
+        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
+        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files))
         .fallback_service(assets::static_service_from(static_dir))
         // CAP-1: same RwLock wrap + handle registration as `router`.
         .with_state({

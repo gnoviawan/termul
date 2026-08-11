@@ -22,7 +22,6 @@ import {
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
-import { CommandChip } from '@/components/chat/CommandChip'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock } from '@/components/chat/chat-attachments'
 import {
@@ -83,7 +82,7 @@ import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isLoopbackWebClient } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
@@ -150,10 +149,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
   const projectIsGitRepo = Boolean(activeProject?.isGitRepo)
   const projectGitBranch = activeProject?.gitBranch ?? null
-  // CAP-2: isolation mode + base-branch picker. Worktree mode is desktop-only
-  // and requires a git repo; on web or non-repo projects the selector is
-  // hidden and `current` is forced.
-  const canUseWorktree = isTauriContext() && projectIsGitRepo
+  // CAP-2: isolation mode + base-branch picker. Worktree mode requires a git
+  // repo; the selector is hidden on non-repo projects. CAP — Web worktree
+  // parity: the worktree mutation routes now ship over HTTP (`web/worktree_api.rs`)
+  // so the launcher's worktree mode picker is no longer gated on `isTauriContext()`
+  // alone. The write routes (`/worktree/create` etc.) are loopback-guarded
+  // (`check_local_only`), so the picker is gated on `isLoopbackWebClient()` —
+  // the desktop (always local) and a loopback web client see it; a non-loopback
+  // LAN client does not, avoiding a picker that would fail `FORBIDDEN` at launch.
+  const canUseWorktree = projectIsGitRepo && isLoopbackWebClient()
   const [isolationMode, setIsolationMode] = useState<'current' | 'worktree'>('current')
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [baseBranchInfo, setBaseBranchInfo] = useState<BaseBranchInfo | null>(null)
@@ -405,10 +409,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const {
     slashSections,
-    activeCommand,
-    setActiveCommand,
-    clearActiveCommand,
     skillPathsRef,
+    hasCommandToken,
     handleSelect,
     onSlashOrMentionKeyDown,
     buildPromptParts
@@ -877,7 +879,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     useWorkspaceStore.getState().hideAgentLauncher()
     setPendingOptions(emptyPendingLauncherOptions())
     skillPathsRef.current = {}
-    setActiveCommand(null)
     clearAttachments()
     resetMentions()
     setPrompt('')
@@ -957,7 +958,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveConfigOptions,
     buildPromptParts,
     skillPathsRef,
-    setActiveCommand,
     isolationMode,
     canUseWorktree,
     baseBranch
@@ -1000,7 +1000,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const canLaunch =
     Boolean(selectedConfig) &&
     selectedEntry?.status === 'ready' &&
-    (prompt.trim().length > 0 || attachments.length > 0 || activeCommand !== null) &&
+    (prompt.trim().length > 0 || attachments.length > 0) &&
     // CAP-2: worktree mode requires an explicit base branch before launch —
     // covers detached HEAD (no current) and any case where the picker has
     // not settled on a value.
@@ -1123,7 +1123,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onRetry={handleRetryPrepare}
                 />
               )}
-            {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -1149,7 +1148,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 minHeight={76}
                 maxHeight={160}
                 placeholder={
-                  activeCommand
+                  hasCommandToken
                     ? 'Add a message (optional)…'
                     : 'Ask anything.. (@ for files, / for commands)'
                 }

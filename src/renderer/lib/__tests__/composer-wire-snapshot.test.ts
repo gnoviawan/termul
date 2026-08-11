@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
-import { skillToken } from '@/lib/skill-tokens'
+import {
+  commandToken,
+  extractCommandName,
+  insertCommandToken,
+  skillToken,
+  stripCommandToken
+} from '@/lib/skill-tokens'
 
 /**
  * Wire-format regression fence for the chat-composer modular redesign.
@@ -134,5 +140,108 @@ describe('composer wire snapshots', () => {
         prefix text (release-version) suffix"
       `
     )
+  })
+})
+
+/**
+ * Command-pill wire snapshots (CAP — Inline command pill). The inline
+ * `\uE004<name>\uE005` token replaces the removed `activeCommand` state. At
+ * send, `buildPromptParts` calls `extractCommandName(value)` →
+ * `wireWithCommand = \`/${name} ${wireText}\`` (byte-identical to the old
+ * `activeCommand` path). The token is stripped from `wireText` (the skill wire
+ * framer receives the de-commanded text).
+ */
+describe('composer wire snapshots — command pill', () => {
+  const CT = (name: string): string => commandToken(name)
+
+  it('extractCommandName reads the command name from the token', () => {
+    expect(extractCommandName(CT('compact'))).toBe('compact')
+    expect(extractCommandName(`hello ${CT('clear')} world`)).toBe('clear')
+    expect(extractCommandName('no command here')).toBeNull()
+    // Malformed (no close) — treated as absent.
+    expect(extractCommandName('\uE004compact without close')).toBeNull()
+  })
+
+  it('stripCommandToken removes the token + trailing space (de-commanded wire text)', () => {
+    expect(stripCommandToken(`${CT('compact')} `)).toBe('')
+    expect(stripCommandToken(`${CT('compact')} hello`)).toBe('hello')
+    expect(stripCommandToken(`prefix ${CT('compact')} suffix`)).toBe('prefix suffix')
+    // No token → unchanged.
+    expect(stripCommandToken('no command')).toBe('no command')
+  })
+
+  it('insertCommandToken rejects a second command (single-command invariant)', () => {
+    const first = insertCommandToken('/', 1, 'compact', 1)
+    expect(first.inserted).toBe(true)
+    if (first.inserted) {
+      expect(first.value).toBe(`${CT('compact')} `)
+    }
+    // A second command token is rejected.
+    const second = insertCommandToken(first.inserted ? first.value : '', 5, 'clear', 0)
+    expect(second.inserted).toBe(false)
+    if (!second.inserted) {
+      expect(second.reason).toBe('existing_command')
+    }
+  })
+
+  it('insertCommandToken clamps when deleteBefore > caret (start floors at 0, token prepended)', () => {
+    // When deleteBefore > caret, `start` floors at 0 and `end` = caret. With
+    // caret=0, end=start=0 → nothing deleted, token prepended to full value.
+    const result = insertCommandToken('hello', 0, 'compact', 5)
+    expect(result.inserted).toBe(true)
+    if (result.inserted) {
+      expect(result.value).toBe(`${CT('compact')} hello`)
+      // Caret lands after the token + trailing space.
+      expect(result.caret).toBe(CT('compact').length + 1)
+    }
+
+    // With caret > 0, start floors at 0, end = caret → first `caret` chars
+    // deleted (the clamp caps deleteBefore at caret), token prepended.
+    const result2 = insertCommandToken('hello', 2, 'clear', 10)
+    expect(result2.inserted).toBe(true)
+    if (result2.inserted) {
+      // The first 2 chars ("he") are deleted; the token is prepended to "llo".
+      expect(result2.value).toBe(`${CT('clear')} llo`)
+      expect(result2.caret).toBe(CT('clear').length + 1)
+    }
+  })
+
+  it('byte-identical wire: command pill + text → `/<name> <text>` (matches old activeCommand path)', () => {
+    // The value carries the command token + user text. buildPromptParts strips
+    // the token, builds the skill wire (none here), then prefixes `/<name> `.
+    const value = `${CT('compact')} hello`
+    const commandName = extractCommandName(value)
+    const valueDecommanded = stripCommandToken(value)
+    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    expect(wireWithCommand).toBe('/compact hello')
+  })
+
+  it('byte-identical wire: command pill + skill pill (command prefix + skill framing)', () => {
+    const value = `${CT('compact')} ${T('git-worktree')} do the thing`
+    const commandName = extractCommandName(value)
+    const valueDecommanded = stripCommandToken(value)
+    const wireText = buildPromptWithLoadedSkills([SKILL_GIT], valueDecommanded)
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    expect(wireWithCommand).toMatchInlineSnapshot(
+      `
+        "/compact # Agent Skills
+
+        git-worktree: /home/u/.agents/skills/git-worktree/SKILL.md
+
+        ---
+
+        (git-worktree) do the thing"
+      `
+    )
+  })
+
+  it('byte-identical wire: command pill alone (no user text) → `/<name>`', () => {
+    const value = `${CT('compact')} `
+    const commandName = extractCommandName(value)
+    const valueDecommanded = stripCommandToken(value)
+    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}`.trim() : wireText
+    expect(wireWithCommand).toBe('/compact')
   })
 })

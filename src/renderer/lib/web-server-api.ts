@@ -15,18 +15,23 @@
  * sees a thrown exception from the network layer.
  */
 import type {
+  BranchInfo,
   DetectedShells,
   DirectoryEntry,
+  DirtyStatus,
   FileContent,
   FileInfo,
   GitCommit,
   GitCommitContext,
   GitStashInfo,
   GitStatusDetail,
-  IpcResult
+  IpcResult,
+  WorktreeInfo
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
+import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
+import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
  * Same-origin base for the embedded server. In web/remote mode the browser is
@@ -349,8 +354,6 @@ export const webServerMcpServers = {
  * data, throwing on `!res.success` so the renderer facade (`skills-api.ts`)
  * can branch `isTauriContext()` between `invoke(...)` and these HTTP impls.
  */
-import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
-
 export const webServerSkills = {
   async list(projectRoot?: string): Promise<AgentSkillSummary[]> {
     const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
@@ -464,5 +467,62 @@ export const webServerMcpProbe = {
     } finally {
       clearTimeout(timer)
     }
+  }
+}
+
+/**
+ * Worktree ops routed to `termul-server` (`/worktree/*`). CAP — Web worktree
+ * parity: each method mirrors a desktop `#[tauri::command] worktree_*` handler
+ * and returns the SAME `IpcResult<T>` contract (the renderer facade
+ * `worktree-api.ts` branches `isTauriContext()` between `invoke(...)` and these
+ * HTTP impls). Only the 7 launch-flow routes ship here; the 8 advanced ops
+ * stay `WEB_UNSUPPORTED` on web (deferred — see deferred-work.md).
+ */
+export const webServerWorktree = {
+  async list(projectPath: string): Promise<IpcResult<WorktreeInfo[]>> {
+    return postJson<WorktreeInfo[]>('/worktree/list', { projectPath })
+  },
+
+  async create(params: {
+    projectPath: string
+    name: string
+    branch: string
+    isNewBranch: boolean
+    startRef?: string
+    targetPath?: string
+  }): Promise<IpcResult<WorktreeInfo>> {
+    return postJson<WorktreeInfo>('/worktree/create', params)
+  },
+
+  async remove(
+    projectPath: string,
+    worktreePath: string,
+    force: boolean
+  ): Promise<IpcResult<void>> {
+    return postJson<void>('/worktree/remove', { projectPath, worktreePath, force })
+  },
+
+  async branches(projectPath: string): Promise<IpcResult<BranchInfo[]>> {
+    const encoded = encodeURIComponent(projectPath)
+    return getJson<BranchInfo[]>(`/worktree/branches?projectPath=${encoded}`)
+  },
+
+  async checkDirty(worktreePath: string): Promise<IpcResult<DirtyStatus>> {
+    const encoded = encodeURIComponent(worktreePath)
+    return getJson<DirtyStatus>(`/worktree/check-dirty?worktreePath=${encoded}`)
+  },
+
+  async resolveBaseBranch(projectPath: string): Promise<IpcResult<BaseBranchInfo>> {
+    return postJson<BaseBranchInfo>('/worktree/resolve-base-branch', { projectPath })
+  },
+
+  async copyIncludeFiles(
+    projectPath: string,
+    worktreePath: string
+  ): Promise<IpcResult<IncludeCopyResult>> {
+    return postJson<IncludeCopyResult>('/worktree/copy-include-files', {
+      projectPath,
+      worktreePath
+    })
   }
 }

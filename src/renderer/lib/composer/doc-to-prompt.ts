@@ -31,6 +31,8 @@
  */
 import type { Node as PmNode } from '@tiptap/pm/model'
 import {
+  CMD_TOKEN_END,
+  CMD_TOKEN_START,
   SKILL_PAD_CHAR,
   SKILL_PAD_END,
   SKILL_PAD_START,
@@ -45,6 +47,14 @@ import {
 export const SKILL_PILL_NODE = 'skillPill'
 
 /**
+ * The command-pill node type name (CAP — Inline command pill). Kept in one
+ * place so the (de)serializers and the `CommandPill` extension agree. Distinct
+ * from `SKILL_PILL_NODE` so the serializer emits the command sentinel pair
+ * (`\uE004/\uE005`) — invisible to `parseSkillSegments` (skill-only).
+ */
+export const CMD_PILL_NODE = 'commandPill'
+
+/**
  * The fixed padding run re-emitted after every pill token to preserve the
  * on-disk draft schema (`\uE002..\uE003`). A single FIGURE SPACE (U+2007) — the
  * content is not load-bearing (the pill is a real DOM node, so the padding no
@@ -55,9 +65,10 @@ export const SKILL_PILL_NODE = 'skillPill'
 export const SKILL_PAD_DEFAULT = SKILL_PAD_CHAR
 
 export interface DocSegment {
-  kind: 'text' | 'pill'
+  kind: 'text' | 'pill' | 'commandPill'
   /** Visible text for a `text` segment; the padded token (`\uE000<name>\uE001\uE002<pad>\uE003`)
-   * for a `pill` segment. */
+   * for a `pill` segment; the command token (`\uE004<name>\uE005`) for a
+   * `commandPill` segment. */
   text: string
   /** Doc position at the start of this segment. */
   docFrom: number
@@ -76,7 +87,8 @@ export interface DocSegment {
  * boundary `\n` is suppressed when the previous paragraph's last inline child
  * was a `hardBreak` (a paragraph ending in hardBreak + next paragraph would
  * otherwise yield `\n\n` where the pre-refactor textarea produced a single
- * `\n`). Pills emit the padded token form (see {@link SKILL_PAD_DEFAULT}).
+ * `\n`). Pills emit the padded token form (see {@link SKILL_PAD_DEFAULT});
+ * command pills emit the command token (`\uE004<name>\uE005`, no padding).
  *
  * ProseMirror positions: a top-level block at `offset` (from `doc.forEach`)
  * occupies doc pos `[offset, offset + nodeSize)`; its inline children start at
@@ -94,7 +106,7 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
       block.forEach((node, offset) => {
         const docFrom = blockOffset + 1 + offset
         let displayText = ''
-        let kind: 'text' | 'pill' = 'text'
+        let kind: 'text' | 'pill' | 'commandPill' = 'text'
         if (node.isText) {
           displayText = node.text ?? ''
           blockEndedInHardBreak = false
@@ -105,6 +117,15 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
           // fixed single figure-space; only the presence is load-bearing.
           displayText = `${SKILL_TOKEN_START}${name}${SKILL_TOKEN_END}${SKILL_PAD_START}${SKILL_PAD_DEFAULT}${SKILL_PAD_END}`
           kind = 'pill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === CMD_PILL_NODE) {
+          const name = String(node.attrs.name ?? '')
+          // Command pill: no padding block (the pill is a real DOM node, so
+          // there is no caret-alignment deficit to compensate). The sentinel
+          // pair is distinct from the skill sentinels so the skill wire framer
+          // / timeline renderer never see command tokens.
+          displayText = `${CMD_TOKEN_START}${name}${CMD_TOKEN_END}`
+          kind = 'commandPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'
@@ -177,7 +198,7 @@ export function docOffsetToDisplayOffset(doc: PmNode, docOffset: number): number
   for (const seg of segments) {
     if (docOffset < seg.docTo) {
       if (docOffset <= seg.docFrom) return seg.displayFrom
-      if (seg.kind === 'pill') return seg.displayFrom
+      if (seg.kind === 'pill' || seg.kind === 'commandPill') return seg.displayFrom
       return seg.displayFrom + (docOffset - seg.docFrom)
     }
   }
@@ -206,7 +227,7 @@ export function displayOffsetToDocOffset(doc: PmNode, displayOffset: number): nu
       // the display newline belongs at the end of the preceding paragraph.
       if (seg.docFrom === seg.docTo) return Math.max(0, seg.docFrom - 1)
       if (displayOffset <= seg.displayFrom) return seg.docFrom
-      if (seg.kind === 'pill') return seg.docTo
+      if (seg.kind === 'pill' || seg.kind === 'commandPill') return seg.docTo
       return seg.docFrom + (displayOffset - seg.displayFrom)
     }
   }

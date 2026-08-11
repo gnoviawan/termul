@@ -234,7 +234,8 @@ vi.mock('@/lib/worktree-context', () => ({
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({
-  isTauriContext: vi.fn(() => false)
+  isTauriContext: vi.fn(() => false),
+  isLoopbackWebClient: vi.fn(() => true)
 }))
 
 // Radix Select portals don't render reliably under jsdom; shim with a native
@@ -1430,7 +1431,7 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
   })
 
-  it('renders a CommandChip when a slash command is selected from the menu', async () => {
+  it('renders an inline command pill when a slash command is selected from the menu', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     mockPersistRead.mockResolvedValue({
@@ -1450,13 +1451,13 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/compact')
 
-    // Previously the launcher inserted bare `/compact ` text; it now creates a
-    // CommandChip (parity with the running chatbox).
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    )
-    // The `/compact` filter text is cleared from the input.
-    expect(getComposerValue()).toBe('')
+    // Previously the launcher inserted bare `/compact ` text or a detached
+    // CommandChip; it now creates an inline command pill (parity with the
+    // running chatbox). The CommandPill NodeView renders the SkillChip with
+    // name prefixed by `/` so the visible text is `/compact`.
+    await waitFor(() => {
+      expect(screen.getByText('/compact')).toBeInTheDocument()
+    })
   })
 })
 
@@ -1591,7 +1592,7 @@ describe('AgentLauncher worktree isolation', () => {
     expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
   })
 
-  // CAP-2: selector hidden on web / non-repo
+  // CAP-2: selector hidden on non-repo
   it('hides the isolation selector when not a git repo (CAP-2)', () => {
     vi.mocked(isTauriContext).mockReturnValue(true)
     mockProjectOverride.current = null // no isGitRepo
@@ -1600,12 +1601,17 @@ describe('AgentLauncher worktree isolation', () => {
     expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
   })
 
-  it('hides the isolation selector on web (CAP-2)', () => {
-    vi.mocked(isTauriContext).mockReturnValue(false)
+  // CAP — Web worktree parity: the isolation selector is no longer gated on
+  // isTauriContext(). A web client on a git project now sees the picker (the
+  // worktree mutation routes ship over HTTP via web/worktree_api.rs + the
+  // worktree-api.ts facade branches isTauriContext() between invoke and fetch).
+  // The launcher no longer imports isTauriContext (canUseWorktree =
+  // projectIsGitRepo), so no isTauriContext mock is needed here — the project
+  // override alone drives the git-repo signal.
+  it('shows the isolation selector on web when the project is a git repo (CAP web parity)', () => {
     mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
     renderLauncher()
-    expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
   })
 
   /**
@@ -1808,7 +1814,7 @@ describe('AgentLauncher placeholder', () => {
     })
   })
 
-  it('renders the optional-message hint when a slash command is staged', async () => {
+  it('inserts an inline command pill when a slash command is selected', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     mockPersistRead.mockResolvedValue({
@@ -1829,10 +1835,7 @@ describe('AgentLauncher placeholder', () => {
     fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('/compact'))
 
     await waitFor(() => {
-      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
-        'data-placeholder',
-        'Add a message (optional)…'
-      )
+      expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()
     })
   })
 })

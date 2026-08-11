@@ -1,10 +1,17 @@
 import type { Editor } from '@tiptap/core'
 import type { MutableRefObject, RefObject } from 'react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { extractSkillNames, insertSkillToken, SKILL_TOKEN_START } from '@/lib/skill-tokens'
+import {
+  extractCommandNames,
+  extractSkillNames,
+  insertCommandToken,
+  insertSkillToken,
+  SKILL_TOKEN_START,
+  stripAllCommandTokens
+} from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
 import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { SlashMenuHandle } from './SlashCommandMenu'
@@ -26,13 +33,13 @@ import type { ComposerMentions } from './use-composer-mentions'
  * screen). This is a LOGIC extraction, not a JSX extraction: the two surfaces
  * keep their own outer chrome (BorderBeam/queue vs agent picker/banners), but
  * route the duplicated composer-field logic — slash menu, skill-pill splice,
- * command chip, submit text builder — through this hook so they cannot drift
- * again.
+ * command-pill splice, submit text builder — through this hook so they cannot
+ * drift again.
  *
  * The hook is renderer-neutral: no Tauri/runtime calls, no JSX. Both surfaces
  * keep their own `submit()`/`launch()` because the dispatch shapes differ
  * (`onSend`/`onSendBlocks` vs `finalizeChatLaunch`/`sendPromptBlocks`), but both
- * read `activeCommand` + `skillPathsRef` + `buildPromptParts()` from the hook
+ * read `hasCommandToken` + `skillPathsRef` + `buildPromptParts()` from the hook
  * to build the wire/display text identically.
  *
  * ## Editor integration (modular redesign)
@@ -46,11 +53,24 @@ import type { ComposerMentions } from './use-composer-mentions'
  * shared with `buildPromptParts`, draft persistence, and the timeline renderer,
  * so the wire payload stays byte-identical to the pre-refactor surface.
  *
- * The hook owns: `activeCommand`, `skillPathsRef`, slash-menu open/sections,
- * `handleSelect` (skill splice + command chip + config/mode apply),
+ * The hook owns: `hasCommandToken` (derived from the value, replacing the
+ * removed `activeCommand` state), `skillPathsRef`, slash-menu open/sections,
+ * `handleSelect` (skill splice + command splice + config/mode apply),
  * `buildPromptParts` (wire/display text builder), and the slash/mention menu
  * keymap adapter (`onSlashOrMentionKeyDown`) that the editor runs BEFORE its
  * own keymap. Backspace-over-pill removal is owned by the editor itself.
+ *
+ * ## Command pill (CAP — Inline command pill)
+ *
+ * Slash commands (e.g. `/compact`) splice an inline `commandPill` Tiptap atom
+ * into the value (`\uE004<name>\uE005` sentinel) instead of setting a detached
+ * `activeCommand` state + rendering `<CommandChip>` on top of the composer.
+ * The wire builder extracts the command name via `extractCommandName(value)`
+ * and prefixes `/<name> ` to the wire payload (byte-identical to the old
+ * `activeCommand` path). The token is stripped from `wireText` (the skill wire
+ * framer receives the de-commanded text). Single-command invariant:
+ * `insertCommandToken` rejects a second command token if one already exists
+ * (matching today's single-`activeCommand` semantics).
  */
 export interface UseChatComposerArgs {
   value: string
@@ -106,9 +126,13 @@ export interface ChatPromptParts {
 export interface UseChatComposerResult {
   slashOpen: boolean
   slashSections: SlashSection[]
-  activeCommand: string | null
-  setActiveCommand: (v: string | null) => void
-  clearActiveCommand: () => void
+  /**
+   * True when the value carries a command token (`\uE004<name>\uE005`). Replaces
+   * the removed `activeCommand` state for hosts that branch on whether a
+   * command is selected (e.g. placeholder copy, canSend/canLaunch). Derived
+   * from the value — the value is the single source of truth.
+   */
+  hasCommandToken: boolean
   skillPathsRef: MutableRefObject<Record<string, string>>
   hasSkillToken: boolean
   handleSelect: (item: SlashItem) => void
@@ -122,9 +146,9 @@ export interface UseChatComposerResult {
   onSlashOrMentionKeyDown: (event: KeyboardEvent) => boolean
   /**
    * Build the wire/display prompt text parts from the current value, resolved
-   * skill paths, and active command. Throws `Error("Skill '<name>' is missing
-   * a path")` when a selected skill has no resolvable path (the canonical
-   * `ChatInputBar` Block If — surfaces catch and toast).
+   * skill paths, and inline command token. Throws `Error("Skill '<name>' is
+   * missing a path")` when a selected skill has no resolvable path (the
+   * canonical `ChatInputBar` Block If — surfaces catch and toast).
    */
   buildPromptParts: () => ChatPromptParts
 }
@@ -178,7 +202,6 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     scheduleRestoreCaret
   } = args
 
-  const [activeCommand, setActiveCommand] = useState<string | null>(null)
   // name → SKILL.md path, captured when a skill is picked from the slash menu
   // so the wire prompt can cite paths synchronously at send time (no IPC read,
   // no failure path). The composer value carries the inline skill tokens; this
@@ -195,6 +218,10 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   // gate. `hasSkillToken` is still exposed for hosts that branch on whether the
   // value carries a skill (e.g. placeholder copy).
   const hasSkillToken = value.includes(SKILL_TOKEN_START)
+  // Command pill: derived from the value (no `activeCommand` state). The value
+  // carries the `\uE004<name>\uE005` token when a command is selected; the wire
+  // builder extracts the name at send time.
+  const hasCommandToken = extractCommandNames(value).length > 0
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
@@ -234,22 +261,31 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         return
       }
       if (item.kind === 'command') {
-        // Set the command chip instead of inserting bare text into the
-        // editor. If the trigger was mid-text, replace the /token portion in
-        // the input.
-        const midTrigger = findSlashTrigger(value)
-        if (midTrigger && midTrigger.start > 0) {
-          const before = value.slice(0, midTrigger.start).trimEnd()
-          const after = value.slice(midTrigger.end).trimStart()
-          const remaining = [before, after].filter(Boolean).join(' ')
-          setValue(remaining)
-          mentions.update(remaining, remaining.length)
-        } else {
-          setValue('')
-          mentions.update('', 0)
+        // Splice an inline command token into the display string at the caret,
+        // removing the `/`-filter text the slash menu was filtering on. The
+        // token carries the command name + no padding block (the command pill
+        // is a real DOM node, so there is no caret-alignment deficit to
+        // compensate). A trailing space is appended so the caret lands in plain
+        // text and the next `/` trigger matches. Single-command invariant:
+        // `insertCommandToken` rejects a second command token if one already
+        // exists (matching today's single-`activeCommand` semantics) — the
+        // rejection is a no-op (value untouched, editor focused).
+        const trigger = findSlashTrigger(value)
+        const editor = editorRef.current
+        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
+        const insertAt = trigger ? trigger.end : caret
+        const deleteBefore = trigger ? trigger.end - trigger.start : 0
+        const result = insertCommandToken(value, insertAt, item.name, deleteBefore)
+        if (!result.inserted) {
+          // Single-command invariant: a command token already exists. Focus
+          // the editor so the user can backspace the existing pill + retry.
+          editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+          return
         }
-        setActiveCommand(item.name)
-        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+        const { value: next, caret: nextCaret } = result
+        setValue(next)
+        mentions.update(next, nextCaret)
+        scheduleRestoreCaret(nextCaret)
         return
       }
       if (item.kind === 'config') {
@@ -276,7 +312,6 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           menuRef: slashMenuRef,
           onClearInput: () => {
             setValue('')
-            setActiveCommand(null)
             mentions.update('', 0)
           }
         })
@@ -298,21 +333,25 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     [slashOpen, slashSections.length, slashMenuRef, mentions, disabled, setValue, editorRef]
   )
 
-  const clearActiveCommand = useCallback(() => {
-    setActiveCommand(null)
-    editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
-  }, [editorRef])
-
   const buildPromptParts = useCallback((): ChatPromptParts => {
-    // Extract the inline skill tokens carried in the value and resolve each
-    // name to its SKILL.md path. Paths come from `skillPathsRef` (captured at
-    // pick time) first, then fall back to the currently-available skills list
-    // — so editing + re-sending a chip message (where the ref is empty
-    // because paths aren't persisted with the message) still resolves paths
-    // from the live skills list. A skill surfaced without a path in either
-    // (e.g. a future web skill with no parity route) blocks the send — HALT
-    // with a clear error so the user can remove the chip.
-    const skillNames = extractSkillNames(value)
+    // Extract ALL command tokens (send-time guard). A corrupted/pasted value
+    // could carry 2+ `\uE004…\uE005` tokens (paste bypasses the single-command
+    // invariant enforced at insert time). The first name sources the
+    // `/<name> ` wire prefix; ALL tokens are stripped from `wireText` so no
+    // sentinel leaks to the agent (extras are silently dropped — graceful
+    // degradation, never a crash).
+    const commandNames = extractCommandNames(value)
+    const commandName = commandNames[0] ?? null
+    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(value) : value
+    // Extract the inline skill tokens carried in the (de-commanded) value and
+    // resolve each name to its SKILL.md path. Paths come from `skillPathsRef`
+    // (captured at pick time) first, then fall back to the currently-available
+    // skills list — so editing + re-sending a chip message (where the ref is
+    // empty because paths aren't persisted with the message) still resolves
+    // paths from the live skills list. A skill surfaced without a path in
+    // either (e.g. a future web skill with no parity route) blocks the send —
+    // HALT with a clear error so the user can remove the chip.
+    const skillNames = extractSkillNames(valueDecommanded)
     const resolvedSkills = skillNames.map((name) => ({
       name,
       path: skillPathsRef.current[name] ?? skills.find((s) => s.name === name)?.path ?? ''
@@ -322,10 +361,10 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       throw new Error(`Skill '${missingPath.name}' is missing a path`)
     }
     const hasSkills = resolvedSkills.length > 0
-    const wireText = buildPromptWithLoadedSkills(resolvedSkills, value)
-    const displayText = value
-    const wireWithCommand = activeCommand ? `/${activeCommand} ${wireText}` : wireText
-    const displayWithCommand = activeCommand ? `/${activeCommand} ${displayText}` : displayText
+    const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDecommanded)
+    const displayText = valueDecommanded
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    const displayWithCommand = commandName ? `/${commandName} ${displayText}` : displayText
     return {
       skills: resolvedSkills,
       hasSkills,
@@ -336,14 +375,12 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       wireTrimmed: wireWithCommand.trim(),
       displayTrimmed: displayWithCommand.trim()
     }
-  }, [value, skills, activeCommand])
+  }, [value, skills])
 
   return {
     slashOpen,
     slashSections,
-    activeCommand,
-    setActiveCommand,
-    clearActiveCommand,
+    hasCommandToken,
     skillPathsRef,
     hasSkillToken,
     handleSelect,

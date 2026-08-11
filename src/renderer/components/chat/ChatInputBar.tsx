@@ -24,7 +24,6 @@ import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
-import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -348,9 +347,7 @@ export function ChatInputBar({
 
   const {
     slashSections,
-    activeCommand,
-    setActiveCommand,
-    clearActiveCommand,
+    hasCommandToken,
     skillPathsRef,
     handleSelect,
     onSlashOrMentionKeyDown,
@@ -372,23 +369,21 @@ export function ChatInputBar({
     scheduleRestoreCaret
   })
 
-  const canSend =
-    !disabled &&
-    !sending &&
-    (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
+  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
   const submit = useCallback(async () => {
     const hasAttachments = attachments.length > 0
     const hasText = value.trim().length > 0
-    if ((!hasText && !activeCommand && !hasAttachments) || disabled || sending) return
+    if ((!hasText && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
-      // Build the wire/display text parts from the current value, resolved skill
-      // paths, and active command. Throws `Skill '<name>' is missing a path`
-      // when a selected skill has no resolvable path (Block If) — caught below.
+      // Build the wire/display text parts from the current value, resolved
+      // skill paths, and inline command token. Throws `Skill '<name>' is
+      // missing a path` when a selected skill has no resolvable path (Block If)
+      // — caught below.
       const { hasSkills, wireWithCommand, displayWithCommand, wireTrimmed, displayTrimmed } =
         buildPromptParts()
       if (!wireTrimmed && !hasAttachments) return
@@ -425,7 +420,6 @@ export function ChatInputBar({
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
       skillPathsRef.current = {}
-      setActiveCommand(null)
       clearAttachments()
       resetMentions()
     } catch (err) {
@@ -438,7 +432,6 @@ export function ChatInputBar({
   }, [
     value,
     attachments,
-    activeCommand,
     disabled,
     sending,
     clearAttachments,
@@ -448,8 +441,7 @@ export function ChatInputBar({
     resetMentions,
     session.id,
     buildPromptParts,
-    skillPathsRef,
-    setActiveCommand
+    skillPathsRef
   ])
 
   const handleKeyDown = useCallback(
@@ -494,13 +486,12 @@ export function ChatInputBar({
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
-    setActiveCommand(null)
     updateMentionsStable(next, next.length)
     // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
     // editor) — replaces the bare `requestAnimationFrame` that swallowed
     // throws against a destroyed editor.
     scheduleRestoreCaret(next.length)
-  }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setActiveCommand, setValue])
+  }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
 
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
@@ -639,7 +630,6 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
-            {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
@@ -664,7 +654,7 @@ export function ChatInputBar({
                 placeholder={
                   disabled
                     ? 'Composer unavailable'
-                    : activeCommand
+                    : hasCommandToken
                       ? 'Add a message (optional)…'
                       : 'Ask anything.. (/ for commands, @ for files )'
                 }

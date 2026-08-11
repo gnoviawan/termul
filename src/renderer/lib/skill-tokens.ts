@@ -54,6 +54,20 @@ export const SKILL_PAD_END = '\uE003'
  */
 export const SKILL_PAD_CHAR = '\u2007'
 
+/**
+ * Inline command-pill sentinels (CAP — Inline command pill). Distinct from the
+ * skill sentinels (`\uE000/\uE001`) so `parseSkillSegments` is untouched —
+ * command tokens are invisible to the skill wire framer, the timeline
+ * user-bubble renderer, and `extractSkillNames`. The command pill is a real
+ * inline DOM node (a Tiptap `NodeView`), so — like the skill pill — there is
+ * no caret-alignment deficit to compensate: no padding block, no figure-space
+ * run. `buildPromptParts` calls `extractCommandName(value)` at send time and
+ * prefixes `/<name> ` to the wire text (byte-identical to the pre-refactor
+ * `activeCommand` state path).
+ */
+export const CMD_TOKEN_START = '\uE004'
+export const CMD_TOKEN_END = '\uE005'
+
 /** A run of plain text or a single skill token extracted from the value. */
 export type SkillSegment =
   | { kind: 'text'; text: string }
@@ -231,4 +245,181 @@ export function extractSkillNames(value: string): string[] {
     }
   }
   return names
+}
+
+// ============================================================================
+// Inline command-pill token model (CAP — Inline command pill)
+// ============================================================================
+
+/**
+ * Build a command token string for the given command name. No padding block —
+ * the command pill is a real inline DOM node (a Tiptap `NodeView`), so there is
+ * no caret-alignment deficit to compensate. The sentinel pair is distinct from
+ * the skill sentinels so `parseSkillSegments` (and the skill wire framer /
+ * timeline renderer) never see command tokens.
+ */
+export function commandToken(name: string): string {
+  return `${CMD_TOKEN_START}${name}${CMD_TOKEN_END}`
+}
+
+/**
+ * Extract the first command name from the value, or `null` when no command
+ * token is present. Used by `buildPromptParts` to source the `/<name> ` wire
+ * prefix from the inline token instead of the removed `activeCommand` state.
+ * Malformed tokens (start without end, or empty name) are treated as absent
+ * so a corrupted value never blocks the send.
+ */
+export function extractCommandName(value: string): string | null {
+  const start = value.indexOf(CMD_TOKEN_START)
+  if (start === -1) return null
+  const end = value.indexOf(CMD_TOKEN_END, start + 1)
+  if (end === -1) return null
+  const name = value.slice(start + 1, end)
+  return name.length > 0 ? name : null
+}
+
+/**
+ * Extract ALL command names from the value in first-appearance order. Used by
+ * `buildPromptParts` as a send-time guard: a corrupted/pasted value could
+ * carry 2+ `\uE004…\uE005` tokens (the single-command invariant is enforced at
+ * insert time, but paste can bypass it). The wire framer strips ALL command
+ * tokens from `wireText` so no sentinel leaks to the agent; the first name
+ * sources the `/<name> ` prefix (extras are silently dropped — graceful
+ * degradation, never a crash). Malformed tokens (no close, empty name) are
+ * skipped.
+ */
+export function extractCommandNames(value: string): string[] {
+  const names: string[] = []
+  let i = 0
+  while (i < value.length) {
+    if (value[i] === CMD_TOKEN_START) {
+      const end = value.indexOf(CMD_TOKEN_END, i + 1)
+      if (end === -1) break
+      const name = value.slice(i + 1, end)
+      if (name.length > 0) names.push(name)
+      i = end + 1
+    } else {
+      i += 1
+    }
+  }
+  return names
+}
+
+/**
+ * Remove the first command token + its trailing space (if present) from the
+ * value. Used by `buildPromptParts` to strip the command token from the value
+ * before passing it to the skill wire framer (`buildPromptWithLoadedSkills`
+ * receives the de-commanded text so the sentinel never leaks to the agent).
+ * Returns the value unchanged when no command token is present.
+ */
+export function stripCommandToken(value: string): string {
+  const start = value.indexOf(CMD_TOKEN_START)
+  if (start === -1) return value
+  const end = value.indexOf(CMD_TOKEN_END, start + 1)
+  if (end === -1) return value
+  let cursor = end + 1
+  // Swallow the single trailing space the splicer appends so the de-commanded
+  // text doesn't carry a leading space when the token was at the start.
+  if (cursor < value.length && value[cursor] === ' ') cursor += 1
+  return `${value.slice(0, start)}${value.slice(cursor)}`
+}
+
+/**
+ * Remove ALL command tokens (+ each one's trailing space) from the value.
+ * Used by `buildPromptParts` as a send-time guard: a corrupted/pasted value
+ * could carry 2+ `\uE004…\uE005` tokens (paste bypasses the single-command
+ * invariant enforced at insert time). Stripping all ensures no sentinel leaks
+ * into the wire text the agent receives. The first command name sources the
+ * `/<name> ` prefix (extras are silently dropped). Returns the value unchanged
+ * when no command token is present.
+ */
+export function stripAllCommandTokens(value: string): string {
+  let out = value
+  // Loop: stripCommandToken removes the first token + trailing space. Repeat
+  // until no more tokens remain. Bounded by the number of tokens (each pass
+  // removes one `\uE004…\uE005` pair + optional space).
+  while (extractCommandName(out) !== null) {
+    out = stripCommandToken(out)
+  }
+  return out
+}
+
+export type InsertCommandTokenResult =
+  | { inserted: true; value: string; caret: number }
+  | { inserted: false; reason: 'existing_command' }
+
+/**
+ * Splice a command token into the value at `caret`, removing the `deleteBefore`
+ * chars immediately preceding the caret (the `/`-trigger filter text the slash
+ * menu clears). A trailing space is appended so the caret lands in plain text
+ * and the user can keep typing; the next `/` trigger still matches because the
+ * space is whitespace. No padding block — the command pill is a real DOM node.
+ *
+ * Single-command invariant: rejects (`inserted:false, reason:'existing_command'`)
+ * when the value already carries a command token, matching today's single-
+ * `activeCommand` semantics. The caller may surface a toast or just focus the
+ * editor; the value is left untouched on rejection.
+ *
+ * Clamp behavior: when `deleteBefore > caret`, `start` floors at 0 (can't go
+ * below the string start). `end` is then `Math.max(0, caret)` — so the deletion
+ * range is `[0, caret)`. When `caret === 0` this means `end === start === 0` and
+ * nothing is deleted (the token is prepended to the full value). When
+ * `caret > 0`, the first `caret` chars are deleted (the clamp effectively caps
+ * `deleteBefore` at `caret`). Either way the token is inserted at position 0.
+ */
+export function insertCommandToken(
+  value: string,
+  caret: number,
+  name: string,
+  deleteBefore = 0
+): InsertCommandTokenResult {
+  // Single-command invariant — reject a second command token.
+  if (extractCommandName(value) !== null) {
+    return { inserted: false, reason: 'existing_command' }
+  }
+  const start = Math.max(0, Math.min(caret - deleteBefore, value.length))
+  const end = Math.max(start, Math.min(caret, value.length))
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const token = commandToken(name)
+  const next = `${before}${token} ${after}`
+  // Caret lands right after the trailing space.
+  return { inserted: true, value: next, caret: before.length + token.length + 1 }
+}
+
+export type RemoveCommandTokenResult =
+  | { removed: true; value: string; caret: number }
+  | { removed: false }
+
+/**
+ * Backspace semantics for the composer: when the caret is *immediately* after a
+ * command token (no selection), remove the whole token plus the trailing space
+ * the splicer appended, and place the caret where the token started. Tolerates
+ * the splicer's trailing space (caret may sit one char after the token end).
+ * Returns `removed:false` for the caller to fall back to the default one-char
+ * backspace. Parallel to `removeSkillTokenBeforeCaret` but without a padding
+ * block (commands carry none). The editor's keymap handles backspace-over-pill
+ * removal via ProseMirror's `nodeBefore` (this helper is the model-level mirror
+ * kept for parity + future surfaces).
+ */
+export function removeCommandTokenBeforeCaret(
+  value: string,
+  caret: number
+): RemoveCommandTokenResult {
+  if (caret <= 0 || caret > value.length) return { removed: false }
+  // Walk back from the caret over the optional trailing space to reach the
+  // token-end \uE005.
+  let end = caret
+  if (end - 1 >= 0 && value[end - 1] === ' ') {
+    end -= 1
+  }
+  if (end - 1 < 0 || value[end - 1] !== CMD_TOKEN_END) return { removed: false }
+  const tokenEnd = end - 1
+  const start = value.lastIndexOf(CMD_TOKEN_START, tokenEnd - 1)
+  if (start === -1) return { removed: false }
+  const name = value.slice(start + 1, tokenEnd)
+  if (name.length === 0) return { removed: false }
+  const before = value.slice(0, start)
+  const after = value.slice(caret)
+  return { removed: true, value: `${before}${after}`, caret: start }
 }

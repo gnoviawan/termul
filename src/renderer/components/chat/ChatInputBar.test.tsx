@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { skillToken } from '@/lib/skill-tokens'
+import { commandToken, skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -544,7 +544,7 @@ describe('ChatInputBar command chip', () => {
     fireEvent.mouseDown(within(listbox).getByText(name))
   }
 
-  it('renders a command chip when a slash command is selected from the menu', async () => {
+  it('renders an inline command pill when a slash command is selected from the menu', async () => {
     const commands = [{ name: 'compact', description: 'Compact the conversation' }]
     renderInputBar({ commands })
 
@@ -558,13 +558,11 @@ describe('ChatInputBar command chip', () => {
     // Select the command
     selectSlashOption('/compact')
 
-    // Command chip should appear
+    // Command pill should render inline (the CommandPill NodeView renders the
+    // SkillChip with name prefixed by `/` so the visible text is `/compact`).
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+      expect(screen.getByText('/compact')).toBeInTheDocument()
     })
-
-    // Editor should be cleared
-    expect(getComposerValue()).toBe('')
   })
 
   it('prepends the command to the prompt on send', async () => {
@@ -580,12 +578,13 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    // Command pill renders inline.
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type a message
-    setComposerValue('hello')
+    // Append text after the pill + trailing space (the value carries the
+    // command token, so we append to it — `setComposerValue` replaces the
+    // whole value, losing the pill, so we build the full value with the token).
+    setComposerValue(`${commandToken('compact')} hello`)
 
     // Send
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -595,7 +594,7 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('removes the command chip when the X button is clicked', async () => {
+  it('removes the command pill on Backspace when the caret is immediately after it', async () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands })
 
@@ -607,20 +606,23 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+
+    // The value carries the command token + trailing space. Place the caret
+    // after the trailing space + dispatch Backspace — the editor's keymap
+    // removes the whole atom pill node.
+    const valueWithToken = `${commandToken('compact')} `
+    expect(getComposerValue()).toBe(valueWithToken)
+    setComposerCaret(valueWithToken.length)
+    pressComposerKey('Backspace')
+
+    // The whole pill + trailing space are removed.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+      expect(screen.queryByText('/compact')).not.toBeInTheDocument()
     })
-
-    // Click remove
-    fireEvent.click(screen.getByRole('button', { name: 'Remove /compact command' }))
-
-    // Chip should be gone
-    expect(
-      screen.queryByRole('button', { name: 'Remove /compact command' })
-    ).not.toBeInTheDocument()
   })
 
-  it('opens the slash menu when / is typed with an active command chip', async () => {
+  it('opens the slash menu when / is typed with an active command pill', async () => {
     const commands = [
       { name: 'compact', description: 'Compact' },
       { name: 'clear', description: 'Clear' }
@@ -635,19 +637,18 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type / again to re-open the menu
-    setComposerValue('/')
+    // Type / again to re-open the menu (the value carries the command token +
+    // trailing space + the new `/`).
+    setComposerValue(`${commandToken('compact')} /`)
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
     })
   })
 
-  it('updates the command chip when a different command is selected', async () => {
+  it('rejects a second command pick (single-command invariant)', async () => {
     const commands = [
       { name: 'compact', description: 'Compact' },
       { name: 'clear', description: 'Clear' }
@@ -662,26 +663,35 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type / again to re-open the menu
-    setComposerValue('/')
+    // Type / again to re-open the menu, then select a different command.
+    setComposerValue(`${commandToken('compact')} /`)
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
     })
-
-    // Select a different command
     selectSlashOption('/clear')
 
+    // The second command is rejected — the single-command invariant keeps the
+    // existing `/compact` pill. The `/clear` pill must NOT render (the
+    // rejection is a no-op, not a replace). The slash menu may list `/compact`
+    // as an option (filter matches), so we assert at least one `/compact`
+    // element is present (the pill). And critically, the `/clear` pill must
+    // NOT have been inserted — its text must not appear in the editor's pill
+    // area. The menu still shows `/clear` as a listbox option, so we scope
+    // the absence check to the editor's data-composer-editor subtree.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /clear command' })).toBeInTheDocument()
+      expect(screen.getAllByText('/compact').length).toBeGreaterThanOrEqual(1)
     })
+    const editor = document.querySelector('[data-composer-editor="true"]')
+    expect(editor).not.toBeNull()
     expect(
-      screen.queryByRole('button', { name: 'Remove /compact command' })
-    ).not.toBeInTheDocument()
+      editor!.querySelector('[data-command-pill="true"][data-command-name="clear"]')
+    ).toBeNull()
+    expect(
+      editor!.querySelector('[data-command-pill="true"][data-command-name="compact"]')
+    ).not.toBeNull()
   })
 
   it('sends just the command when no message is typed', async () => {
@@ -697,11 +707,9 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Send with just the command chip (no text)
+    // Send with just the command pill (no text after it).
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
@@ -709,7 +717,7 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('clears active command when externally seeded text is applied', async () => {
+  it('clears the command pill when externally seeded text is applied', async () => {
     const onSend = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
     const { rerender } = renderInputBar({ commands, onSend })
@@ -722,9 +730,7 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
     // Externally seed text (e.g. editing a message)
     rerender(
@@ -748,11 +754,9 @@ describe('ChatInputBar command chip', () => {
       </TooltipProvider>
     )
 
-    // Command chip should be gone after seeding
+    // Command pill should be gone after seeding
     await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Remove /compact command' })
-      ).not.toBeInTheDocument()
+      expect(screen.queryByText('/compact')).not.toBeInTheDocument()
     })
 
     // Editor should carry the seeded text

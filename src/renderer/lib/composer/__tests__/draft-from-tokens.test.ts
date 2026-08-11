@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { SKILL_PILL_NODE } from '@/lib/composer/doc-to-prompt'
+import { CMD_PILL_NODE, SKILL_PILL_NODE } from '@/lib/composer/doc-to-prompt'
 import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import {
+  CMD_TOKEN_END,
+  CMD_TOKEN_START,
   SKILL_PAD_END,
   SKILL_PAD_START,
   SKILL_TOKEN_END,
@@ -9,6 +11,7 @@ import {
 } from '@/lib/skill-tokens'
 
 const pill = (name: string, path = '') => ({ type: SKILL_PILL_NODE, attrs: { name, path } })
+const cmdPill = (name: string) => ({ type: CMD_PILL_NODE, attrs: { name } })
 const text = (t: string) => ({ type: 'text', text: t })
 const para = (content?: unknown[]) => ({ type: 'paragraph', content })
 
@@ -116,5 +119,38 @@ describe('draftFromTokens', () => {
     const doc = draftFromTokens(garbage)
     expect(doc.content).toHaveLength(1)
     expect(doc.content[0].content).toEqual([text(garbage)])
+  })
+
+  // ----- Command pill (CAP — Inline command pill) -----
+
+  it('parses a command sentinel token into a commandPill node', () => {
+    const value = `${CMD_TOKEN_START}compact${CMD_TOKEN_END}`
+    expect(draftFromTokens(value)).toEqual({
+      type: 'doc',
+      content: [para([cmdPill('compact')])]
+    })
+  })
+
+  it('intersperses command pill + text + skill pill (mixed sentinels)', () => {
+    const value = `${CMD_TOKEN_START}compact${CMD_TOKEN_END} then ${SKILL_TOKEN_START}acp${SKILL_TOKEN_END} after`
+    expect(draftFromTokens(value)).toEqual({
+      type: 'doc',
+      content: [para([cmdPill('compact'), text(' then '), pill('acp'), text(' after')])]
+    })
+  })
+
+  it('treats a malformed (unclosed) command token as plain text', () => {
+    const value = `${CMD_TOKEN_START}compact without close`
+    const doc = draftFromTokens(value)
+    expect(doc.content).toHaveLength(1)
+    expect(doc.content[0].content).toEqual([text(`${CMD_TOKEN_START}compact without close`)])
+  })
+
+  it('treats an empty-name command token as plain text (no pill)', () => {
+    const value = `${CMD_TOKEN_START}${CMD_TOKEN_END}`
+    const doc = draftFromTokens(value)
+    expect(doc.content).toHaveLength(1)
+    expect(doc.content[0].content).toEqual([text(value)])
+    expect(doc.content[0].content![0].type).toBe('text')
   })
 })
