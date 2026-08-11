@@ -173,22 +173,26 @@ export function ModeChip({
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-56 p-1">
         <div className={SELECTOR_SECTION_LABEL}>{label}</div>
-        {modes.availableModes.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onPointerDown={(event) => {
-              if ((event.button ?? 0) !== 0) return
-              event.preventDefault()
-              handleSelect(m.id)
-            }}
-            onClick={() => handleSelect(m.id)}
-            className={cn(SELECTOR_OPTION_ROW, m.id === displayValue && SELECTOR_OPTION_SELECTED)}
-          >
-            <span className="font-medium">{m.name}</span>
-            {m.description && <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>}
-          </button>
-        ))}
+        <div data-testid="mode-chip-options" className="max-h-[180px] overflow-y-auto pr-1">
+          {modes.availableModes.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onPointerDown={(event) => {
+                if ((event.button ?? 0) !== 0) return
+                event.preventDefault()
+                handleSelect(m.id)
+              }}
+              onClick={() => handleSelect(m.id)}
+              className={cn(SELECTOR_OPTION_ROW, m.id === displayValue && SELECTOR_OPTION_SELECTED)}
+            >
+              <span className="font-medium">{m.name}</span>
+              {m.description && (
+                <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>
+              )}
+            </button>
+          ))}
+        </div>
       </PopoverContent>
     </Popover>
   )

@@ -180,6 +180,16 @@ describe('ModeChip pending selection', () => {
     expect(button.querySelector('svg')).toBeTruthy()
   })
 
+  it('scrolls agent mode options when the list exceeds the viewport', () => {
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+
+    expect(screen.getByTestId('mode-chip-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
+  })
+
   it('shows optimistic mode label while pending', async () => {
     let resolveSelect!: () => void
     const onSelect = vi.fn(
