@@ -27,7 +27,10 @@ vi.mock('@/lib/api', () => ({
     setSecret: apiMocks.secureStorageSet,
     getSecret: apiMocks.secureStorageGet,
     deleteSecret: apiMocks.secureStorageDelete
-  }
+  },
+  syncProjects: vi.fn().mockResolvedValue({ success: true }),
+  terminalApi: {},
+  worktreeApi: {}
 }))
 
 import {
