@@ -12,6 +12,7 @@ import {
   _setAcpTransportForTests,
   AcpTransportError,
   createAcpTransport,
+  isTransientAcpTransportError,
   resolveWsUrl,
   toTauriEventName,
   toWsEventType,
@@ -63,6 +64,7 @@ class FakeWebSocket {
     pongTimeoutMs: 75_000
   }
   snapshotEvents: unknown[] = []
+  snapshotFailureCodes = new Map<string, string>()
   /** Session payloads served by `get_session_payload`; unknown ids → not_found. */
   sessionPayloads: Record<string, unknown> = {}
   reopenOutcome: unknown = {
@@ -140,6 +142,15 @@ class FakeWebSocket {
     }
     if (req.type === 'recover_session_snapshot') {
       const payload = req.payload as { sessionId: string }
+      const failureCode = this.snapshotFailureCodes.get(payload.sessionId)
+      if (failureCode) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: failureCode, message: 'snapshot recovery failed' }
+        })
+        return
+      }
       this.emitReply({
         id: req.id,
         ok: true,
@@ -843,6 +854,24 @@ describe('WsAcpTransport', () => {
     expect(transport.getSessionCursor('s1')).toBe(42)
     const types = sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)
     expect(types).toContain('recover_session_snapshot')
+    transport.dispose()
+  })
+
+  it('retains a stale subscription when snapshot recovery fails transiently', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.snapshotFailureCodes.set('s-transient-snapshot', 'agent_crashed')
+
+    await expect(transport.subscribeSession('s-transient-snapshot', 99)).rejects.toMatchObject({
+      code: 'agent_crashed'
+    })
+    const subscribed = (transport as unknown as { subscribed: Set<string> }).subscribed
+    expect(subscribed.has('s-transient-snapshot')).toBe(true)
+    expect(isTransientAcpTransportError(new AcpTransportError('agent_crashed', 'retry'))).toBe(true)
     transport.dispose()
   })
 

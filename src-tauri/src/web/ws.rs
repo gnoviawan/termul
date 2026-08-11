@@ -1284,8 +1284,26 @@ async fn handle_recover_session_snapshot(
     let (client_id, mut rx, events, watermark) =
         match relay.subscribe_snapshot(&parsed.session_id).await {
             Ok(result) => result,
-            Err(_) => {
-                return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
+            Err(error) => {
+                if relay.persistence().is_some_and(|persistence| {
+                    matches!(
+                        persistence.metadata(&parsed.session_id),
+                        Err(crate::acp::SessionPersistenceError::SessionNotFound)
+                    )
+                }) {
+                    return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
+                }
+                tracing::warn!(
+                    target: "termul::web::ws",
+                    session_id = %parsed.session_id,
+                    error = %error,
+                    "recover_session_snapshot: transient snapshot materialization failure"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::AgentCrashed,
+                    "session snapshot is temporarily unavailable; retry after reconnect",
+                );
             }
         };
     subscribed_clients.retain(|(sid, client_id)| {
@@ -3599,6 +3617,84 @@ mod tests {
         )
         .await;
         assert!(next.ok);
+    }
+
+    #[tokio::test]
+    async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let mut sessions = HashSet::new();
+        sessions.insert("session-ordered-cancel".to_string());
+        let (_release, entered) = acp.install_test_agent_with_prompt_gate(
+            AgentId("agent-ordered-cancel".to_string()),
+            sessions,
+        );
+        let registry = Arc::new(ProjectRegistry::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let mut current_agent = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None));
+        let current_project = Arc::new(parking_lot::Mutex::new(None));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        );
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        );
+        entered.await.expect("prompt was accepted before cancellation");
+
+        let first = match rx.recv().await.expect("cancel reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected cancel reply"),
+        };
+        assert_eq!(first.id, "cancel-ordered");
+        assert!(first.ok);
+        let second = match rx.recv().await.expect("prompt completion reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected prompt reply"),
+        };
+        assert_eq!(second.id, "prompt-ordered");
+        assert!(second.ok);
+        assert_eq!(second.payload.expect("stop reason"), json!("cancelled"));
     }
 
     #[tokio::test]

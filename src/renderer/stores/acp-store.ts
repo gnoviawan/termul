@@ -5396,9 +5396,7 @@ export function initAcpEventListeners(): () => void {
       void useAcpStore
         .getState()
         .loadSessionIndex()
-        .then(() => {
-          historyRetryAttempt = 0
-        })
+        .then(() => undefined)
         .catch((error) => {
           if (!isTransientAcpTransportError(error) || historyRetryAttempt >= 3) {
             void logFrontendError({
@@ -5431,6 +5429,11 @@ export function initAcpEventListeners(): () => void {
     setReconnecting: (reconnecting) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {
+        if (historyRetryTimer) {
+          clearTimeout(historyRetryTimer)
+          historyRetryTimer = null
+        }
+        historyRetryAttempt = 0
         refetchHistoryAfterReconnect()
       }
     }

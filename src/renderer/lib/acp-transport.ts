@@ -84,7 +84,10 @@ export class AcpTransportError extends Error {
 }
 
 export function isTransientAcpTransportError(error: unknown): error is AcpTransportError {
-  return error instanceof AcpTransportError && (error.code === 'closed' || error.code === 'timeout')
+  return (
+    error instanceof AcpTransportError &&
+    (error.code === 'closed' || error.code === 'timeout' || error.code === 'agent_crashed')
+  )
 }
 
 export interface AcpTransport {
