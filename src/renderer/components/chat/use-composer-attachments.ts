@@ -1,4 +1,4 @@
-import { type ClipboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
@@ -224,8 +224,11 @@ export interface ComposerAttachments {
   pickFiles: () => Promise<void>
   /** Mention channel (@-picker): stage a `file-ref` by absolute path. */
   addFileRef: (match: MentionMatch) => void
-  /** Paste handler for a composer textarea — images from clipboard, incl. screenshots. */
-  handlePaste: (e: ClipboardEvent<HTMLElement>) => void
+  /** Paste handler for the composer — images from clipboard, incl. screenshots.
+   *  Accepts the DOM `ClipboardEvent` the Tiptap editor's `handlePaste` editorProp
+   *  passes (the pre-refactor textarea's React event was structurally compatible;
+   *  only `clipboardData` + `preventDefault()` are read, both native). */
+  handlePaste: (e: ClipboardEvent) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
   /**
@@ -402,9 +405,10 @@ export function useComposerAttachments(opts: {
   )
 
   const handlePaste = useCallback(
-    (e: ClipboardEvent<HTMLElement>) => {
+    (e: ClipboardEvent) => {
       if (disabled) return
       const data = e.clipboardData
+      if (!data) return
       const files = dataTransferFiles(data)
       if (files.length > 0) {
         // addFiles surfaces capability/size errors via toast.

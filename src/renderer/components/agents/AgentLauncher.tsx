@@ -1,5 +1,6 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
+import type { Editor } from '@tiptap/core'
 import {
   ArrowUp,
   Check,
@@ -30,16 +31,16 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
+import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { McpBadge } from '@/components/chat/McpBadge'
-import { SkillComposerOverlay } from '@/components/chat/SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
+import { useComposerCaretRestore } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
-import { useComposerTextarea } from '@/components/chat/use-composer-textarea'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
@@ -77,6 +78,7 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -127,7 +129,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<Editor | null>(null)
+  const composerInputRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    composerInputRef.current = editorRef.current?.view.dom ?? null
+  })
+  const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
@@ -380,28 +387,32 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
 
   const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
-  const {
-    onInput,
-    onKeyUp,
-    onSelect,
-    onMentionSelect,
-    handleMentionKeyDown,
-    mentionMenuOpen,
-    mentionSections,
-    mentionMenuRef,
-    emptyLabel,
-    resetMentions,
-    resetHeight,
-    clampHeight,
-    updateMentions
-  } = useComposerTextarea({
-    value: prompt,
-    setValue: setPrompt,
-    textareaRef,
-    mentions,
-    disabled: composerDisabled,
-    slashOpen
-  })
+  // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
+  // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
+  // natural typing, and `handleSelect`/`onMentionSelect` feed it on
+  // programmatic splices).
+  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
+  const mentionSections = mentions.sections
+  const mentionMenuRef = mentions.menuRef
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const resetMentions = mentions.reset
+  const onMentionSelect = useCallback(
+    (match: import('@/components/chat/mention-menu-model').MentionMatch) => {
+      const editor = editorRef.current
+      const caret = editor
+        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
+        : prompt.length
+      const outcome = mentions.select(prompt, caret, match)
+      if (!outcome) return
+      setPrompt(outcome.value)
+      mentions.update(outcome.value, outcome.caret)
+      // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
+      // editor) — replaces the bare `requestAnimationFrame` that swallowed
+      // throws against a destroyed editor.
+      scheduleRestoreCaret(outcome.caret)
+    },
+    [prompt, mentions, scheduleRestoreCaret]
+  )
 
   const {
     slashSections,
@@ -409,14 +420,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     setActiveCommand,
     clearActiveCommand,
     skillPathsRef,
-    hasSkillToken,
     handleSelect,
-    handleKeyDown: composerHandleKeyDown,
+    onSlashOrMentionKeyDown,
     buildPromptParts
   } = useChatComposer({
     value: prompt,
     setValue: setPrompt,
-    textareaRef,
+    editorRef,
     slashMenuRef: menuRef,
     commands,
     configOptions: optionsInteractive ? effectiveConfigOptions : [],
@@ -428,11 +438,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     onSetModel: handleSetModel,
     modelOption,
     modelSource: modelSource ?? undefined,
-    handleMentionKeyDown,
-    updateMentions,
-    resetMentions,
-    resetHeight,
-    clampHeight
+    mentions,
+    scheduleRestoreCaret
   })
 
   const persistSelection = useCallback((configId: string) => {
@@ -562,7 +569,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       setPendingOptions(emptyPendingLauncherOptions())
       setSelectedConfigId(entry.configId)
       persistSelection(entry.configId)
-      textareaRef.current?.focus()
+      editorRef.current?.commands.focus()
     },
     [persistSelection]
   )
@@ -884,7 +891,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     setActiveCommand(null)
     clearAttachments()
     resetMentions()
-    resetHeight()
     setPrompt('')
 
     void (async () => {
@@ -955,7 +961,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     clearAttachments,
     appOwnedTempPaths,
     resetMentions,
-    resetHeight,
     pendingOptions,
     preparedKey,
     effectiveModels,
@@ -970,29 +975,31 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   ])
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Shared composer dispatch (skill-token backspace, slash-menu keys,
-      // mention-menu keys) lives in `useChatComposer`. Enter→launch and
-      // Escape→hide are surface-specific (the launcher dispatches a chat
-      // launch, not a running-turn send) and run only when the shared
-      // handler did not consume the event. Both the slash and mention menus
-      // call `preventDefault` on Escape/Enter, so `e.defaultPrevented` is the
-      // single reliable gate.
-      composerHandleKeyDown(e)
-      if (e.defaultPrevented) return
-      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
+    (event: KeyboardEvent): boolean | undefined => {
+      // Editor-first keymap: the slash/mention menu keys + Enter→launch /
+      // Escape→hide run BEFORE the editor's own keymap (Backspace-pill removal
+      // is editor-owned). `onSlashOrMentionKeyDown` consumes the slash/mention
+      // menu arrows/Tab/Enter/Escape when their menus are open; Enter→launch
+      // and Escape→hide are surface-specific (the launcher dispatches a chat
+      // launch, not a running-turn send).
+      if (onSlashOrMentionKeyDown(event) === true) return true
+      if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault()
         void launch()
+        return true
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        e.preventDefault()
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault()
         void launch()
+        return true
       }
-      if (e.key === 'Escape') {
+      if (event.key === 'Escape') {
         useWorkspaceStore.getState().hideAgentLauncher()
+        return true
       }
+      return undefined
     },
-    [composerHandleKeyDown, launch]
+    [onSlashOrMentionKeyDown, launch]
   )
 
   const canLaunch =
@@ -1024,9 +1031,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     for (const b of branches) add(b)
     return out
   })()
-  // `hasSkillToken` comes from `useChatComposer` (destructured above) — the
-  // transparent-textarea overlay is only needed when the value carries a skill
-  // token; otherwise the textarea text stays visible.
 
   return (
     <div
@@ -1049,7 +1053,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               ref={menuRef}
               sections={slashSections}
               onSelect={handleSelect}
-              inputRef={textareaRef}
+              inputRef={composerInputRef}
             />
           )}
           {mentionMenuOpen && (
@@ -1058,7 +1062,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               sections={mentionSections}
               onSelect={onMentionSelect}
               emptyLabel={emptyLabel}
-              inputRef={textareaRef}
+              inputRef={composerInputRef}
             />
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
@@ -1131,37 +1135,27 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               className="px-5 pt-4"
             />
             <div className="px-5 pb-2 pt-4">
-              {/* Transparent-textarea overlay: mirrors the value with inline
-                  SkillChip pills. The textarea text is transparent with a
-                  visible caret; this overlay renders the visible text + chips
-                  in the same metrics so the caret stays aligned.
-
-                  The overlay is `absolute inset-0`, so its containing block
-                  must be a box that exactly matches the textarea — not the
-                  padded parent (which would shift the overlay up-left by the
-                  parent's padding and paint chips above the caret). The inner
-                  `relative` wrapper has no padding, so its box == the
-                  textarea's box and the overlay stays caret-aligned. */}
-              <div className="relative">
-                <SkillComposerOverlay textareaRef={textareaRef} value={prompt} />
-                <textarea
-                  ref={textareaRef}
-                  value={prompt}
-                  onChange={onInput}
-                  onKeyDown={handleKeyDown}
-                  onKeyUp={onKeyUp}
-                  onSelect={onSelect}
-                  onPaste={handlePaste}
-                  placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
-                  rows={2}
-                  aria-label="Agent prompt"
-                  autoFocus
-                  className={cn(
-                    'relative z-10 max-h-40 min-h-[76px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55',
-                    hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground'
-                  )}
-                />
-              </div>
+              {/* Tiptap rich-text editor — the skill "pill" is a real inline
+                  DOM node, so the caret sits flush against the pill's right
+                  edge by construction. No transparent textarea + mirror
+                  overlay, no canvas padding. The `prompt` string (sentinel-token
+                  format) is the shared model the wire builder + first-turn
+                  sync + timeline consume (byte-identical wire payload). */}
+              <ChatComposerEditor
+                value={prompt}
+                onValueChange={setPrompt}
+                onCaretChange={mentions.update}
+                onBeforeEditorKeyDown={handleKeyDown}
+                onPasteAttachments={handlePaste}
+                getSkillPaths={() => skillPathsRef.current}
+                editorRef={editorRef}
+                disabled={composerDisabled}
+                minHeight={76}
+                maxHeight={160}
+                placeholder="Ask for follow-up changes or attach files (@ for files, / for commands)"
+                ariaLabel="Agent prompt"
+                autoFocus
+              />
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <div className="flex min-w-0 items-center gap-2">

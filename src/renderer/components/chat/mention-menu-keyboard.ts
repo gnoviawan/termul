@@ -1,5 +1,6 @@
-import type { KeyboardEvent, RefObject } from 'react'
+import type { RefObject } from 'react'
 import type { FileMentionMenuHandle } from './FileMentionMenu'
+import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
 
 export interface MentionMenuKeyboardOptions {
   menuOpen: boolean
@@ -11,7 +12,7 @@ export interface MentionMenuKeyboardOptions {
 
 /** Route ↑/↓/Tab/Enter/Escape to the @-mention menu when it is open. Returns true if handled. */
 export function tryHandleMentionMenuKeyDown(
-  e: KeyboardEvent,
+  e: ComposerKeyboardEvent,
   options: MentionMenuKeyboardOptions
 ): boolean {
   const { menuOpen, sectionsLength, menuRef, onReset } = options

@@ -1,7 +1,8 @@
+import type { Editor } from '@tiptap/core'
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
-import { type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -15,6 +16,7 @@ import type {
 } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
@@ -34,17 +36,17 @@ import {
 } from './chat-input-bar-config'
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
+import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
-import { SkillComposerOverlay } from './SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
 import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
+import { useComposerCaretRestore } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
-import { useComposerTextarea } from './use-composer-textarea'
 
 // Subtle embossed/raised look shared by the send + stop buttons: soft outer
 // drop shadow to lift the button off the composer, a top inner highlight, and a
@@ -274,7 +276,12 @@ export function ChatInputBar({
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<Editor | null>(null)
+  const composerInputRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    composerInputRef.current = editorRef.current?.view.dom ?? null
+  })
+  const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
   const slashMenuRef = useRef<SlashMenuHandle>(null)
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
     session.projectId,
@@ -316,21 +323,42 @@ export function ChatInputBar({
   }, [canDropPaste])
 
   const slashOpen = isSlashTriggerAny(value) && !disabled
-  const {
-    onInput,
-    onKeyUp,
-    onSelect,
-    onMentionSelect,
-    handleMentionKeyDown,
-    mentionMenuOpen,
-    mentionSections,
-    mentionMenuRef,
-    emptyLabel,
-    resetMentions,
-    resetHeight,
-    clampHeight,
-    updateMentions
-  } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
+  // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
+  // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
+  // natural typing, and `handleSelect`/`onMentionSelect` feed it on
+  // programmatic splices). `onMentionSelect` restores the caret via the editor.
+  // `mentions` is a new object each render (useComposerMentions returns a fresh
+  // literal), so effects that depend on it would re-fire every render and loop
+  // (the seed effect calls `setValue`, which re-renders, which re-fires the
+  // effect). Stabilize the `update` access via a ref so effect deps stay
+  // stable without lying to the lint rule.
+  const mentionsRef = useRef(mentions)
+  mentionsRef.current = mentions
+  const updateMentionsStable = useCallback((v: string, c: number) => {
+    mentionsRef.current.update(v, c)
+  }, [])
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+  const mentionSections = mentions.sections
+  const mentionMenuRef = mentions.menuRef
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const resetMentions = mentions.reset
+  const onMentionSelect = useCallback(
+    (match: import('./mention-menu-model').MentionMatch) => {
+      const editor = editorRef.current
+      const caret = editor
+        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
+        : value.length
+      const outcome = mentions.select(value, caret, match)
+      if (!outcome) return
+      setValue(outcome.value)
+      updateMentionsStable(outcome.value, outcome.caret)
+      // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
+      // editor) — replaces the bare `requestAnimationFrame` that swallowed
+      // throws against a destroyed editor.
+      scheduleRestoreCaret(outcome.caret)
+    },
+    [value, mentions, updateMentionsStable, scheduleRestoreCaret]
+  )
 
   const {
     slashSections,
@@ -338,14 +366,13 @@ export function ChatInputBar({
     setActiveCommand,
     clearActiveCommand,
     skillPathsRef,
-    hasSkillToken,
     handleSelect,
-    handleKeyDown: composerHandleKeyDown,
+    onSlashOrMentionKeyDown,
     buildPromptParts
   } = useChatComposer({
     value,
     setValue,
-    textareaRef,
+    editorRef,
     slashMenuRef,
     commands,
     configOptions,
@@ -355,11 +382,8 @@ export function ChatInputBar({
     onSetConfig,
     onSetMode,
     onSetModel,
-    handleMentionKeyDown,
-    updateMentions,
-    resetMentions,
-    resetHeight,
-    clampHeight
+    mentions,
+    scheduleRestoreCaret
   })
 
   const canSend =
@@ -418,7 +442,6 @@ export function ChatInputBar({
       setActiveCommand(null)
       clearAttachments()
       resetMentions()
-      resetHeight()
     } catch (err) {
       // Skill path resolution throws a specific user-facing message — keep it.
       const msg = err instanceof Error ? err.message : ''
@@ -436,7 +459,6 @@ export function ChatInputBar({
     appOwnedTempPaths,
     onSend,
     onSendBlocks,
-    resetHeight,
     resetMentions,
     session.id,
     buildPromptParts,
@@ -445,57 +467,64 @@ export function ChatInputBar({
   ])
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Shared composer dispatch (skill-token backspace, slash-menu keys,
-      // mention-menu keys) lives in `useChatComposer`. Enter→submit and
-      // Escape→cancel are surface-specific (the running chatbox cancels a busy
-      // turn on Escape and morphs send/stop) and run only when the shared
-      // handler did not consume the event.
-      composerHandleKeyDown(e)
-      if (e.defaultPrevented) return
-      if (e.key === 'Escape' && busy) {
-        e.preventDefault()
+    (event: KeyboardEvent): boolean | undefined => {
+      // Editor-first keymap: the slash/mention menu keys + Enter→submit /
+      // Escape→cancel run BEFORE the editor's own keymap (Backspace-pill
+      // removal is editor-owned). `onSlashOrMentionKeyDown` consumes the
+      // slash/mention menu arrows/Tab/Enter/Escape when their menus are open;
+      // Enter→submit + Ctrl/Cmd+Enter→submit + Escape→cancel are
+      // surface-specific (the running chatbox cancels a busy turn on Escape
+      // and morphs send/stop). Ctrl/Cmd+Enter is part of the frozen
+      // accessibility baseline (parity with `AgentLauncher`).
+      if (onSlashOrMentionKeyDown(event) === true) return true
+      if (event.key === 'Escape' && busy) {
+        event.preventDefault()
         onCancel()
-        return
+        return true
       }
-      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-        e.preventDefault()
-        if (showStop) return
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault()
+        if (showStop) return true
         void submit()
+        return true
       }
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault()
+        if (showStop) return true
+        void submit()
+        return true
+      }
+      return undefined
     },
-    [composerHandleKeyDown, busy, showStop, onCancel, submit]
+    [onSlashOrMentionKeyDown, busy, showStop, onCancel, submit]
   )
 
   // Load externally-seeded text (edit a message, pick a starter prompt), then
   // focus and place the cursor at the end. Keyed on a nonce so re-picking the
-  // same text still applies.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the intended trigger
+  // same text still applies. The editor re-parses `value` on the next render
+  // (its external-sync effect) — the rAF below lands the caret at the end.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the intended trigger; `mentions` is read via a stable ref (`updateMentionsStable`) so it doesn't re-fire every render (which would loop via setValue).
   useEffect(() => {
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
     setActiveCommand(null)
-    updateMentions(next, next.length)
-    const el = textareaRef.current
-    if (!el) return
-    el.focus()
-    requestAnimationFrame(() => {
-      clampHeight(el)
-      el.setSelectionRange(next.length, next.length)
-    })
-  }, [seedNonce, updateMentions, clampHeight])
+    updateMentionsStable(next, next.length)
+    // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
+    // editor) — replaces the bare `requestAnimationFrame` that swallowed
+    // throws against a destroyed editor.
+    scheduleRestoreCaret(next.length)
+  }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setActiveCommand, setValue])
 
-  // Story 5.3 (T2.3): on mobile web, scroll the textarea into view once per
+  // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
-  // Moved from onFocus (where `osk.isOskOpen` may still be false at focus
-  // time) to a closed→open transition effect — mirrors AgentChatPanel. rAF-
-  // deferred to let layout settle; fires once per OSK-open window.
+  // rAF-deferred to let layout settle; fires once per OSK-open window.
   useEffect(() => {
     const wasOpen = prevOskOpenRef.current
     prevOskOpenRef.current = osk.isOskOpen
     if (!wasOpen && osk.isOskOpen && isMobileShell) {
-      const el = textareaRef.current
+      const ed = editorRef.current
+      const el = ed?.view.dom ?? null
       if (el) {
         requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
       }
@@ -591,7 +620,7 @@ export function ChatInputBar({
             ref={slashMenuRef}
             sections={slashSections}
             onSelect={handleSelect}
-            inputRef={textareaRef}
+            inputRef={composerInputRef}
           />
         )}
         {mentionMenuOpen && (
@@ -600,7 +629,7 @@ export function ChatInputBar({
             sections={mentionSections}
             onSelect={onMentionSelect}
             emptyLabel={emptyLabel}
-            inputRef={textareaRef}
+            inputRef={composerInputRef}
           />
         )}
         <ComposerBeamShell busy={busy} reduced={reduced}>
@@ -627,56 +656,32 @@ export function ChatInputBar({
             {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
-              {/* Transparent-textarea overlay: mirrors the value with inline
-                  SkillChip pills. The textarea text is transparent with a
-                  visible caret; this overlay renders the visible text + chips
-                  in the same metrics so the caret stays aligned.
-
-                  The overlay is `absolute inset-0`, so its containing block
-                  must be a box that exactly matches the textarea — not the
-                  padded parent (which would shift the overlay up-left by the
-                  parent's padding and paint chips above the caret). The inner
-                  `relative` wrapper has no padding, so its box == the
-                  textarea's box and the overlay stays caret-aligned. */}
-              <div className="relative">
-                <SkillComposerOverlay textareaRef={textareaRef} value={value} />
-                <textarea
-                  ref={textareaRef}
-                  value={value}
-                  onChange={onInput}
-                  onKeyDown={handleKeyDown}
-                  onKeyUp={onKeyUp}
-                  onSelect={onSelect}
-                  onPaste={handlePaste}
-                  // Story 5.3 (T2.3): on mobile web when the OSK is open, scroll
-                  // the textarea into view once per OSK-open window so iOS Safari
-                  // doesn't leave the input under the keyboard. rAF-deferred to
-                  // let layout settle. Guarded against focus-loop thrash (the OSK
-                  // can re-focus the textarea as it animates; only the first
-                  // focus per OSK-open window triggers the scroll).
-                  // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
-                  // Do NOT change Enter keyboard semantics — handleKeyDown still
-                  // routes Enter→send only when the slash menu is closed.
-                  inputMode="text"
-                  enterKeyHint="send"
-                  disabled={disabled || sending}
-                  rows={1}
-                  placeholder={
-                    disabled
-                      ? 'Composer unavailable'
-                      : activeCommand
-                        ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
-                  }
-                  className={cn(
-                    // text-base (16px): floor for iOS Safari — sub-16px inputs zoom on focus.
-                    'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-base leading-relaxed',
-                    hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
-                    'placeholder:text-muted-foreground focus:outline-none',
-                    'disabled:cursor-not-allowed disabled:text-muted-foreground disabled:placeholder:text-muted-foreground/70 max-h-40'
-                  )}
-                />
-              </div>
+              {/* Tiptap rich-text editor — the skill "pill" is a real inline
+                  DOM node (a Tiptap `NodeView`), so the caret sits flush
+                  against the pill's right edge by construction. No transparent
+                  textarea + mirror overlay, no canvas padding, no overlay
+                  scroll-sync. The `value` string (sentinel-token format) is
+                  the shared model the wire builder + draft persistence +
+                  timeline consume (byte-identical wire payload). */}
+              <ChatComposerEditor
+                value={value}
+                onValueChange={setValue}
+                onCaretChange={mentions.update}
+                onBeforeEditorKeyDown={handleKeyDown}
+                onPasteAttachments={handlePaste}
+                getSkillPaths={() => skillPathsRef.current}
+                editorRef={editorRef}
+                disabled={disabled || sending}
+                minHeight={52}
+                maxHeight={160}
+                placeholder={
+                  disabled
+                    ? 'Composer unavailable'
+                    : activeCommand
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything… (/ for commands, @ for files)'
+                }
+              />
             </div>
             <div
               className="flex items-end justify-between gap-3 px-3 pb-3"

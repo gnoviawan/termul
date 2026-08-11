@@ -1,6 +1,16 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+// RTL auto-cleanup is left ENABLED (default). The `afterEach` below destroys
+// lingering Tiptap editors BEFORE React unmounts — vitest runs `afterEach`
+// hooks in reverse registration order, so this file's hook (registered after
+// RTL's import-time hook) runs first, releasing ProseMirror's
+// `MutationObserver`/rAF callbacks while the DOM is still attached. Then
+// RTL's auto-cleanup unmounts React. Mirrors `ChatInputBar.test.tsx`.
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  getComposerValue,
+  setComposerValue
+} from '@/components/chat/composer/chat-composer-test-helpers'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
@@ -8,9 +18,23 @@ import {
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
+import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { skillToken } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
+
+// jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
+// popover open/positioning; without a stub the agent/model pickers never open
+// (the click doesn't toggle `data-state="open"`). Return `null` so the popover
+// still opens (positioning degrades to the default offset in jsdom).
+if (typeof document.elementFromPoint !== 'function') {
+  Object.defineProperty(document, 'elementFromPoint', {
+    value: () => null,
+    configurable: true,
+    writable: true
+  })
+}
 
 function clickMenuOption(name: string | RegExp): void {
   const dialog = screen.getByRole('dialog')
@@ -577,12 +601,31 @@ beforeEach(() => {
   })
 })
 
+// Explicitly destroy lingering Tiptap/ProseMirror editors BEFORE React's
+// auto-cleanup unmounts (RTL's auto-cleanup runs AFTER this hook in vitest's
+// reverse afterEach order). ProseMirror's `EditorView.destroy` must run while
+// the DOM is still attached so its `MutationObserver`/rAF callbacks are
+// released; otherwise they accumulate across tests in jsdom and hang the file.
+afterEach(() => {
+  const els = document.querySelectorAll('[data-composer-editor="true"]')
+  for (const el of Array.from(els)) {
+    const handle = el as HTMLElement & {
+      __composerEditor?: { destroy?: () => void; isDestroyed?: boolean } | null
+    }
+    const editor = handle.__composerEditor
+    if (editor && typeof editor.destroy === 'function' && !editor.isDestroyed) {
+      editor.destroy()
+    }
+  }
+  cleanup()
+})
+
 describe('AgentLauncher ACP new thread', () => {
   it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello acp' } })
+    setComposerValue('hello acp')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     expect(mockCreateLaunchPlaceholder).toHaveBeenCalled()
@@ -618,7 +661,7 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
     renderLauncher()
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'ready now' } })
+    setComposerValue('ready now')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     expect(mockClaimPreparedChat).toHaveBeenCalledWith(key, 'p1')
@@ -1219,7 +1262,7 @@ describe('AgentLauncher ACP new thread', () => {
     )
     renderLauncher()
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hello cold' } })
+    setComposerValue('hello cold')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
@@ -1254,7 +1297,11 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
     scope: 'project',
     path: '/home/u/.agents/skills/git-worktree/SKILL.md'
   }
-  const TOKEN = '\uE000git-worktree\uE001'
+  // Padded token form — matches what `docToDisplayText` re-emits (pills carry
+  // the `\uE002<pad>\uE003` block for on-disk draft byte-stability) and what
+  // `handleSelect` splices. Editor/display assertions use this so they match
+  // the editor's serialized output.
+  const TOKEN = skillToken('git-worktree', SKILL_PAD_DEFAULT)
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
@@ -1265,33 +1312,33 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
     mockSkills.current = [SKILL_GIT]
     renderLauncher()
 
-    const textarea = await screen.findByLabelText('Agent prompt')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     expect(screen.getByText('Skills')).toBeInTheDocument()
 
     selectSlashOption('/git-worktree')
 
-    // The transparent-textarea overlay renders the chip name as a visible span
-    // (after the slash menu closes, it is the stable selector for the chip).
+    // The Tiptap NodeView renders the chip name as a visible span (after the
+    // slash menu closes, it is the stable selector for the chip).
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
     // The `/` filter text is cleared; the value carries the token + trailing space.
-    expect(textarea).toHaveValue(`${TOKEN} `)
+    expect(getComposerValue()).toBe(`${TOKEN} `)
   })
 
   it('launch injects the wire (path-framed) text into the real send while the optimistic preview carries the display (token) text', async () => {
     mockSkills.current = [SKILL_GIT]
     renderLauncher()
 
-    const textarea = await screen.findByLabelText('Agent prompt')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
     // Type after the chip + trailing space.
-    fireEvent.change(textarea, { target: { value: `${TOKEN} hello` } })
+    setComposerValue(`${TOKEN} hello`)
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     const wireText = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hello`
@@ -1324,13 +1371,13 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
     mockSkills.current = [{ name: 'pathless', description: 'no path', scope: 'project', path: '' }]
     renderLauncher()
 
-    const textarea = await screen.findByLabelText('Agent prompt')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/pathless')
 
     await waitFor(() => expect(screen.getByText('pathless')).toBeInTheDocument())
-    fireEvent.change(textarea, { target: { value: '\uE000pathless\uE001 hello' } })
+    setComposerValue('\uE000pathless\uE001 hello')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     // The toast names the missing path; launch is aborted.
@@ -1362,11 +1409,11 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     mockSkills.current = [SKILL]
     renderLauncher()
 
-    const textarea = await screen.findByLabelText('Agent prompt')
+    await screen.findByLabelText('Agent prompt')
     // Type text before the slash so the trigger is mid-text, not leading.
     // Previously the launcher used `isSlashTrigger` (leading-only) and the
     // menu never opened here; the shared hook now uses `isSlashTriggerAny`.
-    fireEvent.change(textarea, { target: { value: 'hello /' } })
+    setComposerValue('hello /')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
   })
@@ -1385,8 +1432,8 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     }
     renderLauncher()
 
-    const textarea = await screen.findByLabelText('Agent prompt')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/compact')
@@ -1397,7 +1444,7 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
       expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
     )
     // The `/compact` filter text is cleared from the input.
-    expect(textarea).toHaveValue('')
+    expect(getComposerValue()).toBe('')
   })
 })
 
@@ -1569,7 +1616,7 @@ describe('AgentLauncher worktree isolation', () => {
     renderLauncher()
     await chooseWorktreeBaseBranch('feat/x')
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi wt' } })
+    setComposerValue('hi wt')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
@@ -1607,7 +1654,7 @@ describe('AgentLauncher worktree isolation', () => {
     // with isolationMode === 'current' (default) never calls worktreeApi.create.
     renderLauncher()
     // Default mode is 'current' — confirm no worktree create on a normal launch.
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi' } })
+    setComposerValue('hi')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
@@ -1637,7 +1684,7 @@ describe('AgentLauncher worktree isolation', () => {
     renderLauncher()
     await chooseWorktreeBaseBranch('feat/x')
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'collide' } })
+    setComposerValue('collide')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
@@ -1678,7 +1725,7 @@ describe('AgentLauncher worktree isolation', () => {
     const select = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
     fireEvent.change(select, { target: { value: 'main' } })
 
-    fireEvent.change(screen.getByLabelText('Agent prompt'), { target: { value: 'hi' } })
+    setComposerValue('hi')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))

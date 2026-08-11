@@ -14,7 +14,7 @@ interface FileMentionMenuProps {
   /** Override the empty-state label (e.g. "Searching files…" while walking). */
   emptyLabel?: string
   /** The composer textarea that owns this listbox (for aria-controls/activedescendant). */
-  inputRef?: RefObject<HTMLTextAreaElement | null>
+  inputRef?: RefObject<HTMLElement | null>
 }
 
 /**

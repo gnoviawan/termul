@@ -1,16 +1,14 @@
-import type { KeyboardEvent, MutableRefObject, RefObject } from 'react'
+import type { Editor } from '@tiptap/core'
+import type { MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
-import { measureSkillPadding } from '@/lib/skill-chip-metrics'
-import {
-  extractSkillNames,
-  insertSkillToken,
-  removeSkillTokenBeforeCaret,
-  SKILL_TOKEN_START
-} from '@/lib/skill-tokens'
+import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { extractSkillNames, insertSkillToken, SKILL_TOKEN_START } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
+import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { SlashMenuHandle } from './SlashCommandMenu'
+import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
 import { tryHandleSlashMenuKeyDown } from './slash-menu-keyboard'
 import {
   buildSlashSections,
@@ -20,26 +18,46 @@ import {
   type SlashSection,
   slashFilter
 } from './slash-menu-model'
+import type { ComposerMentions } from './use-composer-mentions'
 
 /**
  * Shared chat-composer state + handlers for the two composer hosts
  * (`ChatInputBar` — the running chatbox — and `AgentLauncher` — the new-chat
  * screen). This is a LOGIC extraction, not a JSX extraction: the two surfaces
  * keep their own outer chrome (BorderBeam/queue vs agent picker/banners), but
- * route the duplicated composer-field logic — slash menu, skill-token splice,
+ * route the duplicated composer-field logic — slash menu, skill-pill splice,
  * command chip, submit text builder — through this hook so they cannot drift
  * again.
  *
  * The hook is renderer-neutral: no Tauri/runtime calls, no JSX. Both surfaces
  * keep their own `submit()`/`launch()` because the dispatch shapes differ
- * (`onSend`/`onSendBlocks` vs `finalizeChatLaunch`/`sendPromptBlocks`), but
- * both read `activeCommand` + `skillPathsRef` + `buildPromptParts()` from the
- * hook to build the wire/display text identically.
+ * (`onSend`/`onSendBlocks` vs `finalizeChatLaunch`/`sendPromptBlocks`), but both
+ * read `activeCommand` + `skillPathsRef` + `buildPromptParts()` from the hook
+ * to build the wire/display text identically.
+ *
+ * ## Editor integration (modular redesign)
+ *
+ * The transparent-`<textarea>` + `SkillComposerOverlay` surface is replaced by a
+ * Tiptap rich-text editor (`ChatComposerEditor`). The pill is now a real inline
+ * DOM node (a Tiptap `NodeView`), so the caret sits flush against the pill by
+ * construction — no canvas-based figure-space padding (`measureSkillPadding` is
+ * deleted) and no overlay scroll-sync (`SkillComposerOverlay` is deleted). The
+ * `value` string (sentinel-token format) stays the single source of truth
+ * shared with `buildPromptParts`, draft persistence, and the timeline renderer,
+ * so the wire payload stays byte-identical to the pre-refactor surface.
+ *
+ * The hook owns: `activeCommand`, `skillPathsRef`, slash-menu open/sections,
+ * `handleSelect` (skill splice + command chip + config/mode apply),
+ * `buildPromptParts` (wire/display text builder), and the slash/mention menu
+ * keymap adapter (`onSlashOrMentionKeyDown`) that the editor runs BEFORE its
+ * own keymap. Backspace-over-pill removal is owned by the editor itself.
  */
 export interface UseChatComposerArgs {
   value: string
   setValue: (v: string) => void
-  textareaRef: RefObject<HTMLTextAreaElement | null>
+  /** The Tiptap editor instance (drives transactional pill insertion + caret
+   * restoration after a programmatic string splice). */
+  editorRef: MutableRefObject<Editor | null>
   slashMenuRef: RefObject<SlashMenuHandle | null>
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
@@ -48,22 +66,25 @@ export interface UseChatComposerArgs {
   disabled: boolean
   onSetConfig: (configId: string, valueId: string) => void | Promise<void>
   onSetMode: (modeId: string) => void | Promise<void>
-  /**
-   * Reserved for model-row parity (the model chip routes native ACP models
+  /** Reserved for model-row parity (the model chip routes native ACP models
    * through `onSetModel` when `modelSource === 'models'`). Slash-menu model
    * rows currently flow through the `config` branch → `onSetConfig`, matching
    * the canonical `ChatInputBar` behavior; these fields are kept on the
-   * interface so a future model-row divergence can land without reshaping it.
-   */
+   * interface so a future model-row divergence can land without reshaping it. */
   onSetModel?: (modelId: string) => void | Promise<void>
   modelOption?: SessionConfigOption | null
   modelSource?: 'models' | 'config'
-  /** Mention-menu keyboard dispatch from `useComposerTextarea`. */
-  handleMentionKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean
-  updateMentions: (v: string, caret: number) => void
-  resetMentions: () => void
-  resetHeight: () => void
-  clampHeight: (el: HTMLTextAreaElement) => void
+  /** Mention-menu state from `useComposerMentions`. The hook calls
+   * `mentions.update` after programmatic splices (the editor's live
+   * `onCaretChange` feeds it on natural typing). */
+  mentions: ComposerMentions
+  /**
+   * Schedule a caret restore (display-string offset → doc pos) after a
+   * programmatic value splice, with rAF cleanup. Provided by the host's
+   * `useComposerCaretRestore(editorRef)` so the hook's `handleSelect` + the
+   * host's `onMentionSelect`/seed share ONE rAF ref per editor instance.
+   */
+  scheduleRestoreCaret: (displayOffset: number) => void
 }
 
 export interface ChatPromptParts {
@@ -92,13 +113,13 @@ export interface UseChatComposerResult {
   hasSkillToken: boolean
   handleSelect: (item: SlashItem) => void
   /**
-   * Shared keydown for the composer textarea: skill-token backspace, slash-menu
-   * arrow/Tab/Enter/Escape, and @-mention arrow/Tab/Enter/Escape. Enter→submit
-   * and Escape→cancel/launch are surface-specific (the dispatch shapes differ),
-   * so each host wraps this handler and checks `e.defaultPrevented` before
-   * running its own Enter/Escape branch.
+   * Slash + mention menu keymap adapter for the editor. Runs `tryHandleSlashMenuKeyDown`
+   * then `tryHandleMentionMenuKeyDown` (both consume ↑/↓/Tab/Enter/Escape when
+   * their menu is open). The editor calls this BEFORE its own keymap so menu
+   * keys never reach ProseMirror's base handlers. Returns true when consumed
+   * (the editor skips its default handling for that key).
    */
-  handleKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void
+  onSlashOrMentionKeyDown: (event: KeyboardEvent) => boolean
   /**
    * Build the wire/display prompt text parts from the current value, resolved
    * skill paths, and active command. Throws `Error("Skill '<name>' is missing
@@ -108,11 +129,43 @@ export interface UseChatComposerResult {
   buildPromptParts: () => ChatPromptParts
 }
 
+/**
+ * Adapter: shape a DOM `KeyboardEvent` to the {@link ComposerKeyboardEvent}
+ * contract the slash/mention menu keyboard helpers expect. The DOM event
+ * already carries `key`/`shiftKey`/`metaKey`/`ctrlKey`/`altKey`/`isComposing`
+ * (via `nativeEvent`); we expose `nativeEvent` as the DOM event itself so
+ * `.nativeEvent.isComposing` reads the real composing flag, and
+ * `target`/`currentTarget` as the editor's contenteditable element so future
+ * helpers can reach the editor without a contenteditable-lacking
+ * `selectionStart` lying about the caret. Properly typed — no `as unknown as`
+ * escape hatch.
+ */
+function adaptDomKeybEvent(
+  domEvent: KeyboardEvent,
+  editorEl: HTMLElement | null
+): ComposerKeyboardEvent {
+  return {
+    key: domEvent.key,
+    shiftKey: domEvent.shiftKey,
+    metaKey: domEvent.metaKey,
+    ctrlKey: domEvent.ctrlKey,
+    altKey: domEvent.altKey,
+    target: domEvent.target as HTMLElement | null,
+    currentTarget: editorEl,
+    nativeEvent: domEvent,
+    preventDefault: () => domEvent.preventDefault(),
+    stopPropagation: () => domEvent.stopPropagation(),
+    get defaultPrevented() {
+      return domEvent.defaultPrevented
+    }
+  }
+}
+
 export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResult {
   const {
     value,
     setValue,
-    textareaRef,
+    editorRef,
     slashMenuRef,
     commands,
     configOptions,
@@ -121,10 +174,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     disabled,
     onSetConfig,
     onSetMode,
-    handleMentionKeyDown,
-    updateMentions,
-    resetHeight,
-    clampHeight
+    mentions,
+    scheduleRestoreCaret
   } = args
 
   const [activeCommand, setActiveCommand] = useState<string | null>(null)
@@ -140,69 +191,65 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
     [slashOpen, commands, configOptions, modes, skills, filter]
   )
-  // The transparent-textarea overlay is only needed when the value carries a
-  // skill token; otherwise keep the textarea text visible so plain typing,
-  // overlay first-paint, and any overlay failure never render invisible text.
+  // Pills are real DOM nodes now, so there is no transparent-text overlay to
+  // gate. `hasSkillToken` is still exposed for hosts that branch on whether the
+  // value carries a skill (e.g. placeholder copy).
   const hasSkillToken = value.includes(SKILL_TOKEN_START)
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
       if (item.kind === 'skill') {
-        // Splice an inline skill token at the caret, removing the `/`-filter
-        // text the slash menu was filtering on. The token carries the skill
-        // name; the path is recorded into `skillPathsRef` so the wire prompt
-        // can cite it synchronously at send time. A trailing space is appended
-        // so the caret lands in plain text and the next `/` trigger matches.
+        // Splice an inline skill token into the display string at the caret,
+        // removing the `/`-filter text the slash menu was filtering on. The
+        // token carries the skill name + the fixed padding block
+        // (`\uE002<SKILL_PAD_DEFAULT>\uE003`) — the padding is obsolete for
+        // display (the pill is a real DOM node), but it's re-emitted by
+        // `docToDisplayText` to preserve the on-disk draft schema, so the
+        // splice must include it for offset consistency (the caret offset from
+        // `insertSkillToken` accounts for the padding block's length). The path
+        // is recorded into `skillPathsRef` so the wire prompt can cite it
+        // synchronously at send time. A trailing space is appended so the
+        // caret lands in plain text and the next `/` trigger matches.
         const trigger = findSlashTrigger(value)
-        const caret = textareaRef.current?.selectionStart ?? value.length
+        const editor = editorRef.current
+        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
-        // Measure the FIGURE-SPACE padding needed so the transparent textarea
-        // token text is as wide as the `SkillChip` pill the overlay renders over
-        // it — without this the caret lands ~6 chars behind the chip. Synchronous
-        // canvas measurement; returns '' in jsdom / when no canvas, degrading to
-        // the unpadded token.
-        const padding = measureSkillPadding(item.name, textareaRef.current)
         const { value: next, caret: nextCaret } = insertSkillToken(
           value,
           insertAt,
           item.name,
           deleteBefore,
-          padding
+          SKILL_PAD_DEFAULT
         )
         skillPathsRef.current[item.name] = item.path
         setValue(next)
-        updateMentions(next, nextCaret)
-        resetHeight()
-        requestAnimationFrame(() => {
-          const el = textareaRef.current
-          if (!el) return
-          clampHeight(el)
-          el.setSelectionRange(nextCaret, nextCaret)
-          el.focus()
-        })
+        mentions.update(next, nextCaret)
+        // Restore the caret to the post-pill offset (flush against the pill's
+        // right edge — the pill is a real DOM node, so no gap). rAF defers past
+        // React's commit + the editor's external-value re-parse; the shared
+        // `scheduleRestoreCaret` cancels any pending frame + no-ops if the
+        // editor was destroyed before the frame fired (no swallowed throws).
+        scheduleRestoreCaret(nextCaret)
         return
       }
       if (item.kind === 'command') {
         // Set the command chip instead of inserting bare text into the
-        // textarea. If the trigger was mid-text, replace the /token portion in
+        // editor. If the trigger was mid-text, replace the /token portion in
         // the input.
         const midTrigger = findSlashTrigger(value)
         if (midTrigger && midTrigger.start > 0) {
-          // Mid-text trigger: remove the /token from the input, keep the rest
           const before = value.slice(0, midTrigger.start).trimEnd()
           const after = value.slice(midTrigger.end).trimStart()
           const remaining = [before, after].filter(Boolean).join(' ')
           setValue(remaining)
-          updateMentions(remaining, remaining.length)
+          mentions.update(remaining, remaining.length)
         } else {
-          // Leading or standalone trigger: clear the input
           setValue('')
-          updateMentions('', 0)
+          mentions.update('', 0)
         }
         setActiveCommand(item.name)
-        resetHeight()
-        textareaRef.current?.focus()
+        editorRef.current?.commands.focus()
         return
       }
       if (item.kind === 'config') {
@@ -213,82 +260,48 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         void Promise.resolve(onSetMode(item.modeId)).catch(() => {})
       }
       setValue('')
-      updateMentions('', 0)
-      resetHeight()
+      mentions.update('', 0)
     },
-    [value, onSetConfig, onSetMode, resetHeight, clampHeight, updateMentions, setValue, textareaRef]
+    [value, onSetConfig, onSetMode, setValue, editorRef, mentions, scheduleRestoreCaret]
   )
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Backspace over an inline skill token (caret immediately after a chip,
-      // no active selection): remove the whole token plus the splicer's
-      // trailing space. Falls through to the default one-char backspace when
-      // the caret is in plain text. Alt is excluded so macOS Option+Backspace
-      // (delete-word) doesn't slice a token and leave orphan sentinels.
-      if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const el = e.currentTarget
-        const caret = el.selectionStart ?? 0
-        const selEnd = el.selectionEnd ?? 0
-        if (caret === selEnd) {
-          const result = removeSkillTokenBeforeCaret(value, caret)
-          if (result.removed) {
-            e.preventDefault()
-            setValue(result.value)
-            updateMentions(result.value, result.caret)
-            resetHeight()
-            requestAnimationFrame(() => {
-              const t = textareaRef.current
-              if (!t) return
-              clampHeight(t)
-              t.setSelectionRange(result.caret, result.caret)
-              t.focus()
-            })
-            return
-          }
-        }
-      }
+  const onSlashOrMentionKeyDown = useCallback(
+    (event: KeyboardEvent): boolean => {
+      const editorEl = editorRef.current?.view.dom ?? null
+      const reactLike = adaptDomKeybEvent(event, editorEl)
       if (
-        tryHandleSlashMenuKeyDown(e, {
+        tryHandleSlashMenuKeyDown(reactLike, {
           menuOpen: slashOpen,
           sectionsLength: slashSections.length,
           menuRef: slashMenuRef,
           onClearInput: () => {
             setValue('')
             setActiveCommand(null)
-            updateMentions('', 0)
-            resetHeight()
+            mentions.update('', 0)
           }
         })
       ) {
-        return
+        return true
       }
-      if (handleMentionKeyDown(e)) {
-        return
+      if (
+        tryHandleMentionMenuKeyDown(reactLike, {
+          menuOpen: mentions.menuOpen && !disabled && !slashOpen,
+          sectionsLength: mentions.sections.length,
+          menuRef: mentions.menuRef,
+          onReset: mentions.reset
+        })
+      ) {
+        return true
       }
-      // Enter→submit / Escape→cancel are surface-specific: each host wraps
-      // this handler and checks `e.defaultPrevented` before running its own
-      // branch (the dispatch shapes — onSend/onSendBlocks vs
-      // finalizeChatLaunch/sendPromptBlocks — differ).
+      return false
     },
-    [
-      value,
-      slashOpen,
-      slashSections.length,
-      slashMenuRef,
-      handleMentionKeyDown,
-      updateMentions,
-      clampHeight,
-      resetHeight,
-      setValue,
-      textareaRef
-    ]
+    [slashOpen, slashSections.length, slashMenuRef, mentions, disabled, setValue, editorRef]
   )
 
   const clearActiveCommand = useCallback(() => {
     setActiveCommand(null)
-    textareaRef.current?.focus()
-  }, [textareaRef])
+    editorRef.current?.commands.focus()
+  }, [editorRef])
 
   const buildPromptParts = useCallback((): ChatPromptParts => {
     // Extract the inline skill tokens carried in the value and resolve each
@@ -309,18 +322,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       throw new Error(`Skill '${missingPath.name}' is missing a path`)
     }
     const hasSkills = resolvedSkills.length > 0
-    // Wire text dispatched to the agent: skills framed by path under
-    // `# Agent Skills`, then the user text with tokens replaced by `(name)`.
-    // Always call the framer (it inline-replaces tokens + trims even when
-    // there are no framed skills) so a value carrying a token with no matching
-    // path entry degrades to `(name)` rather than leaking a private-use
-    // sentinel.
     const wireText = buildPromptWithLoadedSkills(resolvedSkills, value)
-    // Display text stored in the optimistic user message: the raw token value
-    // so the timeline overlay re-renders the chips inline.
     const displayText = value
-    // Prepend the active command to both wire and display so the timeline
-    // shows `/cmd …` and the agent receives the command-prefixed wire text.
     const wireWithCommand = activeCommand ? `/${activeCommand} ${wireText}` : wireText
     const displayWithCommand = activeCommand ? `/${activeCommand} ${displayText}` : displayText
     return {
@@ -344,7 +347,17 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     skillPathsRef,
     hasSkillToken,
     handleSelect,
-    handleKeyDown,
+    onSlashOrMentionKeyDown,
     buildPromptParts
   }
+}
+
+/**
+ * Read the current string-caret (display-string offset) from the editor's live
+ * selection. Used by `handleSelect` to splice a skill token at the caret when
+ * the slash menu had no leading `/`-trigger to anchor on (e.g. the trigger is
+ * mid-text and the caret sits at the filter boundary).
+ */
+function stringCaretFromEditor(editor: Editor): number {
+  return docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
 }
