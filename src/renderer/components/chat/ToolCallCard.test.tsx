@@ -207,6 +207,42 @@ describe('ToolCallCard', () => {
       expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument()
     })
 
+    it('renders the "Open file" button last when the row has a disclosure control', () => {
+      const now = 10_000
+      const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now)
+      const runningCall: ToolCall = {
+        ...toolCall('in_progress', [
+          { type: 'content', content: { type: 'text', text: 'Result' } }
+        ]),
+        rawInput: { path: 'src/foo.ts', startLine: 10, endLine: 20 },
+        timestamp: now - 1_500
+      }
+      const { rerender } = render(
+        withTooltip(<ToolCallCard toolCall={runningCall} filePathContext={{ cwd: '/proj' }} />)
+      )
+
+      rerender(
+        withTooltip(
+          <ToolCallCard
+            toolCall={{ ...runningCall, status: 'completed' }}
+            filePathContext={{ cwd: '/proj' }}
+          />
+        )
+      )
+
+      const disclosure = screen.getByRole('button', { expanded: false })
+      const duration = screen.getByText('1.5s')
+      const openFileButton = screen.getByRole('button', { name: 'Open file' })
+      const row = disclosure.parentElement
+      const rowChildren = Array.from(row?.children ?? [])
+
+      expect(screen.getByText('L10-20')).toBeInTheDocument()
+      expect(row).not.toBeNull()
+      expect(rowChildren.indexOf(duration)).toBeLessThan(rowChildren.indexOf(openFileButton))
+      expect(row?.lastElementChild).toBe(openFileButton)
+      dateNow.mockRestore()
+    })
+
     it('does not render an "Open file" button when no path is present in rawInput', () => {
       const call: ToolCall = {
         ...toolCall('completed'),

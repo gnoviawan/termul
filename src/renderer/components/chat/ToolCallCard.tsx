@@ -248,8 +248,8 @@ function ToolCallCardComponent({
   // clicking the label toggles details. The open-file button and chevron are
   // rendered as siblings outside the disclosure button — nesting a <button>
   // inside the disclosure <button> is invalid HTML, so they stay at the row
-  // level. Visual order (icon, label, meta/diffStat, open-file, duration,
-  // alert, chevron) is preserved by the flex container below.
+  // level. Visual order (icon, label, meta/diffStat, duration, alert,
+  // chevron, open-file) is preserved by the flex container below.
   const rowSummary = (
     <>
       <Icon
@@ -306,11 +306,6 @@ function ToolCallCardComponent({
               {rowSummary}
             </div>
           )}
-          {openFilePath ? (
-            <IconActionButton label="Open file" onClick={openFile} size="sm">
-              <ExternalLink />
-            </IconActionButton>
-          ) : null}
           {durationMs != null && (
             <span className="hidden shrink-0 text-3xs tabular-nums text-muted-foreground group-hover/tool:inline">
               {formatDuration(durationMs)}
@@ -327,6 +322,11 @@ function ToolCallCardComponent({
               <ChevronRight size={13} />
             </motion.span>
           )}
+          {openFilePath ? (
+            <IconActionButton label="Open file" onClick={openFile} size="sm">
+              <ExternalLink />
+            </IconActionButton>
+          ) : null}
         </div>
         {hasDetail && (
           <CollapseExpandMotion open={open}>
