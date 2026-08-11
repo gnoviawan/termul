@@ -421,6 +421,40 @@ impl SessionPersistence {
         Ok(metadata)
     }
 
+    /// Reinstall the durable writer for a previously-finalized (catalog-retained)
+    /// session so `enqueue_event` and `last_seq`-derived title-gen succeed on
+    /// reopen. Idempotent: returns `Ok` if a writer is already installed.
+    ///
+    /// `register_session` is catalog-idempotent (short-circuits at the catalog
+    /// check BEFORE `install_runtime`), so it cannot reinstall a writer for a
+    /// finalized session — this dedicated reopen path is required. `finalize_session`
+    /// keeps its terminal contract: it removes the writer but retains the catalog
+    /// entry (read-only listing + `last_seq` still resolve).
+    ///
+    /// Steps: (a) no-op when a writer is already present; (b) fetch metadata from
+    /// the catalog (`SessionNotFound` if the catalog entry is also gone — e.g. a
+    /// deleted session); (c) reactivate the metadata (`Active` + fresh
+    /// `last_activity_at`) and reinstall via `install_runtime` (which inserts into
+    /// both the catalog and the writer map); (d) `persist_index` so the reactivated
+    /// status surfaces in the listing.
+    pub async fn reopen_writer(&self, session_id: &str) -> Result<()> {
+        // (a) Idempotent: a writer is already installed for this session.
+        if self.inner.sessions.lock().contains_key(session_id) {
+            return Ok(());
+        }
+        // (b) Fetch the catalog metadata. A finalized session keeps its catalog
+        // entry, so this succeeds; a deleted session surfaces SessionNotFound.
+        let mut metadata = self.metadata(session_id)?;
+        // (c) Flip status back to Active — the session is being reopened so a
+        // live writer must accept new durable events. `install_runtime` inserts
+        // the reactivated metadata into both the catalog and the writer map.
+        metadata.status = PersistedSessionStatus::Active;
+        metadata.last_activity_at = now_millis();
+        self.install_runtime(metadata)?;
+        // (d) Refresh the index so the listing reflects the reactivated status.
+        self.persist_index().await
+    }
+
     pub fn enqueue_event(&self, mut record: PersistedEventRecord) -> Result<()> {
         if !is_durable_event(&record.type_) {
             return Ok(());
@@ -2211,6 +2245,106 @@ mod tests {
             record.type_ == "local_title_generated"
                 && record.payload.get("title").and_then(Value::as_str) == Some("Hello chat")
         }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `reopen_writer` reinstalls a writer for a finalized (catalog-retained)
+    /// session so `enqueue_event` succeeds again and the catalog status flips
+    /// back to `Active`. Mirrors the `LoadSession`/`ResumeSession` reopen path.
+    #[tokio::test]
+    async fn reopen_writer_reinstalls_writer_for_finalized_session() {
+        let root = temp_dir("reopen-finalized");
+        let (persistence, _) = registered(&root).await;
+        // Enqueue one event then finalize — finalize removes the writer but
+        // keeps the catalog entry (read-only listing + last_seq still resolve).
+        persistence.enqueue_event(record(1, "user_prompt")).unwrap();
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        assert!(!persistence.inner.sessions.lock().contains_key("session-1"));
+        assert_eq!(
+            persistence.metadata("session-1").unwrap().status,
+            PersistedSessionStatus::Closed
+        );
+        // enqueue_event fails with SessionNotFound — the writer is gone.
+        assert!(matches!(
+            persistence.enqueue_event(record(2, "message_chunk")),
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+
+        // reopen_writer reinstalls the writer and flips status to Active.
+        persistence.reopen_writer("session-1").await.unwrap();
+        assert!(persistence.inner.sessions.lock().contains_key("session-1"));
+        assert_eq!(
+            persistence.metadata("session-1").unwrap().status,
+            PersistedSessionStatus::Active
+        );
+        // enqueue_event now succeeds; the new seq advances past the prior
+        // last_seq (1) so the durable frontier is monotonic.
+        persistence.enqueue_event(record(2, "message_chunk")).unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        assert_eq!(persistence.last_seq("session-1").unwrap(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `reopen_writer` is idempotent: calling it twice for an already-open
+    /// session installs a single writer (no duplicate runtime entries).
+    #[tokio::test]
+    async fn reopen_writer_is_idempotent() {
+        let root = temp_dir("reopen-idempotent");
+        let (persistence, _) = registered(&root).await;
+        // First call: writer already present (register_session installed it),
+        // so reopen_writer short-circuits at the idempotent guard.
+        persistence.reopen_writer("session-1").await.unwrap();
+        assert!(persistence.inner.sessions.lock().contains_key("session-1"));
+        // Second call: still idempotent — single writer, no error.
+        persistence.reopen_writer("session-1").await.unwrap();
+        assert!(persistence.inner.sessions.lock().contains_key("session-1"));
+
+        // Finalize then reopen twice — still idempotent after a real reopen.
+        persistence
+            .finalize_session("session-1", PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+        assert!(!persistence.inner.sessions.lock().contains_key("session-1"));
+        persistence.reopen_writer("session-1").await.unwrap();
+        let first_tx = persistence
+            .inner
+            .sessions
+            .lock()
+            .get("session-1")
+            .map(|runtime| runtime.tx.clone());
+        persistence.reopen_writer("session-1").await.unwrap();
+        let second_tx = persistence
+            .inner
+            .sessions
+            .lock()
+            .get("session-1")
+            .map(|runtime| runtime.tx.clone());
+        assert!(
+            first_tx.is_some() && second_tx.is_some(),
+            "writer must remain installed after idempotent reopen"
+        );
+        // Same channel handle — reopen short-circuited, did not spawn a second writer.
+        assert!(
+            first_tx.as_ref().map(|tx| tx.same_channel(second_tx.as_ref().unwrap())).unwrap_or(false),
+            "idempotent reopen must not replace the existing writer channel"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `reopen_writer` surfaces `SessionNotFound` for a session that is absent
+    /// from the catalog (e.g. deleted or never registered) — it must NOT
+    /// fabricate a writer for an unknown id.
+    #[tokio::test]
+    async fn reopen_writer_session_not_found_for_unknown_session() {
+        let root = temp_dir("reopen-unknown");
+        let (persistence, _) = registered(&root).await;
+        assert!(matches!(
+            persistence.reopen_writer("never-registered").await,
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
         let _ = fs::remove_dir_all(root);
     }
 }

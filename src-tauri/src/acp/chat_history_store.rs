@@ -497,10 +497,29 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 fn sync_if_present(path: &Path) -> Result<()> {
     match fs::OpenOptions::new().read(true).open(path) {
-        Ok(file) => Ok(file.sync_all()?),
+        Ok(file) => match file.sync_all() {
+            Ok(()) => Ok(()),
+            Err(error) => classify_sync_error(error),
+        },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Classify a `sync_all()` failure into a `Result`. On non-unix (Windows),
+/// `FlushFileBuffers` on a read-only handle can return `ERROR_ACCESS_DENIED`
+/// when a concurrent writer holds the file — a known Win32 quirk, not a real
+/// I/O failure — so it is mapped to `Ok` so the unload-path flush doesn't
+/// lose chat history. On unix, `PermissionDenied` is a real error and
+/// propagates.
+fn classify_sync_error(error: io::Error) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            return Ok(());
+        }
+    }
+    Err(error.into())
 }
 fn sync_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
@@ -704,5 +723,38 @@ mod tests {
         drop(store);
         assert!(ChatHistoryStore::open(root.clone()).unwrap().list().1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// `classify_sync_error` treats `PermissionDenied` from `sync_all()` as Ok
+    /// on non-unix (Windows `FlushFileBuffers`-on-read-only-handle quirk), and
+    /// as a real error on unix. This is the resilience fix for the unload-path
+    /// flush that lost chat history with `os error 5` on Windows.
+    #[test]
+    fn sync_if_present_treats_windows_permission_denied_as_ok() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied");
+        let classified = classify_sync_error(error);
+        #[cfg(not(unix))]
+        {
+            assert!(classified.is_ok(), "PermissionDenied must be benign on non-unix");
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                classified.is_err(),
+                "PermissionDenied must propagate as a real error on unix"
+            );
+        }
+    }
+
+    /// A non-benign I/O error (e.g. `UnexpectedEof`) must still propagate
+    /// through `classify_sync_error` on every platform — only
+    /// `PermissionDenied` is treated as Ok on non-unix.
+    #[test]
+    fn classify_sync_error_propagates_non_permission_errors() {
+        let error = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
+        assert!(
+            classify_sync_error(error).is_err(),
+            "non-PermissionDenied errors must propagate"
+        );
     }
 }

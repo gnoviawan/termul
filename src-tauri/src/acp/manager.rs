@@ -164,6 +164,34 @@ fn first_prompt_warmup_timeout() -> Duration {
     }
 }
 
+/// Atomically check + mark the first-prompt warmup as started for an agent.
+/// Returns `true` if the caller should run the warmup (the agent was NOT in
+/// the set and is now inserted); returns `false` if a warmup already completed
+/// (or is still in-flight) for this agent within its lifetime — the caller
+/// must skip.
+///
+/// The check + insert happen under ONE lock acquisition so two concurrent
+/// `NewSession` calls for the same agent cannot both pass the gate (TOCTOU
+/// fix): the first inserts, the second sees the entry and coalesces onto the
+/// pending warmup (I/O matrix Row 6: "do not spawn a second"). The entry is
+/// never cleared on a warmup exit branch, so the "done" dedup also holds for
+/// subsequent `NewSession` calls within the same agent lifetime (I/O matrix
+/// Row 5: "Skip second warmup"). Cleared on agent drop (driver self-reap) so
+/// a re-spawned agent re-warmups.
+fn warmup_should_run(warmup_done: &Mutex<HashSet<AgentId>>, agent_id: &AgentId) -> bool {
+    let mut set = warmup_done.lock();
+    if set.contains(agent_id) {
+        log::debug!(
+            "[acp] {agent_id} first-prompt warmup skipped: \
+             already completed for this agent lifetime"
+        );
+        false
+    } else {
+        set.insert(agent_id.clone());
+        true
+    }
+}
+
 /// `session/load` / `session/resume` timeout. Precedence:
 /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (env, operator/diagnostic;
 /// seconds, must be > 0) → in-process UI override
@@ -755,6 +783,13 @@ pub struct AcpManager {
     /// session). A session in this set has a background title-gen task
     /// running; a second trigger for the same session is a logged no-op.
     in_flight_title_gens: Arc<Mutex<HashSet<String>>>,
+    /// Per-agent "warmup done" guard for the first-prompt cold-start
+    /// workaround (pi-acp issue #94). A visibility-churn re-entry of
+    /// `NewSession` for an agent whose warmup already completed (or is still
+    /// in-flight) is a logged no-op so the 4–8s warmup is not re-fired within
+    /// one agent lifetime. Cleared on agent drop (driver self-reap) so a
+    /// re-spawned agent re-warmups.
+    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 }
 
 /// Extract the concatenated text from a `Vec<ContentBlock>` for the
@@ -864,6 +899,7 @@ impl AcpManager {
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
             in_flight_title_gens: Arc::new(Mutex::new(HashSet::new())),
+            warmup_done: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -878,6 +914,7 @@ impl AcpManager {
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
             in_flight_title_gens: Arc::new(Mutex::new(HashSet::new())),
+            warmup_done: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -926,6 +963,7 @@ impl AcpManager {
         let thread_killed = killed.clone();
         let thread_start_error = start_error.clone();
         let thread_persistence = self.persistence.clone();
+        let thread_warmup_done = self.warmup_done.clone();
         let stable_namespace = stable_agent_namespace(&config);
 
         let join_handle = std::thread::Builder::new()
@@ -942,6 +980,7 @@ impl AcpManager {
                     thread_killed,
                     thread_start_error,
                     thread_persistence,
+                    thread_warmup_done,
                 );
             })
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
@@ -1993,6 +2032,7 @@ fn run_agent(
     killed: Arc<AtomicBool>,
     start_error: Arc<Mutex<Option<String>>>,
     persistence: Option<Arc<SessionPersistence>>,
+    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) {
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
@@ -2025,6 +2065,7 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
+        warmup_done.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2064,6 +2105,9 @@ fn run_agent(
         reaped.store(true, Ordering::Release);
         map.remove(&agent_id);
     }
+    // Clear the per-agent warmup-done guard so a re-spawned agent (new
+    // subprocess, fresh cold-start state) re-runs the first-prompt warmup.
+    warmup_done.lock().remove(&agent_id);
 
     // Only surface lifecycle events for an agent the renderer actually saw, and
     // never for an intentional kill (L4): a kill we initiated is silent, so the
@@ -2155,6 +2199,7 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
+    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2238,6 +2283,7 @@ async fn drive_connection(
     let loop_agent_id = agent_id.clone();
     let loop_state = driver_state.clone();
     let loop_spawned = spawned.clone();
+    let loop_warmup_done = warmup_done.clone();
 
     let connection_result = Client
         .builder()
@@ -2605,6 +2651,7 @@ async fn drive_connection(
                 loop_spawned,
                 allow_terminal,
                 persistence,
+                loop_warmup_done,
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
@@ -2630,6 +2677,7 @@ async fn run_command_loop(
     spawned: Arc<AtomicBool>,
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
+    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -2712,6 +2760,7 @@ async fn run_command_loop(
                 let req_agent_id = agent_id.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
+                let req_warmup_done = warmup_done.clone();
                 spawn_request(&cx, slot, async move {
                     let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
                     let timeout = session_new_timeout();
@@ -2773,7 +2822,23 @@ async fn run_command_loop(
                             // prompt may still experience the cold-start hang.
                             // See: https://github.com/svkozak/pi-acp/issues/94
                             let warmup_timeout = first_prompt_warmup_timeout();
-                            if warmup_timeout.as_secs() > 0 {
+                            // Per-agent warmup-done guard: a visibility-churn
+                            // re-entry of `NewSession` for an agent whose
+                            // warmup already completed (or is still in-flight)
+                            // is a logged no-op so the 4–8s cold-start
+                            // workaround is not re-fired within one agent
+                            // lifetime (the renderer re-renders a re-fired
+                            // warmup as a "second chat"). `warmup_should_run`
+                            // atomically checks + inserts under one lock so a
+                            // concurrent re-entry coalesces onto this in-flight
+                            // warmup (I/O matrix: "do not spawn a second");
+                            // the entry is never cleared on a warmup exit
+                            // branch, so the "done" dedup also holds for
+                            // subsequent `NewSession` calls. Cleared on agent
+                            // drop (driver self-reap) so a re-spawned agent
+                            // re-warmups.
+                            let should_warmup = warmup_should_run(&req_warmup_done, &req_agent_id);
+                            if warmup_timeout.as_secs() > 0 && should_warmup {
                                 let warmup_content =
                                     vec![agent_client_protocol::schema::v1::ContentBlock::Text(
                                         agent_client_protocol::schema::v1::TextContent::new(
@@ -2939,6 +3004,7 @@ async fn run_command_loop(
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
+                let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
@@ -2952,6 +3018,27 @@ async fn run_command_loop(
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
+                    // Reinstall the durable writer for a previously-finalized
+                    // (catalog-retained) session so subsequent `enqueue_event`
+                    // and `last_seq`-derived title-gen succeed on reopen.
+                    // `register_session` is catalog-idempotent and short-circuits
+                    // BEFORE `install_runtime`, so it cannot reinstall a writer
+                    // for a finalized session — the dedicated reopen path is
+                    // required. Mirror the `NewSession` ephemeral gate: a
+                    // reopened session is never marked ephemeral by the load
+                    // path, so `is_ephemeral` is false and reopen_writer runs.
+                    // An unknown/ephemeral id surfaces SessionNotFound from
+                    // reopen_writer and is logged + skipped (non-fatal).
+                    if result.is_ok() && !req_state.lock().is_ephemeral(&session_id.0) {
+                        if let Some(persistence) = &req_persistence {
+                            if let Err(error) = persistence.reopen_writer(&session_id.0).await {
+                                log::warn!(
+                                    "[acp] session {} reopen_writer failed: {error} (continuing load)",
+                                    session_id.0
+                                );
+                            }
+                        }
+                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -2965,6 +3052,7 @@ async fn run_command_loop(
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
+                let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
@@ -2975,6 +3063,19 @@ async fn run_command_loop(
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
+                    // Same durable-writer reopen as `LoadSession` above — a
+                    // resumed session was previously finalized and needs its
+                    // writer reinstalled for new durable events + title-gen.
+                    if result.is_ok() && !req_state.lock().is_ephemeral(&session_id.0) {
+                        if let Some(persistence) = &req_persistence {
+                            if let Err(error) = persistence.reopen_writer(&session_id.0).await {
+                                log::warn!(
+                                    "[acp] session {} reopen_writer failed: {error} (continuing resume)",
+                                    session_id.0
+                                );
+                            }
+                        }
+                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -4268,6 +4369,87 @@ mod tests {
             None => std::env::remove_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS"),
         }
         set_first_prompt_warmup_timeout_override(None);
+    }
+
+    // --- First-prompt warmup dedup (I/O matrix Rows 5 & 6) ---
+
+    /// I/O matrix Row 5 — "Duplicate warmup trigger": a PtyManager
+    /// window-visible tick re-fires `NewSession` for an agent whose warmup
+    /// already completed. `warmup_should_run` returns `false` (skip second
+    /// warmup) and logs a debug line; the entry stays in the set so the agent
+    /// remains "done" for its lifetime (a third trigger also skips).
+    #[test]
+    fn warmup_should_run_skips_when_agent_already_completed() {
+        let warmup_done: Arc<Mutex<HashSet<AgentId>>> = Arc::new(Mutex::new(HashSet::new()));
+        let agent_id = AgentId::new();
+        // Simulate a prior warmup that already completed (entry inserted by a
+        // previous NewSession call).
+        warmup_done.lock().insert(agent_id.clone());
+
+        // A re-entry sees the entry and returns false (skip).
+        assert!(
+            !warmup_should_run(&warmup_done, &agent_id),
+            "a duplicate trigger for an already-warmed agent must be skipped"
+        );
+
+        // The entry persists — the agent stays "done" so a third trigger also
+        // skips (not cleared on a skip).
+        assert!(
+            warmup_done.lock().contains(&agent_id),
+            "the done entry must persist after a skip (agent stays done)"
+        );
+        // A third trigger still skips.
+        assert!(
+            !warmup_should_run(&warmup_done, &agent_id),
+            "a third trigger must also skip while the agent is done"
+        );
+    }
+
+    /// I/O matrix Row 6 — "Warmup already in-flight": a second visibility
+    /// tick while the first warmup is still pending coalesces onto the pending
+    /// warmup (do not spawn a second). Because `warmup_should_run` performs
+    /// the check + insert atomically under one lock, two concurrent callers
+    /// for the same agent cannot both pass the gate: exactly one wins (returns
+    /// `true` + inserts), the other sees the entry and coalesces (`false`).
+    #[test]
+    fn warmup_should_run_coalesces_concurrent_calls_for_same_agent() {
+        let warmup_done: Arc<Mutex<HashSet<AgentId>>> = Arc::new(Mutex::new(HashSet::new()));
+        let agent_id = Arc::new(AgentId::new());
+
+        // Two concurrent callers race for the same agent. Because check+insert
+        // is atomic, exactly one wins (returns true) and the other coalesces
+        // (false) — no second warmup is spawned.
+        let set_a = Arc::clone(&warmup_done);
+        let set_b = Arc::clone(&warmup_done);
+        let id_a = Arc::clone(&agent_id);
+        let id_b = Arc::clone(&agent_id);
+        let handle_a = std::thread::spawn(move || warmup_should_run(&set_a, &id_a));
+        let handle_b = std::thread::spawn(move || warmup_should_run(&set_b, &id_b));
+        let a = handle_a.join().expect("warmup thread a panicked");
+        let b = handle_b.join().expect("warmup thread b panicked");
+
+        // Exactly one caller runs the warmup; the other coalesces.
+        assert!(
+            a ^ b,
+            "exactly one concurrent caller must win the warmup gate (got a={a}, b={b})"
+        );
+        // The set has exactly one entry for the agent (the winner inserted it).
+        assert_eq!(
+            warmup_done.lock().len(),
+            1,
+            "exactly one entry for the agent after concurrent calls"
+        );
+        assert!(
+            warmup_done.lock().contains(&agent_id),
+            "the winning caller must have inserted the agent"
+        );
+
+        // After both calls, a subsequent (non-concurrent) trigger also skips —
+        // the agent is now "done" and stays done.
+        assert!(
+            !warmup_should_run(&warmup_done, &agent_id),
+            "a post-completion trigger must skip (agent is done)"
+        );
     }
 
     // --- Background title generation (AD-2/AD-4/AD-8/AD-9) ---

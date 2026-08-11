@@ -320,6 +320,16 @@ const deletedSessionIds = new Set<string>()
 let historyDrain: Promise<void> | null = null
 let pendingGenericWrite: Promise<void> = Promise.resolve()
 let pendingGenericWriteCount = 0
+/**
+ * Memoized in-flight backend `acp_history_flush` promise. `beforeunload` +
+ * `pagehide` + `closeAppWithPersistenceFlush` can all fire on close,
+ * previously triggering 3× concurrent backend flush calls (race + the
+ * Windows `Access is denied` os-error-5 failure). Concurrent callers await
+ * the SAME promise so exactly one `acpHistoryApi.flush()` reaches the
+ * backend. Mirrors the `waitForPendingSessionIndexWrite` in-flight-promise
+ * pattern already in this file.
+ */
+let pendingHistoryFlush: Promise<void> | null = null
 
 async function drainHistoryOperations(): Promise<void> {
   while (pendingHistoryOperations.size > 0) {
@@ -410,6 +420,7 @@ export function _resetPendingIndexWriteTrackerForTesting(): void {
   historyDrain = null
   pendingGenericWrite = Promise.resolve()
   pendingGenericWriteCount = 0
+  pendingHistoryFlush = null
 }
 
 export async function saveSessionIndex(_entries: SessionIndexEntry[]): Promise<void> {
@@ -494,8 +505,28 @@ export async function deleteSessionPayload(id: string): Promise<void> {
 export async function flushSessionHistory(): Promise<void> {
   const mode = historyMode()
   if (mode === 'server' || mode === 'live_only') return
-  await waitForPendingSessionIndexWrite()
-  await acpHistoryApi.flush()
+  // Memoize the in-flight flush promise so `beforeunload` + `pagehide` +
+  // `closeAppWithPersistenceFlush` (which can all fire on close) await the
+  // SAME backend `acp_history_flush` call instead of racing 3× concurrent
+  // flushes (the race produced the Windows `Access is denied` os-error-5
+  // failure). A later caller attaches to the in-flight promise and resolves
+  // with it; the promise is cleared on settle so a fresh flush after close
+  // is not deduped against a stale one.
+  if (pendingHistoryFlush) return pendingHistoryFlush
+  const flushPromise = (async () => {
+    await waitForPendingSessionIndexWrite()
+    await acpHistoryApi.flush()
+  })()
+  pendingHistoryFlush = flushPromise
+  try {
+    await flushPromise
+  } finally {
+    // Clear so a subsequent close-path flush (e.g. a second window close
+    // after the first settled) can invoke the backend again.
+    if (pendingHistoryFlush === flushPromise) {
+      pendingHistoryFlush = null
+    }
+  }
 }
 
 export function _clearPayloadCacheForTesting(): void {

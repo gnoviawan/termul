@@ -637,6 +637,34 @@ describe('serialized save/delete/close barriers', () => {
     expect(flushed).toBe(true)
   })
 
+  it('dedupes concurrent flushSessionHistory calls to a single backend flush', async () => {
+    // beforeunload + pagehide + closeAppWithPersistenceFlush can all fire on
+    // close; without memoization they would race 3× concurrent backend
+    // acp_history_flush calls. All three callers must await the SAME in-flight
+    // promise so exactly one backend flush is invoked.
+    let releaseFlush!: () => void
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve
+    })
+    mockHistoryApi.flush.mockReturnValue(flushGate)
+
+    const first = flushSessionHistory()
+    const second = flushSessionHistory()
+    const third = flushSessionHistory()
+    await flush()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
+
+    releaseFlush()
+    await Promise.all([first, second, third])
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
+
+    // After the in-flight promise settles, a fresh flushSessionHistory can
+    // invoke the backend again (the memo is cleared, not pinned forever).
+    mockHistoryApi.flush.mockResolvedValue(undefined)
+    await flushSessionHistory()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(2)
+  })
+
   it('serializes operations so a queued stale save lands before delete', async () => {
     const order: string[] = []
     let releaseSave!: () => void
