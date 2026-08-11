@@ -99,8 +99,8 @@ export function ConfigChip({
           />
         )}
         <div
-          data-testid={searchable ? 'config-chip-model-options' : undefined}
-          className={cn(maxVisibleOptions && 'max-h-[180px] overflow-y-auto pr-1')}
+          data-testid={searchable ? 'config-chip-model-options' : 'config-chip-options'}
+          className="max-h-[180px] overflow-y-auto pr-1"
         >
           {filteredOptions.length > 0 ? (
             filteredOptions.map((v) => (
@@ -138,7 +138,10 @@ export function ConfigChip({
   )
 }
 
-/** A popover selector for the legacy modes API. */
+/**
+ * Popover for the native ACP `session.modes` API (`session/set_mode`).
+ * Prefer this over a duplicate `category: 'mode'` ConfigChip when both exist.
+ */
 export function ModeChip({
   session,
   disabled,
@@ -171,9 +174,12 @@ export function ModeChip({
           {current?.name ?? label}
         </ComposerPill>
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-56 p-1">
+      <PopoverContent align="start" side="top" collisionPadding={8} className="w-56 p-1">
         <div className={SELECTOR_SECTION_LABEL}>{label}</div>
-        <div data-testid="mode-chip-options" className="max-h-[180px] overflow-y-auto pr-1">
+        <div
+          data-testid="mode-chip-options"
+          className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"
+        >
           {modes.availableModes.map((m) => (
             <button
               key={m.id}

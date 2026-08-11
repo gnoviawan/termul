@@ -190,6 +190,17 @@ describe('ModeChip pending selection', () => {
     expect(screen.getByTestId('mode-chip-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
   })
 
+  it('scrolls config chip options even without maxVisibleOptions', () => {
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    expect(screen.getByTestId('config-chip-options')).toHaveClass(
+      'max-h-[180px]',
+      'overflow-y-auto'
+    )
+  })
+
   it('shows optimistic mode label while pending', async () => {
     let resolveSelect!: () => void
     const onSelect = vi.fn(
