@@ -52,10 +52,7 @@ fn main() -> ExitCode {
     // tokio/app setup (AC2) so the standalone binary never inits the server
     // stack for the child path. See `acp::host_mcp::child` + spec
     // `spec-acp-host-todo-plan-tool.md`.
-    if raw_args
-        .iter()
-        .any(|arg| arg == termul_manager_lib::host_mcp::CHILD_ARG)
-    {
+    if termul_manager_lib::host_mcp::is_child_invocation() {
         return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
     }
 

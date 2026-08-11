@@ -18,13 +18,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::acp::config::{AgentId, SessionId};
-use crate::acp::host_mcp::{emit_plan_update, map_todos_to_plan_entries, FrameReply, FrameRequest};
+use crate::acp::host_mcp::{
+    emit_plan_update, map_todos_to_plan_entries, FrameReply, FrameRequest, PlanStore,
+};
 use crate::web::EventSink;
 
 /// Per-session auth + routing context, keyed by the random token.
@@ -42,7 +43,8 @@ struct SessionAuth {
 }
 
 /// The shared host plan server. Owns the listener thread + the per-session
-/// token map + a clone of the AcpManager sinks (for emitting `plan_update`).
+/// token map + a `PlanStore` cache + a clone of the AcpManager sinks (for
+/// emitting `plan_update`).
 pub struct HostPlanServer {
     /// Set once the dedicated thread has bound the listener.
     port: std::sync::OnceLock<u16>,
@@ -51,6 +53,10 @@ pub struct HostPlanServer {
     sinks: Vec<Arc<dyn EventSink>>,
     /// token -> SessionAuth. One entry per registered session.
     sessions: Mutex<HashMap<String, SessionAuth>>,
+    /// Per-session plan cache (emit-and-cache). v1 doesn't persist; this is
+    /// the seam a future persistence layer reads from on resume. Updated in
+    /// `process_request` (set on emit) + `unregister_*` (drop on close).
+    plan_store: PlanStore,
 }
 
 impl HostPlanServer {
@@ -67,6 +73,7 @@ impl HostPlanServer {
             port: std::sync::OnceLock::new(),
             sinks,
             sessions: Mutex::new(HashMap::new()),
+            plan_store: PlanStore::new(),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -77,7 +84,10 @@ impl HostPlanServer {
         let _handle: std::thread::JoinHandle<()> = std::thread::Builder::new()
             .name("termul-host-mcp".to_string())
             .spawn(move || {
-                let runtime = match Runtime::new() {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         log::error!("[host-mcp] failed to start runtime: {e}");
@@ -110,7 +120,10 @@ impl HostPlanServer {
                                 });
                             }
                             Err(e) => {
+                                // A transient accept failure (e.g. EMFILE) must
+                                // not hot-loop. Brief backoff, then retry.
                                 log::warn!("[host-mcp] accept failed: {e}");
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
                     }
@@ -183,6 +196,23 @@ impl HostPlanServer {
     pub fn unregister_session(&self, real_session_id: &str) {
         let mut sessions = self.sessions.lock();
         sessions.retain(|_, auth| auth.real_session_id.as_deref() != Some(real_session_id));
+        drop(sessions);
+        self.plan_store.drop_session(real_session_id);
+    }
+
+    /// Drop a registration by token (used when `session/new` fails AFTER
+    /// `register_session` but before `bind_session` — the real session_id
+    /// isn't known, so `unregister_session` can't be keyed by it).
+    pub fn unregister_by_token(&self, token: &str) {
+        let real_sid = {
+            let mut sessions = self.sessions.lock();
+            sessions
+                .remove(token)
+                .and_then(|auth| auth.real_session_id)
+        };
+        if let Some(sid) = real_sid {
+            self.plan_store.drop_session(&sid);
+        }
     }
 
     #[must_use]
@@ -190,16 +220,27 @@ impl HostPlanServer {
         *self.port.get().unwrap_or(&0)
     }
 
-    /// Handle one child connection: read a single newline-delimited JSON frame,
-    /// authenticate, emit the plan_update, reply. One frame per connection
-    /// (simplest + robust; localhost TCP connect is sub-ms).
+    /// Handle one child connection: read a single newline-delimited JSON frame
+    /// (capped + timeout-bounded so a wedged/idle peer can't grow `line`
+    /// unbounded or hold the task open), authenticate, emit the plan_update,
+    /// reply. One frame per connection (simplest + robust; localhost TCP
+    /// connect is sub-ms).
     async fn handle_conn(self: Arc<Self>, stream: tokio::net::TcpStream) -> std::io::Result<()> {
         let (reader, mut writer) = stream.into_split();
-        let mut reader = BufReader::new(reader);
-        let mut line = String::new();
+        // Cap the request at 1 MiB so a misbehaving peer can't grow `line`
+        // unbounded. The largest plausible plan (hundreds of todos) is well
+        // under this.
+        const MAX_FRAME: u64 = 1024 * 1024;
+        const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        let mut reader = BufReader::new(reader.take(MAX_FRAME));
 
-        // One request line. A short read / EOF = child died → just close.
-        let n = reader.read_line(&mut line).await?;
+        let mut line = String::new();
+        // Bound the read so an idle peer that connects but never sends is
+        // dropped instead of holding the task forever.
+        let n = match tokio::time::timeout(READ_TIMEOUT, reader.read_line(&mut line)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) | Err(_) => return Ok(()),
+        };
         if n == 0 {
             return Ok(());
         }
@@ -258,7 +299,10 @@ impl HostPlanServer {
         let real_session_id = match &auth.real_session_id {
             Some(sid) => sid.clone(),
             None => {
-                log::warn!("[host-mcp] dropped call: session not yet bound (provisional {})", auth.provisional_sid);
+                log::warn!(
+                    "[host-mcp] dropped call: session not yet bound (provisional {})",
+                    auth.provisional_sid
+                );
                 return FrameReply::err("session not ready");
             }
         };
@@ -266,8 +310,11 @@ impl HostPlanServer {
         // Map todos → PlanEntry + emit. Empty todos = clear (renderer drops).
         let entries = map_todos_to_plan_entries(&req.todos);
         let agent_id = AgentId(auth.agent_id.clone());
-        let session_id = SessionId(real_session_id);
+        let session_id = SessionId(real_session_id.clone());
         let count = entries.len();
+        // Cache the latest plan (emit-and-cache) so a future persistence layer
+        // can read it without re-deriving from replayed events.
+        self.plan_store.set(&real_session_id, entries.clone());
         emit_plan_update(&self.sinks, &agent_id, &session_id, entries);
         log::info!(
             "[host-mcp] emitted plan_update for session {} ({} entries)",
@@ -284,6 +331,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
+    use tokio::runtime::Runtime;
 
     #[derive(Default)]
     struct CapturingSink {

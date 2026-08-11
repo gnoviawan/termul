@@ -48,6 +48,17 @@ pub const TERMUL_PLAN_TOOL_DESCRIPTION: &str = "Update the execution plan / todo
 /// `current_exe() --internal-mcp-plan-server` with the connection info in env.
 pub const CHILD_ARG: &str = "--internal-mcp-plan-server";
 
+/// True when the current process was spawned as the host-injected plan child
+/// (the agent spawned `current_exe() --internal-mcp-plan-server`). Used by
+/// BOTH binaries' `main` to branch BEFORE Tauri/app init. Matches the flag at
+/// ANY position in argv (the standalone binary collects args into a Vec, the
+/// desktop binary reads `args().nth(1)` — this helper unifies the rule so the
+/// two entrypoints can't drift).
+#[must_use]
+pub fn is_child_invocation() -> bool {
+    std::env::args().skip(1).any(|arg| arg == CHILD_ARG)
+}
+
 /// Env vars set on the injected `McpServer::Stdio` (carrying connection info
 /// to the child). Prefixed `TERMUL_PLAN_` to avoid collisions with agent env.
 pub const ENV_PORT: &str = "TERMUL_PLAN_PORT";

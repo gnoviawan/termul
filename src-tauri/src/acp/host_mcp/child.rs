@@ -125,7 +125,21 @@ impl TermulPlanServer {
 
 /// Connect to the parent TCP listener, send one frame, read one reply.
 /// Fresh connection per call (localhost, sub-ms) — simplest + most robust.
+/// The whole round trip is bounded so a wedged parent can't hang the agent's
+/// tool call indefinitely.
 async fn forward_to_parent(
+    config: &ChildConfig,
+    input: &TermulPlanInput,
+) -> Result<String, String> {
+    // 10s covers a healthy round trip many times over; a parent that can't
+    // reply by then is wedged and the agent deserves a clear timeout error.
+    const ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(10);
+    tokio::time::timeout(ROUND_TRIP, forward_to_parent_inner(config, input))
+        .await
+        .map_err(|_| "parent round trip timed out".to_string())?
+}
+
+async fn forward_to_parent_inner(
     config: &ChildConfig,
     input: &TermulPlanInput,
 ) -> Result<String, String> {

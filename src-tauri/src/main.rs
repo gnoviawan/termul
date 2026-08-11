@@ -8,9 +8,7 @@ fn main() {
     // the child never initializes the app / plugins / sinks — it just runs
     // an rmcp MCP server over stdio + forwards calls to the parent's TCP
     // listener. See `acp::host_mcp::child` + spec `spec-acp-host-todo-plan-tool.md`.
-    if std::env::args().nth(1).as_deref()
-        == Some(termul_manager_lib::host_mcp::CHILD_ARG)
-    {
+    if termul_manager_lib::host_mcp::is_child_invocation() {
         std::process::exit(termul_manager_lib::host_mcp::child::run());
     }
 
