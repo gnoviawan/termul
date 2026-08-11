@@ -437,6 +437,12 @@ impl SessionPersistence {
     /// `last_activity_at`) and reinstall via `install_runtime` (which inserts into
     /// both the catalog and the writer map); (d) `persist_index` so the reactivated
     /// status surfaces in the listing.
+    ///
+    /// On-disk `metadata.json` is deliberately NOT rewritten: the catalog is the
+    /// in-memory authority while the process lives, and `recover()` rebuilds from
+    /// disk on restart — where a reopened session correctly reads as `Closed`
+    /// because the agent subprocess cannot survive a restart. Persisting `Active`
+    /// to disk here would lie about liveness after a crash.
     pub async fn reopen_writer(&self, session_id: &str) -> Result<()> {
         // (a) Idempotent: a writer is already installed for this session.
         if self.inner.sessions.lock().contains_key(session_id) {
