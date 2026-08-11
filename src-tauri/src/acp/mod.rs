@@ -17,6 +17,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod history_import;
+pub mod host_mcp;
 pub mod install;
 pub mod manager;
 pub mod mcp_probe;

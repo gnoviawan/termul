@@ -134,6 +134,11 @@ pub use acp::{
     AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, FileProjectRegistry,
     SessionPersistence, WorkspaceManifestService,
 };
+// Host-injected `termul_plan` MCP tool: the `--internal-mcp-plan-server`
+// subcommand branch in `main.rs` + `server_main.rs` reaches `host_mcp::CHILD_ARG`
+// + `host_mcp::child::run()` through this re-export (the `acp` module itself is
+// private). See `acp/host_mcp/mod.rs` + spec `spec-acp-host-todo-plan-tool.md`.
+pub use acp::host_mcp;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's

@@ -45,6 +45,20 @@ fn main() -> ExitCode {
         return run_one_shot_update_check();
     }
 
+    // `--internal-mcp-plan-server`: self-spawned child of the host-injected
+    // `termul_plan` MCP tool. The agent spawns `current_exe()` with this flag
+    // (the injected `McpServer::Stdio`); the child runs an rmcp MCP server over
+    // stdio + forwards calls to the parent's TCP listener. Branch BEFORE any
+    // tokio/app setup (AC2) so the standalone binary never inits the server
+    // stack for the child path. See `acp::host_mcp::child` + spec
+    // `spec-acp-host-todo-plan-tool.md`.
+    if raw_args
+        .iter()
+        .any(|arg| arg == termul_manager_lib::host_mcp::CHILD_ARG)
+    {
+        return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
+    }
+
     // Parse CLI BEFORE any tokio / app setup (AC2).
     let cfg = match ServerConfig::from_args(raw_args) {
         Ok(cfg) => cfg,

@@ -95,19 +95,27 @@ async-process = "2"
 #    handling, improving agent-subprocess reliability on all platforms.
 agent-client-protocol = "1.3"
 
-# MCP client probe (on-demand `initialize` + `tools/list`). rmcp is already in
-# the dep tree transitively via the vendored ACP (which enables `server` +
-# `transport-io`); this direct dep adds the CLIENT transport features Termul's
-# own probe needs. Resolved to 1.7.0 from `^1.2.0`. The `client-side-sse`
-# feature is rmcp's SSE stream parser (consumed by the streamable-http client);
-# rmcp 1.7.0 removed the standalone legacy SSE transport (CHANGELOG #562), so
-# `type: 'sse'` servers are probed via the modern streamable-http client (which
-# still speaks `text/event-stream`). See `src/acp/mcp_probe.rs`.
+# rmcp (Rust MCP SDK). Two consumers in this crate:
+#  1. `src/acp/mcp_probe.rs` — on-demand CLIENT probe (`initialize` + `tools/list`
+#     against a renderer-supplied server config). Uses `client`,
+#     `transport-child-process`, `transport-streamable-http-client-reqwest`,
+#     `client-side-sse` (rmcp's SSE stream parser, consumed by the
+#     streamable-http client which still speaks `text/event-stream` after rmcp
+#     1.7 dropped the standalone legacy SSE transport — CHANGELOG #562).
+#  2. `src/acp/host_mcp/` — the host-injected `termul_plan` MCP SERVER, served
+#     over stdio by a self-spawned child of the host binary. Uses `server`,
+#     `transport-io` (`rmcp::transport::io::stdio()`), and `macros`
+#     (`#[tool_router]` / `#[tool]` / `#[tool_handler]`; the `#[tool]` macro
+#     re-exports `rmcp::schemars` for `JsonSchema` derives — no direct `schemars`
+#     dep needed). Resolved to 1.8.0 from `^1.2.0`.
 rmcp = { version = "1.2.0", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
     "client-side-sse",
+    "server",
+    "transport-io",
+    "macros",
 ] }
 
 # Regex and parsing
