@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -34,6 +34,10 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
 }
 
 describe('ToolCallCard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('shimmers the full card only while in progress', () => {
     const { container, rerender } = render(<ToolCallCard toolCall={toolCall('in_progress')} />)
     const card = container.firstElementChild
@@ -209,7 +213,7 @@ describe('ToolCallCard', () => {
 
     it('renders the "Open file" button last when the row has a disclosure control', () => {
       const now = 10_000
-      const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now)
+      vi.spyOn(Date, 'now').mockReturnValue(now)
       const runningCall: ToolCall = {
         ...toolCall('in_progress', [
           { type: 'content', content: { type: 'text', text: 'Result' } }
@@ -240,7 +244,6 @@ describe('ToolCallCard', () => {
       expect(row).not.toBeNull()
       expect(rowChildren.indexOf(duration)).toBeLessThan(rowChildren.indexOf(openFileButton))
       expect(row?.lastElementChild).toBe(openFileButton)
-      dateNow.mockRestore()
     })
 
     it('does not render an "Open file" button when no path is present in rawInput', () => {
