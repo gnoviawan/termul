@@ -1791,18 +1791,13 @@ describe('AgentLauncher placeholder', () => {
     // configures `Placeholder` with `showOnlyWhenEditable: true`, and
     // Tiptap's `buildPlaceholderDecorations` returns `null` when
     // `!editor.isEditable` — so the `data-placeholder` attribute is NOT
-    // painted to the DOM while the composer is disabled. The placeholder
-    // PROP still evaluates to 'Composer unavailable' (the conditional
-    // mirrors ChatInputBar.tsx:664-670), but it is only re-emitted to the
-    // DOM once the editor becomes editable again.
-    //
-    // Non-vacuous regression guard: the attribute must be either absent
-    // (Tiptap's `showOnlyWhenEditable` suppresses the decoration when
-    // `!editor.isEditable`, so the disabled composer paints no
-    // `data-placeholder`) or exactly `'Composer unavailable'` — never the
-    // old "follow-up changes" wording, never the launcher default, never
-    // any other string.
+    // painted to the DOM while the composer is disabled. The launcher
+    // therefore renders an explicit muted overlay hint so the user sees why
+    // the composer is inert. Assert both: (1) the overlay text is visible,
+    // and (2) the editor never paints the old "follow-up changes" wording or
+    // the launcher default as its data-placeholder.
     await screen.findByLabelText('Agent prompt')
+    expect(await screen.findByText('Composer unavailable')).toBeVisible()
     await waitFor(() => {
       const p = document.querySelector('[data-composer-editor="true"] p')
       const attr = p?.getAttribute('data-placeholder') ?? null
@@ -1810,7 +1805,6 @@ describe('AgentLauncher placeholder', () => {
         'Ask for follow-up changes or attach files (@ for files, / for commands)'
       )
       expect(attr).not.toBe('Ask anything.. (@ for files, / for commands)')
-      expect([null, 'Composer unavailable']).toContain(attr)
     })
   })
 

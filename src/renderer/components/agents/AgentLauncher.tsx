@@ -1129,13 +1129,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               onRemove={removeAttachment}
               className="px-5 pt-4"
             />
-            <div className="px-5 pb-2 pt-4">
+            <div className="relative px-5 pb-2 pt-4">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
-                  DOM node, so the caret sits flush against the pill's right
-                  edge by construction. No transparent textarea + mirror
-                  overlay, no canvas padding. The `prompt` string (sentinel-token
-                  format) is the shared model the wire builder + first-turn
-                  sync + timeline consume (byte-identical wire payload). */}
+                   DOM node, so the caret sits flush against the pill's right
+                   edge by construction. No transparent textarea + mirror
+                   overlay, no canvas padding. The `prompt` string (sentinel-token
+                   format) is the shared model the wire builder + first-turn
+                   sync + timeline consume (byte-identical wire payload). */}
               <ChatComposerEditor
                 value={prompt}
                 onValueChange={setPrompt}
@@ -1149,15 +1149,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 minHeight={76}
                 maxHeight={160}
                 placeholder={
-                  composerDisabled
-                    ? 'Composer unavailable'
-                    : activeCommand
-                      ? 'Add a message (optional)…'
-                      : 'Ask anything.. (@ for files, / for commands)'
+                  activeCommand
+                    ? 'Add a message (optional)…'
+                    : 'Ask anything.. (@ for files, / for commands)'
                 }
                 ariaLabel="Agent prompt"
                 autoFocus
               />
+              {/* Tiptap's `Placeholder` extension is configured with
+                  `showOnlyWhenEditable: true` (ChatComposerEditor.tsx:237-240),
+                  so it suppresses the `data-placeholder` decoration when the
+                  editor is non-editable. The `composerDisabled` branch
+                  (install-required / saving) would therefore paint nothing.
+                  Render an explicit muted hint so the user sees why the
+                  composer is inert. Mirrors the editable-state placeholder's
+                  text-base/leading-relaxed/muted-foreground styling. */}
+              {composerDisabled && (
+                <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground">
+                  Composer unavailable
+                </p>
+              )}
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <div className="flex min-w-0 items-center gap-2">
