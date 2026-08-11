@@ -249,7 +249,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           mentions.update('', 0)
         }
         setActiveCommand(item.name)
-        editorRef.current?.commands.focus()
+        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
         return
       }
       if (item.kind === 'config') {
@@ -300,7 +300,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
 
   const clearActiveCommand = useCallback(() => {
     setActiveCommand(null)
-    editorRef.current?.commands.focus()
+    editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
   }, [editorRef])
 
   const buildPromptParts = useCallback((): ChatPromptParts => {

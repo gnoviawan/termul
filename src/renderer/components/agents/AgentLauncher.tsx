@@ -131,9 +131,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const menuRef = useRef<SlashMenuHandle>(null)
   const editorRef = useRef<Editor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    composerInputRef.current = editorRef.current?.view.dom ?? null
-  })
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
@@ -569,7 +566,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       setPendingOptions(emptyPendingLauncherOptions())
       setSelectedConfigId(entry.configId)
       persistSelection(entry.configId)
-      editorRef.current?.commands.focus()
+      editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
     },
     [persistSelection]
   )
@@ -1149,6 +1146,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 onPasteAttachments={handlePaste}
                 getSkillPaths={() => skillPathsRef.current}
                 editorRef={editorRef}
+                inputRef={composerInputRef}
                 disabled={composerDisabled}
                 minHeight={76}
                 maxHeight={160}

@@ -44,7 +44,7 @@ export function setComposerValue(value: string): void {
   // `emitUpdate: false` avoids a redundant `useEditor` re-render; `onTransaction`
   // still fires and emits `onValueChange` so the host's `setValue` runs.
   act(() => {
-    editor.commands.setContent(draftFromTokens(value), false)
+    editor.commands.setContent(draftFromTokens(value), { emitUpdate: false })
   })
 }
 
@@ -58,7 +58,7 @@ export function setComposerCaret(displayOffset: number): void {
   const editor = getEditor()
   const pos = displayOffsetToDocOffset(editor.state.doc, displayOffset)
   act(() => {
-    editor.chain().focus().setTextSelection(pos).run()
+    editor.chain().focus(undefined, { scrollIntoView: false }).setTextSelection(pos).run()
   })
 }
 
@@ -114,6 +114,6 @@ export function pressComposerKey(
 /** Focus the editor (mirrors `textareaRef.current.focus()` in the old tests). */
 export function focusComposer(): void {
   act(() => {
-    getEditor().commands.focus()
+    getEditor().commands.focus(undefined, { scrollIntoView: false })
   })
 }

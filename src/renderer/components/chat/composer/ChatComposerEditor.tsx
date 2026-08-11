@@ -38,6 +38,8 @@ export interface ChatComposerEditorProps {
   /** Ref that receives the editor instance once it mounts (for `useChatComposer`
    * to drive transactional skill insertion + caret restoration). */
   editorRef?: React.MutableRefObject<Editor | null>
+  /** Ref that receives the mounted editable element for menu ARIA wiring. */
+  inputRef?: React.MutableRefObject<HTMLElement | null>
   /**
    * Attachment paste hook: called first on every paste. If it calls
    * `event.preventDefault()` (an attachment was staged), the editor consumes
@@ -183,6 +185,7 @@ export function ChatComposerEditor({
   onPasteAttachments,
   getSkillPaths,
   editorRef,
+  inputRef,
   disabled = false,
   placeholder,
   ariaLabel,
@@ -196,6 +199,7 @@ export function ChatComposerEditor({
   const onCaretChangeRef = useRef(onCaretChange)
   const onPasteAttachmentsRef = useRef(onPasteAttachments)
   const getSkillPathsRef = useRef(getSkillPaths)
+  const placeholderRef = useRef(placeholder ?? '')
   onValueChangeRef.current = onValueChange
   onCaretChangeRef.current = onCaretChange
   onPasteAttachmentsRef.current = onPasteAttachments
@@ -209,6 +213,7 @@ export function ChatComposerEditor({
 
   const lastEmittedRef = useRef<string>(value)
   const lastCaretRef = useRef<number>(-1)
+  const editorContentRef = useRef<HTMLDivElement | null>(null)
   // Suppresses onTransaction re-emit during a programmatic setContent so an
   // external value change doesn't echo back into setValue (React dedupes it,
   // but skipping the call keeps the effect chain clean). Always reset in a
@@ -228,7 +233,7 @@ export function ChatComposerEditor({
         SkillPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
-          placeholder: placeholder ?? '',
+          placeholder: () => placeholderRef.current,
           showOnlyWhenEditable: true
         }),
         StarterKit.configure({
@@ -338,21 +343,14 @@ export function ChatComposerEditor({
     }
   }, [editor, autoFocus])
 
-  // Live placeholder: `useEditor(..., [])` bakes `Placeholder.configure({ placeholder })`
-  // at mount, so the dynamic placeholder (switches on `disabled`/`activeCommand`)
-  // never reaches the running editor. Update the extension's option storage +
-  // dispatch an empty transaction to re-decorate so the new placeholder paints.
+  // The placeholder extension reads `placeholderRef` when decorations recompute.
+  // Refresh the current view state when the value changes so it repaints without
+  // dispatching a transaction from a React effect or losing selection/history.
   useEffect(() => {
+    placeholderRef.current = placeholder ?? ''
     if (!editor) return
-    const storage = editor.extensionStorage.placeholder as
-      | { options: { placeholder?: string } }
-      | undefined
-    if (storage?.options) {
-      storage.options.placeholder = placeholder ?? ''
-    }
-    // Empty transaction triggers Placeholder's decoration recompute.
     try {
-      editor.view.dispatch(editor.state.tr)
+      editor.view.updateState(editor.state)
     } catch {
       // Editor being destroyed — ignore.
     }
@@ -367,6 +365,17 @@ export function ChatComposerEditor({
     }
   }, [editor, editorRef])
 
+  useEffect(() => {
+    if (!inputRef) return
+    const input = editorContentRef.current?.querySelector<HTMLElement>(
+      '[data-composer-editor="true"]'
+    )
+    inputRef.current = input ?? null
+    return () => {
+      if (inputRef.current === input) inputRef.current = null
+    }
+  }, [inputRef])
+
   // Expose a test/debug handle on the DOM element so tests can drive the
   // editor imperatively. Gated by `import.meta.env.MODE === 'test'` so the
   // full editor instance (commands, state, schema) is NOT exposed to page
@@ -374,7 +383,12 @@ export function ChatComposerEditor({
   useEffect(() => {
     if (!editor) return
     if (import.meta.env.MODE !== 'test') return
-    const dom = editor.view.dom as HTMLElement & { __composerEditor?: Editor | null }
+    const dom = editorContentRef.current?.querySelector<
+      HTMLElement & {
+        __composerEditor?: Editor | null
+      }
+    >('[data-composer-editor="true"]')
+    if (!dom) return
     dom.__composerEditor = editor
     return () => {
       if (dom.__composerEditor === editor) dom.__composerEditor = null
@@ -394,7 +408,7 @@ export function ChatComposerEditor({
     if (value === lastEmittedRef.current) return
     silentRef.current = true
     try {
-      editor.commands.setContent(draftFromTokens(value), false)
+      editor.commands.setContent(draftFromTokens(value), { emitUpdate: false })
     } catch (err) {
       // A malformed draft (corrupted persisted value) should never permanently
       // break the editor — log + fall back to an empty doc so the user can keep
@@ -407,7 +421,7 @@ export function ChatComposerEditor({
         }`
       })
       try {
-        editor.commands.setContent(draftFromTokens(''), false)
+        editor.commands.setContent(draftFromTokens(''), { emitUpdate: false })
       } catch {
         // Last-resort: leave the editor as-is.
       }
@@ -431,7 +445,7 @@ export function ChatComposerEditor({
       style={{ minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` }}
     >
       <div className="h-full w-full overflow-y-auto">
-        <EditorContent editor={editor} />
+        <EditorContent editor={editor} innerRef={editorContentRef} />
       </div>
     </div>
   )

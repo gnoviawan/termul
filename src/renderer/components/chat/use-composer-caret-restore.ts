@@ -38,7 +38,7 @@ export function useComposerCaretRestore(editorRef: React.MutableRefObject<Editor
         if (!ed || ed.isDestroyed) return
         const docPos = displayOffsetToDocOffset(ed.state.doc, displayOffset)
         try {
-          ed.chain().focus().setTextSelection(docPos).run()
+          ed.chain().focus(undefined, { scrollIntoView: false }).setTextSelection(docPos).run()
         } catch (err) {
           // ProseMirror may reject an out-of-range pos (e.g. the doc re-parsed
           // to a shorter length between schedule + fire). Focus is restored by

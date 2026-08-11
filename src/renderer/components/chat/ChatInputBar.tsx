@@ -278,9 +278,6 @@ export function ChatInputBar({
   const toolbarMode = useComposerToolbarMode(rootRef)
   const editorRef = useRef<Editor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    composerInputRef.current = editorRef.current?.view.dom ?? null
-  })
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
   const slashMenuRef = useRef<SlashMenuHandle>(null)
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
@@ -671,6 +668,7 @@ export function ChatInputBar({
                 onPasteAttachments={handlePaste}
                 getSkillPaths={() => skillPathsRef.current}
                 editorRef={editorRef}
+                inputRef={composerInputRef}
                 disabled={disabled || sending}
                 minHeight={52}
                 maxHeight={160}
