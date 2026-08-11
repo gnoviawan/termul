@@ -53,7 +53,7 @@ Feature requests are welcome! Please:
 
 #### Development Workflow
 
-1. Before making architectural or implementation changes, review the AI agent project context at `docs/project-context.md` for repo-specific rules, boundaries, and anti-patterns.
+1. Before making architectural or implementation changes, read `AGENTS.md` for the repository's current policies, boundaries, and known pitfalls.
 2. Make your changes
 3. Run tests:
    ```bash

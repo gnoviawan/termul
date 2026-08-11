@@ -21,7 +21,7 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 
 ### Core Documentation
 
-- [Project Context](./project-context.md) - Required AI-agent preflight rules, implementation boundaries, and anti-patterns
+- [Legacy Project Context](./project-context.md) - Historical AI-context snapshot; reference only, not current instructions
 - [Project Overview](./project-overview.md) - Executive summary and high-level architecture
 - [Architecture](./architecture.md) - Detailed technical architecture
 - [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
@@ -78,7 +78,7 @@ bun run test
 
 This documentation is intended to help AI tools understand and safely extend the codebase.
 
-**Start with:** `./project-context.md`
+**Agent instructions:** [`../AGENTS.md`](../AGENTS.md)
 
 ### When Planning New Features
 
