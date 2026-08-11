@@ -202,6 +202,9 @@ export function displayOffsetToDocOffset(doc: PmNode, displayOffset: number): nu
   const segments = walkDocSegments(doc)
   for (const seg of segments) {
     if (displayOffset < seg.displayTo) {
+      // Paragraph boundaries occupy an inter-block doc position. A caret before
+      // the display newline belongs at the end of the preceding paragraph.
+      if (seg.docFrom === seg.docTo) return Math.max(0, seg.docFrom - 1)
       if (displayOffset <= seg.displayFrom) return seg.docFrom
       if (seg.kind === 'pill') return seg.docTo
       return seg.docFrom + (displayOffset - seg.displayFrom)
@@ -213,7 +216,10 @@ export function displayOffsetToDocOffset(doc: PmNode, displayOffset: number): nu
     return Math.min(1, Math.max(0, doc.content.size - 1))
   }
   const last = segments.at(-1)
-  return last ? last.docTo : doc.content.size
+  if (!last) return doc.content.size
+  // A trailing boundary means the display caret is after the newline, so step
+  // into the following paragraph instead of returning the inter-block position.
+  return last.docFrom === last.docTo ? Math.min(last.docTo + 1, doc.content.size) : last.docTo
 }
 
 /**

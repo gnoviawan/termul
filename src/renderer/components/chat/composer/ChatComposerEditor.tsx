@@ -200,16 +200,18 @@ export function ChatComposerEditor({
   const onPasteAttachmentsRef = useRef(onPasteAttachments)
   const getSkillPathsRef = useRef(getSkillPaths)
   const placeholderRef = useRef(placeholder ?? '')
-  onValueChangeRef.current = onValueChange
-  onCaretChangeRef.current = onCaretChange
-  onPasteAttachmentsRef.current = onPasteAttachments
-  getSkillPathsRef.current = getSkillPaths
 
-  // Per-instance ref holding the latest `onBeforeEditorKeyDown`. Reassigned
-  // every render (refs are mutable, no effect needed); the keymap plugin reads
-  // it at keydown time. Per-instance → no cross-talk between co-mounted editors.
+  // Per-instance ref holding the latest `onBeforeEditorKeyDown`; the keymap
+  // plugin reads it at keydown time, with no cross-talk between editors.
   const beforeKeyDownRef = useRef<((event: KeyboardEvent) => boolean | undefined) | null>(null)
-  beforeKeyDownRef.current = onBeforeEditorKeyDown ?? null
+
+  useEffect(() => {
+    onValueChangeRef.current = onValueChange
+    onCaretChangeRef.current = onCaretChange
+    onPasteAttachmentsRef.current = onPasteAttachments
+    getSkillPathsRef.current = getSkillPaths
+    beforeKeyDownRef.current = onBeforeEditorKeyDown ?? null
+  }, [getSkillPaths, onBeforeEditorKeyDown, onCaretChange, onPasteAttachments, onValueChange])
 
   const lastEmittedRef = useRef<string>(value)
   const lastCaretRef = useRef<number>(-1)
@@ -366,7 +368,7 @@ export function ChatComposerEditor({
   }, [editor, editorRef])
 
   useEffect(() => {
-    if (!inputRef) return
+    if (!editor || !inputRef) return
     const input = editorContentRef.current?.querySelector<HTMLElement>(
       '[data-composer-editor="true"]'
     )
@@ -374,7 +376,7 @@ export function ChatComposerEditor({
     return () => {
       if (inputRef.current === input) inputRef.current = null
     }
-  }, [inputRef])
+  }, [editor, inputRef])
 
   // Expose a test/debug handle on the DOM element so tests can drive the
   // editor imperatively. Gated by `import.meta.env.MODE === 'test'` so the

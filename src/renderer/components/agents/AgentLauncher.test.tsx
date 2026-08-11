@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   getComposerValue,
+  pressComposerKey,
   setComposerValue
 } from '@/components/chat/composer/chat-composer-test-helpers'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -621,6 +622,17 @@ afterEach(() => {
 })
 
 describe('AgentLauncher ACP new thread', () => {
+  it('does not launch when Enter confirms an IME composition', async () => {
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('composing')
+    pressComposerKey('Enter', { isComposing: true })
+
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
+  })
+
   it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()

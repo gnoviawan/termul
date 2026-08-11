@@ -39,7 +39,10 @@ import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashC
 import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
-import { useComposerCaretRestore } from '@/components/chat/use-composer-caret-restore'
+import {
+  useComposerCaretRestore,
+  useComposerMentionSelect
+} from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { TermulMark } from '@/components/TermulMark'
@@ -78,7 +81,6 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
-import { docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -393,23 +395,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const mentionMenuRef = mentions.menuRef
   const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
   const resetMentions = mentions.reset
-  const onMentionSelect = useCallback(
-    (match: import('@/components/chat/mention-menu-model').MentionMatch) => {
-      const editor = editorRef.current
-      const caret = editor
-        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
-        : prompt.length
-      const outcome = mentions.select(prompt, caret, match)
-      if (!outcome) return
-      setPrompt(outcome.value)
-      mentions.update(outcome.value, outcome.caret)
-      // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
-      // editor) — replaces the bare `requestAnimationFrame` that swallowed
-      // throws against a destroyed editor.
-      scheduleRestoreCaret(outcome.caret)
-    },
-    [prompt, mentions, scheduleRestoreCaret]
-  )
+  const onMentionSelect = useComposerMentionSelect({
+    value: prompt,
+    setValue: setPrompt,
+    editorRef,
+    mentions,
+    scheduleRestoreCaret
+  })
 
   const {
     slashSections,
@@ -980,7 +972,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       // and Escape→hide are surface-specific (the launcher dispatches a chat
       // launch, not a running-turn send).
       if (onSlashOrMentionKeyDown(event) === true) return true
-      if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.isComposing
+      ) {
         event.preventDefault()
         void launch()
         return true

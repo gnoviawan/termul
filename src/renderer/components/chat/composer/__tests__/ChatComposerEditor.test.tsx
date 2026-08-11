@@ -1,7 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react'
 import type { Editor } from '@tiptap/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { displayOffsetToDocOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { skillToken } from '@/lib/skill-tokens'
 import { ChatComposerEditor } from '../ChatComposerEditor'
 import { getComposerValue, setComposerValue } from '../chat-composer-test-helpers'
@@ -248,5 +248,16 @@ describe('docToDisplayText round-trip (patches 7 + 11)', () => {
     setComposerValue('line1\nline2')
     // Two paragraphs (no hardBreak) → one boundary `\n`.
     expect(getComposerValue()).toBe('line1\nline2')
+  })
+
+  it('maps a trailing newline caret into the following empty paragraph', async () => {
+    const { getByEditor } = mountEditor()
+    await waitFor(() => expect(getByEditor()).toBeTruthy())
+
+    setComposerValue('a\n')
+    const editor = getByEditor()
+
+    expect(displayOffsetToDocOffset(editor.state.doc, 1)).toBe(2)
+    expect(displayOffsetToDocOffset(editor.state.doc, 2)).toBe(4)
   })
 })

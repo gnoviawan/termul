@@ -18,18 +18,19 @@ import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
  */
 
 function getEditor(): Editor {
-  const el = document.querySelector('[data-composer-editor="true"]') as
-    | (HTMLElement & { __composerEditor?: Editor | null })
-    | null
-  const editor = el?.__composerEditor
+  const el = getEditorEl() as HTMLElement & { __composerEditor?: Editor | null }
+  const editor = el.__composerEditor
   if (!editor) throw new Error('ChatComposerEditor not mounted (no __composerEditor handle)')
   return editor
 }
 
 function getEditorEl(): HTMLElement {
-  const el = document.querySelector('[data-composer-editor="true"]') as HTMLElement | null
-  if (!el) throw new Error('ChatComposerEditor element not found')
-  return el
+  const editors = document.querySelectorAll<HTMLElement>('[data-composer-editor="true"]')
+  if (editors.length === 0) throw new Error('ChatComposerEditor element not found')
+  if (editors.length > 1) {
+    throw new Error(`Ambiguous ChatComposerEditor lookup: ${editors.length} editors mounted`)
+  }
+  return editors[0]
 }
 
 /**
@@ -67,7 +68,7 @@ export function setComposerCaret(displayOffset: number): void {
  * keymap). For a plain `Backspace` with no modifiers, jsdom cannot fire the
  * native `beforeinput`/`deleteContentBackward` that a real browser dispatches
  * after an unhandled Backspace keydown — so when the editor's keymap did NOT
- * handle the key (doc unchanged) and the selection is collapsed mid-text, we
+ * prevent the key and the selection is collapsed mid-text, we
  * simulate that one-char backward delete (mirroring the native deletion the
  * browser would perform). When the keymap DID handle it (e.g. pill removal
  * dispatched a delete transaction), the doc differs and the fallback is skipped
@@ -75,24 +76,29 @@ export function setComposerCaret(displayOffset: number): void {
  */
 export function pressComposerKey(
   key: string,
-  options: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean } = {}
+  options: {
+    shiftKey?: boolean
+    metaKey?: boolean
+    ctrlKey?: boolean
+    altKey?: boolean
+    isComposing?: boolean
+  } = {}
 ): void {
   const el = getEditorEl()
   const editor = getEditor()
-  const docBefore = editor.state.doc
   const selBefore = editor.state.selection
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    shiftKey: options.shiftKey ?? false,
+    metaKey: options.metaKey ?? false,
+    ctrlKey: options.ctrlKey ?? false,
+    altKey: options.altKey ?? false,
+    isComposing: options.isComposing ?? false
+  })
   act(() => {
-    el.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key,
-        bubbles: true,
-        cancelable: true,
-        shiftKey: options.shiftKey ?? false,
-        metaKey: options.metaKey ?? false,
-        ctrlKey: options.ctrlKey ?? false,
-        altKey: options.altKey ?? false
-      })
-    )
+    el.dispatchEvent(event)
   })
   if (
     key === 'Backspace' &&
@@ -100,7 +106,7 @@ export function pressComposerKey(
     !options.metaKey &&
     !options.ctrlKey &&
     !options.altKey &&
-    editor.state.doc.eq(docBefore) &&
+    !event.defaultPrevented &&
     editor.state.selection.empty &&
     selBefore.to > 1
   ) {

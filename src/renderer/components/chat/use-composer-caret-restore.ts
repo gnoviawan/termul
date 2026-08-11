@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useRef } from 'react'
-import { displayOffsetToDocOffset } from '@/lib/composer/doc-to-prompt'
+import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import type { ComposerMentions } from '@/components/chat/use-composer-mentions'
+import { displayOffsetToDocOffset, docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
 
 /**
@@ -66,4 +68,35 @@ export function useComposerCaretRestore(editorRef: React.MutableRefObject<Editor
   }, [])
 
   return { scheduleRestoreCaret }
+}
+
+interface UseComposerMentionSelectOptions {
+  value: string
+  setValue: (value: string) => void
+  editorRef: React.MutableRefObject<Editor | null>
+  mentions: Pick<ComposerMentions, 'select' | 'update'>
+  scheduleRestoreCaret: (displayOffset: number) => void
+}
+
+export function useComposerMentionSelect({
+  value,
+  setValue,
+  editorRef,
+  mentions,
+  scheduleRestoreCaret
+}: UseComposerMentionSelectOptions): (match: MentionMatch) => void {
+  return useCallback(
+    (match: MentionMatch) => {
+      const editor = editorRef.current
+      const caret = editor
+        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
+        : value.length
+      const outcome = mentions.select(value, caret, match)
+      if (!outcome) return
+      setValue(outcome.value)
+      mentions.update(outcome.value, outcome.caret)
+      scheduleRestoreCaret(outcome.caret)
+    },
+    [editorRef, mentions, scheduleRestoreCaret, setValue, value]
+  )
 }

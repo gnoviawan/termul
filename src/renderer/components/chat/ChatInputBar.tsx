@@ -16,7 +16,6 @@ import type {
 } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
-import { docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
@@ -45,7 +44,7 @@ import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
 import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
-import { useComposerCaretRestore } from './use-composer-caret-restore'
+import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
 
 // Subtle embossed/raised look shared by the send + stop buttons: soft outer
@@ -339,23 +338,13 @@ export function ChatInputBar({
   const mentionMenuRef = mentions.menuRef
   const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
   const resetMentions = mentions.reset
-  const onMentionSelect = useCallback(
-    (match: import('./mention-menu-model').MentionMatch) => {
-      const editor = editorRef.current
-      const caret = editor
-        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
-        : value.length
-      const outcome = mentions.select(value, caret, match)
-      if (!outcome) return
-      setValue(outcome.value)
-      updateMentionsStable(outcome.value, outcome.caret)
-      // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
-      // editor) — replaces the bare `requestAnimationFrame` that swallowed
-      // throws against a destroyed editor.
-      scheduleRestoreCaret(outcome.caret)
-    },
-    [value, mentions, updateMentionsStable, scheduleRestoreCaret]
-  )
+  const onMentionSelect = useComposerMentionSelect({
+    value,
+    setValue,
+    editorRef,
+    mentions,
+    scheduleRestoreCaret
+  })
 
   const {
     slashSections,
