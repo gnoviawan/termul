@@ -114,7 +114,7 @@ struct TermulPlanServer {
 impl TermulPlanServer {
     #[tool(
         name = "plan",
-        description = "Update the execution plan / todo list shown in the Termul plan panel. Call this instead of a built-in todo tool so the user sees a unified plan UI across all agents."
+        description = "Update the execution plan / todo list shown in the Termul plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
     )]
     async fn plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
         let request = FrameRequest {
@@ -132,7 +132,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "set_session_title",
-        description = "Set a concise title for the current Termul chat session. Call this during the first turn as soon as the user's intent is clear."
+        description = "Set a concise title for the current Termul chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored."
     )]
     async fn set_session_title(
         &self,

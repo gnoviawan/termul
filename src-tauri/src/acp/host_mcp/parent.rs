@@ -59,8 +59,12 @@ pub struct HostPlanServer {
     /// authoritative turn registry lets `process_request` repair that stale
     /// token binding when exactly one session for the agent is active.
     active_turns: Mutex<HashMap<String, HashSet<String>>>,
-    /// Sessions that already accepted a title during the current active turn.
-    title_calls_this_turn: Mutex<HashSet<String>>,
+    /// Sessions that have already set a title. Per-session (not per-turn): the
+    /// first `set_session_title` call persists + broadcasts; subsequent calls
+    /// for the same session return a success no-op so the agent stops
+    /// retrying. Cleared on `unregister_session`. In-memory only — a resumed
+    /// session in a new process can set the title once again.
+    title_set_for_session: Mutex<HashSet<String>>,
     /// Per-session plan cache (emit-and-cache). v1 doesn't persist; this is
     /// the seam a future persistence layer reads from on resume. Updated in
     /// `process_request` (set on emit) + `unregister_*` (drop on close).
@@ -87,7 +91,7 @@ impl HostPlanServer {
             sinks,
             sessions: Mutex::new(HashMap::new()),
             active_turns: Mutex::new(HashMap::new()),
-            title_calls_this_turn: Mutex::new(HashSet::new()),
+            title_set_for_session: Mutex::new(HashSet::new()),
             plan_store: PlanStore::new(),
             persistence,
         });
@@ -209,7 +213,6 @@ impl HostPlanServer {
 
     /// Mark an accepted prompt turn as active before the agent can call tools.
     pub fn begin_turn(&self, agent_id: &str, real_session_id: &str) {
-        self.title_calls_this_turn.lock().remove(real_session_id);
         self.active_turns
             .lock()
             .entry(agent_id.to_string())
@@ -229,7 +232,6 @@ impl HostPlanServer {
                 active_turns.remove(agent_id);
             }
         }
-        self.title_calls_this_turn.lock().remove(real_session_id);
         log::debug!(
             "[host-mcp] removed active plan route for session {real_session_id} (agent {agent_id})"
         );
@@ -249,7 +251,7 @@ impl HostPlanServer {
             !sessions.is_empty()
         });
         drop(active_turns);
-        self.title_calls_this_turn.lock().remove(real_session_id);
+        self.title_set_for_session.lock().remove(real_session_id);
         self.plan_store.drop_session(real_session_id);
     }
 
@@ -421,12 +423,19 @@ impl HostPlanServer {
                 let Some(title) = req.title else {
                     return FrameReply::err("title is required");
                 };
-                if !self
-                    .title_calls_this_turn
+                // Per-session: the first title call wins; subsequent calls for
+                // the same session are a success no-op (the agent is told it
+                // succeeded so it stops retrying — no churn to the sidebar
+                // title, no duplicate persistence records).
+                if self
+                    .title_set_for_session
                     .lock()
-                    .insert(real_session_id.clone())
+                    .contains(&real_session_id)
                 {
-                    return FrameReply::err("title already set during this turn");
+                    log::debug!(
+                        "[host-mcp] title call no-op: session {real_session_id} already has a title"
+                    );
+                    return FrameReply::ok();
                 }
                 let Some(persistence) = self.persistence.as_ref() else {
                     log::warn!("[host-mcp] title call rejected: persistence unavailable");
@@ -441,9 +450,13 @@ impl HostPlanServer {
                 )
                 .await
                 {
-                    Ok(()) => FrameReply::ok(),
+                    Ok(()) => {
+                        self.title_set_for_session
+                            .lock()
+                            .insert(real_session_id.clone());
+                        FrameReply::ok()
+                    }
                     Err(error) => {
-                        self.title_calls_this_turn.lock().remove(&real_session_id);
                         log::warn!("[host-mcp] title update rejected: {error}");
                         FrameReply::err(error)
                     }
@@ -735,6 +748,139 @@ mod tests {
                 .iter()
                 .any(|record| record.type_ == "local_title_generated"));
             assert_eq!(sink.events.lock().unwrap().len(), 1);
+            persistence.shutdown().await.unwrap();
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn second_title_call_same_session_is_success_noop() {
+        // Per-session enforcement: after the first call sets the title, a
+        // second call for the same session must return `ok` (so the agent
+        // stops retrying) without writing a second persistence record or
+        // emitting a second session_info_update.
+        let root = std::env::temp_dir()
+            .join(format!("termul-host-mcp-title-noop-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let persistence =
+                Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
+            persistence
+                .register_session(crate::acp::SessionRegistration {
+                    session_id: "sess-real".into(),
+                    stable_agent_namespace: Some("config:test".into()),
+                    runtime_agent_id: Some("agent-1".into()),
+                    project_id: None,
+                    cwd,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let sink = Arc::new(CapturingSink::default());
+            let server =
+                HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
+            let (port, token, provisional) = server.register_session("agent-1");
+            server.bind_session(&token, "sess-real");
+            server.begin_turn("agent-1", "sess-real");
+
+            let first = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "set_title",
+                "title": "First title",
+            });
+            let reply = connect_and_send(port, &first).await;
+            assert_eq!(reply["ok"], true);
+            let events_after_first = sink.events.lock().unwrap().len();
+
+            let second = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "set_title",
+                "title": "Should be ignored",
+            });
+            let reply = connect_and_send(port, &second).await;
+            assert_eq!(reply["ok"], true, "repeat title call must succeed (no-op)");
+
+            // No second event + title unchanged + no second record.
+            assert_eq!(
+                sink.events.lock().unwrap().len(),
+                events_after_first,
+                "no second session_info_update"
+            );
+            let metadata = persistence.metadata("sess-real").unwrap();
+            assert_eq!(metadata.title.as_deref(), Some("First title"));
+            let title_records = persistence
+                .replay_after("sess-real", 0)
+                .unwrap()
+                .iter()
+                .filter(|r| r.type_ == "local_title_generated")
+                .count();
+            assert_eq!(title_records, 1, "no duplicate title persistence record");
+            persistence.shutdown().await.unwrap();
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn title_per_session_flag_survives_a_new_turn() {
+        // Per-session (not per-turn): `end_turn` + `begin_turn` for a 2nd turn
+        // must NOT reset the title flag — the agent can't set the title again
+        // on a later turn.
+        let root = std::env::temp_dir()
+            .join(format!("termul-host-mcp-title-turn-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let persistence =
+                Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
+            persistence
+                .register_session(crate::acp::SessionRegistration {
+                    session_id: "sess-real".into(),
+                    stable_agent_namespace: Some("config:test".into()),
+                    runtime_agent_id: Some("agent-1".into()),
+                    project_id: None,
+                    cwd,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let sink = Arc::new(CapturingSink::default());
+            let server =
+                HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
+            let (port, token, provisional) = server.register_session("agent-1");
+            server.bind_session(&token, "sess-real");
+            server.begin_turn("agent-1", "sess-real");
+
+            let first = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "set_title",
+                "title": "Turn 1 title",
+            });
+            assert_eq!(connect_and_send(port, &first).await["ok"], true);
+
+            // End the turn + start a fresh turn (mirrors a 2nd user prompt).
+            server.end_turn("agent-1", "sess-real");
+            server.begin_turn("agent-1", "sess-real");
+
+            let second = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "kind": "set_title",
+                "title": "Turn 2 title",
+            });
+            let reply = connect_and_send(port, &second).await;
+            assert_eq!(reply["ok"], true, "2nd-turn title call must succeed (no-op)");
+            let metadata = persistence.metadata("sess-real").unwrap();
+            assert_eq!(
+                metadata.title.as_deref(),
+                Some("Turn 1 title"),
+                "title must NOT change on a later turn"
+            );
             persistence.shutdown().await.unwrap();
             let _ = std::fs::remove_dir_all(root);
         });
