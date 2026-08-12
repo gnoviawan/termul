@@ -2045,10 +2045,10 @@ impl AcpManager {
                         let _ = accepted.send(Ok(()));
                     }
                     AcpCommand::CancelPrompt { session_id, reply } => {
+                        let _ = reply.send(Ok(()));
                         if let Some(cancel) = pending_cancels.lock().remove(&session_id.0) {
                             let _ = cancel.send(());
                         }
-                        let _ = reply.send(Ok(()));
                     }
                     _ => {}
                 }

@@ -1582,7 +1582,7 @@ mod tests {
                 .unwrap()
                 .chars()
                 .count(),
-            81
+            MAX_TITLE_CHARS + 1 // 48 chars + ellipsis
         );
         let tool_log = fs::read_to_string(
             root.join("store")
