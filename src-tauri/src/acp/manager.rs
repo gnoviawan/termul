@@ -3330,6 +3330,23 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
+                    // Reinstall the durable writer BEFORE sending session/load
+                    // so events arriving during the load (replay chunks,
+                    // status updates) are persisted instead of dropped with
+                    // "persisted session not found". After an app restart the
+                    // in-memory writer is gone; calling reopen_writer here
+                    // restores it from the on-disk catalog before the agent
+                    // starts streaming. Idempotent (no-op if already installed)
+                    // and non-fatal (unknown/ephemeral id surfaces
+                    // SessionNotFound, logged + skipped).
+                    if let Some(persistence) = &req_persistence {
+                        if let Err(error) = persistence.reopen_writer(&session_id.0).await {
+                            log::warn!(
+                                "[acp] session {} reopen_writer failed: {error} (continuing load)",
+                                session_id.0
+                            );
+                        }
+                    }
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
@@ -3342,27 +3359,6 @@ async fn run_command_loop(
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
-                    // Reinstall the durable writer for a previously-finalized
-                    // (catalog-retained) session so subsequent `enqueue_event`
-                    // and `last_seq`-derived title-gen succeed on reopen.
-                    // `register_session` is catalog-idempotent and short-circuits
-                    // BEFORE `install_runtime`, so it cannot reinstall a writer
-                    // for a finalized session — the dedicated reopen path is
-                    // required. Mirror the `NewSession` ephemeral gate: a
-                    // reopened session is never marked ephemeral by the load
-                    // path, so `is_ephemeral` is false and reopen_writer runs.
-                    // An unknown/ephemeral id surfaces SessionNotFound from
-                    // reopen_writer and is logged + skipped (non-fatal).
-                    if result.is_ok() && !req_state.lock().is_ephemeral(&session_id.0) {
-                        if let Some(persistence) = &req_persistence {
-                            if let Err(error) = persistence.reopen_writer(&session_id.0).await {
-                                log::warn!(
-                                    "[acp] session {} reopen_writer failed: {error} (continuing load)",
-                                    session_id.0
-                                );
-                            }
-                        }
-                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -3378,6 +3374,17 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
+                    // Same durable-writer reopen as LoadSession above — call
+                    // BEFORE the request so events arriving during resume are
+                    // persisted instead of silently dropped.
+                    if let Some(persistence) = &req_persistence {
+                        if let Err(error) = persistence.reopen_writer(&session_id.0).await {
+                            log::warn!(
+                                "[acp] session {} reopen_writer failed: {error} (continuing resume)",
+                                session_id.0
+                            );
+                        }
+                    }
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
                         "session/resume",
@@ -3387,19 +3394,6 @@ async fn run_command_loop(
                         req_cx.send_request(request).block_task(),
                     )
                     .await;
-                    // Same durable-writer reopen as `LoadSession` above — a
-                    // resumed session was previously finalized and needs its
-                    // writer reinstalled for new durable events + title-gen.
-                    if result.is_ok() && !req_state.lock().is_ephemeral(&session_id.0) {
-                        if let Some(persistence) = &req_persistence {
-                            if let Err(error) = persistence.reopen_writer(&session_id.0).await {
-                                log::warn!(
-                                    "[acp] session {} reopen_writer failed: {error} (continuing resume)",
-                                    session_id.0
-                                );
-                            }
-                        }
-                    }
                     send_reply(&task_slot, result);
                 });
             }
