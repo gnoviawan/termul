@@ -145,6 +145,39 @@ describe('useWorktreeReconciler', () => {
     })
   })
 
+  it('does not duplicate a worktree the launcher already registered (post-launch tick)', async () => {
+    // Post-launch state: the launcher registered the chat worktree in the
+    // store before the 60s reconciler ticked. Git now reports it too. The
+    // reconciler's `storedPaths` dedup must skip it so no second entry is
+    // created for the same path.
+    vi.mocked(worktreeApi.list).mockResolvedValue({
+      success: true,
+      data: [
+        {
+          name: 'feat-1',
+          branch: 'feat-1',
+          path: '/test/project/.termul/worktrees/feat-1',
+          headCommit: 'abc'
+        },
+        {
+          name: 'feat-2',
+          branch: 'feat-2',
+          path: '/test/project/.termul/worktrees/feat-2',
+          headCommit: 'def'
+        }
+      ]
+    })
+
+    renderHook(() => useWorktreeReconciler('proj-1'))
+
+    // Both reported worktrees are already in the store (wt-1, wt-2), so the
+    // reconciler discovers nothing and never calls addWorktree.
+    await vi.waitFor(() => {
+      expect(mocks.removeWorktree).not.toHaveBeenCalled()
+    })
+    expect(mocks.addWorktree).not.toHaveBeenCalled()
+  })
+
   it('resets active worktree if it becomes orphaned', async () => {
     // Set active worktree to the one that will be orphaned by git (only feat-1 remains)
     mocks.state.activeWorktreeId = 'wt-2'

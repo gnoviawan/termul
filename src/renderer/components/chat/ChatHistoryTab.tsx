@@ -34,14 +34,25 @@ export function ChatHistoryTab({
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
+  // Active project's registered worktree paths. Passed into `scopeSessionIndex`
+  // so worktree-cwd chats stay reachable from the project root view and across
+  // restarts where `activeWorktreeId` is null (the sidebar would otherwise hide
+  // them because their cwd differs from the root). Re-derived whenever the
+  // active project record changes (covers reconciler discovery + launch adds).
+  const worktreePaths = useMemo(
+    () => activeProject?.worktrees?.map((w) => w.path) ?? [],
+    [activeProject]
+  )
+
   // ADR 0002 scoping: show only sessions whose `(projectId, cwd)` match the
   // active project + worktree/root, falling back to projectId-only matching
   // when the exact cwd yields nothing (a chat whose cwd drifted since it was
-  // created is still reachable instead of silently hidden). See
-  // `scopeSessionIndex` for the contract.
+  // created is still reachable instead of silently hidden). Worktree-inclusive
+  // reachability (above) keeps the project's worktree chats listed from the
+  // root view. See `scopeSessionIndex` for the contract.
   const scopedIndex = useMemo(
-    () => scopeSessionIndex(sessionIndex, activeProjectId, activeCwd),
-    [sessionIndex, activeProjectId, activeCwd]
+    () => scopeSessionIndex(sessionIndex, activeProjectId, activeCwd, worktreePaths),
+    [sessionIndex, activeProjectId, activeCwd, worktreePaths]
   )
 
   // Termul-created sessions only. The host-owned `discovered` flag is `false`
@@ -84,11 +95,15 @@ export function ChatHistoryTab({
     return base.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   }, [mergedEntries, query])
 
-  // Reset the window when the query or active scope changes.
+  // Reset the window when the query or active scope changes. `worktreePaths`
+  // is a scoping input (worktree-inclusive reachability), so a reconciler
+  // discovery that grows the set without changing `activeCwd` must also reset
+  // the visible window — otherwise a stale "No matches"/window renders against
+  // the new scope.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on scope/query change
   useEffect(() => {
     setVisibleCount(SIDEBAR_PAGE_SIZE)
-  }, [query, activeProjectId, activeCwd])
+  }, [query, activeProjectId, activeCwd, worktreePaths])
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
   const hasMore = filtered.length > visible.length

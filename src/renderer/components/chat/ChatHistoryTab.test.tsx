@@ -123,26 +123,32 @@ describe('ChatHistoryTab scoping', () => {
     }
   })
 
-  it('shows only sessions matching active (projectId, cwd)', () => {
+  it('shows root-cwd and active-project worktree-cwd sessions from the root view', () => {
     sessionIndexRef.current = [
       entry('mine-main', { projectId: 'p1', cwd: '/work', title: 'mine-main' }),
       entry('mine-wt', { projectId: 'p1', cwd: '/work-wt', title: 'mine-wt' }),
       entry('other-main', { projectId: 'p2', cwd: '/work', title: 'other-main' })
     ]
     render(<ChatHistoryTab />)
+    // mine-main: exact-cwd match against the active project root.
     expect(screen.getByText('mine-main')).toBeInTheDocument()
-    expect(screen.queryByText('mine-wt')).not.toBeInTheDocument()
+    // mine-wt: cwd is a registered worktree path of the active project, so the
+    // worktree-inclusive scoping keeps it reachable from the root view.
+    expect(screen.getByText('mine-wt')).toBeInTheDocument()
+    // other-main: a different project — never listed.
     expect(screen.queryByText('other-main')).not.toBeInTheDocument()
   })
 
-  it('re-scopes when the active worktree changes', () => {
+  it('re-scopes to the active worktree session when the active worktree changes', () => {
     sessionIndexRef.current = [
       entry('mine-main', { projectId: 'p1', cwd: '/work', title: 'mine-main' }),
       entry('mine-wt', { projectId: 'p1', cwd: '/work-wt', title: 'mine-wt' })
     ]
     const { rerender } = render(<ChatHistoryTab />)
+    // Root view (activeWorktreeId=null): worktree-inclusive scoping lists both
+    // the root chat and the project's registered worktree chat.
     expect(screen.getByText('mine-main')).toBeInTheDocument()
-    expect(screen.queryByText('mine-wt')).not.toBeInTheDocument()
+    expect(screen.getByText('mine-wt')).toBeInTheDocument()
     // The project store creates a new record on update; mirror that so the
     // subscription notices the change.
     const prev = projectRef.current
@@ -153,6 +159,8 @@ describe('ChatHistoryTab scoping', () => {
       worktrees: prev!.worktrees
     }
     rerender(<ChatHistoryTab />)
+    // Active worktree view: scoped to the worktree cwd, the root chat is
+    // hidden while the active worktree's chat stays visible.
     expect(screen.queryByText('mine-main')).not.toBeInTheDocument()
     expect(screen.getByText('mine-wt')).toBeInTheDocument()
   })

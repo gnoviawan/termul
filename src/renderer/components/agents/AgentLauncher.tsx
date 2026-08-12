@@ -66,6 +66,7 @@ import {
   type McpToolInfo,
   type ProbeStatus
 } from '@/lib/acp-api'
+import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
@@ -84,6 +85,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isLoopbackWebClient } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
@@ -96,6 +98,7 @@ import {
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import type { Worktree } from '@/types/project'
 
 interface AgentLauncherProps {
   paneId: string
@@ -762,6 +765,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         let worktreePathResult: string | null =
           createResult.success && createResult.data ? createResult.data.path : null
         let worktreeBranchResult: string = branchName
+        // Track the worktree NAME actually used (the retry branch appends `-2`),
+        // so the project-store entry's `name` matches the git worktree on disk.
+        let worktreeNameResult: string = chatId
         if (!worktreePathResult) {
           const failCode = createResult.success ? 'UNKNOWN' : createResult.code
           if (failCode === 'WORKTREE_EXISTS' || failCode === 'BRANCH_ALREADY_HAS_WORKTREE') {
@@ -785,6 +791,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             if (retryResult.success && retryResult.data) {
               worktreePathResult = retryResult.data.path
               worktreeBranchResult = retryBranch
+              worktreeNameResult = retryId
             } else {
               const retryErr = retryResult.success ? 'unknown' : retryResult.error
               throw new Error(`Worktree creation failed: ${retryErr}`)
@@ -825,6 +832,49 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               level: 'warn',
               source: 'agentLauncher.worktreeInclude',
               message: `copyIncludeFiles threw: ${includeErr instanceof Error ? includeErr.message : String(includeErr)}`
+            })
+          }
+
+          // Register the just-created worktree in the project store and
+          // activate it so the Chats sidebar scopes to it immediately (no
+          // 60s reconciler wait) and the worktree survives across restarts.
+          // Dedupe by path against already-stored worktrees so the reconciler
+          // cannot add a second entry for the same path later. Best-effort:
+          // a failure logs a warn and the chat still opens below.
+          try {
+            const projectStore = useProjectStore.getState()
+            const stored = projectStore.projects.find((p) => p.id === projectIdSnapshot)
+            // Dedupe by normalized path: worktreeApi.create and an already-stored
+            // entry (from a prior launch or the reconciler's worktreeApi.list)
+            // can differ by trailing slash / verbatim prefix. Without
+            // normalization the dedup misses and addWorktree creates a duplicate
+            // the comment below claims to prevent.
+            const alreadyStored = stored?.worktrees?.find(
+              (w) => normalizeCwdForScope(w.path) === normalizeCwdForScope(worktreePathResult)
+            )
+            if (alreadyStored) {
+              projectStore.setActiveWorktree(projectIdSnapshot, alreadyStored.id)
+            } else {
+              const newWorktree: Worktree = {
+                id: randomUUID(),
+                name: worktreeNameResult,
+                branch: worktreeBranchResult,
+                path: worktreePathResult,
+                createdAt: new Date().toISOString()
+              }
+              projectStore.addWorktree(projectIdSnapshot, newWorktree)
+              projectStore.setActiveWorktree(projectIdSnapshot, newWorktree.id)
+            }
+            // Boundary log (info-level): not an error, so console.info is
+            // appropriate (logFrontendError is error/warn only).
+            console.info(
+              `[agentLauncher.worktreeRegister] activated branch=${worktreeBranchResult} path=${worktreePathResult}`
+            )
+          } catch (registerErr) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.worktreeRegister',
+              message: `register/activate failed: ${registerErr instanceof Error ? registerErr.message : String(registerErr)}`
             })
           }
         }

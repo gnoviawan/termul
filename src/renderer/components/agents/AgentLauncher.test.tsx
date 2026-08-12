@@ -310,13 +310,19 @@ vi.mock('@/components/ui/select', async () => {
   }
 })
 
-const { mockWorktreeCreate, mockWorktreeCopyInclude, mockWorktreeResolveBaseBranch } = vi.hoisted(
-  () => ({
-    mockWorktreeCreate: vi.fn(),
-    mockWorktreeCopyInclude: vi.fn(),
-    mockWorktreeResolveBaseBranch: vi.fn()
-  })
-)
+const {
+  mockWorktreeCreate,
+  mockWorktreeCopyInclude,
+  mockWorktreeResolveBaseBranch,
+  mockAddWorktree,
+  mockSetActiveWorktree
+} = vi.hoisted(() => ({
+  mockWorktreeCreate: vi.fn(),
+  mockWorktreeCopyInclude: vi.fn(),
+  mockWorktreeResolveBaseBranch: vi.fn(),
+  mockAddWorktree: vi.fn(),
+  mockSetActiveWorktree: vi.fn()
+}))
 
 vi.mock('@/lib/worktree-api', () => ({
   worktreeApi: {
@@ -342,7 +348,9 @@ vi.mock('@/stores/project-store', () => {
   const baseProject = { id: 'p1', name: 'P', path: '/work', defaultShell: undefined }
   const state = {
     activeProjectId: 'p1',
-    projects: [baseProject]
+    projects: [baseProject],
+    addWorktree: mockAddWorktree,
+    setActiveWorktree: mockSetActiveWorktree
   }
   const withOverride = () => ({
     ...state,
@@ -1540,6 +1548,8 @@ describe('AgentLauncher worktree isolation', () => {
       data: { ran: 1, copied: 1, skipped: [] }
     })
     mockWorktreeResolveBaseBranch.mockReset()
+    mockAddWorktree.mockReset()
+    mockSetActiveWorktree.mockReset()
     // "Clean repo on feat/x, base auto" — no origin/HEAD, so the fallback
     // chain resolves to the current branch (feat/x).
     mockWorktreeResolveBaseBranch.mockResolvedValue({
@@ -1663,6 +1673,48 @@ describe('AgentLauncher worktree isolation', () => {
     expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
   })
 
+  // Fix: worktree chat hidden from Chats sidebar — the launcher must register
+  // the just-created worktree in the project store and activate it so the
+  // sidebar scopes to it immediately (no 60s reconciler wait) and the worktree
+  // is a first-class project citizen across restarts.
+  it('registers and activates the created worktree in the project store on launch', async () => {
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('register me')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockAddWorktree).toHaveBeenCalledTimes(1))
+    const [projectId, worktree] = mockAddWorktree.mock.calls[0] as [
+      string,
+      { id: string; path: string; branch: string; name: string }
+    ]
+    expect(projectId).toBe('p1')
+    expect(worktree.path).toBe('/work/.termul/worktrees/abcd1234')
+    expect(worktree.branch).toMatch(/^chat\/[a-f0-9]+$/)
+    expect(worktree.name).toMatch(/^[a-f0-9]{8}$/)
+    // The same id is activated so the sidebar scopes to the new worktree.
+    await waitFor(() => expect(mockSetActiveWorktree).toHaveBeenCalledTimes(1))
+    expect(mockSetActiveWorktree).toHaveBeenCalledWith('p1', worktree.id)
+  })
+
+  it('still opens the chat when worktree registration throws (best-effort)', async () => {
+    mockAddWorktree.mockImplementation(() => {
+      throw new Error('store unavailable')
+    })
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('survive failure')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The best-effort step threw and was swallowed; the chat still opens.
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+  })
+
   // CAP-4: relaunch of a persisted-worktree session does NOT call worktreeApi.create
   it('does not call worktreeApi.create when relaunching a persisted-worktree session (CAP-4)', async () => {
     // The launcher's launch() only creates a worktree when isolationMode ===
@@ -1716,6 +1768,22 @@ describe('AgentLauncher worktree isolation', () => {
       worktreeBranch: string
     }
     expect(finalizeArgs.worktreeBranch).toBe(`${firstBranch}-2`)
+
+    // The project-store entry must reflect the RETRY worktree (name/branch
+    // matching the retry create call's inputs, not the stale original chatId),
+    // so the registered `name` matches the git worktree on disk.
+    await waitFor(() => expect(mockAddWorktree).toHaveBeenCalledTimes(1))
+    const [, registered] = mockAddWorktree.mock.calls[0] as [
+      string,
+      { name: string; branch: string; path: string }
+    ]
+    const retryCreate = mockWorktreeCreate.mock.calls[1][0] as {
+      name: string
+      branch: string
+    }
+    expect(registered.name).toBe(retryCreate.name)
+    expect(registered.branch).toBe(retryCreate.branch)
+    expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
   })
 
   // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch
