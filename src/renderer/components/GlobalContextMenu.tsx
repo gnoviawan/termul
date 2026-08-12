@@ -31,12 +31,16 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import { isMac } from '@/lib/platform'
 import {
   copySelection,
   cutSelection,
   pasteIntoFocused,
   selectAllFocused
 } from '@/lib/text-edit-ops'
+
+// Platform-aware shortcut modifier for display labels (⌘ on macOS, Ctrl elsewhere).
+const SHORTCUT_MOD = isMac ? '⌘' : 'Ctrl'
 
 interface GlobalContextMenuState {
   hasSelection: boolean
@@ -138,7 +142,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void copySelection()
           }}
         >
-          Copy <ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
+          Copy <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasSelection || !isMutableEditableFocused}
@@ -147,7 +151,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void cutSelection()
           }}
         >
-          Cut <ContextMenuShortcut>Ctrl+X</ContextMenuShortcut>
+          Cut <ContextMenuShortcut>{SHORTCUT_MOD}+X</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -157,7 +161,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void pasteIntoFocused()
           }}
         >
-          Paste <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
+          Paste <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!isMutableEditableFocused}
@@ -166,7 +170,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             selectAllFocused()
           }}
         >
-          Select All <ContextMenuShortcut>Ctrl+A</ContextMenuShortcut>
+          Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
