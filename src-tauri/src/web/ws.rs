@@ -391,9 +391,9 @@ impl RuntimePolicy {
     #[must_use]
     pub fn resolved(permission_reconnect_grace: Duration) -> Self {
         let turn_timeout = crate::acp::manager::resolved_turn_timeout(); // Option
-        let turn_idle = crate::acp::manager::turn_idle_timeout();         // Option
-        // `turn_timeout_ms`: 0 = unlimited (no hard cap) sentinel; otherwise
-        // the bounded hard cap in ms.
+        let turn_idle = crate::acp::manager::turn_idle_timeout(); // Option
+                                                                  // `turn_timeout_ms`: 0 = unlimited (no hard cap) sentinel; otherwise
+                                                                  // the bounded hard cap in ms.
         let turn_timeout_ms = turn_timeout.map(|d| d.as_millis() as u64).unwrap_or(0);
         // Inactivity budget published to the client. Preserve the original
         // `hard/2` derivation when a hard cap is configured (bounded, strictly
@@ -517,7 +517,8 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // the `install_acp_agent` WS request.
     let acp_install = state.acp_install.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
-    let mut subscribed_clients: Vec<(String, ClientId)> = Vec::new();
+    let subscribed_clients = Arc::new(tokio::sync::Mutex::new(Vec::<(String, ClientId)>::new()));
+    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients));
     // Per-connection tracking for `switch_project` (Ask-First resolution): the
     // last agent + session this connection used. `switch_project` reuses the
     // agent rather than auto-spawning; a cold tab (no agent yet) → `NO_AGENT`.
@@ -608,6 +609,8 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     });
 
     let read_last_activity = Arc::clone(&last_activity);
+    let read_subscribed_clients = Arc::clone(&subscribed_clients);
+    let read_relay = Arc::clone(&relay);
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
         while let Some(frame) = stream.next().await {
@@ -625,16 +628,16 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             read_last_activity.store(now_ms(), Ordering::Relaxed);
             match msg {
                 Message::Text(t) => {
-                    let handled = handle_request(
+                    if !dispatch_connection_text(
                         &t,
                         &mut authed,
                         &acp,
-                        &relay,
+                        &read_relay,
                         &registry,
                         registry_persistence.as_ref(),
                         projects_file.as_deref(),
                         &write_tx,
-                        &mut subscribed_clients,
+                        &read_subscribed_clients,
                         &mut current_agent,
                         &current_session,
                         &current_project,
@@ -643,8 +646,8 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                         acp_catalog.as_ref(),
                         acp_install.as_ref(),
                     )
-                    .await;
-                    if write_tx.send(Outbound::Reply(handled)).is_err() {
+                    .await
+                    {
                         break; // write half closed.
                     }
                 }
@@ -664,41 +667,6 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     }
                 }
             }
-        }
-        // Cleanup subscriptions for this connection. Retain the affected
-        // session ids so last-subscriber permission grace can be scheduled.
-        let disconnected_sessions: std::collections::HashSet<String> = subscribed_clients
-            .iter()
-            .map(|(sid, _)| sid.clone())
-            .collect();
-        for (sid, cid) in subscribed_clients.drain(..) {
-            relay.unsubscribe(&sid, cid);
-        }
-        // Story 1.7: on browser disconnect, resolve every outstanding
-        // permission whose session now has zero remaining subscribers as deny
-        // (FR14: disconnect → deny). A ticket is denied only when the
-        // disconnecting client was the LAST subscriber — otherwise a remaining
-        // client can still legitimately respond. `relay.session_subscriber_count`
-        // reports the post-unsubscribe count.
-        if let Some(rdz) = relay.rendezvous() {
-            let orphan_sessions: std::collections::HashSet<String> = disconnected_sessions
-                .into_iter()
-                .filter(|sid| relay.session_subscriber_count(sid) == 0)
-                .collect();
-            for sid in orphan_sessions {
-                let relay_for_count = Arc::clone(&relay);
-                rdz.schedule_disconnect_grace(sid, move |session_id| {
-                    relay_for_count.session_subscriber_count(session_id)
-                });
-            }
-        }
-        // Issue #411: on browser disconnect, resolve every outstanding question
-        // whose session now has zero remaining subscribers as cancelled
-        // (mirrors the permission disconnect-deny above).
-        if let Some(qrdz) = relay.question_rendezvous() {
-            let relay_for_count = Arc::clone(&relay);
-            qrdz.deny_all_for_client(move |sid| relay_for_count.session_subscriber_count(sid))
-                .await;
         }
     });
 
@@ -720,6 +688,174 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             // Write is the loser — await its abort to avoid orphaning.
             let _ = write_task.await;
         }
+    }
+    cleanup.run().await;
+}
+
+struct ConnectionCleanup {
+    relay: Arc<WsRelaySink>,
+    subscribed_clients: Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
+    state: Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl ConnectionCleanup {
+    fn new(
+        relay: Arc<WsRelaySink>,
+        subscribed_clients: Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
+    ) -> Self {
+        Self {
+            relay,
+            subscribed_clients,
+            state: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+        }
+    }
+
+    async fn run(&self) {
+        if self
+            .state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let relay = Arc::clone(&self.relay);
+        let subscribed_clients = Arc::clone(&self.subscribed_clients);
+        let state = Arc::clone(&self.state);
+        let cleanup = tokio::spawn(async move {
+            cleanup_connection_subscriptions(&relay, &subscribed_clients).await;
+            state.store(2, Ordering::Release);
+        });
+        let _ = cleanup.await;
+    }
+}
+
+impl Drop for ConnectionCleanup {
+    fn drop(&mut self) {
+        if self
+            .state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let relay = Arc::clone(&self.relay);
+        let subscribed_clients = Arc::clone(&self.subscribed_clients);
+        let state = Arc::clone(&self.state);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                cleanup_connection_subscriptions(&relay, &subscribed_clients).await;
+                state.store(2, Ordering::Release);
+            });
+        } else {
+            warn!(
+                target: "termul::web::ws",
+                "connection cleanup dropped outside a Tokio runtime"
+            );
+        }
+    }
+}
+
+fn authenticated_send_prompt(text: &str, authed: bool) -> Option<(String, Value)> {
+    if !authed {
+        return None;
+    }
+    let request: WsRequest = serde_json::from_str(text).ok()?;
+    (request.type_ == "send_prompt").then_some((request.id, request.payload))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_connection_text(
+    text: &str,
+    authed: &mut bool,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+    write_tx: &mpsc::UnboundedSender<Outbound>,
+    subscribed_clients: &Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
+    current_agent: &mut Option<AgentId>,
+    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
+    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
+    switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
+    history_mode: HistoryMode,
+    acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+    acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
+) -> bool {
+    if let Some((id, payload)) = authenticated_send_prompt(text, *authed) {
+        return match accept_send_prompt(id, &payload, acp, relay).await {
+            Ok(accepted) => {
+                let prompt_acp = Arc::clone(acp);
+                let prompt_tx = write_tx.clone();
+                tokio::spawn(async move {
+                    let reply = complete_send_prompt(accepted, &prompt_acp).await;
+                    let _ = prompt_tx.send(Outbound::Reply(reply));
+                });
+                true
+            }
+            Err(reply) => write_tx.send(Outbound::Reply(reply)).is_ok(),
+        };
+    }
+
+    let mut subscriptions = subscribed_clients.lock().await;
+    let reply = handle_request(
+        text,
+        authed,
+        acp,
+        relay,
+        registry,
+        registry_persistence,
+        projects_file,
+        write_tx,
+        &mut subscriptions,
+        current_agent,
+        current_session,
+        current_project,
+        switch_queue,
+        history_mode,
+        acp_catalog,
+        acp_install,
+    )
+    .await;
+    write_tx.send(Outbound::Reply(reply)).is_ok()
+}
+
+async fn cleanup_connection_subscriptions(
+    relay: &Arc<WsRelaySink>,
+    subscribed_clients: &Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
+) {
+    let subscriptions = std::mem::take(&mut *subscribed_clients.lock().await);
+    let disconnected_sessions: std::collections::HashSet<String> = subscriptions
+        .iter()
+        .map(|(session_id, _)| session_id.clone())
+        .collect();
+    for (session_id, client_id) in subscriptions {
+        relay.unsubscribe(&session_id, client_id);
+    }
+    info!(
+        target: "termul::web::ws",
+        session_count = disconnected_sessions.len(),
+        "connection subscriptions cleaned up"
+    );
+
+    if let Some(rendezvous) = relay.rendezvous() {
+        for session_id in disconnected_sessions
+            .iter()
+            .filter(|session_id| relay.session_subscriber_count(session_id) == 0)
+        {
+            let relay_for_count = Arc::clone(relay);
+            rendezvous.schedule_disconnect_grace(session_id.clone(), move |candidate| {
+                relay_for_count.session_subscriber_count(candidate)
+            });
+        }
+    }
+    if let Some(rendezvous) = relay.question_rendezvous() {
+        let relay_for_count = Arc::clone(relay);
+        rendezvous
+            .deny_all_for_client(move |session_id| {
+                relay_for_count.session_subscriber_count(session_id)
+            })
+            .await;
     }
 }
 
@@ -1148,8 +1284,26 @@ async fn handle_recover_session_snapshot(
     let (client_id, mut rx, events, watermark) =
         match relay.subscribe_snapshot(&parsed.session_id).await {
             Ok(result) => result,
-            Err(_) => {
-                return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
+            Err(error) => {
+                if relay.persistence().is_some_and(|persistence| {
+                    matches!(
+                        persistence.metadata(&parsed.session_id),
+                        Err(crate::acp::SessionPersistenceError::SessionNotFound)
+                    )
+                }) {
+                    return WsReply::err(id, WsErrorCode::NotFound, "session snapshot not found");
+                }
+                tracing::warn!(
+                    target: "termul::web::ws",
+                    session_id = %parsed.session_id,
+                    error = %error,
+                    "recover_session_snapshot: transient snapshot materialization failure"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::AgentCrashed,
+                    "session snapshot is temporarily unavailable; retry after reconnect",
+                );
             }
         };
     subscribed_clients.retain(|(sid, client_id)| {
@@ -1232,13 +1386,13 @@ async fn handle_get_session_cursor(
         .persistence()
         .map(|persistence| {
             persistence.last_seq(&parsed.session_id).unwrap_or_else(|error| {
-                tracing::warn!(
-                    session_id = %parsed.session_id,
-                    error = ?error,
-                    "get_session_cursor: last_seq lookup failed"
-                );
-                0
-            })
+                    tracing::warn!(
+                        session_id = %parsed.session_id,
+                        error = ?error,
+                        "get_session_cursor: last_seq lookup failed"
+                    );
+                    0
+                })
         })
         .unwrap_or(0);
     tracing::debug!(
@@ -2562,94 +2716,119 @@ struct SendPromptPayload {
     turn_id: Option<String>,
 }
 
-async fn handle_send_prompt(
+struct AcceptedSendPrompt {
+    id: String,
+    started: crate::acp::manager::StartedPrompt,
+    claim: PromptClaim,
+}
+
+struct PromptClaim {
+    relay: Arc<WsRelaySink>,
+    session_id: String,
+    turn_id: Option<String>,
+    armed: bool,
+}
+
+impl PromptClaim {
+    fn complete(mut self) {
+        if let Some(turn_id) = self.turn_id.as_deref() {
+            self.relay
+                .turn_watermark()
+                .record_completed(&self.session_id, turn_id);
+        } else {
+            self.relay
+                .turn_watermark()
+                .release_claim(&self.session_id, None);
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for PromptClaim {
+    fn drop(&mut self) {
+        if self.armed {
+            self.relay
+                .turn_watermark()
+                .release_claim(&self.session_id, self.turn_id.as_deref());
+        }
+    }
+}
+
+async fn accept_send_prompt(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
-) -> WsReply {
-    let parsed: SendPromptPayload = match serde_json::from_value(payload.clone()) {
-        Ok(p) => p,
-        Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed send_prompt payload (want agentId, sessionId, text|content, turnId?): {e}")),
-    };
-    // Build the content blocks: prefer explicit `content`; fall back to a
-    // single text block from `text` (mirrors the desktop store's `sendPrompt`
-    // vs `sendPromptBlocks` split — both become `Vec<ContentBlock>` for the agent).
+) -> Result<AcceptedSendPrompt, WsReply> {
+    let parsed: SendPromptPayload = serde_json::from_value(payload.clone()).map_err(|error| {
+        WsReply::err(
+            id.clone(),
+            WsErrorCode::Unsupported,
+            format!("malformed send_prompt payload (want agentId, sessionId, text|content, turnId?): {error}"),
+        )
+    })?;
     let content = match (parsed.content, parsed.text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
-        // Story 1.8 review (EC3): reject an empty/whitespace-only text (the
-        // desktop `commands.rs` has the same guard; an empty-text turn would
-        // leak past the `content.is_empty()` check in `AcpManager::send_prompt`
-        // and poison the turn-id watermark).
         (_, Some(text)) if !text.trim().is_empty() => {
             vec![agent_client_protocol::schema::v1::ContentBlock::Text(
                 agent_client_protocol::schema::v1::TextContent::new(text),
             )]
         }
         _ => {
-            return WsReply::err(
+            return Err(WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
                 "send_prompt requires non-empty `text` or `content`",
-            )
+            ))
         }
     };
 
-    // Ownership is authoritative driver state, not browser input. Reject a
-    // cross-agent session id before claiming a turn, assigning a relay seq, or
-    // writing any durable prompt record.
     match acp
         .owns_session(&parsed.agent_id, parsed.session_id.clone())
         .await
     {
         Ok(true) => {}
         Ok(false) => {
-            return WsReply::err(
+            return Err(WsReply::err(
                 id,
                 WsErrorCode::NotFound,
                 "session does not belong to the supplied live agent",
-            )
+            ))
         }
-        Err(error) => return acp_err_to_reply(id, error),
+        Err(error) => return Err(acp_err_to_reply(id, error)),
     }
 
-    // Claim before persistence so duplicate/busy turns cannot create durable
-    // prompt records. The manager still enforces its driver-thread single-flight
-    // invariant; this closes the web persistence ordering gap.
     match relay
         .turn_watermark()
         .claim_turn(parsed.session_id.0.as_str(), parsed.turn_id.as_deref())
     {
         TurnClaim::Claimed => {}
         TurnClaim::Completed => {
-            return WsReply::err(
+            return Err(WsReply::err(
                 id,
                 WsErrorCode::Stale,
                 "this turn already completed (stale turn-id)",
-            )
+            ))
         }
         TurnClaim::DuplicateInFlight | TurnClaim::Busy => {
-            return WsReply::err(
+            return Err(WsReply::err(
                 id,
                 WsErrorCode::RateLimited,
                 "a prompt turn is already in progress",
-            )
+            ))
         }
     }
-
-    let ephemeral = match acp
-        .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            relay
-                .turn_watermark()
-                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
-            return acp_err_to_reply(id, error);
-        }
+    let claim = PromptClaim {
+        relay: Arc::clone(relay),
+        session_id: parsed.session_id.0.clone(),
+        turn_id: parsed.turn_id.clone(),
+        armed: true,
     };
 
+    let ephemeral = acp
+        .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
+        .await
+        .map_err(|error| acp_err_to_reply(id.clone(), error))?;
     let prompt_payload = json!({
         "agentId": parsed.agent_id.clone(),
         "sessionId": parsed.session_id.clone(),
@@ -2657,52 +2836,53 @@ async fn handle_send_prompt(
         "content": content.clone(),
     });
     if !ephemeral {
-        if let Err(error) = relay
+        relay
             .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
             .await
-        {
-            relay
-                .turn_watermark()
-                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
-            return WsReply::err(
-                id,
-                WsErrorCode::NotImplemented,
-                format!("failed to persist accepted prompt: {error}"),
-            );
-        }
+            .map_err(|error| {
+                WsReply::err(
+                    id.clone(),
+                    WsErrorCode::NotImplemented,
+                    format!("failed to persist accepted prompt: {error}"),
+                )
+            })?;
     }
 
-    match acp
-        .send_prompt(
+    let started = acp
+        .start_prompt(
             &parsed.agent_id,
-            parsed.session_id.clone(),
+            parsed.session_id,
             content,
-            parsed.turn_id.clone(),
+            parsed.turn_id,
         )
         .await
-    {
+        .map_err(|error| acp_err_to_reply(id.clone(), error))?;
+    Ok(AcceptedSendPrompt { id, started, claim })
+}
+
+async fn complete_send_prompt(
+    accepted: AcceptedSendPrompt,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let AcceptedSendPrompt { id, started, claim } = accepted;
+    match acp.wait_prompt(started).await {
         Ok(stop_reason) => {
-            // Story 1.8 T3.3: advance the watermark on completion so a stale
-            // `send_prompt` for the same turn-id is rejected on reconnect
-            // (FR13 last-completed-turn watermark; backs `is_completed` above).
-            // NOTE: the `seen` SET is NOT grown here (review EC2) — dedup of
-            // replayed `prompt_complete` events is client-side
-            // (`acp-transport.ts::seenTurnIds`); the server-side `seen` set has
-            // no reader and would grow unbounded. Only the high-water mark
-            // (`record_completed`) is advanced, which `is_completed` reads.
-            if let Some(turn_id) = &parsed.turn_id {
-                relay
-                    .turn_watermark()
-                    .record_completed(parsed.session_id.0.as_str(), turn_id);
-            }
+            claim.complete();
             ok_with_payload(id, &stop_reason)
         }
-        Err(e) => {
-            relay
-                .turn_watermark()
-                .release_claim(parsed.session_id.0.as_str(), parsed.turn_id.as_deref());
-            acp_err_to_reply(id, e)
-        }
+        Err(error) => acp_err_to_reply(id, error),
+    }
+}
+
+async fn handle_send_prompt(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+) -> WsReply {
+    match accept_send_prompt(id, payload, acp, relay).await {
+        Ok(accepted) => complete_send_prompt(accepted, acp).await,
+        Err(reply) => reply,
     }
 }
 
@@ -3151,6 +3331,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::acp::SpawnOutcome;
+    use crate::web::permissions::{PermissionRendezvous, QuestionRendezvous};
     use std::collections::HashSet;
 
     #[tokio::test]
@@ -3205,6 +3386,445 @@ mod tests {
         relay
             .turn_watermark()
             .release_claim("session-a", Some("turn-cross-agent"));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn authenticated_send_prompt_dispatches_only_post_auth_prompt_frames() {
+        let prompt = authenticated_send_prompt(
+            r#"{"id":"prompt-1","type":"send_prompt","payload":{"sessionId":"s1"}}"#,
+            true,
+        )
+        .expect("post-auth prompt is dispatched");
+        assert_eq!(prompt.0, "prompt-1");
+        assert_eq!(prompt.1["sessionId"], "s1");
+        assert!(
+            authenticated_send_prompt(r#"{"id":"ping-1","type":"ping","payload":{}}"#, true)
+                .is_none()
+        );
+        assert!(authenticated_send_prompt(
+            r#"{"id":"prompt-1","type":"send_prompt","payload":{}}"#,
+            false
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let permissions = Arc::new(PermissionRendezvous::with_policy(
+            Arc::clone(&acp),
+            Duration::from_secs(60),
+            Duration::ZERO,
+        ));
+        let questions = Arc::new(QuestionRendezvous::with_timeout(
+            acp,
+            Duration::from_secs(60),
+        ));
+        relay.set_rendezvous(Arc::clone(&permissions));
+        relay.set_question_rendezvous(Arc::clone(&questions));
+        let (client_id, _rx, replay) = relay.subscribe("session-cleanup", None).await;
+        assert!(matches!(replay, ReplayResult::Ok(0)));
+        permissions.register(
+            "permission-cleanup".to_string(),
+            AgentId("agent-cleanup".to_string()),
+            "session-cleanup".to_string(),
+            json!([]),
+        );
+        questions.register(
+            "question-cleanup".to_string(),
+            AgentId("agent-cleanup".to_string()),
+            "session-cleanup".to_string(),
+            json!([]),
+        );
+        let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
+            "session-cleanup".to_string(),
+            client_id,
+        )]));
+        assert_eq!(relay.session_subscriber_count("session-cleanup"), 1);
+
+        let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
+        let cleanup_task = tokio::spawn(async move {
+            cleanup.run().await;
+            cleanup.run().await;
+        });
+        tokio::task::yield_now().await;
+        cleanup_task.abort();
+        let _ = cleanup_task.await;
+
+        assert_eq!(relay.session_subscriber_count("session-cleanup"), 0);
+        assert!(subscribed.lock().await.is_empty());
+        assert!(!questions.is_outstanding("question-cleanup"));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while permissions.is_outstanding("permission-cleanup") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permission disconnect policy executed");
+    }
+
+    #[tokio::test]
+    async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
+        let relay = Arc::new(WsRelaySink::new());
+        let (client_id, _rx, replay) = relay.subscribe("session-cancelled-relay", None).await;
+        assert!(matches!(replay, ReplayResult::Ok(0)));
+        let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
+            "session-cancelled-relay".to_string(),
+            client_id,
+        )]));
+
+        let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
+        let relay_future = tokio::spawn(async move {
+            let _cleanup = cleanup;
+            std::future::pending::<()>().await;
+        });
+        relay_future.abort();
+        let _ = relay_future.await;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while relay.session_subscriber_count("session-cancelled-relay") != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("drop guard cleaned subscriptions after relay cancellation");
+        assert!(subscribed.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn long_prompt_dispatch_does_not_block_ping_request() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let mut sessions = HashSet::new();
+        sessions.insert("session-long".to_string());
+        let (release, entered) =
+            acp.install_test_agent_with_prompt_gate(AgentId("agent-long".to_string()), sessions);
+        let registry = Arc::new(ProjectRegistry::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let mut current_agent = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None));
+        let current_project = Arc::new(parking_lot::Mutex::new(None));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"prompt-long","type":"send_prompt","payload":{"agentId":"agent-long","sessionId":"session-long","text":"long","turnId":"turn-long"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), entered)
+            .await
+            .expect("prompt reached agent gate")
+            .expect("prompt gate signal");
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            dispatch_connection_text(
+                r#"{"id":"ping-1","type":"ping","payload":{}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        })
+        .await
+        .expect("ping remains processable during prompt");
+        let ping = match rx.recv().await.expect("ping reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected ping reply"),
+        };
+        assert!(ping.ok);
+
+        let concurrent = handle_send_prompt(
+            "prompt-concurrent".to_string(),
+            &json!({
+                "agentId": "agent-long",
+                "sessionId": "session-long",
+                "text": "second",
+                "turnId": "turn-concurrent"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+        assert!(!concurrent.ok);
+        assert_eq!(concurrent.err.expect("busy error").code, "rate_limited");
+
+        let _ = release.send(());
+        let completed = match rx.recv().await.expect("prompt reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected prompt reply"),
+        };
+        assert!(completed.ok);
+        assert_eq!(completed.id, "prompt-long");
+
+        let stale = handle_send_prompt(
+            "prompt-stale".to_string(),
+            &json!({
+                "agentId": "agent-long",
+                "sessionId": "session-long",
+                "text": "duplicate",
+                "turnId": "turn-long"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+        assert!(!stale.ok);
+        assert_eq!(stale.err.expect("stale error").code, "stale");
+
+        let next = handle_send_prompt(
+            "prompt-next".to_string(),
+            &json!({
+                "agentId": "agent-long",
+                "sessionId": "session-long",
+                "text": "next",
+                "turnId": "turn-next"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+        assert!(next.ok);
+    }
+
+    #[tokio::test]
+    async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let mut sessions = HashSet::new();
+        sessions.insert("session-ordered-cancel".to_string());
+        let (_release, entered) = acp.install_test_agent_with_prompt_gate(
+            AgentId("agent-ordered-cancel".to_string()),
+            sessions,
+        );
+        let registry = Arc::new(ProjectRegistry::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let mut current_agent = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None));
+        let current_project = Arc::new(parking_lot::Mutex::new(None));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        );
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+            )
+            .await
+        );
+        entered.await.expect("prompt was accepted before cancellation");
+
+        let first = match rx.recv().await.expect("cancel reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected cancel reply"),
+        };
+        assert_eq!(first.id, "cancel-ordered");
+        assert!(first.ok);
+        let second = match rx.recv().await.expect("prompt completion reply") {
+            Outbound::Reply(reply) => reply,
+            Outbound::Event(_) => panic!("expected prompt reply"),
+        };
+        assert_eq!(second.id, "prompt-ordered");
+        assert!(second.ok);
+        assert_eq!(second.payload.expect("stop reason"), json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_prompt_handler_releases_exact_turn_claim() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let mut sessions = HashSet::new();
+        sessions.insert("session-cancel".to_string());
+        let (_release, entered) =
+            acp.install_test_agent_with_prompt_gate(AgentId("agent-cancel".to_string()), sessions);
+        let prompt_acp = Arc::clone(&acp);
+        let prompt_relay = Arc::clone(&relay);
+        let prompt = tokio::spawn(async move {
+            handle_send_prompt(
+                "prompt-cancel".to_string(),
+                &json!({
+                    "agentId": "agent-cancel",
+                    "sessionId": "session-cancel",
+                    "text": "long",
+                    "turnId": "turn-cancel"
+                }),
+                &prompt_acp,
+                &prompt_relay,
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), entered)
+            .await
+            .expect("prompt reached agent gate")
+            .expect("prompt gate signal");
+
+        prompt.abort();
+        let _ = prompt.await;
+        assert_eq!(
+            relay
+                .turn_watermark()
+                .claim_turn("session-cancel", Some("turn-next")),
+            TurnClaim::Claimed
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconnect() {
+        let root = std::env::temp_dir().join(format!("termul-ws-resume-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-resume".to_string(),
+                runtime_agent_id: Some("agent-resume".to_string()),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(
+            vec![Arc::clone(&relay) as Arc<dyn crate::web::EventSink>],
+            persistence.clone(),
+        ));
+        let mut sessions = HashSet::new();
+        sessions.insert("session-resume".to_string());
+        let (release, entered) =
+            acp.install_test_agent_with_prompt_gate(AgentId("agent-resume".to_string()), sessions);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None));
+        let current_project = Arc::new(parking_lot::Mutex::new(None));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+
+        assert!(
+            dispatch_connection_text(
+                r#"{"id":"prompt-resume","type":"send_prompt","payload":{"agentId":"agent-resume","sessionId":"session-resume","text":"continue after disconnect","turnId":"turn-resume"}}"#,
+                &mut authed,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &subscriptions,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::Server,
+                None,
+                None,
+            )
+            .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), entered)
+            .await
+            .expect("accepted prompt reached the agent gate")
+            .expect("prompt gate signal");
+
+        drop(rx);
+        drop(tx);
+        let _ = release.send(());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if relay
+                    .turn_watermark()
+                    .claim_turn("session-resume", Some("turn-resume"))
+                    == TurnClaim::Completed
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("host turn completed after reply channel disconnected");
+
+        persistence.flush_session("session-resume").await.unwrap();
+        let replay = persistence.replay_after("session-resume", 0).unwrap();
+        assert!(replay.iter().any(|event| event.type_ == "user_prompt"));
+        assert!(replay.iter().any(|event| {
+            event.type_ == "prompt_complete" && event.payload["turnId"] == "turn-resume"
+        }));
+
+        let (_client_id, _events, reconnect_replay) =
+            relay.subscribe("session-resume", Some(0)).await;
+        assert!(matches!(reconnect_replay, ReplayResult::Ok(replayed) if replayed >= 2));
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -3723,8 +4343,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ))
     }
 
@@ -4190,8 +4810,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -4275,8 +4895,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -4326,8 +4946,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -4363,8 +4983,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(ok_reply.ok, "first response wins: {:?}", ok_reply.err);
         // Second frame for the same requestId → stale (ticket evicted).
@@ -4383,8 +5003,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -4419,8 +5039,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -4508,8 +5128,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "unsupported");
@@ -4543,8 +5163,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -4592,8 +5212,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -4628,8 +5248,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(ok_reply.ok, "first answer wins: {:?}", ok_reply.err);
         let stale_reply = block_on(handle_request(
@@ -4647,8 +5267,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!stale_reply.ok);
         assert_eq!(stale_reply.err.unwrap().code, "stale");
@@ -4682,8 +5302,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "permission_denied");
@@ -4739,8 +5359,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "stale");
@@ -4766,8 +5386,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ));
         assert!(reply_ok.ok, "{:?}", reply_ok.err);
         assert_eq!(subs2.len(), 1);
@@ -4792,8 +5412,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ));
         assert!(reply_resub.ok, "{:?}", reply_resub.err);
         assert_eq!(subs2.len(), 1);
@@ -4819,8 +5439,8 @@ mod tests {
                 &current_project,
                 &switch_queue,
                 HistoryMode::LiveOnly,
-            None,
-            None,
+                None,
+                None,
             ));
         assert!(reply_live.ok, "{:?}", reply_live.err);
 
@@ -4873,8 +5493,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(reply.ok, "{:?}", reply.err);
         let payload = reply.payload.expect("selected payload");
@@ -4932,8 +5552,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");
@@ -5048,8 +5668,8 @@ mod tests {
             &current_project,
             &switch_queue,
             HistoryMode::LiveOnly,
-        None,
-        None,
+            None,
+            None,
         ));
         assert!(!reply.ok);
         assert_eq!(reply.err.unwrap().code, "not_found");

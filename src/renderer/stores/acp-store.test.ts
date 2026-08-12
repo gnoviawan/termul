@@ -86,7 +86,8 @@ import {
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
-  type AcpTransport
+  type AcpTransport,
+  AcpTransportError
 } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -4074,6 +4075,176 @@ describe('acp-store', () => {
     expect(index.find((e) => e.id === 's-local')?.title).toBe('Important Title')
     // s-titled keeps the newer local title (not reverted to Untitled).
     expect(index.find((e) => e.id === 's-titled')?.title).toBe('My Title')
+  })
+
+  it('preserves then converges history across transient refresh and reconnect retry', async () => {
+    vi.useFakeTimers()
+    const current = {
+      id: 's-existing',
+      agentId: 'agent-1',
+      agentConfigId: 'cfg-1',
+      title: 'Existing Chat',
+      cwd: '/work',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 4,
+      status: 'closed' as const
+    }
+    useAcpStore.setState({ sessionIndex: [current] })
+    const recovered = { ...current, title: 'Recovered Chat', lastActivityAt: 3 }
+    vi.mocked(loadSessionIndex)
+      .mockRejectedValueOnce(new AcpTransportError('closed', 'transport recovering'))
+      .mockRejectedValueOnce(new AcpTransportError('timeout', 'reconnect race'))
+      .mockResolvedValueOnce([recovered])
+
+    await expect(useAcpStore.getState().loadSessionIndex()).rejects.toMatchObject({
+      code: 'closed'
+    })
+
+    expect(useAcpStore.getState().sessionIndex).toEqual([current])
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'acp-store.loadSessionIndex',
+        message: expect.stringContaining('preserving current entries')
+      })
+    )
+    let reconnectListener: ((reconnecting: boolean) => void) | undefined
+    const transport = {
+      setReconnectListener: vi.fn((listener: (reconnecting: boolean) => void) => {
+        reconnectListener = listener
+      }),
+      setReconnectPriorityProvider: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      dispose: vi.fn()
+    }
+    _setAcpTransportForTests(transport as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+
+    reconnectListener?.(true)
+    expect(useAcpStore.getState().transportReconnecting).toBe(true)
+    reconnectListener?.(false)
+    await Promise.resolve()
+    expect(loadSessionIndex).toHaveBeenCalledTimes(2)
+    expect(useAcpStore.getState().sessionIndex).toEqual([current])
+
+    await vi.advanceTimersByTimeAsync(600)
+    expect(loadSessionIndex).toHaveBeenCalledTimes(3)
+    expect(useAcpStore.getState().sessionIndex).toEqual([recovered])
+
+    expect(useAcpStore.getState().transportReconnecting).toBe(false)
+    teardown()
+    vi.useRealTimers()
+  })
+
+  it('resets an exhausted history retry budget on a later reconnect cycle', async () => {
+    vi.useFakeTimers()
+    const current = {
+      id: 's-existing',
+      agentId: 'agent-1',
+      title: 'Existing Chat',
+      cwd: '/work',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 4,
+      status: 'closed' as const
+    }
+    const recovered = { ...current, title: 'Recovered Later', lastActivityAt: 8 }
+    useAcpStore.setState({ sessionIndex: [current] })
+    vi.mocked(loadSessionIndex)
+      .mockRejectedValueOnce(new AcpTransportError('closed', 'cycle one attempt one'))
+      .mockRejectedValueOnce(new AcpTransportError('timeout', 'cycle one attempt two'))
+      .mockRejectedValueOnce(new AcpTransportError('closed', 'cycle one attempt three'))
+      .mockRejectedValueOnce(new AcpTransportError('timeout', 'cycle one exhausted'))
+      .mockRejectedValueOnce(new AcpTransportError('closed', 'cycle two attempt one'))
+      .mockResolvedValueOnce([recovered])
+
+    let reconnectListener: ((reconnecting: boolean) => void) | undefined
+    const transport = {
+      setReconnectListener: vi.fn((listener: (reconnecting: boolean) => void) => {
+        reconnectListener = listener
+      }),
+      setReconnectPriorityProvider: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      dispose: vi.fn()
+    }
+    _setAcpTransportForTests(transport as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+
+    reconnectListener?.(true)
+    reconnectListener?.(false)
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(loadSessionIndex).toHaveBeenCalledTimes(4)
+    expect(useAcpStore.getState().sessionIndex).toEqual([current])
+
+    reconnectListener?.(true)
+    reconnectListener?.(false)
+    await Promise.resolve()
+    expect(loadSessionIndex).toHaveBeenCalledTimes(5)
+    await vi.advanceTimersByTimeAsync(600)
+    expect(loadSessionIndex).toHaveBeenCalledTimes(6)
+    expect(useAcpStore.getState().sessionIndex).toEqual([recovered])
+
+    teardown()
+    vi.useRealTimers()
+  })
+
+  it('rejects non-transient history failures without replacing current entries', async () => {
+    const current = {
+      id: 's-existing',
+      agentId: 'agent-1',
+      title: 'Existing Chat',
+      cwd: '/work',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 4,
+      status: 'closed' as const
+    }
+    useAcpStore.setState({ sessionIndex: [current] })
+    const error = new Error('desktop schema mismatch')
+    vi.mocked(loadSessionIndex).mockRejectedValueOnce(error)
+
+    await expect(useAcpStore.getState().loadSessionIndex()).rejects.toBe(error)
+    expect(useAcpStore.getState().sessionIndex).toEqual([current])
+  })
+
+  it('allows an older valid history response to apply after a newer refresh fails', async () => {
+    const olderEntries = [
+      {
+        id: 's-valid',
+        agentId: 'agent-1',
+        title: 'Valid Host Entry',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed' as const
+      }
+    ]
+    let resolveOlder: ((entries: typeof olderEntries) => void) | undefined
+    vi.mocked(loadSessionIndex)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOlder = resolve
+          })
+      )
+      .mockRejectedValueOnce(new AcpTransportError('closed', 'newer request failed'))
+
+    const older = useAcpStore.getState().loadSessionIndex()
+    await expect(useAcpStore.getState().loadSessionIndex()).rejects.toMatchObject({
+      code: 'closed'
+    })
+    resolveOlder?.(olderEntries)
+    await older
+
+    expect(useAcpStore.getState().sessionIndex).toEqual(olderEntries)
   })
 
   it('openHistorySession accepts straggler chunks of an in-progress replay after load resolves', async () => {

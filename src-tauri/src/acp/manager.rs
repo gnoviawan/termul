@@ -54,9 +54,9 @@ use crate::acp::events::{
 };
 use crate::acp::session::DriverState;
 use crate::acp::session_persistence::{
-    is_protected_title_source, normalize_title, now_millis, PersistedEventRecord,
-    PersistedSessionStatus, SessionPersistence, SessionRegistration, TitleSource,
-    SESSION_SCHEMA_VERSION,
+    is_protected_title_source, normalize_title, now_millis,
+    PersistedEventRecord, PersistedSessionStatus, SessionPersistence, SessionRegistration,
+    TitleSource, SESSION_SCHEMA_VERSION,
 };
 use crate::web::sink::CapturingEventSink;
 use crate::web::EventSink;
@@ -654,6 +654,10 @@ enum AcpCommand {
         /// `prompt_complete` for the renderer's `seenTurnIds` idempotent dedup —
         /// FR11). `None` for desktop/older clients (dedup is a no-op).
         turn_id: Option<String>,
+        /// Resolves after the driver has claimed the session turn and
+        /// registered its completion task. Callers can then process a
+        /// following cancellation without racing prompt startup.
+        accepted: oneshot::Sender<Result<(), String>>,
         reply: oneshot::Sender<Result<StopReason, String>>,
     },
     CancelPrompt {
@@ -709,6 +713,13 @@ enum AcpCommand {
     },
     /// Ask the driver thread to wind down its connection and exit.
     Shutdown,
+}
+
+pub(crate) struct StartedPrompt {
+    agent_id: AgentId,
+    session_id: SessionId,
+    first_prompt_text: String,
+    completion: oneshot::Receiver<Result<StopReason, String>>,
 }
 
 /// Result of a successful `initialize` handshake, carried back to the spawning
@@ -1319,6 +1330,23 @@ impl AcpManager {
         content: Vec<ContentBlock>,
         turn_id: Option<String>,
     ) -> Result<StopReason, String> {
+        let started = self
+            .start_prompt(agent_id, session_id, content, turn_id)
+            .await?;
+        self.wait_prompt(started).await
+    }
+
+    /// Register a prompt turn with the driver without awaiting the long agent
+    /// completion. Success means the driver's single-flight marker and prompt
+    /// task are installed, so a subsequently queued cancellation cannot no-op
+    /// before the turn starts.
+    pub(crate) async fn start_prompt(
+        self: &Arc<Self>,
+        agent_id: &AgentId,
+        session_id: SessionId,
+        content: Vec<ContentBlock>,
+        turn_id: Option<String>,
+    ) -> Result<StartedPrompt, String> {
         if content.is_empty() {
             return Err("prompt content must not be empty".to_string());
         }
@@ -1327,13 +1355,40 @@ impl AcpManager {
         // prompt to a separate agent (AD-2). Never log it — only forward it.
         let first_prompt_text = extract_prompt_text(&content);
         let tx = self.command_tx(agent_id)?;
-        let stop_reason = send_command(&tx, |reply| AcpCommand::SendPrompt {
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        tx.send(AcpCommand::SendPrompt {
             session_id: session_id.clone(),
             content,
             turn_id,
-            reply,
+            accepted: accepted_tx,
+            reply: completion_tx,
         })
-        .await?;
+        .map_err(|_| "agent thread is no longer running".to_string())?;
+        accepted_rx
+            .await
+            .map_err(|_| "agent thread dropped the prompt acceptance".to_string())??;
+        Ok(StartedPrompt {
+            agent_id: agent_id.clone(),
+            session_id,
+            first_prompt_text,
+            completion: completion_rx,
+        })
+    }
+
+    pub(crate) async fn wait_prompt(
+        self: &Arc<Self>,
+        started: StartedPrompt,
+    ) -> Result<StopReason, String> {
+        let StartedPrompt {
+            agent_id,
+            session_id,
+            first_prompt_text,
+            completion,
+        } = started;
+        let stop_reason = completion
+            .await
+            .map_err(|_| "agent thread dropped the prompt reply".to_string())??;
 
         // Title-gen trigger: fire-and-forget, only on the first turn, only
         // when persistence says the title is still DerivedFirstMessage (no
@@ -1358,7 +1413,7 @@ impl AcpManager {
                     session_id.0
                 );
                 let manager = Arc::clone(self);
-                let user_agent_id = agent_id.clone();
+                let user_agent_id = agent_id;
                 let session_id_str = session_id.0.clone();
                 tokio::spawn(async move {
                     manager
@@ -1499,9 +1554,9 @@ impl AcpManager {
         // `session_reopen_timeout()` pattern, 60s default). The prompt embeds
         // the first user message text — never log it.
         let title_instruction = format!(
-            "Generate a concise title (max 80 characters) for a chat session based on the \
-             following user message. Reply with ONLY the title text — no quotes, no markdown, \
-             no explanation.\n\nUser message: {first_prompt}"
+            "Generate a concise title (max 48 characters) for a chat session based on the \
+             following user message. Reply with ONLY the title text on a single line — no quotes, \
+             no markdown, no greeting, no explanation.\n\nUser message: {first_prompt}"
         );
         let prompt_content = vec![ContentBlock::Text(
             agent_client_protocol::schema::v1::TextContent::new(title_instruction),
@@ -1510,24 +1565,16 @@ impl AcpManager {
         log::debug!(
             "[acp-title] background prompt sent to session {bg_session_id} (timeout {prompt_timeout:?}, user session {session_id})"
         );
-        // Send the title-gen prompt directly through the command channel,
-        // bypassing `send_prompt` (which would re-enter the title-gen trigger
-        // path — the background turn is NOT a user turn and must not fire
-        // another background gen).
-        let bg_command_tx = self.command_tx(&bg_agent_id);
-        let bg_prompt_future = match &bg_command_tx {
-            Ok(tx) => send_command(tx, |reply| AcpCommand::SendPrompt {
-                session_id: bg_session_id.clone(),
-                content: prompt_content,
-                turn_id: None,
-                reply,
-            }),
-            Err(error) => {
-                log::warn!(
-                    "[acp-title] background agent {bg_agent_id} command channel gone for session {session_id}: {error}"
-                );
-                return;
-            }
+        // Start + await directly so the background turn does not re-enter the
+        // user-turn title-generation trigger in `wait_prompt`.
+        let bg_prompt_future = async {
+            let started = self
+                .start_prompt(&bg_agent_id, bg_session_id.clone(), prompt_content, None)
+                .await?;
+            started
+                .completion
+                .await
+                .map_err(|_| "background agent dropped the prompt reply".to_string())?
         };
         let prompt_result = tokio::time::timeout(prompt_timeout, bg_prompt_future).await;
         let stop_reason = match prompt_result {
@@ -1577,7 +1624,7 @@ impl AcpManager {
         // title rather than overwriting with the fallback floor.
         if title.is_empty() || title == "Untitled Chat" {
             log::warn!(
-                "[acp-title] background gen produced empty/Untitled title for session {session_id}; keeping current title"
+                "[acp-title] background gen produced empty/boilerplate title for session {session_id}; keeping current title"
             );
             return;
         }
@@ -1888,7 +1935,10 @@ impl AcpManager {
                     AcpCommand::IsEphemeralSession { reply, .. } => {
                         let _ = reply.send(Ok(false));
                     }
-                    AcpCommand::SendPrompt { reply, .. } => {
+                    AcpCommand::SendPrompt {
+                        accepted, reply, ..
+                    } => {
+                        let _ = accepted.send(Ok(()));
                         let _ = reply.send(Ok(StopReason::EndTurn));
                     }
                     // Unhandled commands are silently dropped (same behavior
@@ -1917,6 +1967,110 @@ impl AcpManager {
                 killed: Arc::new(AtomicBool::new(false)),
             },
         );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_with_prompt_gate(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+    ) -> (oneshot::Sender<()>, oneshot::Receiver<()>) {
+        let (release_tx, release_rx) = oneshot::channel();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        let sinks = self.sinks.clone();
+        let gated_agent_id = agent_id.clone();
+        tokio::spawn(async move {
+            let mut released = false;
+            let mut entered_tx = Some(entered_tx);
+            let mut release_rx = Some(release_rx);
+            let pending_cancels = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+                String,
+                oneshot::Sender<()>,
+            >::new()));
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::OwnsSession { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                    }
+                    AcpCommand::IsEphemeralSession { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
+                    AcpCommand::SendPrompt {
+                        session_id,
+                        turn_id,
+                        accepted,
+                        reply,
+                        ..
+                    } => {
+                        if !released {
+                            if let Some(entered_tx) = entered_tx.take() {
+                                let _ = entered_tx.send(());
+                            }
+                            let mut release_rx = release_rx.take().expect("first prompt gate");
+                            let (cancel_tx, mut cancel_rx) = oneshot::channel();
+                            pending_cancels
+                                .lock()
+                                .insert(session_id.0.clone(), cancel_tx);
+                            let prompt_sinks = sinks.clone();
+                            let prompt_agent_id = gated_agent_id.clone();
+                            let prompt_cancels = Arc::clone(&pending_cancels);
+                            let prompt_session_id = session_id.0.clone();
+                            tokio::spawn(async move {
+                                let stop_reason = tokio::select! {
+                                    _ = &mut release_rx => StopReason::EndTurn,
+                                    _ = &mut cancel_rx => StopReason::Cancelled,
+                                };
+                                prompt_cancels.lock().remove(&prompt_session_id);
+                                let event = PromptCompleteEvent {
+                                    agent_id: prompt_agent_id,
+                                    session_id: session_id.clone(),
+                                    stop_reason,
+                                    turn_id,
+                                };
+                                events::fan_out(
+                                    &prompt_sinks,
+                                    Some(&session_id.0),
+                                    events::EVENT_PROMPT_COMPLETE,
+                                    &event,
+                                );
+                                let _ = reply.send(Ok(stop_reason));
+                            });
+                            released = true;
+                        } else {
+                            let _ = reply.send(Ok(StopReason::EndTurn));
+                        }
+                        let _ = accepted.send(Ok(()));
+                    }
+                    AcpCommand::CancelPrompt { session_id, reply } => {
+                        if let Some(cancel) = pending_cancels.lock().remove(&session_id.0) {
+                            let _ = cancel.send(());
+                        }
+                        let _ = reply.send(Ok(()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities: AgentCapabilities::default(),
+                stable_namespace: None,
+                config: AgentConfig {
+                    config_id: None,
+                    name: "test-agent".to_string(),
+                    command: "test".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::HashMap::new(),
+                    allow_terminal: false,
+                },
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        (release_tx, entered_rx)
     }
 
     /// Desktop compatibility wrapper: logs failures because app-exit callers
@@ -3244,6 +3398,7 @@ async fn run_command_loop(
                 session_id,
                 content,
                 turn_id,
+                accepted,
                 reply,
             } => {
                 // Single-flight per session: reject a second prompt while a turn
@@ -3252,10 +3407,12 @@ async fn run_command_loop(
                 let handles = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(handles) = handles else {
                     // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
-                    let _ = reply.send(Err(format!(
+                    let error = format!(
                         "ACP_TURN_IN_PROGRESS: session {}",
                         session_id.0
-                    )));
+                    );
+                    let _ = accepted.send(Err(error.clone()));
+                    let _ = reply.send(Err(error));
                     continue;
                 };
                 let cancel_rx = handles.cancel_rx;
@@ -3419,7 +3576,11 @@ async fn run_command_loop(
                     // The connection is shutting down; clear the marker we just
                     // set and surface the real error to the caller (L5).
                     driver_state.lock().finish_turn(&turn_session.0);
-                    send_reply(&slot, Err(format!("failed to start prompt turn: {e}")));
+                    let error = format!("failed to start prompt turn: {e}");
+                    let _ = accepted.send(Err(error.clone()));
+                    send_reply(&slot, Err(error));
+                } else {
+                    let _ = accepted.send(Ok(()));
                 }
             }
 

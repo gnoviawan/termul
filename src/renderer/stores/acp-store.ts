@@ -75,7 +75,6 @@ import {
   type SessionModeState,
   type SessionReopenOutcome,
   type SessionUsage,
-  type SpawnAgentResult,
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
@@ -108,7 +107,7 @@ import { decideResume } from '@/lib/acp-resume-policy'
 // store's `transportReconnecting` flag. `getAcpTransport` returns the
 // process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
 // only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
-import { getAcpTransport } from '@/lib/acp-transport'
+import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import {
   AmbiguousAuthError,
   classifySetupError,
@@ -1648,6 +1647,7 @@ const sessionReopenGenerations = new Map<SessionId, number>()
  * generation is no longer current.
  */
 let sessionIndexLoadGeneration = 0
+let sessionIndexAppliedGeneration = 0
 
 /** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
@@ -1735,6 +1735,7 @@ export function _resetInFlightHistoryOpensForTesting(): void {
 /** Test-only: reset the index load generation counter between tests. */
 export function _resetSessionIndexLoadGenerationForTesting(): void {
   sessionIndexLoadGeneration = 0
+  sessionIndexAppliedGeneration = 0
 }
 
 type EnsureLiveAgentOptions = {
@@ -3667,8 +3668,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // local session/title mutation is discarded rather than overwriting the
     // newer projection.
     const generation = ++sessionIndexLoadGeneration
-    const entries = await loadSessionIndexFromDisk()
-    if (generation !== sessionIndexLoadGeneration) return
+    let entries: SessionIndexEntry[]
+    try {
+      entries = await loadSessionIndexFromDisk()
+    } catch (error) {
+      if (isTransientAcpTransportError(error)) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.loadSessionIndex',
+          message: `ACP history index refresh failed; preserving current entries: ${String(error)}`
+        })
+      }
+      throw error
+    }
+    if (generation <= sessionIndexAppliedGeneration) return
+    sessionIndexAppliedGeneration = generation
     // Continue the placeholder counter from the highest persisted suffix so a
     // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
     rebaseUntitledCounter(entries)
@@ -5361,6 +5375,34 @@ export function initAcpEventListeners(): () => void {
   // `false`. The listener is idempotent: re-registration overwrites the
   // previous callback.
   const transport = getAcpTransport()
+  let historyRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let historyRetryAttempt = 0
+  const refetchHistoryAfterReconnect = (): void => {
+    const run = (): void => {
+      void useAcpStore
+        .getState()
+        .loadSessionIndex()
+        .then(() => undefined)
+        .catch((error) => {
+          if (!isTransientAcpTransportError(error) || historyRetryAttempt >= 3) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'acp-store.reconnectHistoryRefresh',
+              message: `ACP history refresh after reconnect failed: ${String(error)}`
+            })
+            return
+          }
+          const delay = Math.min(500 * 2 ** historyRetryAttempt, 2_000)
+          historyRetryAttempt += 1
+          historyRetryTimer = setTimeout(() => {
+            historyRetryTimer = null
+            run()
+          }, delay)
+        })
+    }
+    if (historyRetryTimer) return
+    run()
+  }
   const connection = new AcpConnectionCoordinator(transport, {
     installRecovery: installTransportRecovery,
     pendingPermissionSessions: () => [
@@ -5372,6 +5414,14 @@ export function initAcpEventListeners(): () => void {
     ],
     setReconnecting: (reconnecting) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
+      if (!reconnecting) {
+        if (historyRetryTimer) {
+          clearTimeout(historyRetryTimer)
+          historyRetryTimer = null
+        }
+        historyRetryAttempt = 0
+        refetchHistoryAfterReconnect()
+      }
     }
   })
   connection.attach()
@@ -5505,6 +5555,10 @@ export function initAcpEventListeners(): () => void {
     )
   ]
   return () => {
+    if (historyRetryTimer) {
+      clearTimeout(historyRetryTimer)
+      historyRetryTimer = null
+    }
     teardown.forEach((fn) => {
       fn()
     })
