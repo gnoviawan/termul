@@ -167,6 +167,22 @@ describe('ChatHistoryTab scoping', () => {
     projectRef.current = prev
   })
 
+  it('does not auto-trigger session/list discovery on mount', () => {
+    // The sidebar must not call session/list; external sessions are never listed
+    // and discovery is intentionally stopped to avoid surfacing CLI/other chats.
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+
+    render(<ChatHistoryTab />)
+    expect(mockDiscover).not.toHaveBeenCalled()
+  })
+
   it('opens a visible chat via addAgentChatTab', () => {
     sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
     mockOpen.mockResolvedValue(undefined)
@@ -197,7 +213,7 @@ describe('ChatHistoryTab scoping', () => {
     resolveOpen?.()
   })
 
-  it('opens a discovered tab immediately without waiting for its reopen', () => {
+  it('does not list discovered sessions for opening', () => {
     agentsRef.current = {
       'agent-1': {
         id: 'agent-1',
@@ -210,26 +226,16 @@ describe('ChatHistoryTab scoping', () => {
         { sessionId: 'cli-1', cwd: '/work', title: 'CLI chat', updatedAt: '2026-01-01' }
       ]
     }
-    let resolveOpen: (() => void) | undefined
-    mockOpenDiscovered.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveOpen = resolve
-        })
-    )
 
     render(<ChatHistoryTab />)
-    fireEvent.click(screen.getByText('CLI chat'))
 
-    expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-1', 'cli-1', '/work', 'p1')
-    expect(mockAddTab).toHaveBeenCalledWith('cli-1')
-    expect(mockOpenDiscovered.mock.invocationCallOrder[0]).toBeLessThan(
-      mockAddTab.mock.invocationCallOrder[0]
-    )
-    resolveOpen?.()
+    // Discovered (external/CLI) sessions are never listed, so they can't be
+    // opened from the sidebar — only Termul-created sessions render.
+    expect(screen.queryByText('CLI chat')).not.toBeInTheDocument()
+    expect(mockOpenDiscovered).not.toHaveBeenCalled()
   })
 
-  it('shows all discovered sessions when no session is active', () => {
+  it('hides discovered sessions even when no session is active', () => {
     agentsRef.current = {
       'agent-1': {
         id: 'agent-1',
@@ -246,11 +252,11 @@ describe('ChatHistoryTab scoping', () => {
     activeSessionIdRef.current = null
 
     render(<ChatHistoryTab />)
-    expect(screen.getByText('CLI chat')).toBeInTheDocument()
-    expect(screen.getByText('Another CLI chat')).toBeInTheDocument()
+    expect(screen.queryByText('CLI chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Another CLI chat')).not.toBeInTheDocument()
   })
 
-  it('shows discovered sessions regardless of which session is active', () => {
+  it('hides discovered sessions regardless of which session is active', () => {
     agentsRef.current = {
       'agent-1': {
         id: 'agent-1',
@@ -267,11 +273,11 @@ describe('ChatHistoryTab scoping', () => {
     activeSessionIdRef.current = 'cli-1'
 
     render(<ChatHistoryTab />)
-    expect(screen.getByText('Active CLI chat')).toBeInTheDocument()
-    expect(screen.getByText('Other CLI chat')).toBeInTheDocument()
+    expect(screen.queryByText('Active CLI chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Other CLI chat')).not.toBeInTheDocument()
   })
 
-  it('does not hide local mirror sessions even when a discovered session is active', () => {
+  it('shows local mirror sessions and hides discovered sessions', () => {
     sessionIndexRef.current = [
       entry('local-1', { projectId: 'p1', cwd: '/work', title: 'Local chat' })
     ]
@@ -291,10 +297,10 @@ describe('ChatHistoryTab scoping', () => {
 
     render(<ChatHistoryTab />)
     expect(screen.getByText('Local chat')).toBeInTheDocument()
-    expect(screen.getByText('Active discovered')).toBeInTheDocument()
+    expect(screen.queryByText('Active discovered')).not.toBeInTheDocument()
   })
 
-  it('opens promoted metadata-only sessions through the discovered-session path', async () => {
+  it('hides promoted metadata-only discovered sessions', () => {
     sessionIndexRef.current = [
       entry('cli-1', {
         agentId: 'agent-1',
@@ -315,9 +321,11 @@ describe('ChatHistoryTab scoping', () => {
     configToLiveAgentRef.current = { ['config-1\0/work']: 'agent-1' }
 
     render(<ChatHistoryTab />)
-    fireEvent.click(screen.getByText('Promoted CLI chat'))
 
-    expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-1', 'cli-1', '/work', 'p1')
+    // Promoted external sessions (discovered: true) are hidden; neither open
+    // path fires for them.
+    expect(screen.queryByText('Promoted CLI chat')).not.toBeInTheDocument()
+    expect(mockOpenDiscovered).not.toHaveBeenCalled()
     expect(mockOpen).not.toHaveBeenCalled()
   })
 

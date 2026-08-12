@@ -48,7 +48,6 @@ import {
   type AuthMethod,
   type AvailableCommand,
   acpApi,
-  acpRegisterDiscoveredSession,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
@@ -86,7 +85,6 @@ import {
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
   deriveTitle,
-  fromPersistedSessionSummary,
   getCachedSessionPayload,
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
@@ -1206,6 +1204,9 @@ function persistSession(
       0
     ),
     status: session.status,
+    // Preserve the origin flag so a discovered (external) session re-projected
+    // here can't lose `discovered: true` and leak into the Termul-only sidebar.
+    discovered: existingEntry?.discovered ?? false,
     worktreePath: session.worktreePath,
     worktreeBranch: session.worktreeBranch
   }
@@ -4025,7 +4026,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // clobbers another cwd's results, and a slow in-flight discovery for one cwd
     // can't overwrite a newer cwd's results.
     const key = discoveryKey(agentId, cwd)
-    const projectIdAtStart = useProjectStore.getState().activeProjectId || undefined
 
     // Prevent duplicate concurrent discovery for the same (agent, cwd).
     if (get().discoveringKeys[key]) return
@@ -4064,41 +4064,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       console.info(`[acp] discoverSessions: agent ${agentId} returned ${all.length} session(s)`)
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
 
-      // Promote newly discovered metadata into host persistence. The agent
-      // remains the transcript authority: this command creates metadata only.
-      const existingIds = new Set(get().sessionIndex.map((entry) => entry.id))
-      const promoted: SessionIndexEntry[] = []
-      for (const info of all) {
-        if (existingIds.has(info.sessionId)) continue
-        try {
-          const updatedAt = info.updatedAt ? Date.parse(info.updatedAt) : Number.NaN
-          const summary = await acpRegisterDiscoveredSession({
-            sessionId: info.sessionId,
-            agentId,
-            cwd,
-            title: info.title,
-            updatedAt: Number.isFinite(updatedAt) ? updatedAt : undefined,
-            projectId: projectIdAtStart
-          })
-          promoted.push(fromPersistedSessionSummary(summary))
-          existingIds.add(info.sessionId)
-        } catch (error) {
-          void logFrontendError({
-            level: 'warn',
-            source: 'acp.discoverSessions',
-            message: `Failed to promote discovered session metadata: ${error instanceof Error ? error.message : String(error)}`
-          })
-        }
-      }
-      if (promoted.length > 0) {
-        const promotedIds = new Set(promoted.map((entry) => entry.id))
-        set((s) => ({
-          sessionIndex: [
-            ...promoted,
-            ...s.sessionIndex.filter((entry) => !promotedIds.has(entry.id))
-          ]
-        }))
-      }
+      // Discovery no longer promotes external sessions into host persistence:
+      // the Chats tab renders only Termul-created sessions (`discovered !== true`),
+      // and `session/list` results are external chats Termul did not create. The
+      // function is retained so store coverage keeps exercising the `session/list`
+      // path; it is no longer auto-triggered from the sidebar.
     } catch (e) {
       // Best-effort: log warning, don't toast (discovery is opportunistic).
       console.warn('[acp] session/list failed for agent', agentId, e)

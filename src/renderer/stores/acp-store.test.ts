@@ -5512,6 +5512,34 @@ describe('session discovery (gh-407)', () => {
     expect(discovered![0]!.sessionId).toBe('sess-1')
   })
 
+  it('discoverSessions does not promote discovered sessions into host persistence', async () => {
+    // External/CLI sessions surfaced by session/list must NOT be written to the
+    // Rust index nor merged into sessionIndex — the Chats tab shows only
+    // Termul-created sessions (`discovered !== true`). Promotion was removed.
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { list: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      sessionIndex: []
+    })
+    vi.mocked(invoke).mockResolvedValue({
+      sessions: [{ sessionId: 'sess-external', cwd: '/work', title: 'CLI chat' }],
+      nextCursor: null
+    })
+    await useAcpStore.getState().discoverSessions('agent-1', '/work')
+    // No register_discovered_session IPC issued.
+    const registerCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === 'acp_register_discovered_session')
+    expect(registerCalls).toHaveLength(0)
+    // sessionIndex stays empty — external sessions are not promoted.
+    expect(useAcpStore.getState().sessionIndex).toEqual([])
+  })
+
   it('discoverSessions paginates, forwards the cursor, and de-dupes by sessionId', async () => {
     useAcpStore.setState({
       agents: {

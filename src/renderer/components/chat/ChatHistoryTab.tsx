@@ -2,7 +2,7 @@ import { Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
-import { agentReuseKey, configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-store'
+import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { ChatHistoryEntryRow, type ChatHistorySidebarEntry } from './ChatHistoryEntryRow'
@@ -12,7 +12,7 @@ const SIDEBAR_PAGE_SIZE = 50
 
 type SidebarEntry = ChatHistorySidebarEntry
 
-/** Sidebar tab listing persisted + discovered chat sessions, grouped by recency with search. */
+/** Sidebar tab listing persisted Termul-created chat sessions, grouped by recency with search. */
 export function ChatHistoryTab({
   onSessionOpened
 }: {
@@ -20,14 +20,8 @@ export function ChatHistoryTab({
   onSessionOpened?: () => void
 } = {}): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
-  const discoveredSessions = useAcpStore((s) => s.discoveredSessions)
-  const agents = useAcpStore((s) => s.agents)
-  const agentStatus = useAcpStore((s) => s.agentStatus)
-  const agentConfigs = useAcpStore((s) => s.agentConfigs)
-  const configToLiveAgent = useAcpStore((s) => s.configToLiveAgent)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
-  const discoverSessions = useAcpStore((s) => s.discoverSessions)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
   // Subscribe to the full active-project record so the sidebar re-scopes when
@@ -40,30 +34,6 @@ export function ChatHistoryTab({
     return wt?.path ?? activeProject.path ?? ''
   }, [activeProject])
 
-  // Resolve display name + config id for a live agentId via configToLiveAgent.
-  const resolveAgentIdentity = useCallback(
-    (agentId: string): { name: string | null; configId: string | null } => {
-      const reuseKey = Object.keys(configToLiveAgent).find((k) => configToLiveAgent[k] === agentId)
-      const configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
-      const config = configId ? agentConfigs.find((c) => c.id === configId) : undefined
-      return { name: config?.name ?? null, configId: configId ?? null }
-    },
-    [configToLiveAgent, agentConfigs]
-  )
-
-  // Trigger discovery for all connected agents with `list` capability when
-  // the active cwd changes or agents come online.
-  const agentIds = useMemo(() => Object.keys(agents), [agents])
-  useEffect(() => {
-    if (!activeCwd) return
-    for (const agentId of agentIds) {
-      const caps = agents[agentId]?.capabilities
-      if (caps?.sessionCapabilities?.list) {
-        void discoverSessions(agentId, activeCwd)
-      }
-    }
-  }, [activeCwd, agentIds, agents, discoverSessions])
-
   // ADR 0002 scoping: show only sessions whose `(projectId, cwd)` match the
   // active project + worktree/root, falling back to projectId-only matching
   // when the exact cwd yields nothing (a chat whose cwd drifted since it was
@@ -74,94 +44,30 @@ export function ChatHistoryTab({
     [sessionIndex, activeProjectId, activeCwd]
   )
 
-  // Build a unified sidebar list: local mirror + discovered sessions (deduped).
+  // Termul-created sessions only. The host-owned `discovered` flag is `false`
+  // for sessions Termul created (`register_session`) and `true` for external
+  // `session/list` mirrors — filter hides CLI/other-client chats.
   const mergedEntries = useMemo(() => {
-    const mirrorIds = new Set(scopedIndex.map((e) => e.id))
-    const entries: SidebarEntry[] = scopedIndex.map((e) => {
-      if (!e.discovered) {
-        return {
-          id: e.id,
-          title: e.title,
-          messageCount: e.messageCount,
-          status: e.status,
-          discovered: false,
-          agentId: e.agentId,
-          agentConfigId: e.agentConfigId,
-          lastActivityAt: e.lastActivityAt,
-          canOpen: true
-        }
-      }
-      const liveAgentId = e.agentConfigId
-        ? configToLiveAgent[agentReuseKey(e.agentConfigId, activeCwd)]
-        : undefined
-      const liveAgent = liveAgentId ? agents[liveAgentId] : undefined
-      const canOpen =
-        liveAgentId != null &&
-        agentStatus[liveAgentId] === 'connected' &&
-        (liveAgent?.capabilities?.loadSession === true ||
-          liveAgent?.capabilities?.sessionCapabilities?.resume != null)
-      return {
+    const entries: SidebarEntry[] = scopedIndex
+      .filter((e) => e.discovered !== true)
+      .map((e) => ({
         id: e.id,
         title: e.title,
         messageCount: e.messageCount,
         status: e.status,
-        discovered: true,
-        agentId: liveAgentId,
-        cwd: activeCwd,
+        discovered: false,
+        agentId: e.agentId,
         agentConfigId: e.agentConfigId,
         lastActivityAt: e.lastActivityAt,
-        canOpen
-      }
-    })
-
-    // Add discovered sessions not already in the local mirror. Results are keyed
-    // per (agent, cwd), so look up the active cwd's slot for each connected agent.
-    for (const agentId of Object.keys(agents)) {
-      // Only surface discovered sessions for an agent that is still connected.
-      // A disconnected agent can't service session/load|resume, so its entries
-      // would render as un-clickable; drop them instead of showing dead rows.
-      if (agentStatus[agentId] !== 'connected') continue
-      if (!activeCwd) continue
-      const sessions = discoveredSessions[discoveryKey(agentId, activeCwd)]
-      if (!sessions || sessions.length === 0) continue
-      const caps = agents[agentId]?.capabilities
-      const canOpen = caps?.loadSession === true || caps?.sessionCapabilities?.resume != null
-      const { name: agentName, configId } = resolveAgentIdentity(agentId)
-
-      for (const info of sessions) {
-        // Dedupe: skip if already in the local mirror.
-        if (mirrorIds.has(info.sessionId)) continue
-
-        entries.push({
-          id: info.sessionId,
-          title: info.title || `Session ${info.sessionId.slice(0, 8)}`,
-          messageCount: 0,
-          status: 'active',
-          discovered: true,
-          agentId,
-          agentConfigId: configId ?? undefined,
-          agentName,
-          cwd: info.cwd || activeCwd,
-          lastActivityAt: info.updatedAt ? Date.parse(info.updatedAt) || Date.now() : Date.now(),
-          canOpen
-        })
-      }
-    }
+        canOpen: true
+      }))
 
     return entries
-  }, [
-    scopedIndex,
-    discoveredSessions,
-    agents,
-    agentStatus,
-    activeCwd,
-    resolveAgentIdentity,
-    configToLiveAgent
-  ])
+  }, [scopedIndex])
 
   const [query, setQuery] = useState('')
   // Lazy rendering: keep all results in memory but only render a growing window
-  // (discovery can return hundreds of sessions; rendering all rows is the cost).
+  // (a project can accumulate hundreds of sessions; rendering all rows is the cost).
   const [visibleCount, setVisibleCount] = useState(SIDEBAR_PAGE_SIZE)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
