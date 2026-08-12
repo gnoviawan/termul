@@ -17,6 +17,7 @@ use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
     AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
+use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
@@ -138,6 +139,46 @@ pub async fn acp_list_sessions(
     manager.list_sessions(&agent_id, cwd, cursor).await
 }
 
+/// Promote agent-owned discovered session metadata into host persistence.
+#[tauri::command]
+pub async fn acp_register_discovered_session(
+    manager: State<'_, Arc<AcpManager>>,
+    session_id: String,
+    agent_id: AgentId,
+    cwd: String,
+    title: Option<String>,
+    updated_at: Option<u64>,
+    project_id: Option<String>,
+) -> Result<SessionIndexEntry, String> {
+    if session_id.trim().is_empty() || cwd.trim().is_empty() {
+        return Err("session id and cwd are required".to_string());
+    }
+    let persistence = manager
+        .persistence()
+        .ok_or_else(|| "session persistence unavailable".to_string())?;
+    let metadata = persistence
+        .register_discovered_session(
+            SessionRegistration {
+                session_id,
+                stable_agent_namespace: manager.stable_agent_namespace(&agent_id)?,
+                runtime_agent_id: Some(agent_id.0),
+                project_id,
+                cwd: cwd.into(),
+                ..Default::default()
+            },
+            title,
+            updated_at,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    log::info!(
+        "[acp-history] discovered session promoted session_id={} storage_key={}",
+        metadata.session_id,
+        metadata.storage_key
+    );
+    Ok(SessionIndexEntry::from(&metadata))
+}
+
 /// Send a prompt turn. Accepts either structured ACP content blocks or, for
 /// convenience, a plain text string (wrapped into a single text block).
 ///
@@ -172,9 +213,7 @@ pub async fn acp_send_prompt(
     // (mirrors the WS `send_prompt` handler ordering).
     match manager.owns_session(&agent_id, session_id.clone()).await {
         Ok(true) => {}
-        Ok(false) => {
-            return Err("session does not belong to the supplied live agent".to_string())
-        }
+        Ok(false) => return Err("session does not belong to the supplied live agent".to_string()),
         Err(error) => return Err(error),
     }
     // Skip backend-ephemeral sessions — they have no durable history and must
@@ -194,8 +233,8 @@ pub async fn acp_send_prompt(
         }
     };
     if !ephemeral {
-        if let Err(error) = persist_accepted_prompt(relay.inner(), &agent_id, &session_id, &blocks)
-            .await
+        if let Err(error) =
+            persist_accepted_prompt(relay.inner(), &agent_id, &session_id, &blocks).await
         {
             // Persistence failure rejects dispatch so a transport failure
             // cannot erase an accepted user message. Log session context only
@@ -397,10 +436,7 @@ pub async fn acp_list_catalog(
                 let installed = install.installed_agents();
                 crate::acp::overlay_installed(&mut catalog, &installed);
             }
-            log::info!(
-                "[acp-catalog] list success agents={}",
-                catalog.agents.len()
-            );
+            log::info!("[acp-catalog] list success agents={}", catalog.agents.len());
             Ok(crate::commands::IpcResult::success(catalog))
         }
         Err(error) => {

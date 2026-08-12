@@ -29,7 +29,6 @@ export function ChatHistoryTab({
   const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
   const discoverSessions = useAcpStore((s) => s.discoverSessions)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
-  const activeSessionId = useAcpStore((s) => s.activeSessionId)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
   // Subscribe to the full active-project record so the sidebar re-scopes when
   // the active worktree changes (not just when the active project id changes).
@@ -76,11 +75,6 @@ export function ChatHistoryTab({
   )
 
   // Build a unified sidebar list: local mirror + discovered sessions (deduped).
-  // AD-7: discovered sessions (agent-reported via ACP `session/list` but never
-  // recorded by termul) are filtered OUT of the sidebar, EXCEPT the currently-
-  // active session — so an open tab is never orphaned (the user opened it via
-  // `openDiscoveredSession` and it's the focused chat). The filter runs after
-  // `entries` is built so the active-session exemption is exact.
   const mergedEntries = useMemo(() => {
     const mirrorIds = new Set(scopedIndex.map((e) => e.id))
     const entries: SidebarEntry[] = scopedIndex.map((e) => ({
@@ -88,8 +82,9 @@ export function ChatHistoryTab({
       title: e.title,
       messageCount: e.messageCount,
       status: e.status,
-      discovered: false,
+      discovered: e.discovered === true,
       agentId: e.agentId,
+      cwd: e.discovered ? e.cwd : undefined,
       agentConfigId: e.agentConfigId,
       lastActivityAt: e.lastActivityAt,
       canOpen: true
@@ -129,23 +124,8 @@ export function ChatHistoryTab({
       }
     }
 
-    // AD-7 sidebar display policy: hide discovered sessions that termul never
-    // recorded — EXCEPT the currently-active session (so the open tab is never
-    // orphaned). The filter is applied here (after building `entries`) so the
-    // active-session exemption is exact and the empty-state check below reflects
-    // the post-filter count.
-    return entries.filter(
-      (e) => !e.discovered || (activeSessionId != null && e.id === activeSessionId)
-    )
-  }, [
-    scopedIndex,
-    discoveredSessions,
-    agents,
-    agentStatus,
-    activeCwd,
-    resolveAgentIdentity,
-    activeSessionId
-  ])
+    return entries
+  }, [scopedIndex, discoveredSessions, agents, agentStatus, activeCwd, resolveAgentIdentity])
 
   const [query, setQuery] = useState('')
   // Lazy rendering: keep all results in memory but only render a growing window

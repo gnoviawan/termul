@@ -117,6 +117,7 @@ export const WS_REQUEST_TYPES = [
   'close_session',
   'dispose_ephemeral_session',
   'list_sessions',
+  'register_discovered_session',
   'spawn_agent',
   'kill_agent',
   'list_agents',

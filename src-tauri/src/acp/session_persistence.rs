@@ -236,6 +236,7 @@ struct Inner {
     sessions: Mutex<HashMap<String, SessionRuntime>>,
     /// Canonical in-memory metadata for both active and finalized sessions.
     catalog: Mutex<HashMap<String, Arc<Mutex<SessionMetadata>>>>,
+    registration_lock: tokio::sync::Mutex<()>,
     index_lock: tokio::sync::Mutex<()>,
 }
 
@@ -280,6 +281,7 @@ impl ReplayTestHook {
 
 enum WriterCommand {
     Append(PersistedEventRecord),
+    AppendLocalTitle(String, oneshot::Sender<Result<u64>>),
     Flush(oneshot::Sender<Result<()>>),
     Finalize(PersistedSessionStatus, oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
@@ -299,6 +301,7 @@ impl SessionPersistence {
                 root,
                 sessions: Mutex::new(HashMap::new()),
                 catalog: Mutex::new(HashMap::new()),
+                registration_lock: tokio::sync::Mutex::new(()),
                 index_lock: tokio::sync::Mutex::new(()),
             }),
             #[cfg(test)]
@@ -360,6 +363,93 @@ impl SessionPersistence {
         if let Err(error) = self.persist_index().await {
             self.inner.sessions.lock().remove(&registration.session_id);
             self.inner.catalog.lock().remove(&registration.session_id);
+            let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
+            return Err(error);
+        }
+        Ok(metadata)
+    }
+
+    /// Register metadata for an agent-owned session discovered via
+    /// `session/list`. No transcript events are created; the agent remains the
+    /// transcript authority. Idempotent by session id.
+    pub async fn register_discovered_session(
+        &self,
+        registration: SessionRegistration,
+        title: Option<String>,
+        updated_at: Option<u64>,
+    ) -> Result<SessionMetadata> {
+        let session_id = registration.session_id.trim();
+        let cwd = registration.cwd.to_string_lossy();
+        if session_id.is_empty() || cwd.trim().is_empty() {
+            return Err(SessionPersistenceError::Io(io::Error::other(
+                "discovered session id and cwd are required",
+            )));
+        }
+        let _guard = self.inner.registration_lock.lock().await;
+        let now = updated_at
+            .filter(|timestamp| *timestamp > 0 && *timestamp <= now_millis() + 300_000)
+            .unwrap_or_else(now_millis);
+        let normalized_title = title
+            .map(|value| normalize_title(&value))
+            .filter(|value| value != "Untitled Chat");
+        let existing = { self.inner.catalog.lock().get(session_id).cloned() };
+        if let Some(existing) = existing {
+            let snapshot = {
+                let mut metadata = existing.lock();
+                if metadata.stable_agent_namespace != registration.stable_agent_namespace
+                    || metadata.cwd != cwd
+                {
+                    return Err(SessionPersistenceError::Io(io::Error::other(
+                        "discovered session id conflicts with an existing session scope",
+                    )));
+                }
+                metadata.runtime_agent_id = registration.runtime_agent_id;
+                metadata.project_id = registration.project_id;
+                metadata.status = PersistedSessionStatus::Active;
+                metadata.last_activity_at = now;
+                if metadata.title_source != Some(TitleSource::BackgroundGenerated)
+                    && metadata.title_source != Some(TitleSource::LocalAlias)
+                    && normalized_title.is_some()
+                {
+                    metadata.title = normalized_title;
+                    metadata.title_source = Some(TitleSource::AgentSupplied);
+                }
+                metadata.clone()
+            };
+            self.persist_metadata(&snapshot)?;
+            self.persist_index().await?;
+            return Ok(snapshot);
+        }
+        let storage_key = Uuid::new_v4().to_string();
+        let title_source = normalized_title
+            .as_ref()
+            .map(|_| TitleSource::AgentSupplied);
+        let metadata = SessionMetadata {
+            schema_version: SESSION_SCHEMA_VERSION,
+            storage_key,
+            session_id: session_id.to_string(),
+            stable_agent_namespace: registration.stable_agent_namespace,
+            runtime_agent_id: registration.runtime_agent_id,
+            project_id: registration.project_id,
+            cwd: cwd.into_owned(),
+            title: normalized_title,
+            title_source,
+            created_at: now,
+            last_activity_at: now,
+            status: PersistedSessionStatus::Active,
+            message_count: 0,
+            tool_count: 0,
+            last_seq: 0,
+            worktree_path: registration.worktree_path,
+            worktree_branch: registration.worktree_branch,
+        };
+        if let Err(error) = self.persist_metadata(&metadata) {
+            let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
+            return Err(error);
+        }
+        self.install_catalog_entry(metadata.clone());
+        if let Err(error) = self.persist_index().await {
+            self.inner.catalog.lock().remove(session_id);
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
@@ -484,6 +574,24 @@ impl SessionPersistence {
                 Err(SessionPersistenceError::WriterStopped)
             }
         }
+    }
+
+    /// Append a normalized local-title event with a writer-assigned sequence.
+    /// The writer is the sole sequence authority, so a mid-turn title tool call
+    /// cannot race queued message chunks and reuse their sequence number.
+    pub async fn append_local_title(&self, session_id: &str, title: String) -> Result<u64> {
+        let runtime = self.runtime(session_id)?;
+        if let Some(message) = runtime.unhealthy.lock().clone() {
+            return Err(SessionPersistenceError::PersistenceUnhealthy(message));
+        }
+        let (tx, rx) = oneshot::channel();
+        runtime
+            .tx
+            .send(WriterCommand::AppendLocalTitle(title, tx))
+            .await
+            .map_err(|_| SessionPersistenceError::WriterStopped)?;
+        rx.await
+            .map_err(|_| SessionPersistenceError::WriterStopped)?
     }
 
     pub async fn flush_session(&self, session_id: &str) -> Result<()> {
@@ -640,8 +748,7 @@ impl SessionPersistence {
             .filter(|entry| {
                 entry.project_id.as_deref() == Some(project_id)
                     && entry.cwd == cwd
-                    && (entry.stable_agent_namespace.is_some()
-                        || entry.runtime_agent_id.is_some())
+                    && (entry.stable_agent_namespace.is_some() || entry.runtime_agent_id.is_some())
                     && stable_agent_namespace.is_none_or(|namespace| {
                         entry.stable_agent_namespace.as_deref() == Some(namespace)
                     })
@@ -688,8 +795,8 @@ impl SessionPersistence {
             }
             records
         })
-            .await
-            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
+        .await
+        .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
     }
 
     #[cfg(test)]
@@ -916,6 +1023,30 @@ async fn writer_loop(
     while let Some(command) = rx.recv().await {
         let result = match command {
             WriterCommand::Append(record) => append_record(&inner.root, &metadata, record),
+            WriterCommand::AppendLocalTitle(title, reply) => {
+                let seq = metadata.lock().last_seq + 1;
+                let session_id = metadata.lock().session_id.clone();
+                let result = append_record(
+                    &inner.root,
+                    &metadata,
+                    PersistedEventRecord {
+                        schema_version: SESSION_SCHEMA_VERSION,
+                        session_id: session_id.clone(),
+                        seq,
+                        type_: "local_title_generated".to_string(),
+                        recorded_at: now_millis(),
+                        payload: serde_json::json!({
+                            "sessionId": session_id,
+                            "title": title,
+                        }),
+                    },
+                );
+                let reply_result = result.as_ref().map(|()| seq).map_err(|error| {
+                    SessionPersistenceError::PersistenceUnhealthy(error.to_string())
+                });
+                let _ = reply.send(reply_result);
+                result
+            }
             WriterCommand::Flush(reply) => {
                 let result = sync_session_files(&inner.root, &metadata);
                 let _ = reply.send(result.clone_for_reply());
@@ -1235,13 +1366,51 @@ fn is_secret_key(key: &str) -> bool {
 }
 
 pub(crate) fn normalize_title(text: &str) -> String {
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let text = text.trim();
-    if text.is_empty() {
+    fn strip_wrappers(mut value: &str) -> &str {
+        loop {
+            let next = value
+                .trim()
+                .trim_matches(['"', '\'', '`'])
+                .trim_matches('_')
+                .trim_matches('*')
+                .trim();
+            if next == value {
+                return next;
+            }
+            value = next;
+        }
+    }
+
+    let mut lines = text
+        .split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let mut sanitized = strip_wrappers(lines.next().unwrap_or_default());
+    let lowercase = sanitized.to_ascii_lowercase();
+    const PREAMBLES: &[&str] = &[
+        "sure! here's the title:",
+        "sure, here's the title:",
+        "here's the title:",
+        "the title is:",
+        "title:",
+    ];
+    if let Some(prefix) = PREAMBLES
+        .iter()
+        .find(|prefix| lowercase.starts_with(**prefix))
+    {
+        sanitized = strip_wrappers(&sanitized[prefix.len()..]);
+        if sanitized.is_empty() {
+            sanitized = strip_wrappers(lines.next().unwrap_or_default());
+        }
+    } else if lowercase == "what should we do?" {
+        sanitized = strip_wrappers(lines.next().unwrap_or_default());
+    }
+
+    if sanitized.is_empty() {
         return "Untitled Chat".to_string();
     }
-    let bounded: String = text.chars().take(80).collect();
-    if text.chars().count() > 80 {
+    let bounded: String = sanitized.chars().take(48).collect();
+    if sanitized.chars().count() > 48 {
         format!("{bounded}…")
     } else {
         bounded
@@ -1313,6 +1482,65 @@ mod tests {
             recorded_at: now_millis(),
             payload: json!({"sessionId":"session-1","content":[{"type":"text","text":"hello"}]}),
         }
+    }
+
+    #[test]
+    fn normalize_title_uses_first_line_sanitizes_and_bounds_to_48() {
+        assert_eq!(
+            normalize_title("  **`Fix login bug`**  \nignored explanation"),
+            "Fix login bug"
+        );
+        assert_eq!(
+            normalize_title("Sure! Here's the title:\nFix login bug"),
+            "Fix login bug"
+        );
+        assert_eq!(normalize_title("Title: Fix login bug"), "Fix login bug");
+        let long = "a".repeat(60);
+        let normalized = normalize_title(&long);
+        assert_eq!(normalized.chars().count(), 49);
+        assert!(normalized.ends_with('…'));
+        assert_eq!(normalize_title(" \nsecond line"), "second line");
+        assert_eq!(normalize_title(" \n \r"), "Untitled Chat");
+    }
+
+    #[tokio::test]
+    async fn register_discovered_session_is_metadata_only_agent_supplied_and_idempotent() {
+        let root = temp_dir("discovered");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+        let registration = SessionRegistration {
+            session_id: "discovered-1".into(),
+            stable_agent_namespace: Some("config:test".into()),
+            runtime_agent_id: Some("agent-1".into()),
+            project_id: Some("project-1".into()),
+            cwd,
+            ..Default::default()
+        };
+        let first = persistence
+            .register_discovered_session(registration.clone(), Some("Agent title".into()), Some(42))
+            .await
+            .unwrap();
+        assert_eq!(first.status, PersistedSessionStatus::Active);
+        persistence.shutdown().await.unwrap();
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+        let second = persistence
+            .register_discovered_session(registration, Some("Replacement".into()), Some(99))
+            .await
+            .unwrap();
+        assert_eq!(first.storage_key, second.storage_key);
+        assert_eq!(second.title.as_deref(), Some("Replacement"));
+        assert_eq!(second.title_source, Some(TitleSource::AgentSupplied));
+        assert_eq!(second.status, PersistedSessionStatus::Active);
+        assert_eq!(second.runtime_agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(second.message_count, 0);
+        assert_eq!(second.tool_count, 0);
+        assert_eq!(second.last_seq, 0);
+        assert!(persistence
+            .replay_after("discovered-1", 0)
+            .unwrap()
+            .is_empty());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -1823,10 +2051,9 @@ mod tests {
         persistence.shutdown().await.unwrap();
 
         let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
-        let after = serde_json::to_value(
-            reopened.session_payload_async("session-1").await.unwrap(),
-        )
-        .unwrap();
+        let after =
+            serde_json::to_value(reopened.session_payload_async("session-1").await.unwrap())
+                .unwrap();
         // `status` is expected to differ (Active → Closed across restart); the
         // transcript itself must survive byte-identically.
         assert_eq!(before["messages"], after["messages"]);
@@ -2045,10 +2272,7 @@ mod tests {
             PersistedSessionStatus::Closed,
             "an unclean shutdown must not leave a dead session claiming Active"
         );
-        let payload = reopened
-            .session_payload_async("session-1")
-            .await
-            .unwrap();
+        let payload = reopened.session_payload_async("session-1").await.unwrap();
         assert_eq!(payload.messages.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
@@ -2288,7 +2512,9 @@ mod tests {
         );
         // enqueue_event now succeeds; the new seq advances past the prior
         // last_seq (1) so the durable frontier is monotonic.
-        persistence.enqueue_event(record(2, "message_chunk")).unwrap();
+        persistence
+            .enqueue_event(record(2, "message_chunk"))
+            .unwrap();
         persistence.flush_session("session-1").await.unwrap();
         assert_eq!(persistence.last_seq("session-1").unwrap(), 2);
         let _ = fs::remove_dir_all(root);
@@ -2334,7 +2560,10 @@ mod tests {
         );
         // Same channel handle — reopen short-circuited, did not spawn a second writer.
         assert!(
-            first_tx.as_ref().map(|tx| tx.same_channel(second_tx.as_ref().unwrap())).unwrap_or(false),
+            first_tx
+                .as_ref()
+                .map(|tx| tx.same_channel(second_tx.as_ref().unwrap()))
+                .unwrap_or(false),
             "idempotent reopen must not replace the existing writer channel"
         );
         let _ = fs::remove_dir_all(root);

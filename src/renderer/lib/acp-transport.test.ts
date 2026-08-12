@@ -221,6 +221,35 @@ class FakeWebSocket {
       }
       return
     }
+    if (req.type === 'register_discovered_session') {
+      const payload = req.payload as {
+        sessionId: string
+        agentId: string
+        cwd: string
+        title?: string | null
+        updatedAt?: number
+      }
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: {
+          storageKey: 'promoted-key',
+          sessionId: payload.sessionId,
+          stableAgentNamespace: 'config:test',
+          runtimeAgentId: payload.agentId,
+          cwd: payload.cwd,
+          title: payload.title ?? null,
+          createdAt: payload.updatedAt ?? 1,
+          lastActivityAt: payload.updatedAt ?? 1,
+          status: 'active',
+          messageCount: 0,
+          toolCount: 0,
+          lastSeq: 0,
+          resumeEligible: true
+        }
+      })
+      return
+    }
     if (req.type === 'respond_permission') {
       // Story 1.7 T8.3: by default reject as not_implemented; tests set
       // `respondPermissionErr` to exercise the stale/duplicate → AcpTransportError mapping.
@@ -1075,6 +1104,29 @@ describe('WsAcpTransport', () => {
       .filter((frame) => frame.type === 'subscribe')
     expect(subscriptions).toHaveLength(2)
     expect(subscriptions.every((frame) => frame.payload.lastSeq === 0)).toBe(true)
+    transport.dispose()
+  })
+
+  it('registerDiscoveredSession promotes metadata over the WS seam', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+
+    const summary = await transport.registerDiscoveredSession({
+      sessionId: 'discovered-1',
+      agentId: 'agent-1',
+      cwd: '/work',
+      title: 'Agent title',
+      updatedAt: 42
+    })
+
+    expect(summary).toMatchObject({
+      sessionId: 'discovered-1',
+      runtimeAgentId: 'agent-1',
+      title: 'Agent title',
+      status: 'active'
+    })
     transport.dispose()
   })
 

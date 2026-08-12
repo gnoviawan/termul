@@ -34,6 +34,8 @@ export interface SessionIndexEntry {
    */
   lastSeq?: number
   status: SessionStatus
+  /** Agent-owned metadata mirror created from ACP `session/list`; no local transcript. */
+  discovered?: boolean
   /**
    * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
    * pre-feature sessions. Powers the CAP-6 indicator + the deleted-worktree
@@ -222,6 +224,7 @@ export function toPersistedSessionSummaries(
     lastActivityAt: entry.lastActivityAt,
     status: entry.status === 'initializing' ? 'active' : entry.status,
     messageCount: entry.messageCount,
+    discovered: entry.discovered,
     toolCount: 0,
     lastSeq: entry.lastSeq ?? 0,
     resumeEligible: Boolean(entry.agentConfigId || entry.agentId),
@@ -237,7 +240,10 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
       .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
       .join(' ')
       .trim()
-    if (text.length > 0) return text.length > 40 ? `${text.slice(0, 40)}…` : text
+    if (text.length > 0) {
+      const characters = Array.from(text)
+      return characters.length > 48 ? `${characters.slice(0, 48).join('')}…` : text
+    }
   }
   return fallbackTitle
 }
@@ -280,27 +286,32 @@ function historyMode(): 'server' | 'live_only' | 'tauri_store' | undefined {
   return getAcpTransport().historyMode?.()
 }
 
+export function fromPersistedSessionSummary(entry: PersistedSessionSummary): SessionIndexEntry {
+  return {
+    id: entry.sessionId,
+    agentId: entry.runtimeAgentId ?? '',
+    agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
+      ? entry.stableAgentNamespace.slice('config:'.length)
+      : undefined,
+    title: entry.title ?? 'Untitled Chat',
+    cwd: entry.cwd,
+    projectId: entry.projectId ?? '',
+    createdAt: entry.createdAt,
+    lastActivityAt: entry.lastActivityAt,
+    messageCount: entry.messageCount,
+    lastSeq: entry.lastSeq,
+    status: entry.status,
+    discovered: entry.messageCount === 0 && entry.toolCount === 0 && entry.lastSeq === 0,
+    worktreePath: entry.worktreePath,
+    worktreeBranch: entry.worktreeBranch
+  }
+}
+
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   const transport = getAcpTransport()
   const mode = transport.historyMode?.()
   if (mode === 'server' && transport.listPersistedSessions) {
-    return (await transport.listPersistedSessions()).map((entry) => ({
-      id: entry.sessionId,
-      agentId: entry.runtimeAgentId ?? '',
-      agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
-        ? entry.stableAgentNamespace.slice('config:'.length)
-        : undefined,
-      title: entry.title ?? 'Untitled Chat',
-      cwd: entry.cwd,
-      projectId: entry.projectId ?? '',
-      createdAt: entry.createdAt,
-      lastActivityAt: entry.lastActivityAt,
-      messageCount: entry.messageCount,
-      lastSeq: entry.lastSeq,
-      status: entry.status,
-      worktreePath: entry.worktreePath,
-      worktreeBranch: entry.worktreeBranch
-    }))
+    return (await transport.listPersistedSessions()).map(fromPersistedSessionSummary)
   }
   if (mode === 'live_only') return []
   return (await acpHistoryApi.list()).sessions

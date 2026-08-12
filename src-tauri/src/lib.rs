@@ -19,10 +19,10 @@ pub mod server_update;
 mod shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
-mod updater_api;
 mod skills;
 mod ssh;
 mod trackers;
+mod updater_api;
 pub mod web;
 mod worktree;
 
@@ -1603,6 +1603,7 @@ pub fn run() {
             acp::commands::acp_close_session,
             acp::commands::acp_dispose_ephemeral_session,
             acp::commands::acp_list_sessions,
+            acp::commands::acp_register_discovered_session,
             acp::commands::acp_send_prompt,
             acp::commands::acp_cancel_prompt,
             acp::commands::acp_set_config_option,

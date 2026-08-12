@@ -54,10 +54,11 @@ use crate::acp::events::{
 };
 use crate::acp::session::DriverState;
 use crate::acp::session_persistence::{
-    is_protected_title_source, normalize_title, now_millis,
-    PersistedEventRecord, PersistedSessionStatus, SessionPersistence, SessionRegistration,
-    TitleSource, SESSION_SCHEMA_VERSION,
+    is_protected_title_source, normalize_title, PersistedSessionStatus, SessionPersistence,
+    SessionRegistration, TitleSource,
 };
+#[cfg(test)]
+use crate::acp::session_persistence::{now_millis, SESSION_SCHEMA_VERSION};
 use crate::web::sink::CapturingEventSink;
 use crate::web::EventSink;
 
@@ -387,7 +388,9 @@ where
                     Ok(result) => result,
                     Err(_) if idle_deadline == Some(nd) => {
                         let idle_dur = idle.unwrap_or(Duration::ZERO);
-                        Err(format!("turn idle timeout: no agent activity for {idle_dur:?}"))
+                        Err(format!(
+                            "turn idle timeout: no agent activity for {idle_dur:?}"
+                        ))
                     }
                     Err(_) => {
                         let hard_dur = hard.unwrap_or(Duration::ZERO);
@@ -719,6 +722,7 @@ pub(crate) struct StartedPrompt {
     agent_id: AgentId,
     session_id: SessionId,
     first_prompt_text: String,
+    turn_start_seq: u64,
     completion: oneshot::Receiver<Result<StopReason, String>>,
 }
 
@@ -829,6 +833,56 @@ fn extract_prompt_text(content: &[ContentBlock]) -> String {
     text.chars().take(2000).collect()
 }
 
+/// Normalize, durably persist, flush, and broadcast a locally generated title.
+/// Shared by background generation and the host-injected title tool.
+pub(crate) async fn record_local_title(
+    persistence: &SessionPersistence,
+    sinks: &[Arc<dyn EventSink>],
+    user_agent_id: AgentId,
+    session_id: String,
+    raw_title: String,
+) -> Result<(), String> {
+    let title = normalize_title(&raw_title);
+    if title == "Untitled Chat" {
+        return Err("title must not be empty".to_string());
+    }
+    let metadata = persistence
+        .metadata(&session_id)
+        .map_err(|error| format!("could not read title metadata: {error}"))?;
+    if metadata.title_source == Some(TitleSource::LocalAlias) {
+        return Err("title is protected by a local alias".to_string());
+    }
+    if metadata.title.as_deref() == Some(title.as_str())
+        && metadata.title_source == Some(TitleSource::BackgroundGenerated)
+    {
+        return Ok(());
+    }
+    let next_seq = persistence
+        .append_local_title(&session_id, title.clone())
+        .await
+        .map_err(|error| format!("failed to persist title: {error}"))?;
+    persistence
+        .flush_session(&session_id)
+        .await
+        .map_err(|error| format!("failed to flush title: {error}"))?;
+    let event = SessionInfoUpdateEvent {
+        agent_id: user_agent_id,
+        session_id: SessionId::new(session_id.clone()),
+        title: Some(title.clone()),
+    };
+    events::fan_out(
+        sinks,
+        Some(event.session_id.0.as_str()),
+        events::EVENT_SESSION_INFO_UPDATE,
+        &event,
+    );
+    log::info!(
+        "[acp-title] title persisted and broadcast for session {session_id} (seq={next_seq}, title_len={} chars)",
+        title.chars().count()
+    );
+    Ok(())
+}
+
 /// RAII guard that removes a session id from the in-flight title-gen set on
 /// drop (AD-9). Ensures the debounce set is cleaned up on EVERY exit path
 /// (success, failure, panic) so a crashed gen never permanently blocks a
@@ -915,11 +969,8 @@ impl AcpManager {
     /// exercise the command channel) — `fan_out` over zero sinks is a no-op.
     #[must_use]
     pub fn new(sinks: Vec<Arc<dyn EventSink>>) -> Self {
-        // Eagerly start the host-injected plan MCP server (one shared TCP
-        // listener) here — in the SYNC constructor — so the async
-        // `new_session_with_context` path never blocks a Tokio worker on the
-        // bind + port-publish handshake. Cheap: `sinks.clone()` is Arc-only.
-        let host_plan_server = crate::acp::host_mcp::parent::HostPlanServer::start(sinks.clone());
+        let host_plan_server =
+            crate::acp::host_mcp::parent::HostPlanServer::start(sinks.clone(), None);
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
@@ -936,7 +987,10 @@ impl AcpManager {
         sinks: Vec<Arc<dyn EventSink>>,
         persistence: Arc<SessionPersistence>,
     ) -> Self {
-        let host_plan_server = crate::acp::host_mcp::parent::HostPlanServer::start(sinks.clone());
+        let host_plan_server = crate::acp::host_mcp::parent::HostPlanServer::start(
+            sinks.clone(),
+            Some(Arc::clone(&persistence)),
+        );
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
@@ -945,6 +999,11 @@ impl AcpManager {
             warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
         }
+    }
+
+    #[must_use]
+    pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
+        self.persistence.clone()
     }
 
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
@@ -1166,19 +1225,19 @@ impl AcpManager {
         // isn't known until the response, so register with a provisional id
         // now + bind after `session/new` returns. If session creation fails,
         // evict the token so it doesn't leak (CodeRabbit #6).
-        let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) =
-            if !context.ephemeral {
-                let (port, token, provisional_sid) =
-                    self.host_plan_server.register_session(&agent_id.0);
-                let internal =
-                    build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
-                // Prepend so the internal server is first in the agent's tool list.
-                let mut combined = internal;
-                combined.extend(mcp_servers);
-                (combined, Some(token))
-            } else {
-                (mcp_servers, None)
-            };
+        let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) = if !context
+            .ephemeral
+        {
+            let (port, token, provisional_sid) =
+                self.host_plan_server.register_session(&agent_id.0);
+            let internal = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
+            // Prepend so the internal server is first in the agent's tool list.
+            let mut combined = internal;
+            combined.extend(mcp_servers);
+            (combined, Some(token))
+        } else {
+            (mcp_servers, None)
+        };
 
         let outcome = async {
             gate_mcp_servers(&caps, &combined_mcp_servers)?;
@@ -1204,7 +1263,8 @@ impl AcpManager {
                 // emit plan_update for the right session when the agent calls
                 // termul_plan.
                 if let Some(token) = plan_token {
-                    self.host_plan_server.bind_session(&token, &outcome.session_id.0);
+                    self.host_plan_server
+                        .bind_session(&token, &outcome.session_id.0);
                 }
                 Ok(outcome)
             }
@@ -1354,6 +1414,11 @@ impl AcpManager {
         // command. The background title-gen flow embeds this text in a fresh
         // prompt to a separate agent (AD-2). Never log it — only forward it.
         let first_prompt_text = extract_prompt_text(&content);
+        let turn_start_seq = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.last_seq(&session_id.0).ok())
+            .unwrap_or(0);
         let tx = self.command_tx(agent_id)?;
         let (accepted_tx, accepted_rx) = oneshot::channel();
         let (completion_tx, completion_rx) = oneshot::channel();
@@ -1372,6 +1437,7 @@ impl AcpManager {
             agent_id: agent_id.clone(),
             session_id,
             first_prompt_text,
+            turn_start_seq,
             completion: completion_rx,
         })
     }
@@ -1384,6 +1450,7 @@ impl AcpManager {
             agent_id,
             session_id,
             first_prompt_text,
+            turn_start_seq,
             completion,
         } = started;
         let stop_reason = completion
@@ -1396,9 +1463,15 @@ impl AcpManager {
         // session (AD-9 debounce). The task owns an `Arc<Self>` clone so it
         // can outlive the command's borrowed `&Arc<Self>` receiver.
         if let Some(persistence) = &self.persistence {
-            let is_first_turn = persistence
-                .metadata(&session_id.0)
-                .is_ok_and(|metadata| {
+            let title_was_set_this_turn = persistence
+                .replay_after(&session_id.0, turn_start_seq)
+                .is_ok_and(|records| {
+                    records
+                        .iter()
+                        .any(|record| record.type_ == "local_title_generated")
+                });
+            let is_first_turn = !title_was_set_this_turn
+                && persistence.metadata(&session_id.0).is_ok_and(|metadata| {
                     metadata.title_source == Some(TitleSource::DerivedFirstMessage)
                 })
                 && !first_prompt_text.is_empty();
@@ -1417,7 +1490,11 @@ impl AcpManager {
                 let session_id_str = session_id.0.clone();
                 tokio::spawn(async move {
                     manager
-                        .maybe_generate_background_title(user_agent_id, session_id_str, first_prompt_text)
+                        .maybe_generate_background_title(
+                            user_agent_id,
+                            session_id_str,
+                            first_prompt_text,
+                        )
                         .await;
                 });
             }
@@ -1496,12 +1573,15 @@ impl AcpManager {
                 }
             }
         };
-        let config_id_label = config.config_id.clone().unwrap_or_else(|| config.name.clone());
+        let config_id_label = config
+            .config_id
+            .clone()
+            .unwrap_or_else(|| config.name.clone());
 
         // Spawn the background agent with ONLY the capturing sink (AD-4).
         let capturing_sink = Arc::new(CapturingEventSink::new());
-        let spawn_sinks: Vec<Arc<dyn EventSink>> = vec![Arc::clone(&capturing_sink)
-            as Arc<dyn EventSink>];
+        let spawn_sinks: Vec<Arc<dyn EventSink>> =
+            vec![Arc::clone(&capturing_sink) as Arc<dyn EventSink>];
         let bg_outcome = self.spawn_with_sinks(config, spawn_sinks).await;
         let bg_agent_id = match bg_outcome {
             Ok(outcome) => outcome.agent_id,
@@ -1629,68 +1709,40 @@ impl AcpManager {
             return;
         }
 
-        // Persist the `local_title_generated` durable event (seq = last_seq +
-        // 1; the host's `SessionPersistence` is the sole seq authority — AD-5).
-        let next_seq = match persistence.last_seq(&session_id) {
-            Ok(seq) => seq + 1,
-            Err(error) => {
-                log::warn!(
-                    "[acp-title] background gen could not resolve last_seq for session {session_id}: {error}"
-                );
-                return;
-            }
-        };
-        let record = PersistedEventRecord {
-            schema_version: SESSION_SCHEMA_VERSION,
-            session_id: session_id.clone(),
-            seq: next_seq,
-            type_: "local_title_generated".to_string(),
-            recorded_at: now_millis(),
-            payload: serde_json::json!({
-                "sessionId": session_id,
-                "title": title,
-            }),
-        };
-        if let Err(error) = persistence.enqueue_event(record) {
+        if let Err(error) = self
+            .record_local_title(user_agent_id, session_id.clone(), title)
+            .await
+        {
             log::warn!(
-                "[acp-title] background gen failed to persist local_title_generated for session {session_id}: {error}"
+                "[acp-title] background gen failed to record title for session {session_id}: {error}"
             );
-            return;
         }
-        if let Err(error) = persistence.flush_session(&session_id).await {
-            log::warn!(
-                "[acp-title] background gen failed to flush session {session_id}: {error}"
-            );
-            return;
-        }
-        log::info!(
-            "[acp-title] title persisted for session {session_id} (seq={next_seq}, title_len={} chars)",
-            title.chars().count()
-        );
-
-        // Broadcast a synthetic `SessionInfoUpdateEvent` via the USER's sinks
-        // (the renderer + WS relay) so the sidebar + tab bar pick up the new
-        // title (AD-8). Carries the USER's session id + agent id, not the
-        // background agent's. The renderer's `_onSessionInfoUpdate` is
-        // unchanged — it just sets `session.title`.
-        let event = SessionInfoUpdateEvent {
-            agent_id: user_agent_id,
-            session_id: SessionId::new(session_id.clone()),
-            title: Some(title),
-        };
-        events::fan_out(
-            &self.sinks,
-            Some(event.session_id.0.as_str()),
-            events::EVENT_SESSION_INFO_UPDATE,
-            &event,
-        );
-        log::debug!(
-            "[acp-title] synthetic session_info_update broadcast for session {session_id}"
-        );
 
         // Background agent is killed when `kill_guard` drops at the end of
         // this scope. The in-flight debounce set is cleaned up when
         // `in_flight_guard` drops.
+    }
+
+    /// Normalize, durably persist, flush, and broadcast a locally generated
+    /// title. Shared by background generation and the host-injected title tool.
+    pub(crate) async fn record_local_title(
+        &self,
+        user_agent_id: AgentId,
+        session_id: String,
+        raw_title: String,
+    ) -> Result<(), String> {
+        let persistence = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| "title persistence unavailable".to_string())?;
+        record_local_title(
+            persistence,
+            &self.sinks,
+            user_agent_id,
+            session_id,
+            raw_title,
+        )
+        .await
     }
 
     /// Cancel the active turn for a session, resolving pending permissions with
@@ -2165,7 +2217,10 @@ fn build_internal_plan_stdio(
     let env = vec![
         EnvVariable::new(crate::acp::host_mcp::ENV_PORT, port.to_string()),
         EnvVariable::new(crate::acp::host_mcp::ENV_TOKEN, token.to_string()),
-        EnvVariable::new(crate::acp::host_mcp::ENV_SESSION_ID, provisional_sid.to_string()),
+        EnvVariable::new(
+            crate::acp::host_mcp::ENV_SESSION_ID,
+            provisional_sid.to_string(),
+        ),
         EnvVariable::new(crate::acp::host_mcp::ENV_AGENT_ID, agent_id.to_string()),
     ];
     let stdio = McpServerStdio::new("termul-plan".to_string(), exe)
@@ -3197,7 +3252,9 @@ async fn run_command_loop(
                             if let Some(id) = events::model_config_id_from_options(
                                 response.config_options.as_deref(),
                             ) {
-                                req_state.lock().set_model_config_id(session_id.0.clone(), id);
+                                req_state
+                                    .lock()
+                                    .set_model_config_id(session_id.0.clone(), id);
                             }
 
                             let event = SessionCreatedEvent {
@@ -3407,10 +3464,7 @@ async fn run_command_loop(
                 let handles = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(handles) = handles else {
                     // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
-                    let error = format!(
-                        "ACP_TURN_IN_PROGRESS: session {}",
-                        session_id.0
-                    );
+                    let error = format!("ACP_TURN_IN_PROGRESS: session {}", session_id.0);
                     let _ = accepted.send(Err(error.clone()));
                     let _ = reply.send(Err(error));
                     continue;
@@ -3462,8 +3516,8 @@ async fn run_command_loop(
                             // (it queues onto the connection), so race_turn
                             // stays sync.
                             cancel_state.lock().signal_cancel(&cancel_session.0);
-                            if let Err(error) =
-                                cancel_cx.send_notification(CancelNotification::new(&cancel_session))
+                            if let Err(error) = cancel_cx
+                                .send_notification(CancelNotification::new(&cancel_session))
                             {
                                 log::warn!(
                                     "[acp] failed to cancel agent prompt on turn timeout: {error}"
@@ -3829,16 +3883,21 @@ async fn run_command_loop(
                 let req_agent_id = agent_id.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
-                    let request =
-                        SetSessionConfigOptionRequest::new(&session_id, config_id, value_id.as_str());
+                    let request = SetSessionConfigOptionRequest::new(
+                        &session_id,
+                        config_id,
+                        value_id.as_str(),
+                    );
                     match req_cx.send_request(request).block_task().await {
                         Ok(response) => {
                             // Keep the cached Model-selector configId fresh in case
                             // the agent reorganized its config options.
-                            if let Some(id) = events::model_config_id_from_options(
-                                Some(response.config_options.as_slice()),
-                            ) {
-                                req_state.lock().set_model_config_id(session_id.0.clone(), id);
+                            if let Some(id) = events::model_config_id_from_options(Some(
+                                response.config_options.as_slice(),
+                            )) {
+                                req_state
+                                    .lock()
+                                    .set_model_config_id(session_id.0.clone(), id);
                             }
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
@@ -4766,10 +4825,7 @@ mod tests {
         // The agent is removed from the registry.
         assert!(!manager.agents.lock().contains_key(&agent_id));
         // A Shutdown command was sent.
-        assert!(matches!(
-            rx.recv().await,
-            Some(AcpCommand::Shutdown)
-        ));
+        assert!(matches!(rx.recv().await, Some(AcpCommand::Shutdown)));
     }
 
     /// `maybe_generate_background_title` falls back gracefully when the
@@ -4779,16 +4835,12 @@ mod tests {
     /// so a future trigger can retry.
     #[tokio::test]
     async fn maybe_generate_background_title_falls_back_on_spawn_failure() {
-        let root = std::env::temp_dir().join(format!(
-            "termul-title-spawn-fail-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("termul-title-spawn-fail-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
-        let persistence = SessionPersistence::open(root.join("store"))
-            .await
-            .unwrap();
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
         persistence
             .register_session(SessionRegistration {
                 session_id: "user-sess".to_string(),
@@ -4898,10 +4950,7 @@ mod tests {
         // there (HashSet::insert is idempotent). On drop, the guard removes
         // it. So after the call, the session should be gone.
         assert!(
-            !manager
-                .in_flight_title_gens
-                .lock()
-                .contains("sess-dup"),
+            !manager.in_flight_title_gens.lock().contains("sess-dup"),
             "in-flight guard must clear on debounce-skip exit"
         );
     }

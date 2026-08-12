@@ -35,13 +35,16 @@ use crate::acp::config::{AgentId, SessionId};
 use crate::acp::events::{self, PlanUpdateEvent};
 use crate::web::EventSink;
 
-/// The MCP tool name the agent sees in `tools/list`.
+/// The MCP tool names the agent sees in `tools/list`.
 pub const TERMUL_PLAN_TOOL_NAME: &str = "termul_plan";
+pub const TERMUL_SET_TITLE_TOOL_NAME: &str = "termul_set_session_title";
 
-/// Human-readable description shown to the agent in `tools/list`.
+/// Human-readable descriptions shown to the agent in `tools/list`.
 pub const TERMUL_PLAN_TOOL_DESCRIPTION: &str = "Update the execution plan / todo list shown \
     in the Termul plan panel. Call this instead of a built-in todo tool so the user sees a \
     unified plan UI across all agents.";
+pub const TERMUL_SET_TITLE_TOOL_DESCRIPTION: &str = "Set a concise title for the current \
+    Termul chat session. Call this during the first turn as soon as the user's intent is clear.";
 
 /// The hidden subcommand flag the child detects in argv (passed as the sole
 /// arg of the injected `McpServer::Stdio`). The agent spawns
@@ -75,6 +78,13 @@ pub struct TermulPlanInput {
     pub todos: Vec<TermulPlanTodo>,
 }
 
+/// Input the agent sends to `termul_set_session_title`.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct TermulSetTitleInput {
+    /// Concise title for the current chat session.
+    pub title: String,
+}
+
 /// One todo item. `status`/`priority` are optional strings (the agent may omit
 /// them); the host maps unknown/absent values to ACP defaults.
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
@@ -97,11 +107,24 @@ pub struct TermulPlanTodo {
 /// host doesn't know at injection time). The parent binds the provisional id
 /// → real `session_id` after the `session/new` response arrives, then emits
 /// the plan_update for the real id. The `token` authenticates the child.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameKind {
+    #[default]
+    Plan,
+    SetTitle,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FrameRequest {
     pub token: String,
     pub session_id: String,
+    #[serde(default)]
+    pub kind: FrameKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub todos: Vec<TermulPlanTodo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Parent reply frame (one per connection).
@@ -115,12 +138,18 @@ pub struct FrameReply {
 impl FrameReply {
     #[must_use]
     pub fn ok() -> Self {
-        Self { ok: true, error: None }
+        Self {
+            ok: true,
+            error: None,
+        }
     }
 
     #[must_use]
     pub fn err(msg: impl Into<String>) -> Self {
-        Self { ok: false, error: Some(msg.into()) }
+        Self {
+            ok: false,
+            error: Some(msg.into()),
+        }
     }
 }
 
@@ -132,12 +161,26 @@ pub fn map_todos_to_plan_entries(todos: &[TermulPlanTodo]) -> Vec<PlanEntry> {
     todos
         .iter()
         .map(|todo| {
-            let priority = match todo.priority.as_deref().map(str::trim).unwrap_or("").to_ascii_lowercase().as_str() {
+            let priority = match todo
+                .priority
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str()
+            {
                 "high" => PlanEntryPriority::High,
                 "medium" => PlanEntryPriority::Medium,
                 _ => PlanEntryPriority::Low,
             };
-            let status = match todo.status.as_deref().map(str::trim).unwrap_or("").to_ascii_lowercase().as_str() {
+            let status = match todo
+                .status
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str()
+            {
                 "in_progress" | "inprogress" | "in-progress" => PlanEntryStatus::InProgress,
                 "completed" | "done" | "complete" => PlanEntryStatus::Completed,
                 _ => PlanEntryStatus::Pending,
@@ -207,9 +250,9 @@ pub fn emit_plan_update(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
     use crate::web::sink::AcpEvent;
     use serde_json::Value;
+    use std::sync::Mutex as StdMutex;
 
     /// Test sink that captures every emitted event (for plan_update assertions).
     #[derive(Default)]
@@ -232,9 +275,21 @@ mod tests {
     #[test]
     fn map_todos_preserves_order_and_maps_status_priority() {
         let todos = vec![
-            TermulPlanTodo { content: "a".into(), status: Some("in_progress".into()), priority: Some("high".into()) },
-            TermulPlanTodo { content: "b".into(), status: Some("completed".into()), priority: Some("medium".into()) },
-            TermulPlanTodo { content: "c".into(), status: None, priority: None },
+            TermulPlanTodo {
+                content: "a".into(),
+                status: Some("in_progress".into()),
+                priority: Some("high".into()),
+            },
+            TermulPlanTodo {
+                content: "b".into(),
+                status: Some("completed".into()),
+                priority: Some("medium".into()),
+            },
+            TermulPlanTodo {
+                content: "c".into(),
+                status: None,
+                priority: None,
+            },
         ];
         let entries = map_todos_to_plan_entries(&todos);
         assert_eq!(entries.len(), 3);
@@ -266,9 +321,21 @@ mod tests {
         let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
         let (agent_id, session_id) = make_ids();
         let todos = vec![
-            TermulPlanTodo { content: "one".into(), status: None, priority: None },
-            TermulPlanTodo { content: "two".into(), status: None, priority: None },
-            TermulPlanTodo { content: "three".into(), status: None, priority: None },
+            TermulPlanTodo {
+                content: "one".into(),
+                status: None,
+                priority: None,
+            },
+            TermulPlanTodo {
+                content: "two".into(),
+                status: None,
+                priority: None,
+            },
+            TermulPlanTodo {
+                content: "three".into(),
+                status: None,
+                priority: None,
+            },
         ];
         let entries = map_todos_to_plan_entries(&todos);
         emit_plan_update(&sinks, &agent_id, &session_id, entries);
@@ -298,7 +365,27 @@ mod tests {
         let (type_, payload) = &captured[0];
         assert_eq!(type_, events::EVENT_PLAN_UPDATE);
         let entries = payload["plan"]["entries"].as_array().unwrap();
-        assert!(entries.is_empty(), "empty todos must emit an empty entries array");
+        assert!(
+            entries.is_empty(),
+            "empty todos must emit an empty entries array"
+        );
+    }
+
+    #[test]
+    fn title_frame_round_trips_with_kind_and_title() {
+        let frame = FrameRequest {
+            token: "token".into(),
+            session_id: "provisional".into(),
+            kind: FrameKind::SetTitle,
+            todos: Vec::new(),
+            title: Some("Fix login bug".into()),
+        };
+        let value = serde_json::to_value(&frame).unwrap();
+        assert_eq!(value["kind"], "set_title");
+        assert_eq!(value["title"], "Fix login bug");
+        let decoded: FrameRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.kind, FrameKind::SetTitle);
+        assert_eq!(decoded.title.as_deref(), Some("Fix login bug"));
     }
 
     #[test]

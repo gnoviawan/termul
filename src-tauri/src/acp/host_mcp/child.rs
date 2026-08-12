@@ -20,7 +20,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
-    FrameReply, FrameRequest, TermulPlanInput, ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    FrameKind, FrameReply, FrameRequest, TermulPlanInput, TermulSetTitleInput, ENV_AGENT_ID,
+    ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -52,7 +53,12 @@ pub fn parse_env() -> Result<ChildConfig, String> {
         .ok_or_else(|| format!("missing {ENV_SESSION_ID}"))?;
     // AGENT_ID is optional (used only for logging in the parent); absent → "".
     let agent_id = std::env::var(ENV_AGENT_ID).unwrap_or_default();
-    Ok(ChildConfig { port, token, session_id, agent_id })
+    Ok(ChildConfig {
+        port,
+        token,
+        session_id,
+        agent_id,
+    })
 }
 
 /// Subcommand entrypoint. Called from `main.rs` (desktop) / `server_main.rs`
@@ -69,7 +75,10 @@ pub fn run() -> i32 {
         }
     };
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("[host-mcp-child] failed to start runtime: {e}");
@@ -107,18 +116,38 @@ impl TermulPlanServer {
         name = "termul_plan",
         description = "Update the execution plan / todo list shown in the Termul plan panel. Call this instead of a built-in todo tool so the user sees a unified plan UI across all agents."
     )]
-    async fn termul_plan(
-        &self,
-        Parameters(input): Parameters<TermulPlanInput>,
-    ) -> String {
-        match forward_to_parent(&self.config, &input).await {
+    async fn termul_plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
+        let request = FrameRequest {
+            token: self.config.token.clone(),
+            session_id: self.config.session_id.clone(),
+            kind: FrameKind::Plan,
+            todos: input.todos,
+            title: None,
+        };
+        match forward_to_parent(&self.config, request, "plan updated").await {
             Ok(msg) => msg,
-            Err(e) => {
-                // Surface the error to the agent as the tool result text. The
-                // agent sees the failure + can retry / fall back; the session
-                // keeps running.
-                format!("termul_plan error: {e}")
-            }
+            Err(e) => format!("termul_plan error: {e}"),
+        }
+    }
+
+    #[tool(
+        name = "termul_set_session_title",
+        description = "Set a concise title for the current Termul chat session. Call this during the first turn as soon as the user's intent is clear."
+    )]
+    async fn termul_set_session_title(
+        &self,
+        Parameters(input): Parameters<TermulSetTitleInput>,
+    ) -> String {
+        let request = FrameRequest {
+            token: self.config.token.clone(),
+            session_id: self.config.session_id.clone(),
+            kind: FrameKind::SetTitle,
+            todos: Vec::new(),
+            title: Some(input.title),
+        };
+        match forward_to_parent(&self.config, request, "title updated").await {
+            Ok(msg) => msg,
+            Err(e) => format!("termul_set_session_title error: {e}"),
         }
     }
 }
@@ -129,29 +158,29 @@ impl TermulPlanServer {
 /// tool call indefinitely.
 async fn forward_to_parent(
     config: &ChildConfig,
-    input: &TermulPlanInput,
+    request: FrameRequest,
+    success_message: &'static str,
 ) -> Result<String, String> {
     // 10s covers a healthy round trip many times over; a parent that can't
     // reply by then is wedged and the agent deserves a clear timeout error.
     const ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(10);
-    tokio::time::timeout(ROUND_TRIP, forward_to_parent_inner(config, input))
-        .await
-        .map_err(|_| "parent round trip timed out".to_string())?
+    tokio::time::timeout(
+        ROUND_TRIP,
+        forward_to_parent_inner(config, request, success_message),
+    )
+    .await
+    .map_err(|_| "parent round trip timed out".to_string())?
 }
 
 async fn forward_to_parent_inner(
     config: &ChildConfig,
-    input: &TermulPlanInput,
+    request: FrameRequest,
+    success_message: &'static str,
 ) -> Result<String, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", config.port))
         .await
         .map_err(|e| format!("connect to parent failed: {e}"))?;
-    let req = FrameRequest {
-        token: config.token.clone(),
-        session_id: config.session_id.clone(),
-        todos: input.todos.clone(),
-    };
-    let mut buf = serde_json::to_vec(&req).map_err(|e| format!("encode frame: {e}"))?;
+    let mut buf = serde_json::to_vec(&request).map_err(|e| format!("encode frame: {e}"))?;
     buf.push(b'\n');
     stream
         .write_all(&buf)
@@ -167,7 +196,7 @@ async fn forward_to_parent_inner(
     let reply: FrameReply =
         serde_json::from_str(&line).map_err(|e| format!("decode reply: {e}"))?;
     if reply.ok {
-        Ok("plan updated".to_string())
+        Ok(success_message.to_string())
     } else {
         Err(reply.error.unwrap_or_else(|| "unknown error".to_string()))
     }

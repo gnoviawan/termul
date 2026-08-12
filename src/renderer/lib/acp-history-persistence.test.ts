@@ -117,7 +117,8 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('agent', 'hi'), msg('user', 'Refactor auth')], 'fallback')).toBe(
       'Refactor auth'
     )
-    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(40)}…`)
+    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(48)}…`)
+    expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
   })
 

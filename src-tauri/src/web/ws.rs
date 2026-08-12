@@ -185,7 +185,11 @@ impl WsReply {
     /// breaking the wire contract. This constructor accepts a raw string so
     /// the install handler's `err.code` is byte-identical across transports.
     #[must_use]
-    pub fn err_with_code(id: impl Into<String>, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn err_with_code(
+        id: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             ok: false,
@@ -1049,6 +1053,9 @@ async fn handle_request(
             .await
         }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        "register_discovered_session" => {
+            handle_register_discovered_session(id, &req.payload, acp, relay).await
+        }
         "switch_project" => {
             handle_switch_project(
                 id,
@@ -1235,7 +1242,11 @@ async fn handle_get_session_payload(
                         error = %error,
                         "get_session_payload: host payload materialization failed"
                     );
-                    WsReply::err(id, WsErrorCode::Unsupported, "failed to read session payload")
+                    WsReply::err(
+                        id,
+                        WsErrorCode::Unsupported,
+                        "failed to read session payload",
+                    )
                 }
             }
         }
@@ -1385,7 +1396,9 @@ async fn handle_get_session_cursor(
     let watermark = relay
         .persistence()
         .map(|persistence| {
-            persistence.last_seq(&parsed.session_id).unwrap_or_else(|error| {
+            persistence
+                .last_seq(&parsed.session_id)
+                .unwrap_or_else(|error| {
                     tracing::warn!(
                         session_id = %parsed.session_id,
                         error = ?error,
@@ -1744,11 +1757,7 @@ struct AuthenticateAgentPayload {
     method_id: String,
 }
 
-async fn handle_authenticate_agent(
-    id: String,
-    payload: &Value,
-    acp: &Arc<AcpManager>,
-) -> WsReply {
+async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
     let parsed: AuthenticateAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -1977,11 +1986,9 @@ async fn handle_set_default_project(
     // If the in-memory set fails (target vanished between validation and
     // commit), roll back the file registry (P1: no split-brain).
     if !registry.set_default_project(&parsed.project_id) {
-        if let (Some(file_registry), Some(path), Some(old_default)) = (
-            registry_persistence,
-            projects_file,
-            persisted_old_default,
-        ) {
+        if let (Some(file_registry), Some(path), Some(old_default)) =
+            (registry_persistence, projects_file, persisted_old_default)
+        {
             let mut file_registry = file_registry.lock();
             file_registry.restore_default_project(old_default);
             if let Err(error) = file_registry.save_atomic(path) {
@@ -2694,6 +2701,95 @@ async fn handle_list_sessions(id: String, payload: &Value, acp: &Arc<AcpManager>
     }
 }
 
+/// Persist metadata for an agent-owned session returned by `session/list`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterDiscoveredSessionPayload {
+    session_id: String,
+    agent_id: crate::acp::AgentId,
+    cwd: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    updated_at: Option<u64>,
+    #[serde(default)]
+    project_id: Option<String>,
+}
+
+async fn handle_register_discovered_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+) -> WsReply {
+    let parsed: RegisterDiscoveredSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!(
+                    "malformed register_discovered_session payload (want sessionId, agentId, cwd): {error}"
+                ),
+            )
+        }
+    };
+    if parsed.session_id.trim().is_empty() || parsed.cwd.trim().is_empty() {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "sessionId and cwd are required",
+        );
+    }
+    let Some(persistence) = relay.persistence() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "session persistence unavailable",
+        );
+    };
+    let stable_agent_namespace = match acp.stable_agent_namespace(&parsed.agent_id) {
+        Ok(namespace) => namespace,
+        Err(error) => return acp_err_to_reply(id, error),
+    };
+    match persistence
+        .register_discovered_session(
+            crate::acp::SessionRegistration {
+                session_id: parsed.session_id,
+                stable_agent_namespace,
+                runtime_agent_id: Some(parsed.agent_id.0),
+                project_id: parsed.project_id,
+                cwd: parsed.cwd.into(),
+                ..Default::default()
+            },
+            parsed.title,
+            parsed.updated_at,
+        )
+        .await
+    {
+        Ok(metadata) => {
+            tracing::info!(
+                target: "termul::web::ws",
+                session_id = %metadata.session_id,
+                "register_discovered_session: metadata promoted"
+            );
+            ok_with_payload(id, &crate::acp::SessionIndexEntry::from(&metadata))
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                error = %error,
+                "register_discovered_session: persistence failed"
+            );
+            WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                "failed to persist discovered session metadata",
+            )
+        }
+    }
+}
+
 /// `send_prompt` → `AcpManager::send_prompt(agent_id, session_id, content)`.
 /// Story 1.7 T7.1: the concurrent-turn rejection (`ACP_TURN_IN_PROGRESS`) maps
 /// to `err.code: "rate_limited"` via `map_prompt_error_code`. Story 1.8 T3:
@@ -2849,21 +2945,13 @@ async fn accept_send_prompt(
     }
 
     let started = acp
-        .start_prompt(
-            &parsed.agent_id,
-            parsed.session_id,
-            content,
-            parsed.turn_id,
-        )
+        .start_prompt(&parsed.agent_id, parsed.session_id, content, parsed.turn_id)
         .await
         .map_err(|error| acp_err_to_reply(id.clone(), error))?;
     Ok(AcceptedSendPrompt { id, started, claim })
 }
 
-async fn complete_send_prompt(
-    accepted: AcceptedSendPrompt,
-    acp: &Arc<AcpManager>,
-) -> WsReply {
+async fn complete_send_prompt(accepted: AcceptedSendPrompt, acp: &Arc<AcpManager>) -> WsReply {
     let AcceptedSendPrompt { id, started, claim } = accepted;
     match acp.wait_prompt(started).await {
         Ok(stop_reason) => {
@@ -3690,7 +3778,9 @@ mod tests {
             )
             .await
         );
-        entered.await.expect("prompt was accepted before cancellation");
+        entered
+            .await
+            .expect("prompt was accepted before cancellation");
 
         let first = match rx.recv().await.expect("cancel reply") {
             Outbound::Reply(reply) => reply,
@@ -3886,8 +3976,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_list_acp_catalog_ws_dispatch_returns_payload() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-cat-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("termul-ws-cat-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
             .await
@@ -3920,8 +4009,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_set_catalog_opt_in_ws_dispatch_persists() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-optin-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("termul-ws-optin-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
             .await
@@ -3989,10 +4077,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_acp_catalog_degraded_returns_unavailable() {
-        let reply = handle_request_without_catalog(
-            r#"{"id":"r1","type":"list_acp_catalog","payload":{}}"#,
-        )
-        .await;
+        let reply =
+            handle_request_without_catalog(r#"{"id":"r1","type":"list_acp_catalog","payload":{}}"#)
+                .await;
         assert!(!reply.ok);
         assert_eq!(reply.err.as_ref().unwrap().code, "ACP_CATALOG_UNAVAILABLE");
     }
@@ -4035,12 +4122,12 @@ mod tests {
 
     #[tokio::test]
     async fn second_client_restores_session_created_by_first_client() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-cross-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("termul-ws-cross-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
-        let persistence =
-            crate::acp::SessionPersistence::open(root.join("sessions")).await.unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
         let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
         let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
         // The test agent owns the session + handles the prompt-flow commands
@@ -4663,7 +4750,10 @@ mod tests {
         assert!(reply.err.is_none());
         let payload = reply.payload.expect("payload present on success");
         assert_eq!(payload["agentId"], "agn_test");
-        assert!(payload.get("capabilities").is_some(), "capabilities always serialized");
+        assert!(
+            payload.get("capabilities").is_some(),
+            "capabilities always serialized"
+        );
         assert_eq!(payload["authMethods"][0]["id"], "cursor_login");
         assert_eq!(payload["authMethods"][0]["name"], "Sign in with Cursor");
         // `description` is `None` + skip_serializing_if → omitted from JSON.
@@ -4688,7 +4778,11 @@ mod tests {
         assert!(reply.ok);
         let payload = reply.payload.expect("payload");
         assert_eq!(payload["agentId"], "agn_noauth");
-        assert_eq!(payload["authMethods"], json!([]), "authMethods always serialized as []");
+        assert_eq!(
+            payload["authMethods"],
+            json!([]),
+            "authMethods always serialized as []"
+        );
         assert!(
             payload.get("stableNamespace").is_none(),
             "stableNamespace omitted when None"
@@ -5718,6 +5812,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_discovered_session_promotes_metadata_without_transcript() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-register-discovered-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+        acp.install_test_agent_with_sessions(
+            crate::acp::AgentId("agent-1".to_string()),
+            std::collections::HashSet::new(),
+        );
+
+        let reply = handle_register_discovered_session(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "discovered-1",
+                "agentId": "agent-1",
+                "cwd": cwd.to_string_lossy(),
+                "title": "Agent title",
+                "updatedAt": 42,
+                "projectId": "p-1"
+            }),
+            &acp,
+            &relay,
+        )
+        .await;
+
+        assert!(reply.ok);
+        let metadata = persistence.metadata("discovered-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Agent title"));
+        assert_eq!(
+            metadata.title_source,
+            Some(crate::acp::session_persistence::TitleSource::AgentSupplied)
+        );
+        assert_eq!(metadata.last_seq, 0);
+        assert!(persistence
+            .replay_after("discovered-1", 0)
+            .unwrap()
+            .is_empty());
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn get_session_payload_unsupported_in_live_only() {
         let relay = Arc::new(WsRelaySink::new());
         let reply = handle_get_session_payload(
@@ -5749,8 +5892,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_session_payload_materializes_standalone_durable_history() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-payload-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("termul-ws-payload-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -5920,8 +6062,10 @@ mod tests {
     /// fabricated empty payload that would wipe the client's transcript.
     #[tokio::test]
     async fn get_session_payload_standalone_corrupt_log_is_unsupported() {
-        let root =
-            std::env::temp_dir().join(format!("termul-ws-payload-corrupt-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-payload-corrupt-{}",
+            uuid::Uuid::new_v4()
+        ));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -5957,10 +6101,7 @@ mod tests {
             .unwrap();
         // Corrupt the durable transcript log after finalization.
         let storage_key = persistence.metadata("session-c").unwrap().storage_key;
-        let log_path = persistence
-            .root()
-            .join(&storage_key)
-            .join("messages.jsonl");
+        let log_path = persistence.root().join(&storage_key).join("messages.jsonl");
         {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
@@ -6236,10 +6377,7 @@ mod tests {
         assert_eq!(drained.len(), 1, "exactly one projects_changed broadcast");
         let evt = &drained[0];
         assert_eq!(evt.type_, "projects_changed");
-        assert!(
-            evt.sid.is_none(),
-            "agent-level event: sid must be null"
-        );
+        assert!(evt.sid.is_none(), "agent-level event: sid must be null");
         assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
         assert_eq!(
             evt.payload["defaultProjectId"], "p-1",
@@ -6299,8 +6437,7 @@ mod tests {
         // Subscribe a client to prove NO broadcast reaches it.
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
-        let current_session =
-            Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
         let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
         let target = ProjectSwitchContext {
             project_id: "p-1".to_string(),
@@ -6334,10 +6471,7 @@ mod tests {
             "switch must not persist to the file registry"
         );
         // No file was written to disk.
-        assert!(
-            !path.exists(),
-            "switch must not write the projects file"
-        );
+        assert!(!path.exists(), "switch must not write the projects file");
     }
 
     /// P8 — multi-client: a `switch_project` by one client does NOT fan out
@@ -6370,11 +6504,9 @@ mod tests {
         let mut subs = Vec::new();
         let mut authed = true;
         let mut current_agent: Option<crate::acp::AgentId> = None;
-        let current_session =
-            Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
         let current_project_a = Arc::new(parking_lot::Mutex::new(None::<String>));
-        let switch_queue =
-            Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
 
         // Client A sends switch_project (cold-tab path).
         let reply_a = handle_request(
@@ -6505,8 +6637,9 @@ mod tests {
             }],
             Some("p-1".to_string()),
         );
-        let current_session =
-            Arc::new(parking_lot::Mutex::new(Some(SessionId("s-prev".to_string()))));
+        let current_session = Arc::new(parking_lot::Mutex::new(Some(SessionId(
+            "s-prev".to_string(),
+        ))));
         // The connection is ALREADY on p-1.
         let current_project = Arc::new(parking_lot::Mutex::new(Some("p-1".to_string())));
         let target = ProjectSwitchContext {

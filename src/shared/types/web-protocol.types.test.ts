@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 29 request types including ephemeral disposal, ping, catalog, install, and agent auth', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(29)
+  it('exports exactly 30 request types including discovered-session promotion', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(30)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -74,6 +74,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'close_session',
       'dispose_ephemeral_session',
       'list_sessions',
+      'register_discovered_session',
       'spawn_agent',
       'kill_agent',
       'list_agents',

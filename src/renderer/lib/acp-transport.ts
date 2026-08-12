@@ -140,6 +140,14 @@ export interface AcpTransport {
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
+  registerDiscoveredSession(input: {
+    sessionId: SessionId
+    agentId: AgentId
+    cwd: string
+    title?: string | null
+    updatedAt?: number
+    projectId?: string
+  }): Promise<PersistedSessionSummary>
   sendPrompt(
     agentId: AgentId,
     sessionId: SessionId,
@@ -278,6 +286,8 @@ function createTauriAcpTransport(): AcpTransport {
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
+    registerDiscoveredSession: (input) =>
+      invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
     sendPrompt: (agentId, sessionId, text, _turnId) =>
       invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text }),
     sendPromptBlocks: (agentId, sessionId, content, _turnId) =>
@@ -868,6 +878,17 @@ export class WsAcpTransport implements AcpTransport {
     cursor?: string
   ): Promise<ListSessionsResponse> {
     return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
+  }
+
+  async registerDiscoveredSession(input: {
+    sessionId: SessionId
+    agentId: AgentId
+    cwd: string
+    title?: string | null
+    updatedAt?: number
+    projectId?: string
+  }): Promise<PersistedSessionSummary> {
+    return this.request<PersistedSessionSummary>('register_discovered_session', input)
   }
 
   async sendPrompt(

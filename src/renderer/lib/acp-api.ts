@@ -611,6 +611,17 @@ export async function acpListSessions(
   return getAcpTransport().listSessions(agentId, cwd, cursor)
 }
 
+export async function acpRegisterDiscoveredSession(input: {
+  sessionId: SessionId
+  agentId: AgentId
+  cwd: string
+  title?: string | null
+  updatedAt?: number
+  projectId?: string
+}): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
+  return getAcpTransport().registerDiscoveredSession(input)
+}
+
 export async function acpSendPrompt(
   agentId: AgentId,
   sessionId: SessionId,
