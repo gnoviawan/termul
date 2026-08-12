@@ -952,17 +952,31 @@ function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null 
     for (let j = blocks.length - 1; j >= 0; j--) {
       const block = blocks[j]
       if (block.type !== 'text') continue
-      const parsed = parseTermulPlanFence(block.text)
-      if (parsed !== null) return parsed
-      // If a fence exists but is malformed, keep scanning for an earlier
-      // valid one on the same message; if none surfaces, the rehydrate path
-      // logs the malformed fence separately via `extractTermulPlanFenceJson`.
-      if (extractTermulPlanFenceJson(block.text) !== null) continue
+      // A fence exists in this block — parse it. If the newest fence is
+      // malformed, treat it as terminal: return null rather than continuing
+      // to older fences (last-fence-wins means a malformed newest fence
+      // supersedes any older valid plan).
+      if (extractTermulPlanFenceJson(block.text) !== null) {
+        const parsed = parseTermulPlanFence(block.text)
+        return parsed
+      }
     }
     // Continue to earlier assistant messages — the most recent fence across
     // all turns is the plan-of-record.
   }
   return null
+}
+
+/**
+ * Check whether a text block IS a termul-plan fence (the entire text is the
+ * fence, not just contains one). Used by `appendPlanSnapshot` to decide which
+ * blocks to replace — only drop blocks that ARE fences, preserving assistant
+ * prose that merely quotes or references the fence format.
+ */
+function isTermulPlanFenceBlock(text: string | undefined): boolean {
+  if (typeof text !== 'string' || text.length === 0) return false
+  // Full-string match (anchored): the entire block must be the fence.
+  return /^```termul-plan\r?\n([\s\S]*?)\r?\n```$/.test(text)
 }
 
 /**
@@ -991,10 +1005,10 @@ function appendPlanSnapshot(
   const target = list[lastAgentIdx]
   // Replace any prior termul-plan fence block on the same message so the
   // snapshot is a full deterministic replace (one fence per assistant message).
-  // Use `extractTermulPlanFenceJson` (detects the fence pattern regardless of
-  // JSON validity) so a prior MALFORMED fence is also replaced — not just valid ones.
+  // Only drop blocks that ARE fences (full-string match), preserving assistant
+  // prose that merely contains or quotes the fence format.
   const filteredBlocks = target.blocks.filter(
-    (b) => b.type !== 'text' || extractTermulPlanFenceJson(b.text) === null
+    (b) => b.type !== 'text' || !isTermulPlanFenceBlock(b.text)
   )
   const fenceBlock: ContentBlock = {
     type: 'text',
@@ -5171,11 +5185,37 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // projection is re-fetched. Cross-restart durability requires a host-side
     // synthetic record (renegotiate the spec's "Never: no Rust-side persistence"
     // rule if needed).
+    //
+    // Only update the specific assistant message in the cache — the live window
+    // (`get().messages[sessionId]`) may be trimmed (MAX_LIVE_WINDOW_MESSAGES),
+    // so replacing the entire cached messages array with the live window would
+    // drop older messages and break `loadOlderMessages`.
     const cachedPayload = getCachedSessionPayload(e.sessionId)
     if (cachedPayload) {
-      const updatedMessages = get().messages[e.sessionId] ?? cachedPayload.messages
-      if (updatedMessages !== cachedPayload.messages) {
-        setCachedSessionPayload(e.sessionId, { ...cachedPayload, messages: updatedMessages })
+      const liveMessages = get().messages[e.sessionId]
+      if (liveMessages) {
+        // Find the last assistant message in the live window (the snapshot target).
+        let lastAgentIdx = -1
+        for (let i = liveMessages.length - 1; i >= 0; i--) {
+          if (liveMessages[i].role === 'agent') {
+            lastAgentIdx = i
+            break
+          }
+        }
+        if (lastAgentIdx >= 0) {
+          const liveAgent = liveMessages[lastAgentIdx]
+          // Find the corresponding message in the cached payload by id and
+          // update only its blocks — preserve all other cached messages.
+          const cachedIdx = cachedPayload.messages.findIndex((m) => m.id === liveAgent.id)
+          if (cachedIdx >= 0 && cachedPayload.messages[cachedIdx].blocks !== liveAgent.blocks) {
+            const updatedCachedMessages = [...cachedPayload.messages]
+            updatedCachedMessages[cachedIdx] = liveAgent
+            setCachedSessionPayload(e.sessionId, {
+              ...cachedPayload,
+              messages: updatedCachedMessages
+            })
+          }
+        }
       }
     }
     // Mirror the finished turn (including the agent's reply) to disk. Without

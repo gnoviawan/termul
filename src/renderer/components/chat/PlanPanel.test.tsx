@@ -117,7 +117,7 @@ describe('PlanPanel', () => {
   })
 
   it('hides the panel entirely when entries become empty (agent clears plan while collapsed)', async () => {
-    const { rerender, container } = render(
+    const { rerender } = render(
       <PlanPanel entries={[{ content: 'Task A', status: 'in_progress' }]} />
     )
     const toggle = screen.getByRole('button', { name: /Plan, 0 of 1 task, task in progress/ })
@@ -136,9 +136,7 @@ describe('PlanPanel', () => {
   })
 
   it('exposes a11y attributes on the region and header toggle', () => {
-    const { container } = render(
-      <PlanPanel entries={[{ content: 'Task A', status: 'completed' }]} />
-    )
+    render(<PlanPanel entries={[{ content: 'Task A', status: 'completed' }]} />)
     const region = screen.getByRole('region', { name: 'Execution plan' })
     expect(region).toBeInTheDocument()
     const toggle = screen.getByRole('button', { name: /Plan, 1 of 1 task/ })
@@ -203,7 +201,7 @@ describe('TermulPlanRenderer (termul-plan fence renderer)', () => {
 
   it('shows a streaming placeholder when the fence is incomplete', () => {
     render(<TermulPlanRenderer code="partial" isIncomplete={true} language="termul-plan" />)
-    expect(screen.getByText('Plan snapshot streaming…')).toBeInTheDocument()
+    expect(screen.getByText('Plan snapshot incomplete')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })
 })

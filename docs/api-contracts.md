@@ -352,21 +352,27 @@ When a turn ends (`_onPromptComplete` in `src/renderer/stores/acp-store.ts`), th
 snapshots the live `plans[sessionId]` onto the just-finished assistant message's `blocks` as
 a fenced code block with language `termul-plan`:
 
-~~~md
+````md
 ```termul-plan
 [{"content":"Read AC file","status":"completed","priority":"high"},{"content":"Fix bug","status":"in_progress","priority":"high"}]
 ```
-~~~
+````
 
 The fence JSON is `JSON.stringify(PlanEntry[])` — shape 1:1 with `PlanEntry`
 (`src/renderer/lib/acp-api.ts`). One fence per assistant message (last write wins; a prior
 fence on the same message is replaced). The snapshot rides on the existing `ChatMessage.blocks`
 persistence path (no new schema field).
 
-On `openHistorySession`, the renderer scans the last assistant message's `blocks` for the
+On `openHistorySession`, the renderer scans assistant messages in reverse for the
 fence, parses the JSON, and repopulates `plans[sessionId]` before any new `acp:plan_update`
 would arrive — so a reopened chat shows the prior plan immediately. Malformed JSON is dropped
 from the plan store (logged `source: 'planRehydrate'`); the agent can still emit a fresh plan.
+
+> **Cache-only rehydration:** The fence lives in the renderer's in-memory `messages` projection
+> and the `payloadCache` (updated on `_onPromptComplete`). The durable store (CAP-2 host-owned
+> history) does not contain the fence — cross-restart rehydrate does not work. In-session
+> rehydrate (switching away and back) works via the cache update. Fixing cross-restart requires
+> a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
 
 The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
 `TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
