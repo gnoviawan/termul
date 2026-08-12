@@ -701,6 +701,7 @@ mod tests {
             let server = HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
             let (port, token, provisional) = server.register_session("agent-1");
             server.bind_session(&token, "sess-real");
+            server.begin_turn("agent-1", "sess-real");
             let frame = serde_json::json!({
                 "token": token,
                 "session_id": provisional,

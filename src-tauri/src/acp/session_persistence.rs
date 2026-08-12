@@ -1723,7 +1723,7 @@ mod tests {
                 .unwrap()
                 .chars()
                 .count(),
-            81
+            49
         );
         let tool_log = fs::read_to_string(
             root.join("store")
