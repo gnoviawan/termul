@@ -346,6 +346,34 @@ ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/
 
 See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
 
+#### Persisted plan snapshot (`termul-plan` fence)
+
+When a turn ends (`_onPromptComplete` in `src/renderer/stores/acp-store.ts`), the renderer
+snapshots the live `plans[sessionId]` onto the just-finished assistant message's `blocks` as
+a fenced code block with language `termul-plan`:
+
+~~~md
+```termul-plan
+[{"content":"Read AC file","status":"completed","priority":"high"},{"content":"Fix bug","status":"in_progress","priority":"high"}]
+```
+~~~
+
+The fence JSON is `JSON.stringify(PlanEntry[])` — shape 1:1 with `PlanEntry`
+(`src/renderer/lib/acp-api.ts`). One fence per assistant message (last write wins; a prior
+fence on the same message is replaced). The snapshot rides on the existing `ChatMessage.blocks`
+persistence path (no new schema field).
+
+On `openHistorySession`, the renderer scans the last assistant message's `blocks` for the
+fence, parses the JSON, and repopulates `plans[sessionId]` before any new `acp:plan_update`
+would arrive — so a reopened chat shows the prior plan immediately. Malformed JSON is dropped
+from the plan store (logged `source: 'planRehydrate'`); the agent can still emit a fresh plan.
+
+The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
+`TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
+`PlanPanel`. The live streaming turn shows the sticky `PlanPanel` pinned in `AgentChatPanel`
+instead — the inline renderer is gated to `!streaming` so an in-flight turn never renders a
+duplicate plan UI.
+
 ### `acp:usage_update`
 
 **Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).

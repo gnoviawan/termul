@@ -41,7 +41,8 @@ vi.mock('streamdown', async () => {
     caret,
     animated,
     linkSafety,
-    components
+    components,
+    plugins
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -49,6 +50,7 @@ vi.mock('streamdown', async () => {
     animated?: boolean | AnimateOptions
     linkSafety?: LinkSafety
     components?: Record<string, unknown>
+    plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
@@ -62,6 +64,9 @@ vi.mock('streamdown', async () => {
     const animatedDuration = animatedConfig ? String(animatedConfig.duration ?? '') : ''
     const animatedStagger = animatedConfig ? String(animatedConfig.stagger ?? '') : ''
     const animatedEasing = animatedConfig?.easing ?? ''
+    const rendererLanguages = (plugins?.renderers ?? [])
+      .flatMap((r) => (Array.isArray(r.language) ? r.language : [r.language]))
+      .join(',')
 
     return (
       <div
@@ -73,6 +78,7 @@ vi.mock('streamdown', async () => {
         data-animated-easing={animatedEasing}
         data-caret={caret}
         data-custom-table={Boolean(CustomTable)}
+        data-renderer-languages={rendererLanguages}
       >
         <button
           type="button"
@@ -258,6 +264,24 @@ describe('ChatMessage', () => {
     render(<ChatMessage message={agentMessage(false)} isLast />)
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
+  })
+
+  it('wires the termul-plan renderer only for non-streaming (historical) messages', () => {
+    // Streaming message: the sticky PlanPanel covers the live turn; the
+    // inline renderer is deliberately absent so no duplicate plan UI shows.
+    const { unmount: unmountStreaming } = render(
+      <ChatMessage message={agentMessage(true)} isLast />
+    )
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-renderer-languages', '')
+    unmountStreaming()
+
+    // Historical message: the termul-plan renderer is attached so a
+    // persisted snapshot fence renders an inline read-only PlanPanel.
+    render(<ChatMessage message={agentMessage(false)} isLast />)
+    expect(screen.getByTestId('streamdown')).toHaveAttribute(
+      'data-renderer-languages',
+      'termul-plan'
+    )
   })
 
   it('stops the Streamdown caret when a newer timeline item follows', () => {

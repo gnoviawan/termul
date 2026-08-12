@@ -488,7 +488,7 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
-      <PlanPanel entries={plan} />
+      <PlanPanel key={`plan-${session.id}`} entries={plan} />
       <ChatMessageList
         items={timeline}
         sessionId={session.id}

@@ -33,6 +33,7 @@ import { parseSkillSegments, replaceSkillTokensInline } from '@/lib/skill-tokens
 import { stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import {
   blockData,
   blockDisplayName,
@@ -236,7 +237,18 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
 const CODE_PLUGIN = codePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
 const MERMAID_PLUGIN = mermaidPlugin
+/**
+ * Base plugin set used while the agent message is still streaming. The
+ * `termul-plan` renderer is deliberately absent here so an in-flight turn
+ * never renders a duplicate inline plan (the live sticky `PlanPanel` covers
+ * the streaming turn). Historical (non-streaming) messages swap in
+ * `STREAMDOWN_PLUGINS_WITH_PLAN` via the `plugins` prop on `AgentProse`.
+ */
 const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
+const STREAMDOWN_PLUGINS_WITH_PLAN = {
+  ...STREAMDOWN_PLUGINS,
+  renderers: [{ language: 'termul-plan', component: TermulPlanRenderer }]
+}
 
 // Copy on code blocks, plus download (save an agent-generated file); no line
 // numbers (chat snippets are short). Mermaid keeps its interactive controls.
@@ -393,7 +405,11 @@ function AgentProse({
         caret="block"
         animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
-        plugins={STREAMDOWN_PLUGINS}
+        // The `termul-plan` renderer is attached only to historical
+        // (non-streaming) messages so an in-flight turn never renders a
+        // duplicate inline plan — the live sticky `PlanPanel` owns the
+        // streaming turn.
+        plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
         remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
         controls={STREAMDOWN_CONTROLS}
         components={

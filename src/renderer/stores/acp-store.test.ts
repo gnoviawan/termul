@@ -77,6 +77,7 @@ vi.mock('@/lib/web-tab-session', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
+import type { PlanEntry } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   getCachedSessionPayload,
@@ -6069,6 +6070,417 @@ describe('ACP agent plan store', () => {
     })
     useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-1' })
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
+  })
+
+  // --- Plan persistence + sticky snapshot (spec: plan-persistence-sticky-snapshot) ---
+
+  it('sendPrompt preserves plans[sessionId] across a new prompt turn', async () => {
+    seedSession('sess-1', 'agent-1', false)
+    const plan: PlanEntry[] = [
+      { content: 'step one', status: 'in_progress', priority: 'high' },
+      { content: 'step two', status: 'pending', priority: 'medium' }
+    ]
+    useAcpStore.setState({ plans: { 'sess-1': plan } })
+    // never resolve so the turn stays active for the assertion
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPrompt('sess-1', 'follow up')
+    await Promise.resolve()
+    // Plan must NOT be cleared by sendPrompt (only _onPlanUpdate empty entries clears it)
+    expect(useAcpStore.getState().plans['sess-1']).toBe(plan)
+  })
+
+  it('_onPromptComplete appends a termul-plan fence to the last assistant message when plans[sessionId] is non-empty', () => {
+    seedSession('sess-1', 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-1': [
+          {
+            id: 'm-user',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'do work' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 1
+          },
+          {
+            id: 'm-agent',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working on it' }],
+            streaming: true,
+            timestamp: 1,
+            seq: 2
+          }
+        ]
+      },
+      plans: {
+        'sess-1': [
+          { content: 'Read AC file', status: 'completed', priority: 'high' },
+          { content: 'Fix bug', status: 'in_progress', priority: 'high' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      stopReason: 'end_turn'
+    })
+    const msgs = useAcpStore.getState().messages['sess-1']
+    const lastAgent = [...msgs].reverse().find((m) => m.role === 'agent')
+    expect(lastAgent).toBeDefined()
+    // The fence block must be the last block on the just-finished assistant message
+    const fenceBlock = lastAgent!.blocks.find(
+      (b) =>
+        b.type === 'text' && typeof b.text === 'string' && b.text.startsWith('```termul-plan\n')
+    )
+    expect(fenceBlock).toBeDefined()
+    // Non-fence text blocks (the agent's reply prose) must survive the
+    // appendPlanSnapshot filter — regression guard against a filter that
+    // accidentally drops all text blocks.
+    expect(lastAgent!.blocks).toHaveLength(2)
+    expect(lastAgent!.blocks.find((b) => b.text === 'working on it')).toBeDefined()
+    // The fence JSON decodes to the original PlanEntry[]
+    const json = (fenceBlock!.text as string).replace(/^```termul-plan\n/, '').replace(/\n```$/, '')
+    expect(JSON.parse(json)).toEqual([
+      { content: 'Read AC file', status: 'completed', priority: 'high' },
+      { content: 'Fix bug', status: 'in_progress', priority: 'high' }
+    ])
+    // streaming flag flipped by finalizeStreaming
+    expect(lastAgent!.streaming).toBe(false)
+  })
+
+  it('_onPromptComplete writes no fence when plans[sessionId] is empty (non-compliant agent)', () => {
+    seedSession('sess-1', 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-1': [
+          {
+            id: 'm-agent',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'reply' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 1
+          }
+        ]
+      },
+      plans: {}
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      stopReason: 'end_turn'
+    })
+    const lastAgent = useAcpStore.getState().messages['sess-1'].find((m) => m.role === 'agent')!
+    expect(
+      lastAgent.blocks.some((b) => b.type === 'text' && b.text?.startsWith('```termul-plan\n'))
+    ).toBe(false)
+  })
+
+  it('_onPromptComplete replaces a prior termul-plan fence on the same message (one fence per assistant message)', () => {
+    seedSession('sess-1', 'agent-1', true)
+    const priorFence = '```termul-plan\n[{"content":"old","status":"completed"}]\n```'
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-1': [
+          {
+            id: 'm-agent',
+            role: 'agent',
+            blocks: [
+              { type: 'text', text: 'reply' },
+              { type: 'text', text: priorFence }
+            ],
+            streaming: true,
+            timestamp: 0,
+            seq: 1
+          }
+        ]
+      },
+      plans: {
+        'sess-1': [{ content: 'new plan', status: 'in_progress', priority: 'high' }]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      stopReason: 'end_turn'
+    })
+    const lastAgent = useAcpStore.getState().messages['sess-1'].find((m) => m.role === 'agent')!
+    const fences = lastAgent.blocks.filter(
+      (b) =>
+        b.type === 'text' && typeof b.text === 'string' && b.text.startsWith('```termul-plan\n')
+    )
+    // Exactly one fence — the prior one was replaced, not appended
+    expect(fences).toHaveLength(1)
+    const json = (fences[0]!.text as string).replace(/^```termul-plan\n/, '').replace(/\n```$/, '')
+    expect(JSON.parse(json)).toEqual([
+      { content: 'new plan', status: 'in_progress', priority: 'high' }
+    ])
+  })
+
+  it('_onPromptComplete survives a JSON.stringify failure in appendPlanSnapshot without blocking turn-end (logs source: planSnapshot)', () => {
+    // A PlanEntry mutated to carry a circular reference would make
+    // JSON.stringify throw. The try/catch in _onPromptComplete logs to
+    // source: 'planSnapshot' and continues — the live sticky plan still
+    // covers the turn.
+    seedSession('sess-circular', 'agent-1', true)
+    const circular: PlanEntry = { content: 'bad', status: 'in_progress' } as PlanEntry
+    ;(circular as unknown as { self: unknown }).self = circular
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-circular': [
+          {
+            id: 'm-user',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'do work' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 1
+          },
+          {
+            id: 'm-agent',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working on it' }],
+            streaming: true,
+            timestamp: 1,
+            seq: 2
+          }
+        ]
+      },
+      plans: { 'sess-circular': [circular] }
+    }))
+    // Must not throw
+    expect(() =>
+      useAcpStore.getState()._onPromptComplete({
+        agentId: 'agent-1',
+        sessionId: 'sess-circular',
+        stopReason: 'end_turn'
+      })
+    ).not.toThrow()
+    // The agent's reply prose survives; no fence was appended (stringify threw).
+    const lastAgent = useAcpStore
+      .getState()
+      .messages['sess-circular'].find((m) => m.role === 'agent')!
+    expect(lastAgent.blocks.find((b) => b.text === 'working on it')).toBeDefined()
+    expect(lastAgent.blocks.some((b) => b.text?.startsWith('```termul-plan'))).toBe(false)
+  })
+
+  it('_onPromptComplete updates the in-memory payload cache so a same-session rehydrate finds the fence (CAP-2 host-owned history)', async () => {
+    // Seed the cache with a payload that has NO fence — this is the state
+    // after the host has written the turn's `message_chunk`/`user_prompt`
+    // records but before the renderer has snapshot the plan.
+    seedSession('sess-cache', 'agent-1', true)
+    const baseMessages: ChatMessage[] = [
+      {
+        id: 'm-user',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'do work' }],
+        streaming: false,
+        timestamp: 0,
+        seq: 1
+      },
+      {
+        id: 'm-agent',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'working on it' }],
+        streaming: true,
+        timestamp: 1,
+        seq: 2
+      }
+    ]
+    setCachedSessionPayload('sess-cache', {
+      metadata: {
+        id: 'sess-cache',
+        agentId: 'agent-1',
+        title: 'T',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 0,
+        messageCount: 2,
+        status: 'active' as const
+      },
+      messages: baseMessages
+    })
+    useAcpStore.setState((s) => ({
+      messages: { ...s.messages, 'sess-cache': baseMessages },
+      plans: {
+        'sess-cache': [{ content: 'cache task', status: 'in_progress', priority: 'high' }]
+      }
+    }))
+
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 'sess-cache',
+      stopReason: 'end_turn'
+    })
+
+    // The cache must now reflect the fence-appended messages so a subsequent
+    // loadSessionPayload (within the same app session) finds the fence.
+    const cached = getCachedSessionPayload('sess-cache')
+    expect(cached).toBeDefined()
+    const cachedAgent = [...cached!.messages].reverse().find((m) => m.role === 'agent')
+    expect(cachedAgent).toBeDefined()
+    const cachedFence = cachedAgent!.blocks.find(
+      (b) =>
+        b.type === 'text' && typeof b.text === 'string' && b.text.startsWith('```termul-plan\n')
+    )
+    expect(cachedFence).toBeDefined()
+    // The live store and the cache must agree on the fence content.
+    const storeAgent = useAcpStore
+      .getState()
+      .messages['sess-cache'].find((m) => m.role === 'agent')!
+    const storeFence = storeAgent.blocks.find(
+      (b) =>
+        b.type === 'text' && typeof b.text === 'string' && b.text.startsWith('```termul-plan\n')
+    )!
+    expect(cachedFence!.text).toBe(storeFence.text)
+  })
+
+  it('openHistorySession repopulates plans[id] from the latest termul-plan fence in the last assistant message', async () => {
+    const plan: PlanEntry[] = [
+      { content: 'historical task', status: 'completed', priority: 'high' },
+      { content: 'next step', status: 'in_progress', priority: 'medium' }
+    ]
+    const fence = '```termul-plan\n' + JSON.stringify(plan) + '\n```'
+    setCachedSessionPayload('sess-rehydrate', {
+      metadata: {
+        id: 'sess-rehydrate',
+        agentId: 'agent-x',
+        title: 'Rehydrated',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-user',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do work' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
+          id: 'm-agent',
+          role: 'agent',
+          blocks: [
+            { type: 'text', text: 'reply' },
+            { type: 'text', text: fence }
+          ],
+          streaming: false,
+          timestamp: 1,
+          seq: 2
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('sess-rehydrate')
+    expect(useAcpStore.getState().plans['sess-rehydrate']).toEqual(plan)
+  })
+
+  it('openHistorySession leaves plans[id] empty and warns when the fence JSON is malformed', async () => {
+    setCachedSessionPayload('sess-malformed', {
+      metadata: {
+        id: 'sess-malformed',
+        agentId: 'agent-x',
+        title: 'Malformed',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-agent',
+          role: 'agent',
+          blocks: [{ type: 'text', text: '```termul-plan\n{not valid json}\n```' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('sess-malformed')
+    expect(useAcpStore.getState().plans['sess-malformed']).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'planRehydrate' })
+    )
+  })
+
+  it('openHistorySession does not overwrite a live plans[id] from an in-flight turn', async () => {
+    const livePlan: PlanEntry[] = [{ content: 'live', status: 'in_progress', priority: 'high' }]
+    const fence =
+      '```termul-plan\n' + JSON.stringify([{ content: 'fence', status: 'completed' }]) + '\n```'
+    setCachedSessionPayload('sess-live', {
+      metadata: {
+        id: 'sess-live',
+        agentId: 'agent-x',
+        title: 'Live',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-agent',
+          role: 'agent',
+          blocks: [{ type: 'text', text: fence }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ]
+    })
+    seedSession('sess-live', 'agent-x', true)
+    useAcpStore.setState({ plans: { 'sess-live': livePlan } })
+    await useAcpStore.getState().openHistorySession('sess-live')
+    // Live plan from the in-flight turn wins; the fence does not overwrite it
+    expect(useAcpStore.getState().plans['sess-live']).toBe(livePlan)
+  })
+
+  it('openHistorySession last-fence-wins when two termul-plan fences are in the same assistant message', async () => {
+    const first =
+      '```termul-plan\n' + JSON.stringify([{ content: 'first', status: 'completed' }]) + '\n```'
+    const second =
+      '```termul-plan\n' + JSON.stringify([{ content: 'second', status: 'in_progress' }]) + '\n```'
+    setCachedSessionPayload('sess-twofence', {
+      metadata: {
+        id: 'sess-twofence',
+        agentId: 'agent-x',
+        title: 'Two fences',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm-agent',
+          role: 'agent',
+          blocks: [
+            { type: 'text', text: 'reply' },
+            { type: 'text', text: first },
+            { type: 'text', text: second }
+          ],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ]
+    })
+    await useAcpStore.getState().openHistorySession('sess-twofence')
+    expect(useAcpStore.getState().plans['sess-twofence']).toEqual([
+      { content: 'second', status: 'in_progress' }
+    ])
   })
 })
 

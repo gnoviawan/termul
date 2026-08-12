@@ -93,6 +93,7 @@ import {
   queueSessionPayloadDelete,
   restoredToolCalls,
   type SessionIndexEntry,
+  setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
 import {
@@ -888,6 +889,124 @@ function dropPlanForSession(
   const next = { ...plans }
   delete next[sessionId]
   return next
+}
+
+/**
+ * Parse the LAST ```termul-plan fence out of a markdown text blob. Returns
+ * the parsed `PlanEntry[]` when the JSON is a valid array, or `null` when
+ * there is no fence or the JSON is malformed. Last-fence-wins matches the
+ * snapshot contract: each assistant message carries at most one renderer-
+ * authored snapshot, and a rehydrate must surface the most recent one.
+ */
+export function parseTermulPlanFence(text: string | undefined): PlanEntry[] | null {
+  const json = extractTermulPlanFenceJson(text)
+  if (json === null) return null
+  try {
+    const parsed = JSON.parse(json)
+    if (!Array.isArray(parsed)) return null
+    // Coerce to PlanEntry[]: keep only objects with a string `content`; drop
+    // malformed entries so a single bad entry doesn't poison the whole plan.
+    // `status` and `priority` are optional but must be strings when present.
+    return parsed.filter((entry): entry is PlanEntry => {
+      if (entry === null || typeof entry !== 'object') return false
+      const e = entry as PlanEntry
+      if (typeof e.content !== 'string') return false
+      if (e.status !== undefined && typeof e.status !== 'string') return false
+      if (e.priority !== undefined && typeof e.priority !== 'string') return false
+      return true
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Extract the raw JSON string from the LAST ```termul-plan fence in the text.
+ * Returns `null` when no fence is present. Used by the rehydrate path to
+ * distinguish "no fence" (skip silently) from "malformed fence JSON" (warn).
+ */
+export function extractTermulPlanFenceJson(text: string | undefined): string | null {
+  if (typeof text !== 'string' || text.length === 0) return null
+  // \r? handles both LF and CRLF line endings (Windows host/agent normalization).
+  const fence = /```termul-plan\r?\n([\s\S]*?)\r?\n```/g
+  let lastJson: string | null = null
+  for (let match = fence.exec(text); match !== null; match = fence.exec(text)) {
+    lastJson = match[1]
+  }
+  return lastJson
+}
+
+/**
+ * Scan assistant messages in reverse for a `termul-plan` fence (last fence
+ * wins). Returns the parsed plan, or `null` when no fence is present or the
+ * JSON is malformed. Scans ALL assistant messages — if the last message has
+ * no fence (e.g. the turn was interrupted before `_onPromptComplete` ran),
+ * earlier messages' fences are the plan-of-record.
+ */
+function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'agent') continue
+    const blocks = messages[i].blocks
+    // Last fence wins: scan blocks in reverse so the most recent snapshot
+    // surfaces first.
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const block = blocks[j]
+      if (block.type !== 'text') continue
+      const parsed = parseTermulPlanFence(block.text)
+      if (parsed !== null) return parsed
+      // If a fence exists but is malformed, keep scanning for an earlier
+      // valid one on the same message; if none surfaces, the rehydrate path
+      // logs the malformed fence separately via `extractTermulPlanFenceJson`.
+      if (extractTermulPlanFenceJson(block.text) !== null) continue
+    }
+    // Continue to earlier assistant messages — the most recent fence across
+    // all turns is the plan-of-record.
+  }
+  return null
+}
+
+/**
+ * Append a `termul-plan` fence `text` block carrying the live plan to the
+ * last assistant message's `blocks`. The snapshot is a full deterministic
+ * replace of any prior snapshot block on the same message (one fence per
+ * assistant message, last write wins). Returns the messages map unchanged
+ * when there is no live plan or no assistant message to attach to.
+ */
+function appendPlanSnapshot(
+  messages: Record<SessionId, ChatMessage[]>,
+  sessionId: SessionId,
+  plan: PlanEntry[] | undefined
+): Record<SessionId, ChatMessage[]> {
+  if (!plan || plan.length === 0) return messages
+  const list = messages[sessionId]
+  if (!list || list.length === 0) return messages
+  let lastAgentIdx = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === 'agent') {
+      lastAgentIdx = i
+      break
+    }
+  }
+  if (lastAgentIdx < 0) return messages
+  const target = list[lastAgentIdx]
+  // Replace any prior termul-plan fence block on the same message so the
+  // snapshot is a full deterministic replace (one fence per assistant message).
+  // Use `extractTermulPlanFenceJson` (detects the fence pattern regardless of
+  // JSON validity) so a prior MALFORMED fence is also replaced — not just valid ones.
+  const filteredBlocks = target.blocks.filter(
+    (b) => b.type !== 'text' || extractTermulPlanFenceJson(b.text) === null
+  )
+  const fenceBlock: ContentBlock = {
+    type: 'text',
+    text: `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
+  }
+  const updatedMessage: ChatMessage = {
+    ...target,
+    blocks: [...filteredBlocks, fenceBlock]
+  }
+  const newList = [...list]
+  newList[lastAgentIdx] = updatedMessage
+  return { ...messages, [sessionId]: newList }
 }
 
 /** Remove all pending permissions belonging to an agent. */
@@ -2076,6 +2195,36 @@ async function openHistorySessionInner(
   }))
   onTranscriptInstalled()
 
+  // Rehydrate the sticky plan from the latest assistant message's
+  // `termul-plan` fence (single source of truth). Scans the payload messages
+  // (not the trimmed live window) so the fence is found even when the
+  // trimming boundary lands on the snapshot carrier. Skip silently when a
+  // live `plans[id]` already exists from an in-flight turn — the live plan
+  // owns the active turn; the fence only rehydrates a closed/reopened chat.
+  if (!get().plans[id]) {
+    const rehydrated = scanPlanFenceFromMessages(payload.messages)
+    if (rehydrated && rehydrated.length > 0) {
+      set((s) => ({ plans: { ...s.plans, [id]: rehydrated } }))
+    } else {
+      // Detect a malformed fence (fence present but JSON unparseable / not an
+      // array / empty after coercion) and warn so a corrupted snapshot is
+      // visible without crashing the rehydrate. Leave `plans[id]` empty so
+      // the agent can still emit a fresh plan.
+      const lastAgent = [...payload.messages].reverse().find((m) => m.role === 'agent')
+      const hasMalformedFence =
+        lastAgent?.blocks.some(
+          (b) => b.type === 'text' && extractTermulPlanFenceJson(b.text) !== null
+        ) ?? false
+      if (hasMalformedFence) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'planRehydrate',
+          message: `Malformed termul-plan fence in history session ${id}; leaving plans empty`
+        })
+      }
+    }
+  }
+
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
   // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
@@ -2333,12 +2482,15 @@ async function runPromptTurn(
           timestamp: Date.now(),
           seq: nextSeq()
         }
+        // Plan persistence: do NOT drop `plans[sessionId]` here. The ACP
+        // spec's empty-entries rule (`_onPlanUpdate`) remains the sole
+        // client-visible clear path; clearing on prompt-send wiped
+        // in-progress plans between turns (spec: plan-persistence-sticky-snapshot).
         return {
           messages: {
             ...s.messages,
             [sessionId]: [...list, userMessage]
           },
-          plans: dropPlanForSession(s.plans, sessionId),
           sessions: {
             ...s.sessions,
             [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
@@ -2352,7 +2504,6 @@ async function runPromptTurn(
           ...s.messages,
           [sessionId]: rebrandedList
         },
-        plans: dropPlanForSession(s.plans, sessionId),
         sessions: {
           ...s.sessions,
           [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
@@ -2373,7 +2524,6 @@ async function runPromptTurn(
         ...s.messages,
         [sessionId]: [...(s.messages[sessionId] ?? []), userMessage]
       },
-      plans: dropPlanForSession(s.plans, sessionId),
       sessions: {
         ...s.sessions,
         [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
@@ -4973,7 +5123,25 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // consistent before the turn status flips.
     flushCoalescedSync()
     set((s) => {
-      const messages = finalizeStreaming(s.messages, e.sessionId)
+      // Snapshot the live plan onto the just-finished assistant message's
+      // `blocks` BEFORE `finalizeStreaming` so historical turns retain their
+      // plan-of-record (the fence is the rehydrate source of truth). The
+      // append is a pure data op; `finalizeStreaming` only flips the
+      // `streaming` flag, so the fence survives the finalize pass.
+      let withSnapshot = s.messages
+      try {
+        withSnapshot = appendPlanSnapshot(s.messages, e.sessionId, s.plans[e.sessionId])
+      } catch (error) {
+        // Impossible in practice (pure JS over a PlanEntry[]), but a bad
+        // entry could throw inside JSON.stringify. Log + continue turn-end
+        // without blocking; the live sticky plan still covers the turn.
+        void logFrontendError({
+          level: 'warn',
+          source: 'planSnapshot',
+          message: `Failed to snapshot plan for ${e.sessionId}: ${String(error)}`
+        })
+      }
+      const messages = finalizeStreaming(withSnapshot, e.sessionId)
       const session = s.sessions[e.sessionId]
       // A finished turn abandons any unanswered permission for this session;
       // the backend resolves it 'cancelled', so clear the stale store entry too.
@@ -4994,6 +5162,22 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    // Update the in-memory payload cache so a same-session rehydrate (switching
+    // away and back, or any path that re-runs `loadSessionPayload`) finds the
+    // fence. Since CAP-2 host-owned history, `persistSession` only updates the
+    // session-index projection — the durable message wire shape is owned by the
+    // Rust host, and the renderer's `messages` is a projection. Without this
+    // cache update, the snapshot fence would be lost the moment the live
+    // projection is re-fetched. Cross-restart durability requires a host-side
+    // synthetic record (renegotiate the spec's "Never: no Rust-side persistence"
+    // rule if needed).
+    const cachedPayload = getCachedSessionPayload(e.sessionId)
+    if (cachedPayload) {
+      const updatedMessages = get().messages[e.sessionId] ?? cachedPayload.messages
+      if (updatedMessages !== cachedPayload.messages) {
+        setCachedSessionPayload(e.sessionId, { ...cachedPayload, messages: updatedMessages })
+      }
+    }
     // Mirror the finished turn (including the agent's reply) to disk. Without
     // this, only user sends persist and a restart loses the last reply. Skip
     // sessions no longer in the index — persisting would resurrect a chat the
