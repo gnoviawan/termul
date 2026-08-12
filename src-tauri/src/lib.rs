@@ -134,7 +134,7 @@ pub use acp::{
     AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, FileProjectRegistry,
     SessionPersistence, WorkspaceManifestService,
 };
-// Host-injected `termul_plan` MCP tool: the `--internal-mcp-plan-server`
+// Host-injected `plan` MCP tool: the `--internal-mcp-plan-server`
 // subcommand branch in `main.rs` + `server_main.rs` reaches `host_mcp::CHILD_ARG`
 // + `host_mcp::child::run()` through this re-export (the `acp` module itself is
 // private). See `acp/host_mcp/mod.rs` + spec `spec-acp-host-todo-plan-tool.md`.

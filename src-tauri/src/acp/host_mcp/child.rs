@@ -7,7 +7,7 @@
 //! `McpServer::Stdio`; the child inherits the agent-provided stdin/stdout (the
 //! MCP stdio transport).
 //!
-//! The child runs an rmcp MCP SERVER over stdio exposing the `termul_plan`
+//! The child runs an rmcp MCP SERVER over stdio exposing the `plan`
 //! tool. On each `tools/call`, it opens a fresh TCP connection to the parent
 //! (port + token from env), forwards the input, and returns the parent's reply
 //! to the agent. Minimal runtime: no Tauri plugins, no `AppHandle`, no sinks —
@@ -95,7 +95,7 @@ pub fn run() -> i32 {
     }
 }
 
-/// The rmcp MCP server service backing `termul_plan`. Holds the per-session
+/// The rmcp MCP server service backing `plan`. Holds the per-session
 /// connection info (port + token + session_id) so each `tools/call` can open a
 /// fresh TCP connection to the parent.
 struct TermulPlanServer {
@@ -113,10 +113,10 @@ struct TermulPlanServer {
 #[tool_router(server_handler)]
 impl TermulPlanServer {
     #[tool(
-        name = "termul_plan",
+        name = "plan",
         description = "Update the execution plan / todo list shown in the Termul plan panel. Call this instead of a built-in todo tool so the user sees a unified plan UI across all agents."
     )]
-    async fn termul_plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
+    async fn plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
         let request = FrameRequest {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
@@ -126,15 +126,15 @@ impl TermulPlanServer {
         };
         match forward_to_parent(&self.config, request, "plan updated").await {
             Ok(msg) => msg,
-            Err(e) => format!("termul_plan error: {e}"),
+            Err(e) => format!("plan error: {e}"),
         }
     }
 
     #[tool(
-        name = "termul_set_session_title",
+        name = "set_session_title",
         description = "Set a concise title for the current Termul chat session. Call this during the first turn as soon as the user's intent is clear."
     )]
-    async fn termul_set_session_title(
+    async fn set_session_title(
         &self,
         Parameters(input): Parameters<TermulSetTitleInput>,
     ) -> String {
@@ -147,7 +147,7 @@ impl TermulPlanServer {
         };
         match forward_to_parent(&self.config, request, "title updated").await {
             Ok(msg) => msg,
-            Err(e) => format!("termul_set_session_title error: {e}"),
+            Err(e) => format!("set_session_title error: {e}"),
         }
     }
 }

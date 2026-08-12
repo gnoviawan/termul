@@ -46,7 +46,7 @@ fn main() -> ExitCode {
     }
 
     // `--internal-mcp-plan-server`: self-spawned child of the host-injected
-    // `termul_plan` MCP tool. The agent spawns `current_exe()` with this flag
+    // `plan` MCP tool. The agent spawns `current_exe()` with this flag
     // (the injected `McpServer::Stdio`); the child runs an rmcp MCP server over
     // stdio + forwards calls to the parent's TCP listener. Branch BEFORE any
     // tokio/app setup (AC2) so the standalone binary never inits the server

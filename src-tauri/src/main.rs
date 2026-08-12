@@ -4,7 +4,7 @@
 fn main() {
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this
     // binary (current_exe) as the injected `McpServer::Stdio` for the
-    // host-injected `termul_plan` tool. Branch BEFORE any Tauri/log setup so
+    // host-injected `plan` tool. Branch BEFORE any Tauri/log setup so
     // the child never initializes the app / plugins / sinks — it just runs
     // an rmcp MCP server over stdio + forwards calls to the parent's TCP
     // listener. See `acp::host_mcp::child` + spec `spec-acp-host-todo-plan-tool.md`.

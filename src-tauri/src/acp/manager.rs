@@ -805,12 +805,12 @@ pub struct AcpManager {
     /// one agent lifetime. Cleared on agent drop (driver self-reap) so a
     /// re-spawned agent re-warmups.
     warmup_done: Arc<Mutex<HashSet<AgentId>>>,
-    /// Host-injected `termul_plan` MCP server (one shared TCP listener across
+    /// Host-injected `plan` MCP server (one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
     /// bind + port-publish handshake). Injects a self-spawned stdio child
     /// into every non-ephemeral session's `mcp_servers`; the child forwards
-    /// `termul_plan` calls back here, and `host_mcp::emit_plan_update` emits a
+    /// `plan` calls back here, and `host_mcp::emit_plan_update` emits a
     /// synthetic `acp:plan_update` so the existing renderer `PlanPanel`
     /// renders it. See `host_mcp::mod` + the spec
     /// `spec-acp-host-todo-plan-tool.md`.
@@ -1227,7 +1227,7 @@ impl AcpManager {
             .map(|entry| (entry.capabilities.clone(), entry.stable_namespace.clone()))
             .ok_or_else(|| format!("unknown agent: {agent_id}"))?;
 
-        // Host-injected `termul_plan` MCP tool: prepend a self-spawned stdio
+        // Host-injected `plan` MCP tool: prepend a self-spawned stdio
         // child to every non-ephemeral session's mcp_servers so the agent
         // discovers + calls it as a first-class tool (see `host_mcp::mod` +
         // spec `spec-acp-host-todo-plan-tool.md`). The real ACP session_id
@@ -1270,7 +1270,7 @@ impl AcpManager {
             Ok(outcome) => {
                 // Bind the real session_id to the plan token so the parent can
                 // emit plan_update for the right session when the agent calls
-                // termul_plan.
+                // plan.
                 if let Some(token) = plan_token {
                     self.host_plan_server
                         .bind_session(&token, &outcome.session_id.0);
@@ -2204,11 +2204,11 @@ fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(
     Ok(())
 }
 
-/// Build the internal `termul_plan` MCP server config (stdio self-spawn) to
+/// Build the internal `plan` MCP server config (stdio self-spawn) to
 /// prepend into a session's `mcp_servers`. The agent spawns
 /// `current_exe() --internal-mcp-plan-server` as a child; the child reads
 /// `TERMUL_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` / `_AGENT_ID` from env,
-/// runs an rmcp MCP server over stdio, and forwards `termul_plan` calls to
+/// runs an rmcp MCP server over stdio, and forwards `plan` calls to
 /// the parent TCP listener. The internal server is `McpServer::Stdio`, which
 /// `gate_mcp_servers` accepts unconditionally (stdio is mandatory in ACP), so
 /// no gate relaxation is needed.
@@ -2231,7 +2231,7 @@ fn build_internal_plan_stdio(
         ),
         EnvVariable::new(crate::acp::host_mcp::ENV_AGENT_ID, agent_id.to_string()),
     ];
-    let stdio = McpServerStdio::new("termul-plan".to_string(), exe)
+    let stdio = McpServerStdio::new("termul".to_string(), exe)
         .args(vec![crate::acp::host_mcp::CHILD_ARG.to_string()])
         .env(env);
     vec![McpServer::Stdio(stdio)]
@@ -3506,7 +3506,7 @@ async fn run_command_loop(
                 let turn_persistence = persistence.clone();
                 let turn_session = session_id.clone();
                 let log_session = session_id.clone();
-                // Register before spawning so an immediate `termul_plan` call is
+                // Register before spawning so an immediate `plan` call is
                 // routed to this accepted prompt's session, even when the agent
                 // reuses an MCP child created for an older session.
                 host_plan_server.begin_turn(&agent_id.0, &session_id.0);

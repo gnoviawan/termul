@@ -1,5 +1,5 @@
 //! Parent side of the host-injected plan tool: an in-process TCP listener that
-//! the self-spawned child connects to on each `termul_plan` call.
+//! the self-spawned child connects to on each `plan` call.
 //!
 //! One shared listener serves all sessions (started lazily by `AcpManager` on
 //! first `new_session_with_context`). Each session is registered with a random

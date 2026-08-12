@@ -1,4 +1,4 @@
-//! Host-injected `termul_plan` MCP tool — first-class plan UI for every ACP agent.
+//! Host-injected `plan` MCP tool — first-class plan UI for every ACP agent.
 //!
 //! Termul auto-injects a host-side MCP server into every `session/new`
 //! `mcp_servers` list (see `AcpManager::new_session_with_context`). The agent
@@ -14,7 +14,7 @@
 //! - `child` — `--internal-mcp-plan-server` subcommand entrypoint. The agent
 //!   spawns `current_exe()` with this flag (the McpServer::Stdio config built
 //!   in `new_session_with_context`). Runs an rmcp MCP SERVER over stdio
-//!   exposing `termul_plan`; on each call, opens a fresh TCP connection to the
+//!   exposing `plan`; on each call, opens a fresh TCP connection to the
 //!   parent, forwards the input, returns the parent's reply.
 //!
 //! Desktop + standalone parity: no `tauri-plugin-mcp-bridge` / `AppHandle` —
@@ -58,7 +58,7 @@ pub const ENV_TOKEN: &str = "TERMUL_PLAN_TOKEN";
 pub const ENV_SESSION_ID: &str = "TERMUL_PLAN_SESSION_ID";
 pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 
-/// Input the agent sends to `termul_plan` (the `arguments` of `tools/call`).
+/// Input the agent sends to `plan` (the `arguments` of `tools/call`).
 /// Also re-used as the parent–child TCP frame body (one todo per plan entry).
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TermulPlanInput {
@@ -67,7 +67,7 @@ pub struct TermulPlanInput {
     pub todos: Vec<TermulPlanTodo>,
 }
 
-/// Input the agent sends to `termul_set_session_title`.
+/// Input the agent sends to `set_session_title`.
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TermulSetTitleInput {
     /// Concise title for the current chat session.
