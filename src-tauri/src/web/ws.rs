@@ -3454,8 +3454,18 @@ mod tests {
         cleanup_task.abort();
         let _ = cleanup_task.await;
 
-        assert_eq!(relay.session_subscriber_count("session-cleanup"), 0);
-        assert!(subscribed.lock().await.is_empty());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if relay.session_subscriber_count("session-cleanup") == 0
+                    && subscribed.lock().await.is_empty()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("subscriptions cleaned up after connection cleanup");
         assert!(!questions.is_outstanding("question-cleanup"));
         tokio::time::timeout(Duration::from_secs(1), async {
             while permissions.is_outstanding("permission-cleanup") {

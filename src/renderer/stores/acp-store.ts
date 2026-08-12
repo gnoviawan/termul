@@ -5377,13 +5377,16 @@ export function initAcpEventListeners(): () => void {
   const transport = getAcpTransport()
   let historyRetryTimer: ReturnType<typeof setTimeout> | null = null
   let historyRetryAttempt = 0
+  let historyTornDown = false
   const refetchHistoryAfterReconnect = (): void => {
     const run = (): void => {
+      if (historyTornDown) return
       void useAcpStore
         .getState()
         .loadSessionIndex()
         .then(() => undefined)
         .catch((error) => {
+          if (historyTornDown) return
           if (!isTransientAcpTransportError(error) || historyRetryAttempt >= 3) {
             void logFrontendError({
               level: 'warn',
@@ -5555,6 +5558,7 @@ export function initAcpEventListeners(): () => void {
     )
   ]
   return () => {
+    historyTornDown = true
     if (historyRetryTimer) {
       clearTimeout(historyRetryTimer)
       historyRetryTimer = null
