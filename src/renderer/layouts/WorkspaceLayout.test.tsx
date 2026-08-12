@@ -885,12 +885,12 @@ describe('WorkspaceLayout - Empty States', () => {
 
       // The onShortcut subscription registers in a layout effect; under
       // full-suite contention this can slip past the default 1s waitFor.
-      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 5000 })
+      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 10000 })
       act(() => backendShortcut?.('colorThemePicker'))
       // ThemePicker is React.lazy — allow extra time for the chunk to resolve
       // under full-suite resource contention (passes instantly in isolation).
       expect(
-        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 5000 })
+        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 10000 })
       ).toBeInTheDocument()
     })
   })
@@ -1188,7 +1188,7 @@ describe('WorkspaceLayout - Empty States', () => {
           () => {
             expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
           },
-          { timeout: 5000 }
+          { timeout: 10000 }
         )
 
         // Give the async project-switch effect a tick to settle.
