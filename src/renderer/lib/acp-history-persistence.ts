@@ -307,18 +307,26 @@ export function scopeSessionIndex(
 }
 
 // Canonicalize a cwd/path for comparison: strip the Windows verbatim `\\?\`
-// prefix, unify separators to `/`, and trim trailing slashes. Shared between
-// `scopeSessionIndex` (session cwd vs project worktree paths) and the launcher's
-// worktree-registration dedup (new worktree path vs already-stored paths), so a
-// trailing-slash or verbatim-prefix form mismatch can't defeat either check.
-// No lowercasing — preserves case-sensitive matching on POSIX where the prefix
-// and backslashes never occur (the transform is a no-op there).
+// prefix, collapse the extended UNC verbatim prefix `\\?\UNC\` to `//` so it
+// matches standard UNC `\\server\share`, unify separators to `/`, and trim
+// trailing slashes. Shared between `scopeSessionIndex` (session cwd vs project
+// worktree paths) and the launcher's worktree-registration dedup (new worktree
+// path vs already-stored paths), so a trailing-slash or verbatim-prefix form
+// mismatch can't defeat either check. No lowercasing — preserves case-sensitive
+// matching on POSIX where the prefix and backslashes never occur (the transform
+// is a no-op there).
 export function normalizeCwdForScope(p: string): string {
   if (!p) return p
-  return p
-    .replace(/^\\\\\?\\/, '')
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
+  return (
+    p
+      // Extended UNC verbatim prefix `\\?\UNC\server\share` → `//server/share`:
+      // collapse to `//` BEFORE the generic verbatim-prefix strip so extended and
+      // standard UNC (`\\server\share`) normalize identically.
+      .replace(/^\\\\\?\\UNC\\/i, '//')
+      .replace(/^\\\\\?\\/, '')
+      .replace(/\\/g, '/')
+      .replace(/\/+$/, '')
+  )
 }
 
 function historyMode(): 'server' | 'live_only' | 'tauri_store' | undefined {

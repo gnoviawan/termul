@@ -46,6 +46,7 @@ import {
   loadSessionPayload,
   markSessionPayloadPinned,
   maxPayloadSeq,
+  normalizeCwdForScope,
   PERSISTED_TOOL_CALL_BYTE_BUDGET,
   PERSISTED_TOOL_CALLS_LIMIT,
   queueSessionPayloadDelete,
@@ -237,6 +238,23 @@ describe('pure history helpers', () => {
         'E:/project/.termul/worktrees/wt'
       ]).map(({ id }) => id)
     ).toEqual(['wt-chat'])
+  })
+
+  it('normalizes extended UNC verbatim prefix to match standard UNC paths', () => {
+    // Windows extended UNC verbatim prefix `\\?\UNC\server\share\…` and the
+    // standard UNC `\\server\share\…` must produce the same scope value so a
+    // UNC-rooted worktree chat is reachable regardless of which form the host
+    // canonicalized the cwd into.
+    const extended = '\\\\?\\UNC\\server\\share\\wt'
+    const standard = '\\\\server\\share\\wt'
+    expect(normalizeCwdForScope(extended)).toBe(normalizeCwdForScope(standard))
+
+    // Scoping matches an extended-UNC session cwd against a standard-UNC
+    // active cwd / worktree path from the root view.
+    const wtChat = entry('unc-wt', { cwd: extended })
+    expect(
+      scopeSessionIndex([wtChat], 'project-1', standard, [standard]).map(({ id }) => id)
+    ).toEqual(['unc-wt'])
   })
 
   it('preserves the existing browser summary wire shape', () => {
