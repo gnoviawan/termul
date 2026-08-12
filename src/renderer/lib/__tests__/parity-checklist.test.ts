@@ -1309,6 +1309,20 @@ describe('Parity Checklist Automation', () => {
       expect(handler).toMatch(/stopPropagation/)
     })
 
+    it('ProjectSidebar.tsx handleGroupContextMenu calls stopPropagation (parity with handleContextMenu)', () => {
+      const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
+      const content = readFileSync(sidebar, 'utf-8')
+      // The group context menu handler must also stopPropagation so the global
+      // Radix trigger doesn't double-fire over the sidebar's group menu.
+      const handlerMatch = content.match(
+        /handleGroupContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[/
+      )
+      expect(handlerMatch, 'handleGroupContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
+    })
+
     it('FileExplorer.tsx handleContextMenu calls stopPropagation (pre-existing pattern)', () => {
       const explorer = join(LIB_DIR, '..', 'components', 'file-explorer', 'FileExplorer.tsx')
       expect(existsSync(explorer), 'FileExplorer.tsx should exist').toBe(true)

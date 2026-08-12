@@ -367,6 +367,7 @@ export function ProjectSidebar({
   const handleGroupContextMenu = useCallback(
     (e: React.MouseEvent, groupId: string): void => {
       e.preventDefault()
+      e.stopPropagation()
       const group = groups.find((g) => g.id === groupId)
       if (group) {
         setGroupContextMenu({

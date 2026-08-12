@@ -81,6 +81,47 @@ function getSelectionText(): string {
 }
 
 /**
+ * A snapshot of the current selection so it can be restored after `copyText` —
+ * `copyText`'s non-secure-context fallback focuses a temporary textarea
+ * (`lib/copy-text.ts`), which destroys the original selection. Without
+ * restoring it, `execCommand('delete')` in `cutSelection` would delete nothing.
+ */
+type SelectionSnapshot =
+  | { kind: 'input'; start: number; end: number }
+  | { kind: 'range'; range: Range }
+  | null
+
+function captureSelectionSnapshot(el: HTMLElement): SelectionSnapshot {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    return { kind: 'input', start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 }
+  }
+  const sel = typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null
+  if (sel && sel.rangeCount > 0) {
+    return { kind: 'range', range: sel.getRangeAt(0).cloneRange() }
+  }
+  return null
+}
+
+function restoreSelectionSnapshot(el: HTMLElement, snapshot: SelectionSnapshot): void {
+  if (!snapshot) return
+  if (
+    snapshot.kind === 'input' &&
+    (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
+  ) {
+    try {
+      el.setSelectionRange(snapshot.start, snapshot.end)
+    } catch {
+      // setSelectionRange can throw for some input types (email/number); ignore.
+    }
+  } else if (snapshot.kind === 'range' && typeof window !== 'undefined' && window.getSelection) {
+    const sel = window.getSelection()
+    if (!sel) return
+    sel.removeAllRanges()
+    sel.addRange(snapshot.range)
+  }
+}
+
+/**
  * Copy the current selection to the clipboard. Returns `false` when no
  * selection exists or the copy failed (logged via log-api).
  */
@@ -107,10 +148,17 @@ export async function cutSelection(): Promise<boolean> {
   const text = getSelectionText()
   if (!text) return false
   const editable = getFocusedEditable()
-  if (!isMutableEditable(editable)) return false
+  if (!editable || !isMutableEditable(editable)) return false
+  // Capture the selection BEFORE copyText — its non-secure-context fallback
+  // focuses a temporary textarea (lib/copy-text.ts), destroying the original
+  // selection. Restore it before deletion so execCommand('delete') removes the
+  // originally selected text (CodeRabbit finding).
+  const snapshot = captureSelectionSnapshot(editable)
   try {
     const copied = await copyText(text)
     if (!copied) return false
+    editable.focus()
+    restoreSelectionSnapshot(editable, snapshot)
     return document.execCommand('delete')
   } catch (error) {
     logFailure('cutSelection', error)

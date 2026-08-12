@@ -204,6 +204,24 @@ describe('text-edit-ops', () => {
       expect(result).toBe(false)
       expect(execCommandMock).not.toHaveBeenCalled()
     })
+
+    it('restores the original selection before delete after copyText destroys it', async () => {
+      const input = createInput('hello world')
+      input.setSelectionRange(0, 5)
+      const setSelectionRangeSpy = vi.spyOn(input, 'setSelectionRange')
+      // Simulate copyText's non-secure-context fallback (lib/copy-text.ts): it
+      // focuses a temporary textarea, destroying the original input selection +
+      // focus. cutSelection must restore the selection before delete.
+      mocks.copyText.mockImplementation(async () => {
+        input.blur()
+        return true
+      })
+
+      const result = await cutSelection()
+      expect(result).toBe(true)
+      expect(setSelectionRangeSpy).toHaveBeenCalledWith(0, 5)
+      expect(execCommandMock).toHaveBeenCalledWith('delete')
+    })
   })
 
   // ---- pasteIntoFocused ----
