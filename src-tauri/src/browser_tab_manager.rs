@@ -632,6 +632,15 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    /// Open DevTools for the webview backing this browser tab.
+    ///
+    /// Debug-gated: only exists in debug builds. In release builds, the
+    /// `browser_tab_open_devtools` Tauri command is a cfg-gated stub that
+    /// returns `Err("DevTools disabled in production")` directly — it never
+    /// calls this method, so there's no release stub (avoids dead_code).
+    /// The desktop "Toggle DevTools" menu item is already debug-gated
+    /// separately in `lib.rs`.
+    #[cfg(debug_assertions)]
     pub fn open_devtools(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
         webview.open_devtools();

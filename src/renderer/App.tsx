@@ -4,6 +4,7 @@ import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
@@ -54,6 +55,7 @@ import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
+import { usePreventNativeContextMenu } from './hooks/use-prevent-native-context-menu'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
@@ -99,10 +101,13 @@ const queryClient = new QueryClient()
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 
 // Component to handle app-level effects like auto-save.
-// Mirrors TauriApp.tsx AppEffects mount order (lines 63-100) for the portable
-// subset. Native-only effects (usePreventDefaultContextMenu, showWindow,
-// useWindowState) are intentionally NOT ported — they would break the browser
-// (right-click dev menu, no native window). usePreventAltMenu stays (web-only).
+// Mirrors TauriApp.tsx AppEffects mount order for the portable subset.
+// Native-only effects (usePreventDevToolsShortcuts, showWindow, useWindowState)
+// are intentionally NOT ported — they would break the browser (web cannot
+// block its own devtools; no native window). The global context menu is
+// mounted on both surfaces via <GlobalContextMenu> in the root render.
+// usePreventNativeContextMenu is ported for parity (portal regression defense).
+// usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
   useTerminalAutoSave()
@@ -132,6 +137,11 @@ function AppEffects(): null {
   useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
+  // P4: suppress the native browser context menu app-wide (capture phase) for
+  // web parity — portaled overlays (toasts, modals) outside
+  // <GlobalContextMenu>'s Radix trigger subtree would show the browser's
+  // native Inspect menu. The Radix trigger still opens the global menu.
+  usePreventNativeContextMenu()
 
   // Initialize notification permissions once at app startup so the OS (or
   // browser) permission prompt appears early, not on first terminal exit. On
@@ -207,24 +217,26 @@ const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={80} skipDelayDuration={300}>
-        <ErrorBoundary context="App Root">
-          <AppEffects />
-          <Toaster />
-          <Sonner />
-          {/* Web/remote mode only: in-app directory picker registered with
-              dialogApi so NewProjectModal's Browse button works without a native
-              dialog.open (Story: Web/remote project creation). Desktop never
-              mounts it. */}
-          {!isTauriContext() && <DirectoryPicker />}
-          <RouterProvider router={router} future={{ v7_startTransition: true }} />
-          <WhatsNewModal
-            isOpen={whatsNew.isOpen}
-            version={whatsNew.version}
-            notes={whatsNew.notes}
-            htmlUrl={whatsNew.htmlUrl}
-            onClose={whatsNew.close}
-          />
-        </ErrorBoundary>
+        <GlobalContextMenu>
+          <ErrorBoundary context="App Root">
+            <AppEffects />
+            <Toaster />
+            <Sonner />
+            {/* Web/remote mode only: in-app directory picker registered with
+                dialogApi so NewProjectModal's Browse button works without a native
+                dialog.open (Story: Web/remote project creation). Desktop never
+                mounts it. */}
+            {!isTauriContext() && <DirectoryPicker />}
+            <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <WhatsNewModal
+              isOpen={whatsNew.isOpen}
+              version={whatsNew.version}
+              notes={whatsNew.notes}
+              htmlUrl={whatsNew.htmlUrl}
+              onClose={whatsNew.close}
+            />
+          </ErrorBoundary>
+        </GlobalContextMenu>
       </TooltipProvider>
     </QueryClientProvider>
   )

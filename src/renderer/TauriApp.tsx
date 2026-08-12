@@ -3,9 +3,12 @@ import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
+import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
 import { getCurrentWindow } from '@/lib/tauri-window'
 import { useUpdateToast } from './components/UpdateAvailableToast'
@@ -46,20 +49,6 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
 const queryClient = new QueryClient()
 
-// Prevent the default webview context menu (Inspect, Back, etc.) from appearing
-// on right-click. Custom context menus (FileExplorer, ProjectSidebar) already
-// call e.preventDefault() in their React handlers and render their own UI,
-// so they are unaffected by this capture-phase listener.
-function usePreventDefaultContextMenu(): void {
-  useEffect(() => {
-    const handler = (e: MouseEvent): void => {
-      e.preventDefault()
-    }
-    document.addEventListener('contextmenu', handler, { capture: true })
-    return () => document.removeEventListener('contextmenu', handler, { capture: true })
-  }, [])
-}
-
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
   useTerminalAutoSave()
@@ -89,7 +78,15 @@ function AppEffects(): null {
   useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
-  usePreventDefaultContextMenu()
+  // P4: suppress the native webview context menu app-wide (capture phase) so
+  // portaled overlays (toasts, modals) outside <GlobalContextMenu>'s Radix
+  // trigger subtree don't show the native Inspect/Back menu. The Radix
+  // trigger still opens the global menu (preventDefault doesn't stop
+  // propagation). Defense-in-depth alongside <GlobalContextMenu>.
+  usePreventNativeContextMenu()
+  // Desktop-only: block devtools/view-source shortcuts (F12, Ctrl+Shift+I/J/C,
+  // Ctrl+U) in production. Web/remote (App.tsx) must never mount this hook.
+  usePreventDevToolsShortcuts()
 
   // Initialize desktop notification permissions once at app startup
   // so the OS permission prompt appears early, not on first terminal exit
@@ -146,19 +143,21 @@ export default function TauriApp(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ErrorBoundary context="App Root">
-          <AppEffects />
-          <Toaster />
-          <Sonner />
-          <RouterProvider router={router} future={{ v7_startTransition: true }} />
-          <WhatsNewModal
-            isOpen={whatsNew.isOpen}
-            version={whatsNew.version}
-            notes={whatsNew.notes}
-            htmlUrl={whatsNew.htmlUrl}
-            onClose={whatsNew.close}
-          />
-        </ErrorBoundary>
+        <GlobalContextMenu>
+          <ErrorBoundary context="App Root">
+            <AppEffects />
+            <Toaster />
+            <Sonner />
+            <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <WhatsNewModal
+              isOpen={whatsNew.isOpen}
+              version={whatsNew.version}
+              notes={whatsNew.notes}
+              htmlUrl={whatsNew.htmlUrl}
+              onClose={whatsNew.close}
+            />
+          </ErrorBoundary>
+        </GlobalContextMenu>
       </TooltipProvider>
     </QueryClientProvider>
   )

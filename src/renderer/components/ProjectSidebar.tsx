@@ -641,6 +641,7 @@ export function ProjectSidebar({
 
   const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {
     e.preventDefault()
+    e.stopPropagation()
     setContextMenu({
       isOpen: true,
       x: e.clientX,

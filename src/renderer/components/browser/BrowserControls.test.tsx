@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { BrowserControls } from './BrowserControls'
@@ -23,6 +23,11 @@ function renderWithProvider(ui: React.ReactElement) {
 describe('BrowserControls', () => {
   beforeEach(() => {
     useBrowserSessionStore.setState({ tabs: new Map() })
+  })
+
+  afterEach(() => {
+    // Restore env stubs (P12: PROD env stub must not leak into other tests).
+    vi.unstubAllEnvs()
   })
 
   it('renders nothing when tab has no URL', () => {
@@ -105,6 +110,18 @@ describe('BrowserControls', () => {
     expect(screen.getByTitle('Forward')).toBeInTheDocument()
     expect(screen.getByTitle('Reload')).toBeInTheDocument()
     expect(screen.getByTitle('Debug Console')).toBeInTheDocument()
+  })
+
+  // P12: the Debug Console button is hidden in production builds.
+  it('hides the Debug Console button when import.meta.env.PROD is true', () => {
+    vi.stubEnv('PROD', true)
+    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
+    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
+
+    expect(screen.queryByTitle('Debug Console')).not.toBeInTheDocument()
+    // Other controls are still present.
+    expect(screen.getByTitle('Back')).toBeInTheDocument()
+    expect(screen.getByTitle('Reload')).toBeInTheDocument()
   })
 
   it('renders URL input with current tab URL', () => {

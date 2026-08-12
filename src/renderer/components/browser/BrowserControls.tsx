@@ -97,19 +97,21 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
             placeholder="Enter URL..."
           />
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
-              className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Open debug console"
-              title="Debug Console"
-            >
-              <Bug size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Debug Console</TooltipContent>
-        </Tooltip>
+        {!import.meta.env.PROD && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
+                className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Open debug console"
+                title="Debug Console"
+              >
+                <Bug size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Debug Console</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button

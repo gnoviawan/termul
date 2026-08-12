@@ -1170,7 +1170,17 @@ pub async fn browser_tab_reload(
     }
 }
 
-/// Open DevTools for a browser tab
+/// Open DevTools for a browser tab.
+///
+/// Debug-gated: the real implementation calls `BrowserTabManager::open_devtools`
+/// (which opens the webview inspector). In release builds the command is a
+/// stub that returns `Ok(IpcResult::error("DevTools disabled in production",
+/// ...))` so the browser-tab devtools path is fully blocked in prod — mirrors
+/// the existing `toggle_devtools` cfg-gate pattern in `lib.rs`. P13: the
+/// `BrowserTabManager::open_devtools` method only exists in debug builds (no
+/// release stub → no dead_code). The TS side also hides the Debug Console
+/// button in prod, so a user never reaches the release stub.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn browser_tab_open_devtools(
     tab_id: String,
@@ -1180,6 +1190,18 @@ pub async fn browser_tab_open_devtools(
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_OPEN_DEVTOOLS_FAILED")),
     }
+}
+
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub async fn browser_tab_open_devtools(
+    _tab_id: String,
+    _browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    Ok(IpcResult::error(
+        "DevTools disabled in production".to_string(),
+        "BROWSER_TAB_OPEN_DEVTOOLS_DISABLED",
+    ))
 }
 
 /// Inject annotation overlay script into a browser tab

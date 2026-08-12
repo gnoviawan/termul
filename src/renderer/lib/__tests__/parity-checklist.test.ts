@@ -1160,4 +1160,164 @@ describe('Parity Checklist Automation', () => {
       }
     })
   })
+
+  // Global right-click context menu + production devtools block. Pins that:
+  //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
+  //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).
+  //   - The native-context-menu preventDefault hook (usePreventNativeContextMenu) is
+  //     mounted on BOTH roots (P4: portal regression defense).
+  //   - The browser-tab devtools command is cfg-gated in Rust (debug real impl,
+  //     release Err stub); the manager method is debug-only (P13: no release stub).
+  //   - The Debug Console button is hidden in prod (import.meta.env.PROD).
+  describe('Global context menu + devtools block parity', () => {
+    const GlobalMenu = join(LIB_DIR, '..', 'components', 'GlobalContextMenu.tsx')
+    const DevtoolsHook = join(LIB_DIR, '..', 'hooks', 'use-prevent-devtools-shortcuts.ts')
+    const TextEditOps = join(LIB_DIR, 'text-edit-ops.ts')
+    const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
+    const WebApp = join(LIB_DIR, '..', 'App.tsx')
+    const BrowserControls = join(LIB_DIR, '..', 'components', 'browser', 'BrowserControls.tsx')
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const BrowserTabManagerRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'browser_tab_manager.rs'
+    )
+
+    it('GlobalContextMenu.tsx exists and renders the Radix menu with Copy/Cut/Paste/Select All', () => {
+      expect(existsSync(GlobalMenu), 'GlobalContextMenu.tsx should exist').toBe(true)
+      const content = readFileSync(GlobalMenu, 'utf-8')
+      expect(content).toMatch(/from\s+['"]@\/components\/ui\/context-menu['"]/)
+      expect(content).toMatch(/ContextMenuContent/)
+      expect(content).toMatch(/ContextMenuTrigger/)
+      expect(content).toMatch(/ContextMenuSeparator/)
+      // The four edit operations must be wired. The "no Reload/Back/Inspect"
+      // constraint is asserted at runtime by GlobalContextMenu.test.tsx
+      // (queryByRole), not here — this is a static file check.
+      expect(content).toMatch(/copySelection/)
+      expect(content).toMatch(/cutSelection/)
+      expect(content).toMatch(/pasteIntoFocused/)
+      expect(content).toMatch(/selectAllFocused/)
+    })
+
+    it('text-edit-ops.ts exists with the four edit helpers + log-api boundary', () => {
+      expect(existsSync(TextEditOps), 'text-edit-ops.ts should exist').toBe(true)
+      const content = readFileSync(TextEditOps, 'utf-8')
+      expect(content).toMatch(/export\s+async\s+function\s+\bcopySelection\b/)
+      expect(content).toMatch(/export\s+async\s+function\s+\bcutSelection\b/)
+      expect(content).toMatch(/export\s+async\s+function\s+\bpasteIntoFocused\b/)
+      expect(content).toMatch(/export\s+function\s+\bselectAllFocused\b/)
+      // Reuses clipboardApi + copyText + logFrontendError (never throws).
+      expect(content).toMatch(/clipboardApi/)
+      expect(content).toMatch(/copyText/)
+      expect(content).toMatch(/logFrontendError/)
+    })
+
+    it('use-prevent-devtools-shortcuts.ts exists and is a capture-phase keydown blocker', () => {
+      expect(existsSync(DevtoolsHook), 'use-prevent-devtools-shortcuts.ts should exist').toBe(true)
+      const content = readFileSync(DevtoolsHook, 'utf-8')
+      // Capture-phase document listener (mirror usePreventDefaultContextMenu shape).
+      expect(content).toMatch(/addEventListener\(\s*['"]keydown['"]/)
+      expect(content).toMatch(/capture:\s*true/)
+      // P5: production-gated (no-op in dev so devs keep F12 access).
+      expect(content).toMatch(/import\.meta\.env\.PROD/)
+      // P6: uses e.code (locale-independent) for the letter matches.
+      expect(content).toMatch(/KeyI/)
+      expect(content).toMatch(/KeyJ/)
+      expect(content).toMatch(/KeyC/)
+      expect(content).toMatch(/KeyU/)
+      // P6: accepts metaKey (macOS Cmd).
+      expect(content).toMatch(/metaKey/)
+      // P6: excludes altKey.
+      expect(content).toMatch(/!.*altKey|!e\.altKey/)
+      // preventDefault + stopPropagation on match.
+      expect(content).toMatch(/preventDefault/)
+      expect(content).toMatch(/stopPropagation/)
+      // P10: boundary log via logFrontendError on each block.
+      expect(content).toMatch(/logFrontendError/)
+    })
+
+    it('TauriApp.tsx wraps root in GlobalContextMenu + mounts the devtools blocker + native-context-menu defense', () => {
+      expect(existsSync(TauriApp), 'TauriApp.tsx should exist').toBe(true)
+      const content = readFileSync(TauriApp, 'utf-8')
+      expect(content).toMatch(/GlobalContextMenu/)
+      expect(content).toMatch(/usePreventDevToolsShortcuts/)
+      // P4: the native-context-menu preventDefault hook is re-added as
+      // defense-in-depth (usePreventNativeContextMenu) alongside
+      // <GlobalContextMenu> so portaled overlays don't show the native menu.
+      expect(content).toMatch(/usePreventNativeContextMenu/)
+      // The old hook name must be gone (renamed).
+      expect(content).not.toMatch(/usePreventDefaultContextMenu/)
+    })
+
+    it('App.tsx wraps root in GlobalContextMenu + mounts native-context-menu defense (no devtools blocker)', () => {
+      expect(existsSync(WebApp), 'App.tsx should exist').toBe(true)
+      const content = readFileSync(WebApp, 'utf-8')
+      expect(content).toMatch(/GlobalContextMenu/)
+      // P4: web also mounts the native-context-menu defense (portal regression).
+      expect(content).toMatch(/usePreventNativeContextMenu/)
+      // Web parity: NO devtools blocker (browser cannot block its own devtools).
+      // Assert no import of the hook (the dashed import path), not the camelCase
+      // name — App.tsx's comment mentions the hook by name for documentation.
+      expect(content).not.toMatch(/from\s+['"]@\/hooks\/use-prevent-devtools-shortcuts['"]/)
+      expect(content).not.toMatch(/usePreventDevToolsShortcuts\(\)/)
+    })
+
+    it('commands.rs cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
+      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
+      const content = readFileSync(CommandsRust, 'utf-8')
+      expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?browser_tab_open_devtools/)
+      expect(content).toMatch(
+        /#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?browser_tab_open_devtools/
+      )
+      expect(content).toMatch(/DevTools disabled in production/)
+    })
+
+    it('browser_tab_manager.rs cfg-gates open_devtools (debug-only; P13: no release stub)', () => {
+      expect(existsSync(BrowserTabManagerRust), 'browser_tab_manager.rs should exist').toBe(true)
+      const content = readFileSync(BrowserTabManagerRust, 'utf-8')
+      // P13: only the debug (#[cfg(debug_assertions)]) method exists — the
+      // release stub was removed (the release command returns the error
+      // directly, so the method is never called in release → no dead_code).
+      expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?fn\s+open_devtools/)
+      // No release cfg-gated open_devtools stub (P13 removed it).
+      expect(content).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?fn\s+open_devtools/)
+    })
+
+    it('BrowserControls.tsx hides the Debug Console button in production', () => {
+      expect(existsSync(BrowserControls), 'BrowserControls.tsx should exist').toBe(true)
+      const content = readFileSync(BrowserControls, 'utf-8')
+      expect(content).toMatch(/import\.meta\.env\.PROD/)
+      expect(content).toMatch(/browserTabOpenDevtools/)
+    })
+
+    it('ProjectSidebar.tsx handleContextMenu calls stopPropagation so the global trigger does not fire', () => {
+      const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
+      expect(existsSync(sidebar), 'ProjectSidebar.tsx should exist').toBe(true)
+      const content = readFileSync(sidebar, 'utf-8')
+      // The handleContextMenu callback must call both preventDefault and
+      // stopPropagation so the global Radix trigger doesn't double-fire.
+      const handlerMatch = content.match(
+        /handleContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[\]\)/
+      )
+      expect(handlerMatch, 'handleContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
+    })
+
+    it('FileExplorer.tsx handleContextMenu calls stopPropagation (pre-existing pattern)', () => {
+      const explorer = join(LIB_DIR, '..', 'components', 'file-explorer', 'FileExplorer.tsx')
+      expect(existsSync(explorer), 'FileExplorer.tsx should exist').toBe(true)
+      const content = readFileSync(explorer, 'utf-8')
+      const handlerMatch = content.match(/handleContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[/)
+      expect(handlerMatch, 'FileExplorer handleContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
+    })
+  })
 })
