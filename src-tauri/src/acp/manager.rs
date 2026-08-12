@@ -2330,10 +2330,10 @@ fn run_agent(
         (state.drain_all(), state.active_session_ids())
     };
     // A connection teardown can drop an in-flight prompt task before its normal
-    // completion cleanup runs. Remove every surviving host-plan route here so
-    // a later session cannot be mistaken for an ambiguous concurrent turn.
+    // completion cleanup runs. Remove every surviving session's auth, cache,
+    // and route so stale MCP children cannot target a later session.
     for session_id in &active_sessions {
-        host_plan_server.end_turn(&agent_id.0, session_id);
+        host_plan_server.unregister_session(session_id);
     }
     for permission in leaked {
         let _ = permission.responder.respond(RequestPermissionResponse::new(
@@ -3347,6 +3347,7 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
+                let req_plan_server = host_plan_server.clone();
                 spawn_request(&cx, slot, async move {
                     let request = CloseSessionRequest::new(&session_id);
                     let result = req_cx.send_request(request).block_task().await;
@@ -3373,6 +3374,9 @@ async fn run_command_loop(
                                 "cancelled": true,
                             }));
                         }
+                        // Evict host-plan auth, cache, and any active route only
+                        // after the agent confirms the session is closed.
+                        req_plan_server.unregister_session(&session_id.0);
                     }
                     let mut result = result.map(|_| ()).map_err(|e| e.to_string());
                     if result.is_ok() {
