@@ -805,7 +805,7 @@ pub struct AcpManager {
     /// one agent lifetime. Cleared on agent drop (driver self-reap) so a
     /// re-spawned agent re-warmups.
     warmup_done: Arc<Mutex<HashSet<AgentId>>>,
-    /// Host-injected `plan` MCP server (one shared TCP listener across
+    /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
     /// bind + port-publish handshake). Injects a self-spawned stdio child
@@ -2204,7 +2204,7 @@ fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(
     Ok(())
 }
 
-/// Build the internal `plan` MCP server config (stdio self-spawn) to
+/// Build the internal `termul` MCP server config (for the `plan` tool; stdio self-spawn) to
 /// prepend into a session's `mcp_servers`. The agent spawns
 /// `current_exe() --internal-mcp-plan-server` as a child; the child reads
 /// `TERMUL_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` / `_AGENT_ID` from env,
