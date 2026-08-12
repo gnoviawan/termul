@@ -42,7 +42,7 @@ pub struct ChatHistoryIndexEntry {
     pub last_activity_at: u64,
     pub message_count: u64,
     pub status: ChatHistoryStatus,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub discovered: bool,
     /// Worktree path the agent runs in (CAP-3). Additive: old entries
     /// deserialize with `None` (the renderer-authored metadata payload omits

@@ -95,7 +95,7 @@ pub struct SessionMetadata {
     pub tool_count: u64,
     pub last_seq: u64,
     /// Agent-owned metadata mirror created from ACP `session/list`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub discovered: bool,
     /// Worktree path the agent runs in (CAP-3). Additive: old entries
     /// deserialize with `None`. State isolation still keys on `cwd`; this
@@ -126,7 +126,7 @@ pub struct SessionIndexEntry {
     pub message_count: u64,
     pub tool_count: u64,
     pub last_seq: u64,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub discovered: bool,
     pub resume_eligible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
