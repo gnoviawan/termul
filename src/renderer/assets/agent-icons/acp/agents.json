@@ -81,11 +81,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.52",
+    "version": "3.0.53",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.52",
+        "package": "cline@3.0.53",
         "args": ["--acp"]
       }
     }
@@ -308,11 +308,11 @@
   {
     "id": "dimcode",
     "name": "DimCode",
-    "version": "0.3.9",
+    "version": "0.3.10",
     "description": "A coding agent that puts leading models at your command.",
     "distribution": {
       "npx": {
-        "package": "dimcode@0.3.9",
+        "package": "dimcode@0.3.10",
         "args": ["acp"]
       }
     }
@@ -320,11 +320,11 @@
   {
     "id": "dirac",
     "name": "Dirac",
-    "version": "0.4.34",
+    "version": "0.4.35",
     "description": "Reduces API costs by more than 50%, produces better and faster work. Uses Hash anchored parallel edits, AST manipulation and a whole lot of neat optimizations. Fully Open Source.",
     "distribution": {
       "npx": {
-        "package": "dirac-cli@0.4.34",
+        "package": "dirac-cli@0.4.35",
         "args": ["--acp"]
       }
     }
@@ -360,11 +360,11 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "version": "0.54.4",
+    "version": "0.55.1",
     "description": "Google's official CLI for Gemini",
     "distribution": {
       "npx": {
-        "package": "@google/gemini-cli@0.54.4",
+        "package": "@google/gemini-cli@0.55.1",
         "args": ["--acp"]
       }
     }
@@ -426,11 +426,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@1.0.1",
+        "package": "@xai-official/grok@1.0.2",
         "args": ["agent", "stdio"]
       }
     }
@@ -438,33 +438,33 @@
   {
     "id": "harn",
     "name": "Harn",
-    "version": "0.10.79",
+    "version": "0.10.83",
     "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.79/harn-aarch64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.83/harn-aarch64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "darwin-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.79/harn-x86_64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.83/harn-x86_64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.79/harn-aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.83/harn-aarch64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.79/harn-x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.83/harn-x86_64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "windows-x86_64": {
           "cmd": "harn.exe",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.79/harn-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.83/harn-x86_64-pc-windows-msvc.zip",
           "args": ["serve", "acp"]
         }
       }
@@ -599,29 +599,29 @@
   {
     "id": "mistral-vibe",
     "name": "Mistral Vibe",
-    "version": "2.24.0",
+    "version": "2.24.1",
     "description": "Mistral's open-source coding assistant",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.0/vibe-acp-darwin-aarch64-2.24.0.tar.gz"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.1/vibe-acp-darwin-aarch64-2.24.1.tar.gz"
         },
         "darwin-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.0/vibe-acp-darwin-x86_64-2.24.0.tar.gz"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.1/vibe-acp-darwin-x86_64-2.24.1.tar.gz"
         },
         "linux-aarch64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.0/vibe-acp-linux-aarch64-2.24.0.tar.gz"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.1/vibe-acp-linux-aarch64-2.24.1.tar.gz"
         },
         "linux-x86_64": {
           "cmd": "./vibe-acp",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.0/vibe-acp-linux-x86_64-2.24.0.tar.gz"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.1/vibe-acp-linux-x86_64-2.24.1.tar.gz"
         },
         "windows-x86_64": {
           "cmd": "./vibe-acp.exe",
-          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.0/vibe-acp-windows-x86_64-2.24.0.zip"
+          "archive": "https://github.com/mistralai/mistral-vibe/releases/download/v2.24.1/vibe-acp-windows-x86_64-2.24.1.zip"
         }
       }
     }
@@ -744,11 +744,11 @@
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.9",
+    "version": "0.21.10",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.9",
+        "package": "@qwen-code/qwen-code@0.21.10",
         "args": ["--acp", "--experimental-skills"]
       }
     }
@@ -756,20 +756,20 @@
   {
     "id": "sigit",
     "name": "siGit Code",
-    "version": "1.5.1",
+    "version": "1.5.2",
     "description": "Local-first coding agent. Runs entirely on your machine with optional on-device LLM inference via Onde.",
     "distribution": {
       "npx": {
-        "package": "@smbcloud/sigit@1.5.1"
+        "package": "@smbcloud/sigit@1.5.2"
       },
       "binary": {
         "darwin-aarch64": {
           "cmd": "./sigit",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.1/sigit-macos-arm64.tar.gz"
+          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.2/sigit-macos-arm64.tar.gz"
         },
         "darwin-x86_64": {
           "cmd": "./sigit",
-          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.1/sigit-macos-amd64.tar.gz"
+          "archive": "https://github.com/getsigit/sigit/releases/download/v1.5.2/sigit-macos-amd64.tar.gz"
         },
         "linux-aarch64": {
           "cmd": "./sigit-linux-arm64"
