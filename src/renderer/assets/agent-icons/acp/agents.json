@@ -332,11 +332,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.193.0",
+    "version": "0.194.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.193.0",
+        "package": "droid@0.194.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -395,7 +395,7 @@
   {
     "id": "goose",
     "name": "goose",
-    "version": "1.45.0",
+    "version": "1.46.0",
     "description": "A local, extensible, open source AI agent that automates engineering tasks",
     "distribution": {
       "binary": {
@@ -417,7 +417,7 @@
         },
         "windows-x86_64": {
           "cmd": "./goose-package\\goose.exe",
-          "archive": "https://github.com/block/goose/releases/download/v1.45.0/goose-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/block/goose/releases/download/v1.46.0/goose-x86_64-pc-windows-msvc.zip",
           "args": ["acp"]
         }
       }
@@ -473,38 +473,38 @@
   {
     "id": "junie",
     "name": "Junie",
-    "version": "2698.3.0",
+    "version": "2783.3.0",
     "description": "AI Coding Agent by JetBrains",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./Applications/junie.app/Contents/MacOS/junie",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-macos-aarch64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-macos-aarch64.zip",
           "args": ["--acp=true"]
         },
         "darwin-x86_64": {
           "cmd": "./Applications/junie.app/Contents/MacOS/junie",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-macos-amd64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-macos-amd64.zip",
           "args": ["--acp=true"]
         },
         "linux-aarch64": {
           "cmd": "./junie-app/bin/junie",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-linux-aarch64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-linux-aarch64.zip",
           "args": ["--acp=true"]
         },
         "linux-x86_64": {
           "cmd": "./junie-app/bin/junie",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-linux-amd64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-linux-amd64.zip",
           "args": ["--acp=true"]
         },
         "windows-x86_64": {
           "cmd": "./junie/junie.exe",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-windows-amd64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-windows-amd64.zip",
           "args": ["--acp=true"]
         },
         "windows-aarch64": {
           "cmd": "./junie/junie.exe",
-          "archive": "https://github.com/JetBrains/junie/releases/download/2698.3/junie-release-2698.3-windows-aarch64.zip",
+          "archive": "https://github.com/JetBrains/junie-acp-release/releases/download/2783.3/junie-release-2783.3-windows-aarch64.zip",
           "args": ["--acp=true"]
         }
       }
