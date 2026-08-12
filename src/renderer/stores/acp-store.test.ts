@@ -5540,6 +5540,55 @@ describe('session discovery (gh-407)', () => {
     expect(useAcpStore.getState().sessionIndex).toEqual([])
   })
 
+  it('persistSession keeps a discovered session hidden through close/disconnect projection', () => {
+    // Regression: openDiscoveredSession creates a session with `discovered: true`
+    // but no sessionIndex entry. _onSessionClosed/_onAgentDisconnected still call
+    // persistSession, which must preserve `discovered: true` so the external
+    // session does not leak into the Termul-only Chats tab as `discovered: false`.
+    useAcpStore.setState({
+      ...FRESH,
+      sessionIndex: [],
+      sessions: {
+        'disc-1': {
+          id: 'disc-1',
+          agentId: 'agent-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: Date.now(),
+          discovered: true
+        }
+      },
+      messages: {
+        'disc-1': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 1
+          }
+        ]
+      }
+    })
+
+    // Closing the session triggers persistSession projection.
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'disc-1' })
+
+    const projected = useAcpStore.getState().sessionIndex.find((e) => e.id === 'disc-1')
+    // If projected at all, it MUST keep `discovered: true` — never `false`
+    // (which would surface it in the Chats tab).
+    if (projected) expect(projected.discovered).toBe(true)
+  })
+
   it('discoverSessions paginates, forwards the cursor, and de-dupes by sessionId', async () => {
     useAcpStore.setState({
       agents: {

@@ -213,6 +213,15 @@ export interface AcpSession {
    */
   worktreePath?: string
   worktreeBranch?: string
+  /**
+   * Origin marker for sessions opened via `openDiscoveredSession` (external
+   * `session/list` chats). Carried on the live record so `persistSession`
+   * preserves it even when no `sessionIndex` entry exists yet (the
+   * disconnect/close path would otherwise default a discovered session to
+   * `discovered: false` and leak it into the Termul-only Chats tab).
+   * Absent/`false` for sessions Termul created via `createSession`.
+   */
+  discovered?: boolean
 }
 
 export interface PendingPermission {
@@ -1206,7 +1215,10 @@ function persistSession(
     status: session.status,
     // Preserve the origin flag so a discovered (external) session re-projected
     // here can't lose `discovered: true` and leak into the Termul-only sidebar.
-    discovered: existingEntry?.discovered ?? false,
+    // Prefer the live-session marker (set by openDiscoveredSession) over the
+    // existing index entry, so the disconnect/close path stays correct even when
+    // no sessionIndex entry exists yet.
+    discovered: session.discovered ?? existingEntry?.discovered ?? false,
     worktreePath: session.worktreePath,
     worktreeBranch: session.worktreeBranch
   }
@@ -4140,7 +4152,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             configOptions: existingControls?.configOptions ?? [],
             lastError: null,
             createdAt: Date.now(),
-            replaying: strategy === 'load' ? 'pending' : null
+            replaying: strategy === 'load' ? 'pending' : null,
+            // Stamp origin so persistSession keeps this external session hidden
+            // even when it has no sessionIndex entry yet (disconnect/close path).
+            discovered: true
           }
         },
         messages: { ...s.messages, [sessionId]: [] }
