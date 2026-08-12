@@ -308,11 +308,11 @@
   {
     "id": "dimcode",
     "name": "DimCode",
-    "version": "0.3.10",
+    "version": "0.3.11",
     "description": "A coding agent that puts leading models at your command.",
     "distribution": {
       "npx": {
-        "package": "dimcode@0.3.10",
+        "package": "dimcode@0.3.11",
         "args": ["acp"]
       }
     }
@@ -629,11 +629,11 @@
   {
     "id": "nova",
     "name": "Nova",
-    "version": "1.1.31",
+    "version": "1.1.32",
     "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
     "distribution": {
       "npx": {
-        "package": "@compass-ai/nova@1.1.31",
+        "package": "@compass-ai/nova@1.1.32",
         "args": ["acp"]
       }
     }
