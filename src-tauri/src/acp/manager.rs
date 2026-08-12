@@ -2097,10 +2097,15 @@ impl AcpManager {
                         let _ = accepted.send(Ok(()));
                     }
                     AcpCommand::CancelPrompt { session_id, reply } => {
-                        if let Some(cancel) = pending_cancels.lock().remove(&session_id.0) {
+                        let cancel = pending_cancels.lock().remove(&session_id.0);
+                        let _ = reply.send(Ok(()));
+                        // Let the cancellation request emit its acknowledgement before
+                        // unblocking the prompt-completion task. This keeps the test
+                        // transport's ordering contract deterministic under CI load.
+                        tokio::task::yield_now().await;
+                        if let Some(cancel) = cancel {
                             let _ = cancel.send(());
                         }
-                        let _ = reply.send(Ok(()));
                     }
                     _ => {}
                 }
