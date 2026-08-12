@@ -113,7 +113,9 @@ pub fn materialize_session_payload(
         // separately-read metadata) so the payload can never advertise a
         // `lastSeq` that disagrees with the messages it carries when a writer
         // lands an event between the metadata read and the replay.
-        last_seq: records.last().map_or(metadata.last_seq, |record| record.seq),
+        last_seq: records
+            .last()
+            .map_or(metadata.last_seq, |record| record.seq),
         status: metadata.status.clone(),
         worktree_path: metadata.worktree_path.clone(),
         worktree_branch: metadata.worktree_branch.clone(),
@@ -265,6 +267,7 @@ mod tests {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
             worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
             worktree_branch: Some("chat/abc123".to_string()),
         }
@@ -375,11 +378,7 @@ mod tests {
                 "snapshot:agent:11",
             ]
         );
-        let seqs: Vec<u64> = payload
-            .messages
-            .iter()
-            .map(|message| message.seq)
-            .collect();
+        let seqs: Vec<u64> = payload.messages.iter().map(|message| message.seq).collect();
         assert_eq!(seqs, vec![1, 2, 4, 6, 10, 11]);
         let timestamps: Vec<u64> = payload
             .messages
@@ -388,7 +387,10 @@ mod tests {
             .collect();
         assert_eq!(timestamps, vec![101, 102, 104, 106, 110, 111]);
         // Text coalescing within a run (appendBlocks semantics).
-        assert_eq!(payload.messages[1].blocks, vec![json!({"type":"text","text":"Hello "})]);
+        assert_eq!(
+            payload.messages[1].blocks,
+            vec![json!({"type":"text","text":"Hello "})]
+        );
         assert_eq!(
             payload.messages[3].blocks,
             vec![json!({"type":"text","text":"world!"})]
@@ -504,7 +506,11 @@ mod tests {
 
     #[test]
     fn tool_call_update_never_splits_the_open_run() {
-        let records = vec![chunk(1, "agent", "a"), tool_call_update(2), chunk(3, "agent", "b")];
+        let records = vec![
+            chunk(1, "agent", "a"),
+            tool_call_update(2),
+            chunk(3, "agent", "b"),
+        ];
         let payload = materialize_session_payload(&metadata(), &records);
         assert_eq!(payload.messages.len(), 1);
         assert_eq!(payload.messages[0].id, "snapshot:agent:1");

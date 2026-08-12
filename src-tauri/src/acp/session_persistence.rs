@@ -94,6 +94,9 @@ pub struct SessionMetadata {
     pub message_count: u64,
     pub tool_count: u64,
     pub last_seq: u64,
+    /// Agent-owned metadata mirror created from ACP `session/list`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discovered: bool,
     /// Worktree path the agent runs in (CAP-3). Additive: old entries
     /// deserialize with `None`. State isolation still keys on `cwd`; this
     /// field powers the CAP-6 indicator + the deleted-worktree fallback.
@@ -123,6 +126,8 @@ pub struct SessionIndexEntry {
     pub message_count: u64,
     pub tool_count: u64,
     pub last_seq: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discovered: bool,
     pub resume_eligible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
@@ -147,6 +152,7 @@ impl From<&SessionMetadata> for SessionIndexEntry {
             message_count: metadata.message_count,
             tool_count: metadata.tool_count,
             last_seq: metadata.last_seq,
+            discovered: metadata.discovered,
             resume_eligible: metadata.stable_agent_namespace.is_some(),
             worktree_path: metadata.worktree_path.clone(),
             worktree_branch: metadata.worktree_branch.clone(),
@@ -329,6 +335,7 @@ impl SessionPersistence {
                 "session cwd is not a directory",
             )));
         }
+        let _guard = self.inner.registration_lock.lock().await;
         if self
             .inner
             .catalog
@@ -355,6 +362,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
         };
@@ -406,9 +414,9 @@ impl SessionPersistence {
                 metadata.runtime_agent_id = registration.runtime_agent_id;
                 metadata.project_id = registration.project_id;
                 metadata.status = PersistedSessionStatus::Active;
-                metadata.last_activity_at = now;
-                if metadata.title_source != Some(TitleSource::BackgroundGenerated)
-                    && metadata.title_source != Some(TitleSource::LocalAlias)
+                metadata.last_activity_at = metadata.last_activity_at.max(now);
+                metadata.discovered = true;
+                if !is_protected_title_source(metadata.title_source.as_ref())
                     && normalized_title.is_some()
                 {
                     metadata.title = normalized_title;
@@ -440,6 +448,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: true,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
         };
@@ -472,6 +481,7 @@ impl SessionPersistence {
                 "imported session cwd is empty",
             )));
         }
+        let _guard = self.inner.registration_lock.lock().await;
         if self
             .inner
             .catalog
@@ -497,6 +507,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
         };
@@ -534,6 +545,7 @@ impl SessionPersistence {
     /// because the agent subprocess cannot survive a restart. Persisting `Active`
     /// to disk here would lie about liveness after a crash.
     pub async fn reopen_writer(&self, session_id: &str) -> Result<()> {
+        let _guard = self.inner.registration_lock.lock().await;
         // (a) Idempotent: a writer is already installed for this session.
         if self.inner.sessions.lock().contains_key(session_id) {
             return Ok(());
@@ -1525,7 +1537,7 @@ mod tests {
         persistence.shutdown().await.unwrap();
         let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
         let second = persistence
-            .register_discovered_session(registration, Some("Replacement".into()), Some(99))
+            .register_discovered_session(registration.clone(), Some("Replacement".into()), Some(99))
             .await
             .unwrap();
         assert_eq!(first.storage_key, second.storage_key);
@@ -1540,6 +1552,24 @@ mod tests {
             .replay_after("discovered-1", 0)
             .unwrap()
             .is_empty());
+        let mut conflicting = registration;
+        conflicting.stable_agent_namespace = Some("config:other".into());
+        let conflict = persistence
+            .register_discovered_session(conflicting, Some("Wrong owner".into()), Some(100))
+            .await
+            .unwrap_err();
+        assert!(conflict
+            .to_string()
+            .contains("conflicts with an existing session scope"));
+        assert_eq!(
+            persistence
+                .metadata("discovered-1")
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Replacement")
+        );
+        persistence.shutdown().await.unwrap();
         let _ = fs::remove_dir_all(root);
     }
 

@@ -119,6 +119,7 @@ describe('pure history helpers', () => {
     )
     expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(48)}…`)
     expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
+    expect(deriveTitle([msg('user', 'First line\nSecond line')], 'fallback')).toBe('First line')
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
   })
 
@@ -368,11 +369,16 @@ describe('provider routing', () => {
         messageCount: 3,
         toolCount: 1,
         lastSeq: 7,
+        discovered: true,
         resumeEligible: true
       }
     ])
     await expect(loadSessionIndex()).resolves.toEqual([
-      expect.objectContaining({ id: 'server-1', agentConfigId: 'cfg-server' })
+      expect.objectContaining({
+        id: 'server-1',
+        agentConfigId: 'cfg-server',
+        discovered: true
+      })
     ])
     expect(mockHistoryApi.list).not.toHaveBeenCalled()
 

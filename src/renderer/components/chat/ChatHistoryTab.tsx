@@ -2,7 +2,7 @@ import { Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
-import { configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-store'
+import { agentReuseKey, configIdFromReuseKey, discoveryKey, useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { ChatHistoryEntryRow, type ChatHistorySidebarEntry } from './ChatHistoryEntryRow'
@@ -77,18 +77,42 @@ export function ChatHistoryTab({
   // Build a unified sidebar list: local mirror + discovered sessions (deduped).
   const mergedEntries = useMemo(() => {
     const mirrorIds = new Set(scopedIndex.map((e) => e.id))
-    const entries: SidebarEntry[] = scopedIndex.map((e) => ({
-      id: e.id,
-      title: e.title,
-      messageCount: e.messageCount,
-      status: e.status,
-      discovered: e.discovered === true,
-      agentId: e.agentId,
-      cwd: e.discovered ? e.cwd : undefined,
-      agentConfigId: e.agentConfigId,
-      lastActivityAt: e.lastActivityAt,
-      canOpen: true
-    }))
+    const entries: SidebarEntry[] = scopedIndex.map((e) => {
+      if (!e.discovered) {
+        return {
+          id: e.id,
+          title: e.title,
+          messageCount: e.messageCount,
+          status: e.status,
+          discovered: false,
+          agentId: e.agentId,
+          agentConfigId: e.agentConfigId,
+          lastActivityAt: e.lastActivityAt,
+          canOpen: true
+        }
+      }
+      const liveAgentId = e.agentConfigId
+        ? configToLiveAgent[agentReuseKey(e.agentConfigId, activeCwd)]
+        : undefined
+      const liveAgent = liveAgentId ? agents[liveAgentId] : undefined
+      const canOpen =
+        liveAgentId != null &&
+        agentStatus[liveAgentId] === 'connected' &&
+        (liveAgent?.capabilities?.loadSession === true ||
+          liveAgent?.capabilities?.sessionCapabilities?.resume != null)
+      return {
+        id: e.id,
+        title: e.title,
+        messageCount: e.messageCount,
+        status: e.status,
+        discovered: true,
+        agentId: liveAgentId,
+        cwd: activeCwd,
+        agentConfigId: e.agentConfigId,
+        lastActivityAt: e.lastActivityAt,
+        canOpen
+      }
+    })
 
     // Add discovered sessions not already in the local mirror. Results are keyed
     // per (agent, cwd), so look up the active cwd's slot for each connected agent.
@@ -125,7 +149,15 @@ export function ChatHistoryTab({
     }
 
     return entries
-  }, [scopedIndex, discoveredSessions, agents, agentStatus, activeCwd, resolveAgentIdentity])
+  }, [
+    scopedIndex,
+    discoveredSessions,
+    agents,
+    agentStatus,
+    activeCwd,
+    resolveAgentIdentity,
+    configToLiveAgent
+  ])
 
   const [query, setQuery] = useState('')
   // Lazy rendering: keep all results in memory but only render a growing window

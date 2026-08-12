@@ -282,6 +282,8 @@ export interface PersistedSessionSummary {
   messageCount: number
   toolCount: number
   lastSeq: number
+  /** Agent-owned metadata mirror; transcript remains authoritative in the agent. */
+  discovered?: boolean
   resumeEligible: boolean
   /**
    * Worktree path the agent runs in (CAP-3). Additive: absent on pre-feature

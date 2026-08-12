@@ -240,9 +240,10 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
       .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
       .join(' ')
       .trim()
-    if (text.length > 0) {
-      const characters = Array.from(text)
-      return characters.length > 48 ? `${characters.slice(0, 48).join('')}…` : text
+    const firstLine = text.split(/\r?\n/, 1)[0].trim()
+    if (firstLine.length > 0) {
+      const characters = Array.from(firstLine)
+      return characters.length > 48 ? `${characters.slice(0, 48).join('')}…` : firstLine
     }
   }
   return fallbackTitle
@@ -301,7 +302,9 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
     messageCount: entry.messageCount,
     lastSeq: entry.lastSeq,
     status: entry.status,
-    discovered: entry.messageCount === 0 && entry.toolCount === 0 && entry.lastSeq === 0,
+    discovered:
+      entry.discovered ??
+      (entry.messageCount === 0 && entry.toolCount === 0 && entry.lastSeq === 0),
     worktreePath: entry.worktreePath,
     worktreeBranch: entry.worktreeBranch
   }

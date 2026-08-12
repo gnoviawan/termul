@@ -42,6 +42,8 @@ pub struct ChatHistoryIndexEntry {
     pub last_activity_at: u64,
     pub message_count: u64,
     pub status: ChatHistoryStatus,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discovered: bool,
     /// Worktree path the agent runs in (CAP-3). Additive: old entries
     /// deserialize with `None` (the renderer-authored metadata payload omits
     /// it for pre-feature sessions). Used by the CAP-4 relaunch lookup +
@@ -735,7 +737,10 @@ mod tests {
         let classified = classify_sync_error(error);
         #[cfg(not(unix))]
         {
-            assert!(classified.is_ok(), "PermissionDenied must be benign on non-unix");
+            assert!(
+                classified.is_ok(),
+                "PermissionDenied must be benign on non-unix"
+            );
         }
         #[cfg(unix)]
         {

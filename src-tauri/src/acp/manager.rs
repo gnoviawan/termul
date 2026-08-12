@@ -846,9 +846,10 @@ pub(crate) async fn record_local_title(
     if title == "Untitled Chat" {
         return Err("title must not be empty".to_string());
     }
-    let metadata = persistence
-        .metadata(&session_id)
-        .map_err(|error| format!("could not read title metadata: {error}"))?;
+    let metadata = persistence.metadata(&session_id).map_err(|error| {
+        log::warn!("[acp-title] metadata lookup failed for session {session_id}: {error}");
+        "could not read title metadata".to_string()
+    })?;
     if metadata.title_source == Some(TitleSource::LocalAlias) {
         return Err("title is protected by a local alias".to_string());
     }
@@ -860,11 +861,17 @@ pub(crate) async fn record_local_title(
     let next_seq = persistence
         .append_local_title(&session_id, title.clone())
         .await
-        .map_err(|error| format!("failed to persist title: {error}"))?;
+        .map_err(|error| {
+            log::warn!("[acp-title] title persistence failed for session {session_id}: {error}");
+            "failed to persist title".to_string()
+        })?;
     persistence
         .flush_session(&session_id)
         .await
-        .map_err(|error| format!("failed to flush title: {error}"))?;
+        .map_err(|error| {
+            log::warn!("[acp-title] title flush failed for session {session_id}: {error}");
+            "failed to flush title".to_string()
+        })?;
     let event = SessionInfoUpdateEvent {
         agent_id: user_agent_id,
         session_id: SessionId::new(session_id.clone()),
@@ -1465,18 +1472,17 @@ impl AcpManager {
         // session (AD-9 debounce). The task owns an `Arc<Self>` clone so it
         // can outlive the command's borrowed `&Arc<Self>` receiver.
         if let Some(persistence) = &self.persistence {
-            let title_was_set_this_turn = persistence
-                .replay_after(&session_id.0, turn_start_seq)
-                .is_ok_and(|records| {
-                    records
-                        .iter()
-                        .any(|record| record.type_ == "local_title_generated")
-                });
-            let is_first_turn = !title_was_set_this_turn
+            let is_first_turn = !first_prompt_text.is_empty()
                 && persistence.metadata(&session_id.0).is_ok_and(|metadata| {
                     metadata.title_source == Some(TitleSource::DerivedFirstMessage)
                 })
-                && !first_prompt_text.is_empty();
+                && !persistence
+                    .replay_after(&session_id.0, turn_start_seq)
+                    .is_ok_and(|records| {
+                        records
+                            .iter()
+                            .any(|record| record.type_ == "local_title_generated")
+                    });
             if is_first_turn {
                 let mut set = self.in_flight_title_gens.lock();
                 if !set.insert(session_id.0.clone()) {
@@ -2097,15 +2103,10 @@ impl AcpManager {
                         let _ = accepted.send(Ok(()));
                     }
                     AcpCommand::CancelPrompt { session_id, reply } => {
-                        let cancel = pending_cancels.lock().remove(&session_id.0);
-                        let _ = reply.send(Ok(()));
-                        // Let the cancellation request emit its acknowledgement before
-                        // unblocking the prompt-completion task. This keeps the test
-                        // transport's ordering contract deterministic under CI load.
-                        tokio::task::yield_now().await;
-                        if let Some(cancel) = cancel {
+                        if let Some(cancel) = pending_cancels.lock().remove(&session_id.0) {
                             let _ = cancel.send(());
                         }
+                        let _ = reply.send(Ok(()));
                     }
                     _ => {}
                 }

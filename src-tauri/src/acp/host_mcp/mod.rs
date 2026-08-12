@@ -35,17 +35,6 @@ use crate::acp::config::{AgentId, SessionId};
 use crate::acp::events::{self, PlanUpdateEvent};
 use crate::web::EventSink;
 
-/// The MCP tool names the agent sees in `tools/list`.
-pub const TERMUL_PLAN_TOOL_NAME: &str = "termul_plan";
-pub const TERMUL_SET_TITLE_TOOL_NAME: &str = "termul_set_session_title";
-
-/// Human-readable descriptions shown to the agent in `tools/list`.
-pub const TERMUL_PLAN_TOOL_DESCRIPTION: &str = "Update the execution plan / todo list shown \
-    in the Termul plan panel. Call this instead of a built-in todo tool so the user sees a \
-    unified plan UI across all agents.";
-pub const TERMUL_SET_TITLE_TOOL_DESCRIPTION: &str = "Set a concise title for the current \
-    Termul chat session. Call this during the first turn as soon as the user's intent is clear.";
-
 /// The hidden subcommand flag the child detects in argv (passed as the sole
 /// arg of the injected `McpServer::Stdio`). The agent spawns
 /// `current_exe() --internal-mcp-plan-server` with the connection info in env.

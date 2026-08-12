@@ -12,6 +12,7 @@ const {
   discoveredSessionsRef,
   agentsRef,
   agentStatusRef,
+  configToLiveAgentRef,
   activeSessionIdRef,
   projectRef
 } = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const {
   discoveredSessionsRef: { current: {} as Record<string, unknown[]> },
   agentsRef: { current: {} as Record<string, unknown> },
   agentStatusRef: { current: {} as Record<string, string> },
+  configToLiveAgentRef: { current: {} as Record<string, string> },
   activeSessionIdRef: { current: null as string | null },
   projectRef: {
     current: null as {
@@ -51,16 +53,17 @@ vi.mock('@/stores/acp-store', () => {
       agents: agentsRef.current,
       agentStatus: agentStatusRef.current,
       agentConfigs: [],
-      configToLiveAgent: {},
+      configToLiveAgent: configToLiveAgentRef.current,
       discoverSessions: mockDiscover,
       openDiscoveredSession: mockOpenDiscovered,
       activeSessionId: activeSessionIdRef.current
     })
   // Stubs for the store helpers the component imports.
+  const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const configIdFromReuseKey = () => ''
   const discoveryKey = (agentId: string, cwd: string) => `${agentId}\0${cwd}`
   const useAgentTemplateId = () => null
-  return { useAcpStore, configIdFromReuseKey, discoveryKey, useAgentTemplateId }
+  return { useAcpStore, agentReuseKey, configIdFromReuseKey, discoveryKey, useAgentTemplateId }
 })
 
 vi.mock('@/stores/workspace-store', () => ({
@@ -110,6 +113,7 @@ describe('ChatHistoryTab scoping', () => {
     discoveredSessionsRef.current = {}
     agentsRef.current = {}
     agentStatusRef.current = {}
+    configToLiveAgentRef.current = {}
     activeSessionIdRef.current = null
     projectRef.current = {
       id: 'p1',
@@ -297,7 +301,8 @@ describe('ChatHistoryTab scoping', () => {
         title: 'Promoted CLI chat',
         messageCount: 0,
         status: 'active',
-        discovered: true
+        discovered: true,
+        agentConfigId: 'config-1'
       })
     ]
     agentsRef.current = {
@@ -307,6 +312,7 @@ describe('ChatHistoryTab scoping', () => {
       }
     }
     agentStatusRef.current = { 'agent-1': 'connected' }
+    configToLiveAgentRef.current = { ['config-1\0/work']: 'agent-1' }
 
     render(<ChatHistoryTab />)
     fireEvent.click(screen.getByText('Promoted CLI chat'))

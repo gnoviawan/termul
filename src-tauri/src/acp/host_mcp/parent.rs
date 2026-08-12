@@ -59,6 +59,8 @@ pub struct HostPlanServer {
     /// authoritative turn registry lets `process_request` repair that stale
     /// token binding when exactly one session for the agent is active.
     active_turns: Mutex<HashMap<String, HashSet<String>>>,
+    /// Sessions that already accepted a title during the current active turn.
+    title_calls_this_turn: Mutex<HashSet<String>>,
     /// Per-session plan cache (emit-and-cache). v1 doesn't persist; this is
     /// the seam a future persistence layer reads from on resume. Updated in
     /// `process_request` (set on emit) + `unregister_*` (drop on close).
@@ -85,6 +87,7 @@ impl HostPlanServer {
             sinks,
             sessions: Mutex::new(HashMap::new()),
             active_turns: Mutex::new(HashMap::new()),
+            title_calls_this_turn: Mutex::new(HashSet::new()),
             plan_store: PlanStore::new(),
             persistence,
         });
@@ -206,6 +209,7 @@ impl HostPlanServer {
 
     /// Mark an accepted prompt turn as active before the agent can call tools.
     pub fn begin_turn(&self, agent_id: &str, real_session_id: &str) {
+        self.title_calls_this_turn.lock().remove(real_session_id);
         self.active_turns
             .lock()
             .entry(agent_id.to_string())
@@ -225,6 +229,7 @@ impl HostPlanServer {
                 active_turns.remove(agent_id);
             }
         }
+        self.title_calls_this_turn.lock().remove(real_session_id);
         log::debug!(
             "[host-mcp] removed active plan route for session {real_session_id} (agent {agent_id})"
         );
@@ -244,6 +249,7 @@ impl HostPlanServer {
             !sessions.is_empty()
         });
         drop(active_turns);
+        self.title_calls_this_turn.lock().remove(real_session_id);
         self.plan_store.drop_session(real_session_id);
     }
 
@@ -415,6 +421,13 @@ impl HostPlanServer {
                 let Some(title) = req.title else {
                     return FrameReply::err("title is required");
                 };
+                if !self
+                    .title_calls_this_turn
+                    .lock()
+                    .insert(real_session_id.clone())
+                {
+                    return FrameReply::err("title already set during this turn");
+                }
                 let Some(persistence) = self.persistence.as_ref() else {
                     log::warn!("[host-mcp] title call rejected: persistence unavailable");
                     return FrameReply::err("title persistence unavailable");
@@ -423,13 +436,14 @@ impl HostPlanServer {
                     persistence,
                     &self.sinks,
                     AgentId(auth.agent_id),
-                    real_session_id,
+                    real_session_id.clone(),
                     title,
                 )
                 .await
                 {
                     Ok(()) => FrameReply::ok(),
                     Err(error) => {
+                        self.title_calls_this_turn.lock().remove(&real_session_id);
                         log::warn!("[host-mcp] title update rejected: {error}");
                         FrameReply::err(error)
                     }
@@ -721,6 +735,7 @@ mod tests {
                 .iter()
                 .any(|record| record.type_ == "local_title_generated"));
             assert_eq!(sink.events.lock().unwrap().len(), 1);
+            persistence.shutdown().await.unwrap();
             let _ = std::fs::remove_dir_all(root);
         });
     }

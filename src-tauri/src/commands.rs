@@ -264,7 +264,8 @@ fn attach_forwarders() -> &'static Mutex<HashMap<String, (u64, tokio::task::Abor
 /// Recover the forwarder map guard even if a holder panicked while holding the
 /// lock — silently skipping on poison would skip predecessor aborts and leak
 /// entries.
-fn lock_forwarders() -> std::sync::MutexGuard<'static, HashMap<String, (u64, tokio::task::AbortHandle)>> {
+fn lock_forwarders(
+) -> std::sync::MutexGuard<'static, HashMap<String, (u64, tokio::task::AbortHandle)>> {
     attach_forwarders()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1711,7 +1712,11 @@ pub(crate) fn validated_search_root(scope_root: &str, search_root: &str) -> Resu
         .map(|path| path.to_string_lossy().to_string())
 }
 
-pub(crate) fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
+pub(crate) fn build_search_args(
+    query: &str,
+    root_path: &str,
+    max_matches_per_file: usize,
+) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
         "-F".to_string(),
@@ -3564,10 +3569,7 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
     // Validate the payload is an array (mirrors `mcp_servers_api::put`).
     if !registry.is_array() {
         log::warn!("remote_sync_mcp_registry: rejected non-array payload");
-        return IpcResult::error(
-            "MCP registry must be a JSON array",
-            "MCP_REGISTRY_INVALID",
-        );
+        return IpcResult::error("MCP registry must be a JSON array", "MCP_REGISTRY_INVALID");
     }
 
     // Serialize + enforce the 1 MiB ceiling (mirrors `mcp_servers_api::put`).
@@ -3582,10 +3584,7 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
         }
         Err(_) => {
             log::warn!("remote_sync_mcp_registry: payload not serializable");
-            return IpcResult::error(
-                "MCP registry is not serializable",
-                "MCP_REGISTRY_INVALID",
-            );
+            return IpcResult::error("MCP registry is not serializable", "MCP_REGISTRY_INVALID");
         }
     };
 
@@ -3594,23 +3593,23 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
     // A present-but-invalid default path returns an error rather than silently
     // falling back to the home directory (which the web route never reads).
     let project_root = match project_registry.default_project_path() {
-        Some(p) => match crate::web::config::resolve_and_validate_project_root(
-            std::path::Path::new(&p),
-        ) {
-            Ok(root) => root,
-            Err(e) => {
-                log::error!(
-                    "remote_sync_mcp_registry: default project path '{}' \
+        Some(p) => {
+            match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)) {
+                Ok(root) => root,
+                Err(e) => {
+                    log::error!(
+                        "remote_sync_mcp_registry: default project path '{}' \
                      failed canonicalization: {}",
-                    p,
-                    e
-                );
-                return IpcResult::error(
-                    "No active project root available for MCP registry sync",
-                    "NO_ACTIVE_PROJECT_ROOT",
-                );
+                        p,
+                        e
+                    );
+                    return IpcResult::error(
+                        "No active project root available for MCP registry sync",
+                        "NO_ACTIVE_PROJECT_ROOT",
+                    );
+                }
             }
-        },
+        }
         None => {
             log::warn!(
                 "remote_sync_mcp_registry: no active project path in registry; \
@@ -3667,10 +3666,7 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
                 path.display(),
                 error
             );
-            IpcResult::error(
-                "Failed to persist MCP registry",
-                "MCP_REGISTRY_WRITE_ERROR",
-            )
+            IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
         }
         Err(error) => {
             log::error!(
@@ -3678,10 +3674,7 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
                 path.display(),
                 error
             );
-            IpcResult::error(
-                "Failed to persist MCP registry",
-                "MCP_REGISTRY_WRITE_ERROR",
-            )
+            IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
         }
     }
 }
@@ -3699,7 +3692,9 @@ pub struct DesktopChatHistoryList {
     pub legacy_import_complete: bool,
 }
 
-fn host_entry_to_desktop(entry: crate::acp::SessionIndexEntry) -> crate::acp::ChatHistoryIndexEntry {
+fn host_entry_to_desktop(
+    entry: crate::acp::SessionIndexEntry,
+) -> crate::acp::ChatHistoryIndexEntry {
     crate::acp::ChatHistoryIndexEntry {
         id: entry.session_id,
         agent_id: entry.runtime_agent_id.unwrap_or_default(),
@@ -3721,6 +3716,7 @@ fn host_entry_to_desktop(entry: crate::acp::SessionIndexEntry) -> crate::acp::Ch
             crate::acp::PersistedSessionStatus::Error => crate::acp::ChatHistoryStatus::Error,
             crate::acp::PersistedSessionStatus::Closed => crate::acp::ChatHistoryStatus::Closed,
         },
+        discovered: entry.discovered,
         worktree_path: entry.worktree_path,
         worktree_branch: entry.worktree_branch,
     }
@@ -3764,8 +3760,7 @@ pub async fn acp_history_get(
     match persistence.session_payload_async(&session_id).await {
         Ok(payload) => {
             log::info!("[acp-history] get success session_id={}", log_session_id);
-            let value = serde_json::to_value(&payload)
-                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
             Ok(IpcResult::success(Some(value)))
         }
         Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
@@ -3992,22 +3987,14 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
 /// (`--- a/<path>` / `+++ b/<path>` / `@@ … @@` / body) built by the
 /// renderer from the working-tree diff. See #257.
 #[tauri::command]
-pub async fn git_stage_hunk(
-    cwd: String,
-    path: String,
-    hunk_patch: String,
-) -> Result<(), String> {
+pub async fn git_stage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
 }
 
 /// Unstage a single hunk. `hunk_patch` is built from the staged diff and
 /// reverse-applied to the index. See #257.
 #[tauri::command]
-pub async fn git_unstage_hunk(
-    cwd: String,
-    path: String,
-    hunk_patch: String,
-) -> Result<(), String> {
+pub async fn git_unstage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch)
 }
 
@@ -4606,10 +4593,7 @@ pub async fn workspace_manifest_write(
             "WORKSPACE_MANIFEST_UNAVAILABLE",
         ));
     };
-    match service
-        .write(&project_id, based_revision, manifest)
-        .await
-    {
+    match service.write(&project_id, based_revision, manifest).await {
         Ok(outcome) => {
             // Boundary log emits project_id + revision + update_identity —
             // never the topology or claim. The service already logged it.
@@ -4710,6 +4694,7 @@ mod tests {
             message_count: 3,
             tool_count: 1,
             last_seq: 5,
+            discovered: false,
             resume_eligible: true,
             worktree_path: None,
             worktree_branch: None,
@@ -4744,6 +4729,7 @@ mod tests {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
             resume_eligible: false,
             worktree_path: None,
             worktree_branch: None,
@@ -4756,7 +4742,10 @@ mod tests {
         );
         assert_eq!(desktop.title, "Untitled Chat");
         assert_eq!(desktop.project_id, "");
-        assert!(matches!(desktop.status, crate::acp::ChatHistoryStatus::Error));
+        assert!(matches!(
+            desktop.status,
+            crate::acp::ChatHistoryStatus::Error
+        ));
     }
 
     #[test]
@@ -5127,7 +5116,11 @@ mod remote_sync_mcp_registry_tests {
         ]);
 
         let result = sync_mcp_registry_to_project_file(&reg, registry).await;
-        assert!(result.success, "fallback should succeed, got {:?}", result.error);
+        assert!(
+            result.success,
+            "fallback should succeed, got {:?}",
+            result.error
+        );
 
         let file = registry_path(&dir);
         let bytes = std::fs::read(&file).unwrap();
@@ -5142,4 +5135,3 @@ mod remote_sync_mcp_registry_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

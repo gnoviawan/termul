@@ -16,7 +16,7 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::service::serve_server;
 use rmcp::{tool, tool_router};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
@@ -187,7 +187,8 @@ async fn forward_to_parent_inner(
         .await
         .map_err(|e| format!("write frame: {e}"))?;
 
-    let mut reader = BufReader::new(stream);
+    const MAX_REPLY: u64 = 64 * 1024;
+    let mut reader = BufReader::new(stream.take(MAX_REPLY));
     let mut line = String::new();
     reader
         .read_line(&mut line)

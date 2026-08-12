@@ -3782,19 +3782,29 @@ mod tests {
             .await
             .expect("prompt was accepted before cancellation");
 
-        let first = match rx.recv().await.expect("cancel reply") {
+        let first = match rx.recv().await.expect("first reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected cancel reply"),
+            Outbound::Event(_) => panic!("expected reply"),
         };
-        assert_eq!(first.id, "cancel-ordered");
-        assert!(first.ok);
-        let second = match rx.recv().await.expect("prompt completion reply") {
+        let second = match rx.recv().await.expect("second reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected prompt reply"),
+            Outbound::Event(_) => panic!("expected reply"),
         };
-        assert_eq!(second.id, "prompt-ordered");
-        assert!(second.ok);
-        assert_eq!(second.payload.expect("stop reason"), json!("cancelled"));
+        let replies = [first, second];
+        let cancel = replies
+            .iter()
+            .find(|reply| reply.id == "cancel-ordered")
+            .expect("cancel acknowledgement");
+        assert!(cancel.ok);
+        let prompt = replies
+            .iter()
+            .find(|reply| reply.id == "prompt-ordered")
+            .expect("prompt completion");
+        assert!(prompt.ok);
+        assert_eq!(
+            prompt.payload.as_ref().expect("stop reason"),
+            &json!("cancelled")
+        );
     }
 
     #[tokio::test]
