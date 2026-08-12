@@ -211,6 +211,10 @@ function ConnectedTerminalComponent({
   const webglAddonRef = useRef<WebglAddon | null>(null)
   const fileLinkProviderDisposableRef = useRef<IDisposable | null>(null)
   const webglRecoveryAttemptsRef = useRef<number>(0)
+  // Pinned to true once WebGL recovery is exhausted for this terminal, so we
+  // permanently use xterm's built-in renderer instead of re-entering a failing
+  // WebGL path. Reset only when the user manually toggles the renderer setting.
+  const webglExhaustedRef = useRef<boolean>(false)
   const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null)
   const webglContextLostRef = useRef<boolean>(false)
@@ -711,7 +715,7 @@ function ConnectedTerminalComponent({
 
     // WebGL addon loading with context loss recovery
     const loadWebglAddon = (term: Terminal, isRecovery: boolean = false): void => {
-      if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+      if (!shouldUseWebglRenderer(rendererPreferenceRef.current) || webglExhaustedRef.current) {
         webglAddonRef.current = null
         return
       }
@@ -729,6 +733,14 @@ function ConnectedTerminalComponent({
             isRecovery
           }
         })
+        // Finalize the fallback. The last WebGL addon was already disposed in
+        // onContextLoss, so xterm has reverted to its built-in renderer. Pin
+        // the exhaustion flag so we never re-enter the failing WebGL path
+        // (settings changes, visibility recovery), and force a full repaint so
+        // the fallback renderer redraws immediately instead of leaving the pane
+        // blank until the next PTY-driven render.
+        webglExhaustedRef.current = true
+        term.refresh(0, term.rows - 1)
         return
       }
       try {
@@ -1314,6 +1326,9 @@ function ConnectedTerminalComponent({
     }
 
     if (terminalRef.current && loadWebglAddonRef.current && !webglAddonRef.current) {
+      // Manual retry path: toggling the renderer preference (dom → webgl)
+      // clears the exhaustion flag and gives WebGL a fresh attempt.
+      webglExhaustedRef.current = false
       webglRecoveryAttemptsRef.current = 0
       loadWebglAddonRef.current(terminalRef.current)
     }

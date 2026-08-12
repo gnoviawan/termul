@@ -1737,6 +1737,36 @@ describe('ConnectedTerminal', () => {
       }
     })
 
+    it('should force a fallback repaint once WebGL recovery is exhausted', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      try {
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled()
+        })
+
+        vi.useFakeTimers()
+
+        // Exhaust all recovery attempts: init load + 2 recoveries bring the
+        // counter to MAX, then the 3rd context loss pins the exhaustion flag.
+        for (let i = 0; i < 3; i++) {
+          capturedContextLossCallback!()
+          await vi.advanceTimersByTimeAsync(150)
+        }
+
+        // The exhausted path forces a full repaint so xterm's built-in renderer
+        // redraws instead of leaving the pane blank while the PTY keeps running.
+        expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, mockTerminalInstance.rows - 1)
+
+        // No further WebGL addon is created once exhausted.
+        expect(webglAddonCreateCount).toBe(3)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
     it.skip('should dispose WebGL and skip recovery after switching renderer preference to canvas', async () => {
       vi.useFakeTimers()
       const { rerender } = render(<ConnectedTerminal className="renderer-auto" />)
