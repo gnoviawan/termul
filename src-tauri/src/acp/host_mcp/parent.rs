@@ -14,7 +14,7 @@
 //! the per-agent driver-thread model in `AcpManager`) — works on both the
 //! desktop binary and the standalone `termul-server` (no `AppHandle`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -53,6 +53,11 @@ pub struct HostPlanServer {
     sinks: Vec<Arc<dyn EventSink>>,
     /// token -> SessionAuth. One entry per registered session.
     sessions: Mutex<HashMap<String, SessionAuth>>,
+    /// Runtime agent id -> sessions with an accepted prompt currently in flight.
+    /// Some agents reuse an older session's MCP child for later sessions; this
+    /// authoritative turn registry lets `process_request` repair that stale
+    /// token binding when exactly one session for the agent is active.
+    active_turns: Mutex<HashMap<String, HashSet<String>>>,
     /// Per-session plan cache (emit-and-cache). v1 doesn't persist; this is
     /// the seam a future persistence layer reads from on resume. Updated in
     /// `process_request` (set on emit) + `unregister_*` (drop on close).
@@ -73,6 +78,7 @@ impl HostPlanServer {
             port: std::sync::OnceLock::new(),
             sinks,
             sessions: Mutex::new(HashMap::new()),
+            active_turns: Mutex::new(HashMap::new()),
             plan_store: PlanStore::new(),
         });
         let server_for_thread = Arc::clone(&server);
@@ -189,6 +195,32 @@ impl HostPlanServer {
         }
     }
 
+    /// Mark an accepted prompt turn as active before the agent can call tools.
+    pub fn begin_turn(&self, agent_id: &str, real_session_id: &str) {
+        self.active_turns
+            .lock()
+            .entry(agent_id.to_string())
+            .or_default()
+            .insert(real_session_id.to_string());
+        log::debug!(
+            "[host-mcp] registered active plan route for session {real_session_id} (agent {agent_id})"
+        );
+    }
+
+    /// Remove a completed, rejected-to-start, cancelled, or failed prompt turn.
+    pub fn end_turn(&self, agent_id: &str, real_session_id: &str) {
+        let mut active_turns = self.active_turns.lock();
+        if let Some(sessions) = active_turns.get_mut(agent_id) {
+            sessions.remove(real_session_id);
+            if sessions.is_empty() {
+                active_turns.remove(agent_id);
+            }
+        }
+        log::debug!(
+            "[host-mcp] removed active plan route for session {real_session_id} (agent {agent_id})"
+        );
+    }
+
     /// Drop a session's auth entry (on close/dispose). Scans by the bound real
     /// session_id. Best-effort — the renderer's `_onPlanUpdate` already guards
     /// closed sessions, so a stale in-flight call is harmless, but evicting
@@ -197,6 +229,12 @@ impl HostPlanServer {
         let mut sessions = self.sessions.lock();
         sessions.retain(|_, auth| auth.real_session_id.as_deref() != Some(real_session_id));
         drop(sessions);
+        let mut active_turns = self.active_turns.lock();
+        active_turns.retain(|_, sessions| {
+            sessions.remove(real_session_id);
+            !sessions.is_empty()
+        });
+        drop(active_turns);
         self.plan_store.drop_session(real_session_id);
     }
 
@@ -296,7 +334,7 @@ impl HostPlanServer {
         // The real session_id must be bound (post `session/new`). If not, the
         // agent called the tool before the session was created — shouldn't
         // happen, but reject defensively.
-        let real_session_id = match &auth.real_session_id {
+        let bound_session_id = match &auth.real_session_id {
             Some(sid) => sid.clone(),
             None => {
                 log::warn!(
@@ -304,6 +342,44 @@ impl HostPlanServer {
                     auth.provisional_sid
                 );
                 return FrameReply::err("session not ready");
+            }
+        };
+
+        // Agents may retain and call an MCP child created for an older session.
+        // Prefer the token's bound session when it is active. Otherwise, repair
+        // the route only when this runtime agent has exactly one active turn;
+        // multiple active sessions are ambiguous and must never cross-route.
+        let real_session_id = {
+            let active_turns = self.active_turns.lock();
+            match active_turns.get(&auth.agent_id) {
+                Some(sessions) if sessions.contains(&bound_session_id) => bound_session_id.clone(),
+                Some(sessions) if sessions.len() == 1 => {
+                    let active_session_id = sessions.iter().next().expect("len checked").clone();
+                    log::info!(
+                        "[host-mcp] rerouted stale plan binding for agent {} from session {} to active session {}",
+                        auth.agent_id,
+                        bound_session_id,
+                        active_session_id
+                    );
+                    active_session_id
+                }
+                Some(sessions) if sessions.len() > 1 => {
+                    log::warn!(
+                        "[host-mcp] rejected ambiguous stale plan binding for agent {} (bound session {}, {} active turns)",
+                        auth.agent_id,
+                        bound_session_id,
+                        sessions.len()
+                    );
+                    return FrameReply::err("ambiguous active session");
+                }
+                _ => {
+                    log::warn!(
+                        "[host-mcp] rejected plan call for agent {} with no active turn (bound session {})",
+                        auth.agent_id,
+                        bound_session_id
+                    );
+                    return FrameReply::err("no active turn");
+                }
             }
         };
 
@@ -335,13 +411,16 @@ mod tests {
 
     #[derive(Default)]
     struct CapturingSink {
-        events: StdMutex<Vec<String>>,
+        events: StdMutex<Vec<(String, serde_json::Value)>>,
     }
 
     impl EventSink for CapturingSink {
         fn emit(&self, event: &crate::web::sink::AcpEvent) {
             if event.type_ == crate::acp::events::EVENT_PLAN_UPDATE {
-                self.events.lock().unwrap().push(event.type_.to_string());
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push((event.type_.to_string(), event.payload.clone()));
             }
         }
     }
@@ -412,6 +491,7 @@ mod tests {
         let server = HostPlanServer::start(vec![sink.clone()]);
         let (port, token, provisional) = server.register_session("agent-1");
         server.bind_session(&token, "sess-real");
+        server.begin_turn("agent-1", "sess-real");
 
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
@@ -426,9 +506,113 @@ mod tests {
             let reply = connect_and_send(port, &frame).await;
             assert_eq!(reply["ok"], true);
         });
-        // The capturing sink records plan_update event names.
         let captured = sink.events.lock().unwrap();
         assert_eq!(captured.len(), 1, "exactly one plan_update must be emitted");
+        assert_eq!(captured[0].1["sessionId"], "sess-real");
+    }
+
+    #[test]
+    fn bound_session_without_an_active_turn_is_rejected() {
+        let sink = Arc::new(CapturingSink::default());
+        let server = HostPlanServer::start(vec![sink.clone()]);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "sess-real");
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "todos": [{"content": "late work"}],
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["error"], "no active turn");
+        });
+
+        assert!(sink.events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_binding_routes_to_the_agents_only_active_turn() {
+        let sink = Arc::new(CapturingSink::default());
+        let server = HostPlanServer::start(vec![sink.clone()]);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "sess-old");
+        server.begin_turn("agent-1", "sess-current");
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "todos": [{"content": "current work"}],
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], true);
+        });
+
+        let captured = sink.events.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1["sessionId"], "sess-current");
+        assert!(server.plan_store.get("sess-old").is_none());
+        assert_eq!(server.plan_store.get("sess-current").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bound_active_session_wins_when_agent_has_multiple_active_turns() {
+        let sink = Arc::new(CapturingSink::default());
+        let server = HostPlanServer::start(vec![sink.clone()]);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "sess-bound");
+        server.begin_turn("agent-1", "sess-bound");
+        server.begin_turn("agent-1", "sess-other");
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "todos": [{"content": "bound work"}],
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], true);
+        });
+
+        let captured = sink.events.lock().unwrap();
+        assert_eq!(captured[0].1["sessionId"], "sess-bound");
+    }
+
+    #[test]
+    fn ambiguous_stale_binding_is_rejected_instead_of_cross_routed() {
+        let sink = Arc::new(CapturingSink::default());
+        let server = HostPlanServer::start(vec![sink.clone()]);
+        let (port, token, provisional) = server.register_session("agent-1");
+        server.bind_session(&token, "sess-old");
+        server.begin_turn("agent-1", "sess-a");
+        server.begin_turn("agent-1", "sess-b");
+
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let frame = serde_json::json!({
+                "token": token,
+                "session_id": provisional,
+                "todos": [{"content": "ambiguous work"}],
+            });
+            let reply = connect_and_send(port, &frame).await;
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["error"], "ambiguous active session");
+        });
+
+        assert!(sink.events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn end_turn_removes_routing_candidate() {
+        let server = HostPlanServer::start(vec![]);
+        server.begin_turn("agent-1", "sess-current");
+        server.end_turn("agent-1", "sess-current");
+        assert!(server.active_turns.lock().get("agent-1").is_none());
     }
 
     #[test]

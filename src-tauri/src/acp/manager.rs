@@ -993,6 +993,7 @@ impl AcpManager {
         let thread_start_error = start_error.clone();
         let thread_persistence = self.persistence.clone();
         let thread_warmup_done = self.warmup_done.clone();
+        let thread_host_plan_server = self.host_plan_server.clone();
         let stable_namespace = stable_agent_namespace(&config);
 
         let join_handle = std::thread::Builder::new()
@@ -1001,6 +1002,7 @@ impl AcpManager {
                 run_agent(
                     thread_config,
                     sinks,
+                    thread_host_plan_server,
                     thread_agent_id,
                     command_rx,
                     init_tx,
@@ -2271,6 +2273,7 @@ async fn join_thread_bounded(handle: JoinHandle<()>) {
 fn run_agent(
     config: AgentConfig,
     sinks: Vec<Arc<dyn EventSink>>,
+    host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
@@ -2306,6 +2309,7 @@ fn run_agent(
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
+        host_plan_server.clone(),
         agent_id.clone(),
         command_rx,
         init_tx,
@@ -2325,6 +2329,12 @@ fn run_agent(
         let mut state = driver_state.lock();
         (state.drain_all(), state.active_session_ids())
     };
+    // A connection teardown can drop an in-flight prompt task before its normal
+    // completion cleanup runs. Remove every surviving host-plan route here so
+    // a later session cannot be mistaken for an ambiguous concurrent turn.
+    for session_id in &active_sessions {
+        host_plan_server.end_turn(&agent_id.0, session_id);
+    }
     for permission in leaked {
         let _ = permission.responder.respond(RequestPermissionResponse::new(
             RequestPermissionOutcome::Cancelled,
@@ -2440,6 +2450,7 @@ fn run_agent(
 async fn drive_connection(
     config: AgentConfig,
     sinks: Vec<Arc<dyn EventSink>>,
+    host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
     agent_id: AgentId,
     command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
@@ -2527,6 +2538,7 @@ async fn drive_connection(
 
     // Clones moved into the command loop (`main_fn`).
     let loop_sinks = sinks.clone();
+    let loop_host_plan_server = host_plan_server;
     let loop_agent_id = agent_id.clone();
     let loop_state = driver_state.clone();
     let loop_spawned = spawned.clone();
@@ -2893,6 +2905,7 @@ async fn drive_connection(
                 command_rx,
                 init_tx,
                 loop_sinks,
+                loop_host_plan_server,
                 loop_agent_id,
                 loop_state,
                 loop_spawned,
@@ -2919,6 +2932,7 @@ async fn run_command_loop(
     mut command_rx: mpsc::UnboundedReceiver<AcpCommand>,
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
     sinks: Vec<Arc<dyn EventSink>>,
+    host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
     agent_id: AgentId,
     driver_state: Arc<Mutex<DriverState>>,
     spawned: Arc<AtomicBool>,
@@ -3423,10 +3437,15 @@ async fn run_command_loop(
                 let turn_cx = cx.clone();
                 let turn_sinks = sinks.clone();
                 let turn_agent_id = agent_id.clone();
+                let turn_plan_server = host_plan_server.clone();
                 let turn_state = driver_state.clone();
                 let turn_persistence = persistence.clone();
                 let turn_session = session_id.clone();
                 let log_session = session_id.clone();
+                // Register before spawning so an immediate `termul_plan` call is
+                // routed to this accepted prompt's session, even when the agent
+                // reuses an MCP child created for an older session.
+                host_plan_server.begin_turn(&agent_id.0, &session_id.0);
                 // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
@@ -3485,9 +3504,10 @@ async fn run_command_loop(
                         }
                     }
 
-                    // Turn is over: clear the active-turn marker and resolve any
-                    // permissions that were never answered (H3 — normal
-                    // completion, not just cancel).
+                    // Turn is over: clear the host-plan routing marker and the
+                    // driver active-turn marker, then resolve permissions that
+                    // were never answered (H3 — normal completion, not just cancel).
+                    turn_plan_server.end_turn(&turn_agent_id.0, &session_id.0);
                     let pending = turn_state.lock().finish_turn(&session_id.0);
                     for permission in pending {
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
@@ -3573,8 +3593,9 @@ async fn run_command_loop(
                     Ok(())
                 });
                 if let Err(e) = spawn_result {
-                    // The connection is shutting down; clear the marker we just
+                    // The connection is shutting down; clear the markers we just
                     // set and surface the real error to the caller (L5).
+                    host_plan_server.end_turn(&agent_id.0, &turn_session.0);
                     driver_state.lock().finish_turn(&turn_session.0);
                     let error = format!("failed to start prompt turn: {e}");
                     let _ = accepted.send(Err(error.clone()));
