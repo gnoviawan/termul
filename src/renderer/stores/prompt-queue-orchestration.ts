@@ -5,7 +5,9 @@
  * `ACP_TURN_IN_PROGRESS` error contract shared with Rust `acp_send_prompt`.
  */
 
+import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import type { ContentBlock, SessionId } from '@/lib/acp-api'
+import { AcpTransportError } from '@/lib/acp-transport'
 
 /** Stable code from Rust when `acp_send_prompt` rejects a concurrent turn. */
 export const ACP_TURN_IN_PROGRESS_CODE = 'ACP_TURN_IN_PROGRESS'
@@ -42,7 +44,20 @@ export interface RecoverableChatMessage {
 type PromptQueueMap = Record<SessionId, QueuedPrompt[]>
 
 export function isPromptTurnInProgressError(err: unknown): boolean {
-  return String(err).includes(ACP_TURN_IN_PROGRESS_CODE)
+  // Two surfaces report "a prompt turn is already in progress"; both must trigger
+  // `runPromptTurn`'s `recoverPromptToQueue` recovery (parity across desktop/web):
+  //  • Desktop/IPC: `acp_send_prompt` rejects with `Error('ACP_TURN_IN_PROGRESS: …')`.
+  //  • Web/WS: the relay maps the turn-busy condition to `WsErrorCode::RateLimited` via
+  //    `map_prompt_error_code` (preserving the `ACP_TURN_IN_PROGRESS: …` message) AND via
+  //    the pre-flight `TurnClaim::DuplicateInFlight | Busy` branch (message
+  //    "a prompt turn is already in progress"). Both surface as
+  //    `AcpTransportError(WS_ERROR_CODES.RATE_LIMITED, …)`.
+  // The string branch covers IPC + the WS `map_prompt_error_code` form (message keeps the
+  // code prefix); the instanceof branch covers the WS turn-claim form (different message).
+  return (
+    String(err).includes(ACP_TURN_IN_PROGRESS_CODE) ||
+    (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.RATE_LIMITED)
+  )
 }
 
 /**

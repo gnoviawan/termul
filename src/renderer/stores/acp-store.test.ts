@@ -1002,6 +1002,32 @@ describe('acp-store', () => {
     ])
     expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
     expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('queues a prompt when the WS transport rejects a concurrent turn (rate_limited)', async () => {
+    // Web/remote path: the relay returns `err.code: rate_limited` with
+    // message "a prompt turn is already in progress" (the only RateLimited
+    // emit site is the send_prompt DuplicateInFlight/Busy branch), surfaced as
+    // `AcpTransportError`. The store must recover it to the queue instead of
+    // finalizing the turn — mirrors the IPC `ACP_TURN_IN_PROGRESS` case above.
+    seedSession('s1', 'agent-1', false)
+    _setAcpTransportForTests({
+      sendPrompt: vi
+        .fn()
+        .mockRejectedValue(
+          new AcpTransportError('rate_limited', 'a prompt turn is already in progress')
+        ),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await useAcpStore.getState().sendPrompt('s1', 'queued after race')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().promptQueues['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'queued after race' }
+    ])
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
   it('flushes the next queued prompt when the turn ends', async () => {
