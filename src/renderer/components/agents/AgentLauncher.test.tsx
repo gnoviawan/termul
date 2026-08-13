@@ -75,6 +75,7 @@ const {
   mockHideAgentLauncher,
   mockPersistRead,
   mockPersistWrite,
+  mockPersistWriteDebounced,
   mockNavigate,
   mockRetargetWarmPool,
   mockSetSelectedAgentConfigId,
@@ -105,6 +106,7 @@ const {
   mockHideAgentLauncher: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
+  mockPersistWriteDebounced: vi.fn(),
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
@@ -191,7 +193,11 @@ vi.mock('react-router-dom', async () => {
 })
 
 vi.mock('@/lib/api', () => ({
-  persistenceApi: { read: mockPersistRead, write: mockPersistWrite },
+  persistenceApi: {
+    read: mockPersistRead,
+    write: mockPersistWrite,
+    writeDebounced: mockPersistWriteDebounced
+  },
   filesystemApi: {
     onFileChanged: vi.fn(() => () => {}),
     onFileCreated: vi.fn(() => () => {}),
@@ -448,7 +454,8 @@ vi.mock('@/stores/acp-store', () => {
     useAcpSession,
     prepareChatKey,
     agentReuseKey,
-    hasModelRelevantOptionsCache
+    hasModelRelevantOptionsCache,
+    persistComposerOptions: vi.fn()
   }
 })
 
@@ -571,6 +578,7 @@ beforeEach(() => {
   mockSetMcpServerEnabled.mockResolvedValue(undefined)
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
+  mockPersistWriteDebounced.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
   mockClaimPreparedChat.mockReturnValue(null)
   mockCreateLaunchPlaceholder.mockReturnValue('launch-placeholder-1')

@@ -75,6 +75,11 @@ export const PersistenceKeys = {
   // GH-289: value shape is `LastSelectedAgent` ({ agentId, mode }); legacy
   // records carrying only `{ agentId }` are read as `mode: 'cli'`.
   lastSelectedAgent: 'agents/last-selected',
+  // Last composer selections (model, thinking level, config, mode, worktree
+  // isolation + base branch) per agent-config-id. Restored on launcher mount
+  // so the next chat starts with the user's last pick regardless of which
+  // surface (launcher or running chatbox) set it.
+  lastComposerOptions: (configId: string): string => `agents/composer-options/${configId}`,
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`
@@ -85,6 +90,18 @@ export const PersistenceKeys = {
 export interface LastSelectedAgent {
   agentId: string
   mode: 'cli' | 'acp'
+}
+
+// Persisted composer selections per agent-config-id. Written by both the
+// launcher (pre-launch pending options + worktree isolation) and the store
+// setters (running-chatbox model/mode/config changes). Restored on launcher
+// mount. All fields optional — an absent field means "use agent default".
+export interface PersistedComposerOptions {
+  modelId?: string
+  modeId?: string
+  configValues?: Record<string, string>
+  isolationMode?: 'current' | 'worktree'
+  baseBranch?: string | null
 }
 
 // Persisted project data (stored at projects.json)

@@ -22,6 +22,7 @@
  * prepared-chat reaping) and is **not** a cross-tab isolation boundary.
  */
 
+import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type {
   ProjectSwitchCompletedEvent,
   ProjectSwitchFailedEvent,
@@ -116,6 +117,7 @@ import {
   type PrepareChatError,
   SETUP_ERROR_LABELS
 } from '@/lib/agents/acp-spawn-errors'
+import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -1622,6 +1624,64 @@ function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId)
   })
 }
 
+/**
+ * Persist composer selections (model/mode/config) per agent-config-id via
+ * `persistenceApi` (debounced). Called from the store setters so running-chatbox
+ * selection changes are captured regardless of which surface triggered them.
+ * Merges the patch into the existing record (not a full overwrite) so a
+ * single-field change (e.g. config) doesn't wipe the persisted model. Skips
+ * ephemeral/warm-pool sessions so agent defaults don't overwrite the user's
+ * real last selection. Best-effort — a persistence failure logs a warn and
+ * does not throw (the selection still applied to the live session).
+ *
+ * ## Concurrency: per-key serialization
+ *
+ * Each call does read-merge-write. Without serialization, two concurrent
+ * calls (e.g. setModel + setMode firing in the same tick) can both read the
+ * same prior record, then the second write overwrites the first's field. The
+ * `composerOptionQueues` map chains promises per key so each patch reads the
+ * latest in-flight record immediately before writing.
+ */
+const composerOptionQueues = new Map<string, Promise<void>>()
+
+export function persistComposerOptions(
+  configId: string,
+  patch: PersistedComposerOptions,
+  sessionId?: SessionId
+): void {
+  if (sessionId && ephemeralSessionIds.has(sessionId)) return
+  const key = PersistenceKeys.lastComposerOptions(configId)
+  const prev = composerOptionQueues.get(key) ?? Promise.resolve()
+  const next = prev.then(async () => {
+    const result = await persistenceApi.read<PersistedComposerOptions>(key)
+    const existing = result.success ? (result.data ?? {}) : {}
+    const merged: PersistedComposerOptions = { ...existing, ...patch }
+    // Deep-merge configValues so a single config change doesn't wipe
+    // sibling config values persisted from a prior selection.
+    if (existing.configValues && patch.configValues) {
+      merged.configValues = { ...existing.configValues, ...patch.configValues }
+    }
+    // Drop undefined values so the record stays compact and absent fields
+    // mean "use agent default" (not "explicitly unset to undefined").
+    for (const k of Object.keys(merged) as (keyof PersistedComposerOptions)[]) {
+      if (merged[k] === undefined) delete merged[k]
+    }
+    await persistenceApi.writeDebounced(key, merged)
+  })
+  composerOptionQueues.set(key, next)
+  next.catch((err) => {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.persistComposerOptions',
+      message: `persist failed for ${configId}: ${err instanceof Error ? err.message : String(err)}`
+    })
+  })
+  // Clean up the queue entry once settled to avoid unbounded growth.
+  next.finally(() => {
+    if (composerOptionQueues.get(key) === next) composerOptionQueues.delete(key)
+  })
+}
+
 /** Best-effort tear-down for a session created by a cancelled/stale prepare. */
 function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
   // createSession may have set activeSessionId as a side effect; that must not
@@ -1752,6 +1812,11 @@ function dropEphemeralSessionState(state: AcpState, sessionId: SessionId): Parti
 export function _resetEphemeralSessionIdsForTesting(): void {
   ephemeralSessionIds.clear()
   commitMessageCollectors.clear()
+}
+
+/** Test-only: mark a session as ephemeral (warm-pool seed) for persistence-skip tests. */
+export function _addEphemeralSessionIdForTesting(sessionId: SessionId): void {
+  ephemeralSessionIds.add(sessionId)
 }
 
 /**
@@ -4639,6 +4704,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
+      persistComposerOptions(agentConfigId, { configValues: { [configId]: valueId } }, sessionId)
     }
   },
 
@@ -4660,6 +4726,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })
     cacheOptionsFromSession(set, get, sessionId)
+    const configId = configIdForAgentId(get(), session.agentId)
+    if (configId) {
+      persistComposerOptions(configId, { modeId }, sessionId)
+    }
   },
 
   setModel: async (sessionId, modelId) => {
@@ -4680,6 +4750,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
     })
     cacheOptionsFromSession(set, get, sessionId)
+    const configId = configIdForAgentId(get(), session.agentId)
+    if (configId) {
+      persistComposerOptions(configId, { modelId }, sessionId)
+    }
   },
 
   respondPermission: async (requestId, optionId) => {

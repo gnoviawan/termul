@@ -1,4 +1,4 @@
-import type { LastSelectedAgent } from '@shared/types/persistence.types'
+import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
 import {
@@ -92,6 +92,7 @@ import {
   type AcpSession,
   agentReuseKey,
   hasModelRelevantOptionsCache,
+  persistComposerOptions,
   prepareChatKey,
   useAcpSession,
   useAcpStore
@@ -320,6 +321,23 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveConfigOptions,
     cachedOptions?.updatedAt
   ])
+  // `persistSelection` is declared before the ACP setters below so the setters
+  // ACP setters below so the setters can close over them without a temporal-dead-zone
+  // reference (the setters are also passed into `useChatComposer` before its line).
+  const persistSelection = useCallback((configId: string) => {
+    cachedConfigId = configId
+    void persistenceApi.write<LastSelectedAgent>(PersistenceKeys.lastSelectedAgent, {
+      agentId: configId,
+      mode: 'acp'
+    })
+  }, [])
+
+  // Composer-selection persistence is delegated to the store's
+  // `persistComposerOptions` helper, which serializes per-key mutations so
+  // concurrent calls (e.g. model + mode in the same tick) can't overwrite
+  // each other. The launcher calls it without a sessionId (pre-launch, no
+  // session exists yet); the store setters call it with a sessionId (and
+  // the ephemeral-session guard skips warm-pool seeds).
   // The three ACP setters below are declared before `useChatComposer` so the
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
@@ -330,6 +348,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           ...prev,
           configValues: { ...prev.configValues, [configId]: valueId }
         }))
+        if (activeConfigId) {
+          persistComposerOptions(activeConfigId, {
+            configValues: { [configId]: valueId }
+          })
+        }
         return
       }
       try {
@@ -339,7 +362,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         throw err
       }
     },
-    [preparedSessionId]
+    [preparedSessionId, activeConfigId]
   )
 
   const handleSetModel = useCallback(
@@ -347,6 +370,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (!preparedSessionId) {
         if (modelSource === 'models') {
           setPendingOptions((prev) => ({ ...prev, modelId: valueId }))
+          if (activeConfigId) {
+            persistComposerOptions(activeConfigId, { modelId: valueId })
+          }
           return
         }
         if (!modelOption) {
@@ -357,6 +383,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           modelId: valueId,
           configValues: { ...prev.configValues, [modelOption.id]: valueId }
         }))
+        if (activeConfigId) {
+          persistComposerOptions(activeConfigId, {
+            modelId: valueId,
+            configValues: { [modelOption.id]: valueId }
+          })
+        }
         return
       }
       if (modelSource === 'models') {
@@ -373,13 +405,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       }
       await handleSetConfig(modelOption.id, valueId)
     },
-    [handleSetConfig, modelOption, modelSource, preparedSessionId]
+    [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId]
   )
 
   const handleSetMode = useCallback(
     async (modeId: string) => {
       if (!preparedSessionId) {
         setPendingOptions((prev) => ({ ...prev, modeId }))
+        if (activeConfigId) {
+          persistComposerOptions(activeConfigId, { modeId })
+        }
         return
       }
       try {
@@ -389,7 +424,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         throw err
       }
     },
-    [preparedSessionId]
+    [preparedSessionId, activeConfigId]
   )
 
   const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
@@ -436,14 +471,98 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     scheduleRestoreCaret
   })
 
-  const persistSelection = useCallback((configId: string) => {
-    cachedConfigId = configId
-    void persistenceApi.write<LastSelectedAgent>(PersistenceKeys.lastSelectedAgent, {
-      agentId: configId,
-      mode: 'acp'
-    })
-  }, [])
+  // Restore persisted composer selections for the current agent on mount and
+  // on agent change. Seeds `pendingOptions` (model/mode/config) +
+  // `isolationMode`/`baseBranch` (worktree) so the next chat starts with the
+  // user's last pick. Fallbacks: drop selections no longer advertised by the
+  // agent; fall back to 'current' when worktree is no longer available; fall
+  // back to defaultBase when baseBranch is no longer in the branch list.
+  // Runs on agent change; options may not be loaded yet on first run (cache
+  // miss + prepareChat in flight), so validation is best-effort — invalid
+  // selections are dropped silently if options are available, otherwise
+  // accepted as-is (the agent will ignore unknown values at launch).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on agent change only; options/branches are read at run time, re-running on every options change would re-seed and fight user edits.
+  useEffect(() => {
+    if (!activeConfigId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await persistenceApi.read<PersistedComposerOptions>(
+          PersistenceKeys.lastComposerOptions(activeConfigId)
+        )
+        if (cancelled) return
+        if (!result.success || !result.data) return
+        const saved = result.data
+        const configValues: Record<string, string> = {}
+        if (saved.configValues) {
+          for (const [cid, vid] of Object.entries(saved.configValues)) {
+            const opt = effectiveConfigOptions.find((o) => o.id === cid)
+            // Drop the value when the option is missing OR the value is no
+            // longer in the option's advertised values.
+            if (opt && opt.options.some((o) => o.value === vid)) {
+              configValues[cid] = vid
+            } else {
+              void logFrontendError({
+                level: 'warn',
+                source: 'agentLauncher.restoreComposerOptions',
+                message: `dropping persisted config — option ${cid} no longer advertised`
+              })
+            }
+          }
+        }
+        let modelId = saved.modelId
+        if (modelId) {
+          const modelOpt = resolveModelOption(
+            partitionConfigOptions(effectiveConfigOptions).model,
+            effectiveModels
+          ).option
+          if (modelOpt && !modelOpt.options.some((o) => o.value === modelId)) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.restoreComposerOptions',
+              message: 'dropping persisted model — no longer advertised'
+            })
+            modelId = undefined
+          }
+        }
+        let modeId = saved.modeId
+        if (modeId && effectiveModes) {
+          if (!effectiveModes.availableModes.some((m) => m.id === modeId)) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.restoreComposerOptions',
+              message: 'dropping persisted mode — no longer advertised'
+            })
+            modeId = undefined
+          }
+        }
+        if (modelId || modeId || Object.keys(configValues).length > 0) {
+          setPendingOptions({ modelId, modeId, configValues })
+        }
+        if (saved.isolationMode === 'worktree' && canUseWorktree && saved.baseBranch) {
+          setIsolationMode('worktree')
+          if (
+            branches.length > 0 &&
+            !branches.includes(saved.baseBranch) &&
+            baseBranchInfo?.defaultBase
+          ) {
+            setBaseBranch(baseBranchInfo.defaultBase)
+          } else {
+            setBaseBranch(saved.baseBranch)
+          }
+        }
+      } catch {
+        // Best-effort — silent failure, launcher shows agent defaults.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Re-run on agent change only. Options/branches are read at run time;
+    // re-running on every options change would re-seed and fight user edits.
+  }, [activeConfigId])
 
+  // Restore the last-selected agent on mount if no agent is selected yet.
   useEffect(() => {
     if (selectedConfigId || supportedAgents.length === 0) return
     let cancelled = false
@@ -522,6 +641,31 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     setBaseBranch(baseBranchInfo.defaultBase)
   }, [isolationMode, baseBranch, baseBranchInfo])
 
+  // Persist worktree isolation mode + base branch changes for the current
+  // agent so the next chat starts with the same worktree preference. Only
+  // persists when worktree mode is available (`canUseWorktree`) — a non-git
+  // project falls back to 'current' and does not overwrite the persisted pick.
+  useEffect(() => {
+    if (!activeConfigId) return
+    if (!canUseWorktree) return
+    persistComposerOptions(activeConfigId, {
+      isolationMode,
+      baseBranch: isolationMode === 'worktree' ? baseBranch : null
+    })
+  }, [activeConfigId, isolationMode, baseBranch, canUseWorktree])
+
+  // Validate the restored `baseBranch` once the branch list loads. The restore
+  // effect (on `[activeConfigId]`) may set a persisted branch before
+  // `worktreeApi.branches` resolves. If the branch was deleted, fall back to
+  // the resolved default.
+  useEffect(() => {
+    if (isolationMode !== 'worktree' || !baseBranch || branches.length === 0) return
+    if (branches.includes(baseBranch)) return
+    if (baseBranchInfo?.defaultBase) {
+      setBaseBranch(baseBranchInfo.defaultBase)
+    }
+  }, [isolationMode, baseBranch, branches, baseBranchInfo])
+
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
       return
@@ -558,14 +702,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {
+      // No-op when re-selecting the same agent — avoids resetting
+      // worktree/pending state and overwriting the persisted record.
+      if (entry.configId === selectedConfigId) {
+        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+        return
+      }
       setManualPath('')
       setManualInstallOverride(null)
       setPendingOptions(emptyPendingLauncherOptions())
+      // Reset worktree isolation + base branch; the restore effect on
+      // `[activeConfigId]` will re-seed them from the persisted record for
+      // the new agent (or leave them at 'current'/null if no record exists).
+      setIsolationMode('current')
+      setBaseBranch(null)
       setSelectedConfigId(entry.configId)
       persistSelection(entry.configId)
       editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
     },
-    [persistSelection]
+    [persistSelection, selectedConfigId]
   )
 
   const handleInstallAgent = useCallback(
@@ -939,6 +1094,21 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           await saveAgentConfig(configSnapshot)
         }
         persistSelection(configSnapshot.id)
+        // Persist the final composer selections snapshot (model/mode/config
+        // + worktree isolation + base branch) so the next chat starts with
+        // the user's last pick. The store setters already persisted
+        // running-chatbox changes; this catches the pre-launch pending
+        // options that never went through a store setter (no prepared session).
+        persistComposerOptions(configSnapshot.id, {
+          modelId: pendingSnapshot.modelId,
+          modeId: pendingSnapshot.modeId,
+          configValues:
+            Object.keys(pendingSnapshot.configValues).length > 0
+              ? pendingSnapshot.configValues
+              : undefined,
+          isolationMode,
+          baseBranch: isolationMode === 'worktree' ? baseBranch : null
+        })
 
         // Real send carries the WIRE text (path-framed skills, command-prefixed)
         // so the agent receives paths, not tokens.

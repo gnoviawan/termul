@@ -76,6 +76,21 @@ vi.mock('@/lib/web-tab-session', () => ({
   getTabFocusedSessionId: vi.fn(() => null)
 }))
 
+// Mock persistenceApi so composer-selection persistence calls are observable
+// in tests without hitting the Tauri plugin-store transport. Preserve other
+// `@/lib/api` exports via importActual so transitive imports still resolve.
+const { mockPersistenceApi } = vi.hoisted(() => ({
+  mockPersistenceApi: {
+    read: vi.fn(),
+    write: vi.fn(),
+    writeDebounced: vi.fn()
+  }
+}))
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>()
+  return { ...actual, persistenceApi: mockPersistenceApi }
+})
+
 import { invoke } from '@tauri-apps/api/core'
 import type { PlanEntry } from '@/lib/acp-api'
 import {
@@ -92,6 +107,7 @@ import {
 } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import {
+  _addEphemeralSessionIdForTesting,
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
   _resetAcpAuthForTesting,
@@ -262,6 +278,11 @@ describe('acp-store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({ success: false })
+    mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
     _resetAcpTransportForTests(null)
     _resetInFlightHistoryOpensForTesting()
     _resetAcpAuthForTesting()
@@ -7222,5 +7243,219 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+})
+
+describe('acp-store: composer-selection persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({ success: false })
+    mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('setModel persists the modelId to persistenceApi (debounced)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-persist', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-persist': {
+          ...s.sessions['sess-persist'],
+          models: {
+            currentModelId: 'm1',
+            availableModels: [
+              { modelId: 'm1', name: 'Model One' },
+              { modelId: 'm2', name: 'Model Two' }
+            ]
+          }
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined) // set_model
+
+    await useAcpStore.getState().setModel('sess-persist', 'm2')
+    // persistComposerOptions chains on a per-key promise queue; flush the
+    // microtask before asserting.
+    await vi.waitFor(() => expect(mockPersistenceApi.writeDebounced).toHaveBeenCalled())
+
+    expect(mockPersistenceApi.writeDebounced).toHaveBeenCalledWith(
+      'agents/composer-options/cfg-1',
+      expect.objectContaining({ modelId: 'm2' })
+    )
+  })
+
+  it('setMode persists the modeId to persistenceApi (debounced)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-persist', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-persist': {
+          ...s.sessions['sess-persist'],
+          modes: {
+            currentModeId: 'agent',
+            availableModes: [
+              { id: 'agent', name: 'Agent' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          }
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined) // set_mode
+
+    await useAcpStore.getState().setMode('sess-persist', 'plan')
+    await vi.waitFor(() => expect(mockPersistenceApi.writeDebounced).toHaveBeenCalled())
+
+    expect(mockPersistenceApi.writeDebounced).toHaveBeenCalledWith(
+      'agents/composer-options/cfg-1',
+      expect.objectContaining({ modeId: 'plan' })
+    )
+  })
+
+  it('setConfigOption persists the config value to persistenceApi (debounced)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-persist', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-persist': {
+          ...s.sessions['sess-persist'],
+          configOptions: [
+            {
+              id: 'thought_level',
+              name: 'Thinking',
+              category: 'thought_level',
+              type: 'select',
+              currentValue: 'low',
+              options: [
+                { value: 'low', name: 'Low' },
+                { value: 'high', name: 'High' }
+              ]
+            }
+          ]
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'thought_level',
+        name: 'Thinking',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'high',
+        options: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' }
+        ]
+      }
+    ]) // set_config_option
+
+    await useAcpStore.getState().setConfigOption('sess-persist', 'thought_level', 'high')
+    await vi.waitFor(() => expect(mockPersistenceApi.writeDebounced).toHaveBeenCalled())
+
+    expect(mockPersistenceApi.writeDebounced).toHaveBeenCalledWith(
+      'agents/composer-options/cfg-1',
+      expect.objectContaining({ configValues: { thought_level: 'high' } })
+    )
+  })
+
+  it('persistComposerOptions merges partial patches (does not overwrite existing fields)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-persist', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-persist': {
+          ...s.sessions['sess-persist'],
+          models: {
+            currentModelId: 'm1',
+            availableModels: [
+              { modelId: 'm1', name: 'Model One' },
+              { modelId: 'm2', name: 'Model Two' }
+            ]
+          },
+          modes: {
+            currentModeId: 'agent',
+            availableModes: [
+              { id: 'agent', name: 'Agent' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          }
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    // Simulate an existing persisted record with a config value.
+    mockPersistenceApi.read.mockResolvedValue({
+      success: true,
+      data: { configValues: { thought_level: 'high' } }
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined) // set_model
+
+    await useAcpStore.getState().setModel('sess-persist', 'm2')
+    await vi.waitFor(() => expect(mockPersistenceApi.writeDebounced).toHaveBeenCalled())
+
+    const callArgs = vi.mocked(mockPersistenceApi.writeDebounced).mock.calls[0]
+    expect(callArgs).toBeDefined()
+    const written = callArgs![1] as Record<string, unknown>
+    // The merge preserves the existing configValues while adding modelId.
+    expect(written).toMatchObject({
+      modelId: 'm2',
+      configValues: { thought_level: 'high' }
+    })
+  })
+
+  it('skips persistence for ephemeral/warm-pool sessions', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    seedSession('sess-eph', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-eph': {
+          ...s.sessions['sess-eph'],
+          models: {
+            currentModelId: 'm1',
+            availableModels: [
+              { modelId: 'm1', name: 'Model One' },
+              { modelId: 'm2', name: 'Model Two' }
+            ]
+          }
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    // Mark the session as ephemeral (warm-pool seed).
+    _addEphemeralSessionIdForTesting('sess-eph')
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined) // set_model
+
+    await useAcpStore.getState().setModel('sess-eph', 'm2')
+    // Ephemeral sessions skip persistence so agent defaults don't overwrite
+    // the user's real last selection.
+    expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
   })
 })
