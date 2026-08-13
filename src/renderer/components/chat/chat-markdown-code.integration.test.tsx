@@ -1,5 +1,5 @@
 import { code as codePlugin } from '@streamdown/code'
-import { render, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { Streamdown } from 'streamdown'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ChatMarkdownCode } from './chat-markdown-code'
@@ -35,6 +35,35 @@ describe('ChatMarkdownCode with Streamdown', () => {
       expect(lineWrappers[0]).toHaveTextContent('const first = 1')
       expect(lineWrappers[1]).toHaveTextContent(/^\s*$/)
       expect(lineWrappers[2]).toHaveTextContent('const third = 3')
+    })
+  })
+
+  it('renders a termul-plan fence as a PlanPanel instead of a code block', async () => {
+    const plan = [
+      { content: 'Investigate the renderer bypass', status: 'completed' },
+      { content: 'Fix the delegation in ChatMarkdownCode', status: 'in_progress' }
+    ]
+    const fence = `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
+    const { container } = render(
+      <TooltipProvider>
+        <Streamdown
+          mode="static"
+          plugins={{ code: codePlugin }}
+          components={{ code: ChatMarkdownCode }}
+          controls={false}
+          lineNumbers={false}
+          linkSafety={{ enabled: false }}
+        >
+          {fence}
+        </Streamdown>
+      </TooltipProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Execution plan' })).toBeInTheDocument()
+      expect(screen.getByText('Investigate the renderer bypass')).toBeInTheDocument()
+      expect(screen.getByText('Fix the delegation in ChatMarkdownCode')).toBeInTheDocument()
+      expect(container.querySelector('[data-streamdown="code-block-body"]')).toBeNull()
     })
   })
 })
