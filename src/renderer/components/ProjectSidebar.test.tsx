@@ -642,7 +642,7 @@ describe('ProjectSidebar Project Chat List', () => {
     renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
     expandChats()
 
-    fireEvent.click(screen.getByLabelText('Open terminal in Refactor sidebar'))
+    fireEvent.click(screen.getByLabelText('Open terminal for chat Refactor sidebar'))
 
     await waitFor(() => {
       expect(mockOpenTerminalAtCwd).toHaveBeenCalledWith('1', '/repo/main')

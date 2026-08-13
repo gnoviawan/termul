@@ -13,7 +13,8 @@ const {
   mockTerminalApiSpawn,
   mockTerminals,
   mockSetActiveWorktree,
-  mockActivePaneId
+  mockActivePaneId,
+  mockLogFrontendError
 } = vi.hoisted(() => ({
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
@@ -25,7 +26,8 @@ const {
   mockSetActiveWorktree: vi.fn(),
   // Mutable so the no-pane branch can be exercised without re-registering the
   // workspace-store mock. Defaults to an active pane so existing tests pass.
-  mockActivePaneId: { current: 'pane-1' as string | null }
+  mockActivePaneId: { current: 'pane-1' as string | null },
+  mockLogFrontendError: vi.fn()
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
@@ -62,6 +64,10 @@ vi.mock('@/stores/app-settings-store', () => ({
   useAppSettingsStore: {
     getState: () => ({ settings: { maxTerminalsPerProject: 10 } })
   }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: mockLogFrontendError
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -236,6 +242,7 @@ describe('openTerminalAtCwd', () => {
       success: true,
       data: { id: 'pty-1', shell: 'bash', cwd: '/chat/cwd', claim: 'claim-pty-1' }
     })
+    mockLogFrontendError.mockReset()
   })
 
   it('opens a terminal at the given cwd WITHOUT syncing activeWorktreeId', async () => {
@@ -255,9 +262,11 @@ describe('openTerminalAtCwd', () => {
     // The chat terminal path must NOT touch the active worktree — that is the
     // user's "make this the active chat" gesture, not a worktree switch.
     expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+    // Successful spawns are not logged (no info level; warn-on-success is noise).
+    expect(mockLogFrontendError).not.toHaveBeenCalled()
   })
 
-  it('returns no-pane when there is no active workspace pane', async () => {
+  it('returns no-pane when there is no active workspace pane (warn-logged)', async () => {
     mockActivePaneId.current = null
 
     const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
@@ -265,14 +274,26 @@ describe('openTerminalAtCwd', () => {
     expect(result).toEqual({ status: 'no-pane' })
     expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
     expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+    // Durable boundary log for the recoverable no-pane outcome.
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'terminal-spawn.openTerminalAtCwd' })
+    )
   })
 
-  it('returns spawn-failed (without syncing active worktree) when spawn fails', async () => {
+  it('returns spawn-failed (without syncing active worktree) when spawn fails (error-logged)', async () => {
     mockTerminalApiSpawn.mockResolvedValue({ success: false, error: 'Shell not found' })
 
     const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
 
     expect(result).toEqual({ status: 'spawn-failed', error: 'Shell not found' })
     expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+    // Durable failure log carries the spawn error.
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'terminal-spawn.openTerminalAtCwd',
+        message: expect.stringContaining('Shell not found')
+      })
+    )
   })
 })

@@ -76,8 +76,8 @@ const entry = (overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry =>
   ...overrides
 })
 
-/** Count rendered chat rows via the per-row "Open terminal in …" affordance. */
-const chatRows = () => screen.getAllByRole('button', { name: /^Open terminal in / })
+/** Count rendered chat rows via the per-row "Open terminal for chat …" affordance. */
+const chatRows = () => screen.getAllByRole('button', { name: /^Open terminal for chat / })
 
 describe('ProjectChatList scoping', () => {
   it('scopes by projectId only, excludes discovered sessions, newest-first', () => {
@@ -105,8 +105,8 @@ describe('ProjectChatList scoping', () => {
     expect(screen.queryByText('Discovered')).not.toBeInTheDocument()
 
     // Newest-first: Newest's terminal button precedes Older's in DOM order.
-    const newestBtn = screen.getByLabelText('Open terminal in Newest')
-    const olderBtn = screen.getByLabelText('Open terminal in Older')
+    const newestBtn = screen.getByLabelText('Open terminal for chat Newest')
+    const olderBtn = screen.getByLabelText('Open terminal for chat Older')
     expect(newestBtn.compareDocumentPosition(olderBtn)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
@@ -118,7 +118,7 @@ describe('ProjectChatList scoping', () => {
     render(<ProjectChatList projectId="p1" />)
 
     expect(screen.getByText('Drifted')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Open terminal in Drifted'))
+    fireEvent.click(screen.getByLabelText('Open terminal for chat Drifted'))
     await waitFor(() => {
       expect(mockOpenTerminalAtCwd).toHaveBeenCalledWith('p1', '/somewhere/else')
     })
@@ -215,7 +215,7 @@ describe('ProjectChatList chat row interactions', () => {
     })
     render(<ProjectChatList projectId="p1" />)
 
-    fireEvent.click(screen.getByLabelText('Open terminal in My Chat'))
+    fireEvent.click(screen.getByLabelText('Open terminal for chat My Chat'))
 
     await waitFor(() => {
       expect(mockOpenTerminalAtCwd).toHaveBeenCalledWith('p1', '/repo/wt')
@@ -228,9 +228,9 @@ describe('ProjectChatList chat row interactions', () => {
     })
     render(<ProjectChatList projectId="p1" />)
 
-    const termBtn = screen.getByLabelText('Open terminal in No Cwd')
+    const termBtn = screen.getByLabelText('Open terminal for chat No Cwd')
     expect(termBtn).toBeDisabled()
-    expect(termBtn).toHaveAttribute('title', 'No cwd for this chat')
+    expect(termBtn).toHaveAttribute('title', 'No working directory for this chat')
   })
 })
 
@@ -275,12 +275,29 @@ describe('ProjectChatList context menu', () => {
     await waitFor(() => expect(mockRevealInFileManager).toHaveBeenCalledWith('/repo/x'))
   })
 
-  it('runs Delete Chat against the chat id', async () => {
+  it('requires confirmation before deleting a chat, then deletes on confirm', async () => {
     render(<ProjectChatList projectId="p1" />)
     fireEvent.contextMenu(screen.getByText('Ctx Chat'))
     fireEvent.click(screen.getByText('Delete Chat'))
 
+    // A confirmation dialog blocks the irreversible delete.
+    expect(screen.getByText('Delete chat')).toBeInTheDocument()
+    // No deletion yet — only after the user confirms.
+    expect(mockDeleteHistorySession).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
     await waitFor(() => expect(mockDeleteHistorySession).toHaveBeenCalledWith('c1'))
+  })
+
+  it('does not delete when the confirmation dialog is cancelled', () => {
+    render(<ProjectChatList projectId="p1" />)
+    fireEvent.contextMenu(screen.getByText('Ctx Chat'))
+    fireEvent.click(screen.getByText('Delete Chat'))
+    // Cancel the confirmation — the chat must not be deleted.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(mockDeleteHistorySession).not.toHaveBeenCalled()
   })
 
   it('shows a toast.error when deleting a chat fails (rejection)', async () => {
@@ -288,6 +305,7 @@ describe('ProjectChatList context menu', () => {
     render(<ProjectChatList projectId="p1" />)
     fireEvent.contextMenu(screen.getByText('Ctx Chat'))
     fireEvent.click(screen.getByText('Delete Chat'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith('Could not delete that chat. Try again.')

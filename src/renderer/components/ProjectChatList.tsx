@@ -1,6 +1,7 @@
 import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { ContextMenuItem } from '@/components/ContextMenu'
 import { ContextMenu } from '@/components/ContextMenu'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
@@ -110,8 +111,12 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
     entry: ProjectChatEntry | null
   }>({ isOpen: false, x: 0, y: 0, entry: null })
 
+  // Delete is irreversible — route it through a confirmation dialog (mirrors
+  // the project/group delete pattern) instead of deleting on the first click.
+  const [deleteConfirm, setDeleteConfirm] = useState<ProjectChatEntry | null>(null)
+
   const handleOpen = useCallback(
-    async (entry: ProjectChatEntry) => {
+    (entry: ProjectChatEntry) => {
       try {
         const opening = openHistorySession(entry.id)
         addAgentChatTab(entry.id)
@@ -139,7 +144,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       if (!entry.cwd) return
       const outcome = await openTerminalAtCwd(projectId, entry.cwd)
       if (outcome.status === 'opened') {
-        toast.success('Terminal opened', { description: `Opened at "${entry.title}"` })
+        toast.success('Terminal opened', { description: `Opened at ${entry.cwd}` })
       } else if (outcome.status === 'no-pane') {
         toast.error('No active pane', {
           description: 'Cannot open terminal without an active workspace pane.'
@@ -217,12 +222,12 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
         {
           label: 'Delete Chat',
           icon: <Trash2 size={14} />,
-          onClick: () => handleDelete(entry.id),
+          onClick: () => setDeleteConfirm(entry),
           variant: 'danger' as const
         }
       ]
     },
-    [handleOpenTerminal, handleOpenInFileExplorer, handleCopyPath, handleDelete]
+    [handleOpenTerminal, handleOpenInFileExplorer, handleCopyPath]
   )
 
   return (
@@ -309,6 +314,25 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
           onClose={closeChatContextMenu}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={deleteConfirm !== null}
+        title="Delete chat"
+        message={
+          deleteConfirm ? `Delete “${deleteConfirm.title}”? This action cannot be undone.` : ''
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          if (deleteConfirm) {
+            const id = deleteConfirm.id
+            setDeleteConfirm(null)
+            handleDelete(id)
+          }
+        }}
+        onCancel={() => setDeleteConfirm(null)}
+      />
     </div>
   )
 }
@@ -347,8 +371,8 @@ function ProjectChatRow({
       </button>
       <button
         type="button"
-        aria-label={`Open terminal in ${entry.title}`}
-        title={hasCwd ? `Open terminal in ${entry.title}` : 'No cwd for this chat'}
+        aria-label={`Open terminal for chat ${entry.title}`}
+        title={hasCwd ? `Open terminal at ${entry.cwd}` : 'No working directory for this chat'}
         disabled={!hasCwd}
         onClick={(e) => {
           e.stopPropagation()
