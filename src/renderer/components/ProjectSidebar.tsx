@@ -386,7 +386,10 @@ export function ProjectSidebar({
                   <ContextMenuCheckboxItem
                     key={p.id}
                     checked={isProjectInGroup}
-                    onSelect={() => moveProjectToGroup(p.id, isProjectInGroup ? null : groupId)}
+                    onCheckedChange={(checked) =>
+                      moveProjectToGroup(p.id, checked ? groupId : null)
+                    }
+                    onSelect={(e) => e.preventDefault()}
                   >
                     {p.name}
                   </ContextMenuCheckboxItem>
