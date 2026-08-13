@@ -195,7 +195,11 @@ vi.mock('@/lib/api', () => ({
   filesystemApi: {
     onFileChanged: vi.fn(() => () => {}),
     onFileCreated: vi.fn(() => () => {}),
-    onFileDeleted: vi.fn(() => () => {})
+    onFileDeleted: vi.fn(() => () => {}),
+    searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
+    searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
+    onSearchFileNamesBatch: vi.fn(() => () => {}),
+    onSearchFileNamesDone: vi.fn(() => () => {})
   }
 }))
 

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -46,37 +46,66 @@ const {
   mockMcpCount,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
-  mockReadDir,
   mockSkills,
-  mockToastError
-} = vi.hoisted(() => ({
-  mockSetConfig: vi.fn(),
-  mockSetMode: vi.fn(),
-  mockSetModel: vi.fn(),
-  // Story 1.8 review (verification-gap #8): override-able MCP server count for
-  // the read-only badge. 0 by default (badge hidden); tests set it to render.
-  mockMcpCount: { current: 0 },
-  // Stable mocks for the chatbox popover's per-server toggle + probe actions
-  // (introduced alongside the status/tools/chatbox-toggle work). Reused across
-  // renders so call assertions hold.
-  mockSetMcpServerEnabled: vi.fn(async () => {}),
-  mockLoadMcpTools: vi.fn(async () => {}),
-  mockReadDir: vi.fn(),
-  // Override-able skills list (defaults to [] — web/no-skills parity). Skill
-  // tests push entries here so useAgentSkills surfaces them in the slash menu.
-  // `path` is required so the wire prompt can cite it (desktop always has one).
-  mockSkills: {
-    current: [] as Array<{
-      name: string
-      description: string
-      scope: string
-      path: string
-    }>
-  },
-  mockToastError: vi.fn()
-}))
+  mockToastError,
+  mockIsTauri,
+  mockStreamApi,
+  batchCb,
+  doneCb
+} = vi.hoisted(() => {
+  const batch = { current: null as null | ((e: never) => void) }
+  const done = { current: null as null | ((e: never) => void) }
+  return {
+    mockSetConfig: vi.fn(),
+    mockSetMode: vi.fn(),
+    mockSetModel: vi.fn(),
+    // Story 1.8 review (verification-gap #8): override-able MCP server count for
+    // the read-only badge. 0 by default (badge hidden); tests set it to render.
+    mockMcpCount: { current: 0 },
+    // Stable mocks for the chatbox popover's per-server toggle + probe actions
+    // (introduced alongside the status/tools/chatbox-toggle work). Reused across
+    // renders so call assertions hold.
+    mockSetMcpServerEnabled: vi.fn(async () => {}),
+    mockLoadMcpTools: vi.fn(async () => {}),
+    // Override-able skills list (defaults to [] — web/no-skills parity). Skill
+    // tests push entries here so useAgentSkills surfaces them in the slash menu.
+    // `path` is required so the wire prompt can cite it (desktop always has one).
+    mockSkills: {
+      current: [] as Array<{
+        name: string
+        description: string
+        scope: string
+        path: string
+      }>
+    },
+    mockToastError: vi.fn(),
+    // Desktop/web gate for the @-mention stream. Defaults to false (web parity);
+    // the file-mentions describe flips it true to exercise the ripgrep stream.
+    mockIsTauri: vi.fn(() => false),
+    // Streaming filename-search stubs (mirror use-composer-mentions.test.tsx).
+    // Callbacks are captured into refs so tests can emit synthetic batches/done.
+    batchCb: batch,
+    doneCb: done,
+    mockStreamApi: {
+      searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
+      searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
+      onSearchFileNamesBatch: vi.fn((cb: (e: never) => void) => {
+        batch.current = cb
+        return () => {
+          batch.current = null
+        }
+      }),
+      onSearchFileNamesDone: vi.fn((cb: (e: never) => void) => {
+        done.current = cb
+        return () => {
+          done.current = null
+        }
+      })
+    }
+  }
+})
 
-vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauri }))
 
 vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
@@ -153,7 +182,11 @@ const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return { ...actual, persistenceApi: fakePersistenceApi }
+  return {
+    ...actual,
+    persistenceApi: fakePersistenceApi,
+    filesystemApi: { ...actual.filesystemApi, ...mockStreamApi }
+  }
 })
 
 beforeEach(() => {
@@ -459,11 +492,19 @@ describe('ChatInputBar placeholder', () => {
 describe('ChatInputBar file mentions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockReadDir.mockImplementation(async (path: string) => {
-      if (path === '/work') return [{ name: 'src', isDirectory: true }]
-      if (path === '/work/src') return [{ name: 'auth.ts', isDirectory: false }]
-      return []
-    })
+    vi.useFakeTimers()
+    mockIsTauri.mockReturnValue(true)
+    mockStreamApi.searchFileNamesStreamStart.mockResolvedValue({ success: true as const })
+    mockStreamApi.searchFileNamesStreamCancel.mockResolvedValue({ success: true as const })
+    mockStreamApi.onSearchFileNamesBatch.mockClear()
+    mockStreamApi.onSearchFileNamesDone.mockClear()
+    batchCb.current = null
+    doneCb.current = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    mockIsTauri.mockReturnValue(false)
   })
 
   it('stages a selected @ file and sends it as a resource link block', async () => {
@@ -472,7 +513,39 @@ describe('ChatInputBar file mentions', () => {
 
     setComposerValue('fix @auth')
 
-    const option = await screen.findByRole('option', { name: /auth\.ts/ })
+    // Debounce (90ms for >=3-char query) then the ripgrep stream starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90)
+    })
+
+    const batch = batchCb.current as unknown as
+      | ((e: {
+          searchId: string
+          files: Array<{ path: string; ignored: boolean }>
+          truncated?: boolean
+        }) => void)
+      | null
+    batch?.({
+      searchId: 'search-1',
+      files: [{ path: 'src/auth.ts', ignored: false }]
+    })
+    const done = doneCb.current as unknown as
+      | ((e: {
+          searchId: string
+          truncated: boolean
+          totalFiles: number
+          code?: string
+          error?: string
+        }) => void)
+      | null
+    done?.({ searchId: 'search-1', truncated: false, totalFiles: 1 })
+
+    // Switch back to real timers so `waitFor` can poll for the post-select /
+    // send async effects.
+    vi.useRealTimers()
+    await act(async () => {})
+
+    const option = screen.getByRole('option', { name: /auth\.ts/ })
     fireEvent.mouseDown(option)
 
     await waitFor(() => expect(getComposerValue()).toBe('fix '))
