@@ -78,11 +78,12 @@ function AppEffects(): null {
   useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
-  // P4: suppress the native webview context menu app-wide (capture phase) so
+  // Suppress the native webview context menu app-wide (BUBBLE phase) so
   // portaled overlays (toasts, modals) outside <GlobalContextMenu>'s Radix
-  // trigger subtree don't show the native Inspect/Back menu. The Radix
-  // trigger still opens the global menu (preventDefault doesn't stop
-  // propagation). Defense-in-depth alongside <GlobalContextMenu>.
+  // trigger subtree don't show the native Inspect/Back menu. Bubble — not
+  // capture — so Radix's trigger (composeEventHandlers, defaultPrevented
+  // check) still opens the global menu. Defense-in-depth alongside
+  // <GlobalContextMenu>.
   usePreventNativeContextMenu()
   // Desktop-only: block devtools/view-source shortcuts (F12, Ctrl+Shift+I/J/C,
   // Ctrl+U) in production. Web/remote (App.tsx) must never mount this hook.

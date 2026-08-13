@@ -137,10 +137,11 @@ function AppEffects(): null {
   useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
-  // P4: suppress the native browser context menu app-wide (capture phase) for
-  // web parity — portaled overlays (toasts, modals) outside
+  // Suppress the native browser context menu app-wide (BUBBLE phase) for web
+  // parity — portaled overlays (toasts, modals) outside
   // <GlobalContextMenu>'s Radix trigger subtree would show the browser's
-  // native Inspect menu. The Radix trigger still opens the global menu.
+  // native Inspect menu. Bubble — not capture — so the Radix trigger
+  // (composeEventHandlers, defaultPrevented check) still opens the global menu.
   usePreventNativeContextMenu()
 
   // Initialize notification permissions once at app startup so the OS (or
