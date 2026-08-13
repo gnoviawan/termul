@@ -1,21 +1,15 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
 import {
-  AlertCircle,
   AlertTriangle,
   Archive,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Copy,
   Edit2,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
-  Home,
   Palette,
   Plus,
   RotateCcw,
@@ -23,8 +17,7 @@ import {
   Settings,
   Terminal,
   Trash2,
-  X,
-  XCircle
+  X
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -33,29 +26,22 @@ import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
-import { getWorktreeStatusFromCache, useWorktreeStatus } from '@/hooks/use-worktree-status'
-import { clipboardApi, dialogApi, shellApi, worktreeApi } from '@/lib/api'
+import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
-import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
-import { randomUUID } from '@/lib/uuid'
-import { filterWorktrees } from '@/lib/worktree-filter'
-import { groupWorktrees } from '@/lib/worktree-grouping'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
-import type { Project, ProjectColor, Worktree } from '@/types/project'
-import { isWorktreeTermulManaged } from '@/types/project'
-import type { WorktreeHealthStatus } from '@/types/worktree-status'
+import type { Project, ProjectColor } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
 import { ContextMenu } from './ContextMenu'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
-import { RemoveWorktreeDialog } from './RemoveWorktreeDialog'
+import { ProjectChatList } from './ProjectChatList'
 import { SSHPanel } from './ssh/SSHPanel'
 
 interface ContextMenuState {
@@ -87,20 +73,6 @@ interface SettingsDialogState {
 interface NewWorktreeModalState {
   isOpen: boolean
   projectId: string
-}
-
-interface WorktreeContextMenuState {
-  isOpen: boolean
-  x: number
-  y: number
-  worktree: Worktree | null
-  projectId: string
-}
-
-interface WorktreeDeleteConfirmState {
-  isOpen: boolean
-  projectId: string
-  worktree: Worktree | null
 }
 
 interface ProjectSidebarProps {
@@ -136,8 +108,6 @@ export function ProjectSidebar({
   const {
     selectProject,
     addProject,
-    setActiveWorktree,
-    setWorktreeOperationLock,
     addGroup,
     removeGroup,
     renameGroup,
@@ -147,12 +117,8 @@ export function ProjectSidebar({
     reorderProjectInGroup,
     updateGroup
   } = useProjectActions()
-  const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked)
   const storeGroups = useProjectStore((state) => state.groups)
   const groups = useMemo(() => storeGroups ?? [], [storeGroups])
-
-  // Poll worktree status for the active project (populates shared cache for sidebar badges)
-  useWorktreeStatus(activeProjectId)
 
   // Reconcile stored worktrees against actual git state (detects orphaned entries)
   useWorktreeReconciler(activeProjectId)
@@ -187,8 +153,8 @@ export function ProjectSidebar({
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Expanded worktree projects — expansion is controlled solely by the chevron.
-  // Selecting a project no longer auto-expands its worktrees, keeping the list uncluttered.
+  // Expanded projects — expansion is controlled solely by the chevron.
+  // Selecting a project does not auto-expand its chat list, keeping the list uncluttered.
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set<string>())
 
   // Context menu state
@@ -197,22 +163,6 @@ export function ProjectSidebar({
     x: 0,
     y: 0,
     projectId: ''
-  })
-
-  // Worktree context menu state
-  const [worktreeContextMenu, setWorktreeContextMenu] = useState<WorktreeContextMenuState>({
-    isOpen: false,
-    x: 0,
-    y: 0,
-    worktree: null,
-    projectId: ''
-  })
-
-  // Worktree delete confirmation state
-  const [worktreeDeleteConfirm, setWorktreeDeleteConfirm] = useState<WorktreeDeleteConfirmState>({
-    isOpen: false,
-    projectId: '',
-    worktree: null
   })
 
   // Inline editing state
@@ -486,158 +436,6 @@ export function ProjectSidebar({
       groupContextMenu.x,
       groupContextMenu.y
     ]
-  )
-
-  const handleWorktreeSelect = useCallback(
-    (projectId: string, worktreeId: string | null): void => {
-      setActiveWorktree(projectId, worktreeId)
-      if (worktreeId) {
-        const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-        const worktree = project?.worktrees?.find((w) => w.id === worktreeId)
-        toast({
-          title: 'Switched worktree',
-          description: `Active worktree switched to "${worktree?.name}". New terminals will open here. Existing terminals remain where they are.`
-        })
-      } else {
-        toast({
-          title: 'Switched to project root',
-          description: 'Switched to project root. New terminals will open here.'
-        })
-      }
-    },
-    [setActiveWorktree]
-  )
-
-  // Activate a worktree AND open a terminal in it, in one action.
-  // Shared by the row hover terminal button and the "Open Terminal Here" context menu.
-  const handleOpenTerminalInWorktree = useCallback(
-    async (
-      projectId: string,
-      worktreeId: string | null,
-      worktreePath: string,
-      worktreeName: string
-    ): Promise<void> => {
-      const outcome = await activateAndOpenTerminal(projectId, worktreeId, worktreePath)
-      if (outcome.status === 'opened') {
-        toast({ title: 'Terminal opened', description: `Terminal opened in "${worktreeName}"` })
-      } else if (outcome.status === 'no-pane') {
-        toast({
-          title: 'No active pane',
-          description: 'Cannot open terminal without an active workspace pane.'
-        })
-      } else {
-        toast({
-          title: 'Failed to open terminal',
-          description: outcome.error || 'Could not create a terminal in this worktree.'
-        })
-      }
-    },
-    []
-  )
-
-  const handleWorktreeContextMenu = useCallback(
-    (e: React.MouseEvent, projectId: string, worktree: Worktree): void => {
-      e.preventDefault()
-      e.stopPropagation()
-      setWorktreeContextMenu({
-        isOpen: true,
-        x: e.clientX,
-        y: e.clientY,
-        worktree,
-        projectId
-      })
-    },
-    []
-  )
-
-  const closeWorktreeContextMenu = useCallback((): void => {
-    setWorktreeContextMenu((prev) => ({ ...prev, isOpen: false }))
-  }, [])
-
-  const handleCopyWorktreePath = useCallback(async (path: string): Promise<void> => {
-    try {
-      await clipboardApi.writeText(path)
-      toast({ title: 'Path copied', description: path })
-    } catch {
-      // Fallback: try navigator.clipboard
-      try {
-        await navigator.clipboard.writeText(path)
-        toast({ title: 'Path copied', description: path })
-      } catch {
-        toast({ title: 'Failed to copy path', description: 'Could not copy to clipboard' })
-      }
-    }
-  }, [])
-
-  const handleOpenInFileExplorer = useCallback(
-    async (worktreePath: string): Promise<void> => {
-      // Use the filesystem API to open the directory in the OS file manager
-      try {
-        await (window as any).__TAURI_INTERNALS__?.invoke('open_path_in_file_manager', {
-          path: worktreePath
-        })
-      } catch {
-        // Fallback — just copy the path
-        handleCopyWorktreePath(worktreePath)
-      }
-    },
-    [handleCopyWorktreePath]
-  )
-
-  const _handleRemoveWorktree = useCallback(
-    async (projectId: string, worktree: Worktree): Promise<void> => {
-      if (!isWorktreeTermulManaged(worktree)) return // Only remove Termul-managed worktrees
-
-      const projectPath = useProjectStore.getState().projects.find((p) => p.id === projectId)?.path
-      if (!projectPath) {
-        toast({ title: 'Failed to remove worktree', description: 'Project path not found' })
-        return
-      }
-
-      setWorktreeOperationLock(true)
-      try {
-        const result = await worktreeApi.remove(projectPath, worktree.path, false)
-        if (result.success) {
-          useProjectStore.getState().removeWorktree(projectId, worktree.id)
-          toast({ title: 'Worktree removed', description: `"${worktree.name}" has been removed.` })
-          // Reconcile worktrees after removal
-          const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-          if (project?.path) {
-            const listResult = await worktreeApi.list(project.path)
-            if (listResult.success && listResult.data) {
-              // Preserve existing IDs for stable references (activeWorktreeId, status cache)
-              const existingWorktrees =
-                useProjectStore.getState().projects.find((p) => p.id === projectId)?.worktrees ?? []
-              const existingByPath = new Map(existingWorktrees.map((w) => [w.path, w]))
-
-              const updatedWorktrees: Worktree[] = listResult.data.map((wt) => {
-                const existing = existingByPath.get(wt.path)
-                return (
-                  existing ?? {
-                    id: randomUUID(),
-                    name: wt.name,
-                    branch: wt.branch,
-                    path: wt.path,
-                    createdAt: new Date().toISOString()
-                  }
-                )
-              })
-              useProjectStore.getState().updateProject(projectId, { worktrees: updatedWorktrees })
-            }
-          }
-        } else {
-          toast({
-            title: 'Failed to remove worktree',
-            description: result.error ?? 'Unknown error'
-          })
-        }
-      } catch (err) {
-        toast({ title: 'Error removing worktree', description: String(err) })
-      } finally {
-        setWorktreeOperationLock(false)
-      }
-    },
-    [setWorktreeOperationLock]
   )
 
   const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {
@@ -915,57 +713,6 @@ export function ProjectSidebar({
     [onRestoreProject, handleConfirmDelete]
   )
 
-  const getWorktreeContextMenuItems = useCallback(
-    (projectId: string, worktree: Worktree): ContextMenuItem[] => {
-      const canRemove = isWorktreeTermulManaged(worktree)
-      return [
-        {
-          label: 'Open Terminal Here',
-          icon: <Terminal size={14} />,
-          onClick: () =>
-            void handleOpenTerminalInWorktree(projectId, worktree.id, worktree.path, worktree.name)
-        },
-        {
-          label: 'Open in File Explorer',
-          icon: <FolderOpen size={14} />,
-          onClick: () => void handleOpenInFileExplorer(worktree.path)
-        },
-        {
-          label: 'Copy Path',
-          icon: <Copy size={14} />,
-          onClick: () => void handleCopyWorktreePath(worktree.path)
-        },
-        { type: 'separator' as const },
-        {
-          label: 'Remove Worktree',
-          icon: <Trash2 size={14} />,
-          onClick: () => {
-            const projectPath = useProjectStore
-              .getState()
-              .projects.find((p) => p.id === projectId)?.path
-            if (!projectPath) {
-              toast({
-                title: 'Failed to remove worktree',
-                description: 'Project path not found',
-                variant: 'destructive'
-              })
-              return
-            }
-            setWorktreeDeleteConfirm({ isOpen: true, projectId, worktree })
-          },
-          variant: 'danger' as const,
-          disabled: !canRemove || isWorktreeOperationLocked
-        }
-      ]
-    },
-    [
-      handleOpenTerminalInWorktree,
-      handleOpenInFileExplorer,
-      handleCopyWorktreePath,
-      isWorktreeOperationLocked
-    ]
-  )
-
   const colorPickerTarget =
     colorPicker.targetType === 'project'
       ? projects.find((p) => p.id === colorPicker.targetId)
@@ -1165,7 +912,7 @@ export function ProjectSidebar({
         ) : (
           <div data-testid="active-projects-container">
             {/* LayoutGroup keeps Reorder layout measurements in sync when an item's
-						    own height changes (e.g. expanding/collapsing worktrees via the
+						    own height changes (e.g. expanding/collapsing a project's chat list via the
 						    chevron). Without it, the group caches stale item boxes after a
 						    height change and drag-to-reorder stops working. */}
             <LayoutGroup>
@@ -1351,28 +1098,6 @@ export function ProjectSidebar({
                                       selectProject(project.id)
                                       navigate('/settings')
                                     }}
-                                    onWorktreeSelect={(worktreeId) =>
-                                      handleWorktreeSelect(project.id, worktreeId)
-                                    }
-                                    onWorktreeContextMenu={(e, worktree) =>
-                                      handleWorktreeContextMenu(e, project.id, worktree)
-                                    }
-                                    onOpenTerminalInWorktree={(
-                                      worktreeId,
-                                      worktreePath,
-                                      worktreeName
-                                    ) =>
-                                      void handleOpenTerminalInWorktree(
-                                        project.id,
-                                        worktreeId,
-                                        worktreePath,
-                                        worktreeName
-                                      )
-                                    }
-                                    isWorktreeOperationLocked={isWorktreeOperationLocked}
-                                    onNewWorktree={(pId) =>
-                                      setNewWorktreeModal({ isOpen: true, projectId: pId })
-                                    }
                                   />
                                 </Reorder.Item>
                               )
@@ -1467,24 +1192,6 @@ export function ProjectSidebar({
                             selectProject(project.id)
                             navigate('/settings')
                           }}
-                          onWorktreeSelect={(worktreeId) =>
-                            handleWorktreeSelect(project.id, worktreeId)
-                          }
-                          onWorktreeContextMenu={(e, worktree) =>
-                            handleWorktreeContextMenu(e, project.id, worktree)
-                          }
-                          onOpenTerminalInWorktree={(worktreeId, worktreePath, worktreeName) =>
-                            void handleOpenTerminalInWorktree(
-                              project.id,
-                              worktreeId,
-                              worktreePath,
-                              worktreeName
-                            )
-                          }
-                          isWorktreeOperationLocked={isWorktreeOperationLocked}
-                          onNewWorktree={(pId) =>
-                            setNewWorktreeModal({ isOpen: true, projectId: pId })
-                          }
                         />
                       </Reorder.Item>
                     )
@@ -1589,19 +1296,6 @@ export function ProjectSidebar({
           })
         }
       />
-
-      {/* Worktree Context Menu */}
-      {worktreeContextMenu.isOpen && worktreeContextMenu.worktree && (
-        <ContextMenu
-          items={getWorktreeContextMenuItems(
-            worktreeContextMenu.projectId,
-            worktreeContextMenu.worktree
-          )}
-          x={worktreeContextMenu.x}
-          y={worktreeContextMenu.y}
-          onClose={closeWorktreeContextMenu}
-        />
-      )}
 
       {/* Color Picker Popover */}
       {colorPicker.isOpen && colorPickerTarget && (
@@ -1765,16 +1459,6 @@ export function ProjectSidebar({
         onCancel={handleCancelDelete}
       />
 
-      {/* Worktree Removal Dialog */}
-      <RemoveWorktreeDialog
-        isOpen={worktreeDeleteConfirm.isOpen}
-        onClose={() => setWorktreeDeleteConfirm({ isOpen: false, projectId: '', worktree: null })}
-        projectId={worktreeDeleteConfirm.projectId}
-        worktree={worktreeDeleteConfirm.worktree}
-        projectPath={projects.find((p) => p.id === worktreeDeleteConfirm.projectId)?.path ?? ''}
-        gitBranch={projects.find((p) => p.id === worktreeDeleteConfirm.projectId)?.gitBranch}
-      />
-
       {/* New Worktree Modal */}
       <NewWorktreeModal
         isOpen={newWorktreeModal.isOpen}
@@ -1808,15 +1492,6 @@ interface ProjectItemProps {
   onSaveRename: () => void
   onCancelRename: () => void
   onSettingsClick: () => void
-  onWorktreeSelect: (worktreeId: string | null) => void
-  onWorktreeContextMenu: (e: React.MouseEvent, worktree: Worktree) => void
-  onOpenTerminalInWorktree: (
-    worktreeId: string | null,
-    worktreePath: string,
-    worktreeName: string
-  ) => void
-  isWorktreeOperationLocked: boolean
-  onNewWorktree: (projectId: string) => void
 }
 
 const ProjectItem = memo(function ProjectItem({
@@ -1834,12 +1509,7 @@ const ProjectItem = memo(function ProjectItem({
   onEditNameChange,
   onSaveRename,
   onCancelRename,
-  onSettingsClick,
-  onWorktreeSelect,
-  onWorktreeContextMenu,
-  onOpenTerminalInWorktree,
-  isWorktreeOperationLocked,
-  onNewWorktree
+  onSettingsClick
 }: ProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -1861,13 +1531,6 @@ const ProjectItem = memo(function ProjectItem({
       onCancelRename()
     }
   }
-
-  const hasWorktrees = (project.worktrees?.length ?? 0) > 0 || project.isGitRepo
-  const worktrees = project.worktrees ?? []
-
-  // Worktree search and group collapse state
-  const [worktreeSearchQuery, setWorktreeSearchQuery] = useState('')
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   return (
     <div data-testid={`project-item-${project.id}`}>
@@ -1891,26 +1554,23 @@ const ProjectItem = memo(function ProjectItem({
         aria-current={isActive ? 'page' : undefined}
         aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
       >
-        {/* Expand/collapse chevron for projects with worktrees or git */}
-        {hasWorktrees ? (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleExpand()
-            }}
-            className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
-            aria-label={isExpanded ? 'Collapse worktrees' : 'Expand worktrees'}
-            aria-expanded={isExpanded}
-          >
-            {isExpanded ? (
-              <ChevronDown size={12} className="text-muted-foreground" />
-            ) : (
-              <ChevronRight size={12} className="text-muted-foreground" />
-            )}
-          </button>
-        ) : (
-          <div className="w-5 flex-shrink-0" />
-        )}
+        {/* Expand/collapse chevron — every project can have chats, so the
+            chevron always shows (not only git projects). */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleExpand()
+          }}
+          className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
+          aria-label={isExpanded ? 'Collapse chats' : 'Expand chats'}
+          aria-expanded={isExpanded}
+        >
+          {isExpanded ? (
+            <ChevronDown size={12} className="text-muted-foreground" />
+          ) : (
+            <ChevronRight size={12} className="text-muted-foreground" />
+          )}
+        </button>
 
         {isEditing ? (
           <input
@@ -1983,246 +1643,10 @@ const ProjectItem = memo(function ProjectItem({
         )}
       </div>
 
-      {/* Worktree sub-items */}
-      <CollapseExpandMotion
-        open={Boolean(isExpanded && hasWorktrees)}
-        className="ml-5 border-l border-sidebar-border"
-      >
-        {/* Worktree search bar - visible at 10+ worktrees, flat style matching the file explorer */}
-        {worktrees.length >= 10 && (
-          <div className="px-2 py-1">
-            <div className="relative">
-              <Search
-                size={12}
-                className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                placeholder="Search worktrees…"
-                value={worktreeSearchQuery}
-                onChange={(e) => setWorktreeSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape' && worktreeSearchQuery) {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    setWorktreeSearchQuery('')
-                  }
-                }}
-                className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
-                aria-label="Search worktrees"
-              />
-              {worktreeSearchQuery && (
-                <button
-                  onClick={() => setWorktreeSearchQuery('')}
-                  className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-                  title="Clear search"
-                  aria-label="Clear worktree search"
-                >
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-        {/* Root item */}
-        <WorktreeItem
-          name="Root"
-          branch={project.gitBranch ?? 'main'}
-          path={project.path ?? ''}
-          isRoot
-          isActive={project.activeWorktreeId === null || project.activeWorktreeId === undefined}
-          onClick={() => onWorktreeSelect(null)}
-          onOpenTerminal={
-            project.path
-              ? () => onOpenTerminalInWorktree(null, project.path as string, 'project root')
-              : undefined
-          }
-        />
-        {/* Grouped worktree items with search filter */}
-        {(() => {
-          const filtered = worktreeSearchQuery
-            ? filterWorktrees(worktrees, { searchQuery: worktreeSearchQuery })
-            : worktrees
-          const groups = groupWorktrees(filtered)
-          return groups.map((group) => {
-            const isCollapsed = collapsedGroups.has(group.id)
-            return (
-              <div key={group.id} className="mb-1">
-                {group.id !== 'other' && group.items.length > 1 && (
-                  <button
-                    onClick={() => {
-                      setCollapsedGroups((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(group.id)) {
-                          next.delete(group.id)
-                        } else {
-                          next.add(group.id)
-                        }
-                        return next
-                      })
-                    }}
-                    className="label-group flex items-center w-full px-2 py-0.5 text-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
-                  >
-                    <span>{isCollapsed ? '▶' : '▼'}</span>
-                    <span className="ml-1">{group.name}</span>
-                    <span className="ml-auto text-4xs font-normal text-muted-foreground/40">
-                      {group.items.length}
-                    </span>
-                  </button>
-                )}
-                {(!isCollapsed || group.id === 'other' || group.items.length <= 1) &&
-                  group.items.map((wt) => (
-                    <WorktreeItem
-                      key={wt.id}
-                      name={wt.name}
-                      branch={wt.branch}
-                      path={wt.path}
-                      worktreeId={wt.id}
-                      isActive={project.activeWorktreeId === wt.id}
-                      isTermulManaged={isWorktreeTermulManaged(wt)}
-                      onClick={() => onWorktreeSelect(wt.id)}
-                      onContextMenu={(e) => onWorktreeContextMenu(e, wt)}
-                      onOpenTerminal={() => onOpenTerminalInWorktree(wt.id, wt.path, wt.name)}
-                    />
-                  ))}
-              </div>
-            )
-          })
-        })()}
-        {/* New Worktree button */}
-        {project.isGitRepo && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onNewWorktree(project.id)
-            }}
-            disabled={isWorktreeOperationLocked}
-            className="w-full flex items-center px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
-            title={
-              isWorktreeOperationLocked
-                ? 'Another worktree operation in progress'
-                : 'Create new worktree'
-            }
-          >
-            <Plus size={10} className="mr-1.5" />
-            New Worktree
-          </button>
-        )}
+      {/* Project chat history sub-items */}
+      <CollapseExpandMotion open={isExpanded} className="ml-5 border-l border-sidebar-border">
+        <ProjectChatList projectId={project.id} />
       </CollapseExpandMotion>
-    </div>
-  )
-})
-
-interface WorktreeItemProps {
-  name: string
-  branch: string
-  path: string
-  isRoot?: boolean
-  isActive: boolean
-  isTermulManaged?: boolean
-  worktreeId?: string
-  onClick: () => void
-  onContextMenu?: (e: React.MouseEvent) => void
-  onOpenTerminal?: () => void
-}
-
-/** Icon + color for worktree health status */
-function HealthBadge({ status }: { status: WorktreeHealthStatus | undefined }) {
-  if (!status || status === 'clean') return null
-
-  const config: Record<WorktreeHealthStatus, { icon: typeof CheckCircle2; className: string }> = {
-    clean: { icon: CheckCircle2, className: 'text-green-500' },
-    dirty: { icon: AlertCircle, className: 'text-yellow-500' },
-    ahead: { icon: ArrowUpCircle, className: 'text-blue-500' },
-    behind: { icon: ArrowDownCircle, className: 'text-orange-500' },
-    conflicted: { icon: XCircle, className: 'text-red-500' }
-  }
-
-  const { icon: Icon, className } = config[status]
-  return <Icon size={10} className={cn('flex-shrink-0', className)} />
-}
-
-const WorktreeItem = memo(function WorktreeItem({
-  name,
-  branch,
-  path,
-  isRoot,
-  isActive,
-  isTermulManaged,
-  worktreeId,
-  onClick,
-  onContextMenu,
-  onOpenTerminal
-}: WorktreeItemProps): React.JSX.Element {
-  // Read health status from cache (updated by useWorktreeStatus polling in ProjectSidebar)
-  // This reads a shared Map — no hook subscription needed; the parent sidebar
-  // re-renders on status changes, which causes this item to re-render too.
-  const healthStatus: WorktreeHealthStatus | undefined = worktreeId
-    ? getWorktreeStatusFromCache(worktreeId)?.health
-    : undefined
-
-  const tooltip = isRoot
-    ? `Project root (${branch})`
-    : `${name} on ${branch}${path ? ` — ${path}` : ''}${isTermulManaged === false ? ' — External worktree' : ''}`
-
-  return (
-    <div
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        // Only activate row-select for keys on the row itself, not on nested
-        // controls (e.g. the terminal button), which handle their own keys.
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onClick()
-        }
-      }}
-      className={cn(
-        'group w-full flex items-center px-2 py-1 text-xs transition-colors text-left cursor-pointer',
-        isActive
-          ? 'bg-primary/15 text-foreground'
-          : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
-      )}
-      title={tooltip}
-      aria-current={isActive ? 'page' : undefined}
-      aria-label={isRoot ? `Project root on ${branch}` : `Worktree ${name} on ${branch}`}
-    >
-      <div className="mr-1.5 flex-shrink-0 inline-flex items-center" aria-hidden="true">
-        {isRoot ? (
-          <Home size={12} className="text-muted-foreground" />
-        ) : (
-          <GitBranch size={12} className="text-primary/70" />
-        )}
-      </div>
-      <span className="truncate flex-1">{isRoot ? 'Root' : name}</span>
-      {!isRoot && <HealthBadge status={healthStatus} />}
-      {!isRoot && isTermulManaged === false && (
-        <span
-          className="text-3xs text-amber-500/70 ml-1"
-          title="External worktree (not created by Termul)"
-        >
-          ext
-        </span>
-      )}
-      {onOpenTerminal && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenTerminal()
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-          className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-sidebar-accent transition-all ml-1 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-          title={`Open terminal in ${isRoot ? 'project root' : name}`}
-          aria-label={`Open terminal in ${isRoot ? 'project root' : name}`}
-        >
-          <Terminal size={12} className="text-muted-foreground" aria-hidden="true" />
-        </button>
-      )}
     </div>
   )
 })

@@ -164,3 +164,32 @@ export async function activateAndOpenTerminal(
   }
   return { status: 'spawn-failed', error: result.error }
 }
+
+/**
+ * Open a terminal at an arbitrary `cwd` (e.g. a chat's worktree path) WITHOUT
+ * the `setActiveWorktree` side effect that {@link activateAndOpenTerminal}
+ * performs. Used by the project chat-row terminal icon, where the user's
+ * "active worktree" must not change just because they spawned a terminal in a
+ * chat's cwd. Reuses {@link spawnTerminalInPane} (which still wires worktree
+ * symlinks when `cwd` matches a stored worktree path) and reads `activePaneId`
+ * + the per-project terminal limit from the stores at call time.
+ */
+export async function openTerminalAtCwd(
+  projectId: string,
+  cwd: string
+): Promise<ActivateAndOpenTerminalOutcome> {
+  const paneId = useWorkspaceStore.getState().activePaneId
+  if (!paneId) {
+    return { status: 'no-pane' }
+  }
+
+  const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
+  const result = await spawnTerminalInPane(paneId, projectId, cwd, {
+    maxTerminalsPerProject
+  })
+
+  if (result.success) {
+    return { status: 'opened', terminalId: result.terminalId }
+  }
+  return { status: 'spawn-failed', error: result.error }
+}

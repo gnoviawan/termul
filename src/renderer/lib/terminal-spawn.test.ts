@@ -11,7 +11,9 @@ const {
   mockIsTerminalLimitReached,
   mockAddTabToPane,
   mockTerminalApiSpawn,
-  mockTerminals
+  mockTerminals,
+  mockSetActiveWorktree,
+  mockActivePaneId
 } = vi.hoisted(() => ({
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
@@ -19,7 +21,11 @@ const {
   mockIsTerminalLimitReached: vi.fn(),
   mockAddTabToPane: vi.fn(),
   mockTerminalApiSpawn: vi.fn(),
-  mockTerminals: [] as Array<{ projectId: string }>
+  mockTerminals: [] as Array<{ projectId: string }>,
+  mockSetActiveWorktree: vi.fn(),
+  // Mutable so the no-pane branch can be exercised without re-registering the
+  // workspace-store mock. Defaults to an active pane so existing tests pass.
+  mockActivePaneId: { current: 'pane-1' as string | null }
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
@@ -37,7 +43,7 @@ vi.mock('@/stores/terminal-store', () => ({
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: {
     getState: () => ({
-      activePaneId: 'pane-1',
+      activePaneId: mockActivePaneId.current,
       addTabToPane: mockAddTabToPane
     })
   }
@@ -46,8 +52,15 @@ vi.mock('@/stores/workspace-store', () => ({
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: {
     getState: () => ({
-      projects: [{ id: 'proj-1', name: 'Test', path: '/test', defaultShell: 'bash', envVars: [] }]
+      projects: [{ id: 'proj-1', name: 'Test', path: '/test', defaultShell: 'bash', envVars: [] }],
+      setActiveWorktree: mockSetActiveWorktree
     })
+  }
+}))
+
+vi.mock('@/stores/app-settings-store', () => ({
+  useAppSettingsStore: {
+    getState: () => ({ settings: { maxTerminalsPerProject: 10 } })
   }
 }))
 
@@ -61,12 +74,13 @@ vi.mock('@/lib/env-parser', () => ({
   resolveEnvForSpawn: () => ({ env: {}, hasProjectEnv: false })
 }))
 
-import { spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { openTerminalAtCwd, spawnTerminalInPane } from '@/lib/terminal-spawn'
 
 describe('spawnTerminalInPane', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockTerminals.length = 0
+    mockActivePaneId.current = 'pane-1'
     mockIsTerminalLimitReached.mockReturnValue(false)
     mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
     // CAP-3: spawn is the only claim issuance path — the fixture carries the
@@ -208,5 +222,57 @@ describe('spawnTerminalInPane', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Failed to create terminal')
+  })
+})
+
+describe('openTerminalAtCwd', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTerminals.length = 0
+    mockActivePaneId.current = 'pane-1'
+    mockIsTerminalLimitReached.mockReturnValue(false)
+    mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: true,
+      data: { id: 'pty-1', shell: 'bash', cwd: '/chat/cwd', claim: 'claim-pty-1' }
+    })
+  })
+
+  it('opens a terminal at the given cwd WITHOUT syncing activeWorktreeId', async () => {
+    const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
+
+    expect(result.status).toBe('opened')
+    if (result.status === 'opened') {
+      expect(result.terminalId).toBe('term-new-1')
+    }
+    expect(mockTerminalApiSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/chat/cwd', projectId: 'proj-1' })
+    )
+    expect(mockAddTabToPane).toHaveBeenCalledWith(
+      'pane-1',
+      expect.objectContaining({ type: 'terminal' })
+    )
+    // The chat terminal path must NOT touch the active worktree — that is the
+    // user's "make this the active chat" gesture, not a worktree switch.
+    expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+  })
+
+  it('returns no-pane when there is no active workspace pane', async () => {
+    mockActivePaneId.current = null
+
+    const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
+
+    expect(result).toEqual({ status: 'no-pane' })
+    expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
+    expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+  })
+
+  it('returns spawn-failed (without syncing active worktree) when spawn fails', async () => {
+    mockTerminalApiSpawn.mockResolvedValue({ success: false, error: 'Shell not found' })
+
+    const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
+
+    expect(result).toEqual({ status: 'spawn-failed', error: 'Shell not found' })
+    expect(mockSetActiveWorktree).not.toHaveBeenCalled()
   })
 })

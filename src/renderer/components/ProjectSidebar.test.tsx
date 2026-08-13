@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { ProjectSidebar } from './ProjectSidebar'
 
@@ -9,6 +12,10 @@ const {
   mockGetAvailableShells,
   mockSpawnTerminalInPane,
   mockActivateAndOpenTerminal,
+  mockOpenTerminalAtCwd,
+  mockAddAgentChatTab,
+  mockOpenHistorySession,
+  mockDeleteHistorySession,
   mockUseProjectsWithActivity,
   mockUseProjectsWithErrors,
   mockUseProjectsWithActiveAgentChat
@@ -16,6 +23,10 @@ const {
   mockGetAvailableShells: vi.fn(),
   mockSpawnTerminalInPane: vi.fn(),
   mockActivateAndOpenTerminal: vi.fn(),
+  mockOpenTerminalAtCwd: vi.fn(),
+  mockAddAgentChatTab: vi.fn(),
+  mockOpenHistorySession: vi.fn(),
+  mockDeleteHistorySession: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
   mockUseProjectsWithErrors: vi.fn(),
   mockUseProjectsWithActiveAgentChat: vi.fn()
@@ -58,7 +69,8 @@ vi.mock('@/stores/acp-store', async () => {
 
 vi.mock('@/lib/terminal-spawn', () => ({
   spawnTerminalInPane: mockSpawnTerminalInPane,
-  activateAndOpenTerminal: mockActivateAndOpenTerminal
+  activateAndOpenTerminal: mockActivateAndOpenTerminal,
+  openTerminalAtCwd: mockOpenTerminalAtCwd
 }))
 
 vi.mock('@/lib/utils', async () => {
@@ -73,6 +85,13 @@ beforeEach(() => {
   mockSpawnTerminalInPane.mockResolvedValue({ success: true, data: { id: 'term-1' } })
   mockActivateAndOpenTerminal.mockReset()
   mockActivateAndOpenTerminal.mockResolvedValue({ status: 'opened', terminalId: 'term-1' })
+  mockOpenTerminalAtCwd.mockReset()
+  mockOpenTerminalAtCwd.mockResolvedValue({ status: 'opened', terminalId: 'term-1' })
+  mockAddAgentChatTab.mockReset()
+  mockOpenHistorySession.mockReset()
+  mockOpenHistorySession.mockResolvedValue(undefined)
+  mockDeleteHistorySession.mockReset()
+  mockDeleteHistorySession.mockResolvedValue(undefined)
   mockGetAvailableShells.mockResolvedValue({
     success: true,
     data: {
@@ -90,6 +109,18 @@ beforeEach(() => {
   mockUseProjectsWithActiveAgentChat.mockReturnValue([])
   mockUseProjectsWithErrors.mockReset()
   mockUseProjectsWithErrors.mockReturnValue(new Set())
+  // Reset chat-history store state to a clean baseline. ProjectChatList reads
+  // `sessionIndex` + the open/delete actions; drive them through spies so the
+  // integration tests stay deterministic without exercising the real reopen.
+  useAcpStore.setState({
+    sessionIndex: [],
+    openHistorySession: mockOpenHistorySession,
+    deleteHistorySession: mockDeleteHistorySession
+  })
+  useWorkspaceStore.setState({
+    activePaneId: 'pane-1',
+    addAgentChatTab: mockAddAgentChatTab
+  })
 })
 
 const mockProjects: Project[] = [
@@ -117,10 +148,13 @@ const renderWithRouter = (props = {}) => {
   )
 }
 
-// Worktrees are collapsed by default and only expand via the chevron, so tests
-// that assert on worktree rows must open the section first.
-const expandWorktrees = () => {
-  fireEvent.click(screen.getByLabelText('Expand worktrees'))
+// The project chat list is collapsed by default and only expands via the
+// chevron, so tests that assert on chat rows must open the section first.
+// `getAllByLabelText` because every project now shows a chevron; [0] is the
+// first project in render order.
+const expandChats = () => {
+  const chevrons = screen.getAllByLabelText('Expand chats')
+  fireEvent.click(chevrons[0])
 }
 
 describe('ProjectSidebar Context Menu', () => {
@@ -552,75 +586,79 @@ describe('ProjectSidebar Activity Indicator', () => {
   })
 })
 
-describe('ProjectSidebar Worktree Row', () => {
-  const projectWithWorktree: Project[] = [
-    {
-      id: '1',
-      name: 'Project One',
-      color: 'blue',
-      gitBranch: 'main',
-      isGitRepo: true,
-      worktrees: [
-        {
-          id: 'wt-1',
-          name: 'try-new-hero',
-          branch: 'feature/try-new-hero',
-          path: '/repo/.termul/worktrees/try-new-hero',
-          createdAt: new Date().toISOString()
-        }
-      ]
-    }
+describe('ProjectSidebar Project Chat List', () => {
+  const chatEntry = (overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry => ({
+    id: 'chat-1',
+    agentId: 'agent-1',
+    title: 'Refactor sidebar',
+    cwd: '/repo/main',
+    projectId: '1',
+    createdAt: 1000,
+    lastActivityAt: 2000,
+    messageCount: 5,
+    status: 'active',
+    ...overrides
+  })
+
+  const projectWithChats: Project[] = [
+    { id: '1', name: 'Project One', color: 'blue', gitBranch: 'main' }
   ]
 
-  it('shows the worktree name but not the branch chip on the row face', () => {
-    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
-    expandWorktrees()
+  it('renders the per-project chat search and chat rows when expanded', () => {
+    useAcpStore.setState({ sessionIndex: [chatEntry()] })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    // Name is shown
-    expect(screen.getByText('try-new-hero')).toBeInTheDocument()
-    // Branch is NOT shown as a visible chip on the row
-    expect(screen.queryByText('feature/try-new-hero')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
+    expect(screen.getByText('Refactor sidebar')).toBeInTheDocument()
   })
 
-  it('keeps the branch available via the row tooltip', () => {
-    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
-    expandWorktrees()
+  it('shows the empty state when the project has no chats', () => {
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    const row = screen.getByLabelText('Worktree try-new-hero on feature/try-new-hero')
-    expect(row).toHaveAttribute('title', expect.stringContaining('feature/try-new-hero'))
+    expect(
+      screen.getByText('No chats yet. Start one with the New Chat button.')
+    ).toBeInTheDocument()
   })
 
-  it('exposes an accessible "Open terminal" button on the worktree row', () => {
-    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
-    expandWorktrees()
+  it('opens/resumes the chat when a chat row is clicked (no active-worktree sync)', async () => {
+    useAcpStore.setState({ sessionIndex: [chatEntry()] })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    expect(screen.getByLabelText('Open terminal in try-new-hero')).toBeInTheDocument()
-  })
-
-  it('opens a terminal in the worktree when the terminal button is clicked, without triggering row select', async () => {
-    const onSelectProject = vi.fn()
-    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1', onSelectProject })
-    expandWorktrees()
-
-    fireEvent.click(screen.getByLabelText('Open terminal in try-new-hero'))
+    fireEvent.click(screen.getByText('Refactor sidebar'))
 
     await waitFor(() => {
-      expect(mockActivateAndOpenTerminal).toHaveBeenCalled()
+      expect(mockOpenHistorySession).toHaveBeenCalledWith('chat-1')
+      expect(mockAddAgentChatTab).toHaveBeenCalledWith('chat-1')
     })
-    // The terminal-button click must not bubble to the project row's select handler
-    expect(onSelectProject).not.toHaveBeenCalled()
+    // Chat row click must not route through the worktree terminal path.
+    expect(mockActivateAndOpenTerminal).not.toHaveBeenCalled()
   })
 
-  it('does not trigger row select when activating the terminal button via keyboard', () => {
-    renderWithRouter({ projects: projectWithWorktree, activeProjectId: '1' })
-    expandWorktrees()
+  it('opens a terminal at the chat cwd via openTerminalAtCwd when the terminal icon is clicked', async () => {
+    useAcpStore.setState({ sessionIndex: [chatEntry({ cwd: '/repo/main' })] })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    const termButton = screen.getByLabelText('Open terminal in try-new-hero')
-    // Enter on the nested terminal button must not bubble to the row's onKeyDown select
-    fireEvent.keyDown(termButton, { key: 'Enter' })
+    fireEvent.click(screen.getByLabelText('Open terminal in Refactor sidebar'))
 
-    // The shared open handler is not invoked by the key event (spawn happens on click)
+    await waitFor(() => {
+      expect(mockOpenTerminalAtCwd).toHaveBeenCalledWith('1', '/repo/main')
+    })
+    // The chat terminal icon must not sync activeWorktreeId (no activateAndOpenTerminal).
     expect(mockActivateAndOpenTerminal).not.toHaveBeenCalled()
+  })
+
+  it('keeps the New Worktree action on the project header context menu', async () => {
+    const projectGit: Project[] = [
+      { id: '1', name: 'Project One', color: 'blue', gitBranch: 'main', isGitRepo: true }
+    ]
+    renderWithRouter({ projects: projectGit, activeProjectId: '1' })
+
+    fireEvent.contextMenu(screen.getByText('Project One'))
+    expect(screen.getByText('New Worktree')).toBeInTheDocument()
   })
 })
 
@@ -784,54 +822,56 @@ describe('ProjectSidebar Project Search', () => {
   })
 })
 
-describe('ProjectSidebar Worktree Search', () => {
-  // 10+ worktrees crosses the worktree-search threshold.
-  const projectWithManyWorktrees: Project[] = [
-    {
-      id: '1',
-      name: 'Big Repo',
-      color: 'blue',
-      gitBranch: 'main',
-      isGitRepo: true,
-      worktrees: Array.from({ length: 11 }, (_, i) => ({
-        id: `wt-${i}`,
-        name: `worktree-${i}`,
-        branch: `feature/branch-${i}`,
-        path: `/repo/.termul/worktrees/worktree-${i}`,
-        createdAt: new Date().toISOString()
-      }))
-    }
+describe('ProjectSidebar Chat Search', () => {
+  const projectWithChats: Project[] = [
+    { id: '1', name: 'Project One', color: 'blue', gitBranch: 'main' }
   ]
 
-  it('shows a worktree search box with an icon once there are 10+ worktrees', () => {
-    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
-    expandWorktrees()
-    expect(screen.getByLabelText('Search worktrees')).toBeInTheDocument()
+  const chats: SessionIndexEntry[] = Array.from({ length: 3 }, (_, i) => ({
+    id: `chat-${i}`,
+    agentId: 'agent-1',
+    title: `Chat ${i}`,
+    cwd: '/repo/main',
+    projectId: '1',
+    createdAt: 1000 + i,
+    lastActivityAt: 2000 + i,
+    messageCount: i,
+    status: 'active' as const
+  }))
+
+  it('shows the per-project chat search box once a project is expanded', () => {
+    useAcpStore.setState({ sessionIndex: chats })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
+
+    expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
   })
 
-  it('shows a clear button only after typing, and clears on click', () => {
-    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
-    expandWorktrees()
+  it('filters this project chats by title', () => {
+    useAcpStore.setState({ sessionIndex: chats })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
-    expect(screen.queryByLabelText('Clear worktree search')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Search chats'), {
+      target: { value: 'Chat 1' }
+    })
 
-    fireEvent.change(input, { target: { value: 'worktree-3' } })
-    expect(screen.getByLabelText('Clear worktree search')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByLabelText('Clear worktree search'))
-    expect(input.value).toBe('')
+    expect(screen.getByText('Chat 1')).toBeInTheDocument()
+    expect(screen.queryByText('Chat 0')).not.toBeInTheDocument()
+    expect(screen.queryByText('Chat 2')).not.toBeInTheDocument()
   })
 
-  it('clears the worktree query on Escape', () => {
-    renderWithRouter({ projects: projectWithManyWorktrees, activeProjectId: '1' })
-    expandWorktrees()
+  it('clears the chat query on Escape', () => {
+    useAcpStore.setState({ sessionIndex: chats })
+    renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
+    expandChats()
 
-    const input = screen.getByLabelText('Search worktrees') as HTMLInputElement
-    fireEvent.change(input, { target: { value: 'worktree-3' } })
+    const input = screen.getByLabelText('Search chats') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Chat 1' } })
     fireEvent.keyDown(input, { key: 'Escape' })
 
     expect(input.value).toBe('')
+    expect(screen.getByText('Chat 0')).toBeInTheDocument()
   })
 })
 

@@ -10,8 +10,8 @@ import { ChatRoute } from '@/components/ChatRoute'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { ResizeEdges } from '@/components/ResizeEdges'
-import { SidebarTabs } from '@/components/SidebarTabs'
 import { StatusBar } from '@/components/StatusBar'
 import { TitleBar } from '@/components/TitleBar'
 import {
@@ -1921,7 +1921,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               {/* Sidebar */}
               {isSidebarVisible && (
                 <div className="mr-2">
-                  <SidebarTabs
+                  <ProjectSidebar
                     projects={projects}
                     activeProjectId={activeProjectId}
                     onSelectProject={handleSelectProject}
