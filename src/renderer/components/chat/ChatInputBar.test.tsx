@@ -525,8 +525,9 @@ describe('ChatInputBar file mentions', () => {
           truncated?: boolean
         }) => void)
       | null
+    const sid = mockStreamApi.searchFileNamesStreamStart.mock.calls[0]?.[0] as string
     batch?.({
-      searchId: 'search-1',
+      searchId: sid,
       files: [{ path: 'src/auth.ts', ignored: false }]
     })
     const done = doneCb.current as unknown as
@@ -538,7 +539,7 @@ describe('ChatInputBar file mentions', () => {
           error?: string
         }) => void)
       | null
-    done?.({ searchId: 'search-1', truncated: false, totalFiles: 1 })
+    done?.({ searchId: sid, truncated: false, totalFiles: 1 })
 
     // Switch back to real timers so `waitFor` can poll for the post-select /
     // send async effects.

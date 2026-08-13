@@ -3,36 +3,40 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MentionMatch } from './mention-menu-model'
 import { useComposerMentions } from './use-composer-mentions'
 
-const { mockApi, batchCb, doneCb, mockIsTauri, mockLog } = vi.hoisted(() => {
-  const batch = { current: null as null | ((e: never) => void) }
-  const done = { current: null as null | ((e: never) => void) }
+const { mockApi, batchCbs, doneCbs, mockIsTauri, mockLog, mockUuid } = vi.hoisted(() => {
+  const batch: Array<(e: never) => void> = []
+  const done: Array<(e: never) => void> = []
   return {
-    batchCb: batch,
-    doneCb: done,
+    batchCbs: batch,
+    doneCbs: done,
     mockApi: {
       searchFileNamesStreamStart: vi.fn(),
       searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
       onSearchFileNamesBatch: vi.fn((cb: (e: never) => void) => {
-        batch.current = cb
+        batch.push(cb)
         return () => {
-          batch.current = null
+          const i = batch.indexOf(cb)
+          if (i >= 0) batch.splice(i, 1)
         }
       }),
       onSearchFileNamesDone: vi.fn((cb: (e: never) => void) => {
-        done.current = cb
+        done.push(cb)
         return () => {
-          done.current = null
+          const i = done.indexOf(cb)
+          if (i >= 0) done.splice(i, 1)
         }
       })
     },
     mockIsTauri: vi.fn(() => true),
-    mockLog: vi.fn(async () => {})
+    mockLog: vi.fn(async () => {}),
+    mockUuid: vi.fn(() => 'inst')
   }
 })
 
 vi.mock('@/lib/api', () => ({ filesystemApi: mockApi }))
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauri }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
+vi.mock('@/lib/uuid', () => ({ randomUUID: mockUuid }))
 
 interface BatchEvent {
   searchId: string
@@ -49,11 +53,11 @@ interface DoneEvent {
 
 const emitBatch = (e: BatchEvent) =>
   act(() => {
-    ;(batchCb.current as unknown as ((e: BatchEvent) => void) | null)?.(e)
+    for (const cb of [...batchCbs]) (cb as (e: BatchEvent) => void)(e)
   })
 const emitDone = (e: DoneEvent) =>
   act(() => {
-    ;(doneCb.current as unknown as ((e: DoneEvent) => void) | null)?.(e)
+    for (const cb of [...doneCbs]) (cb as (e: DoneEvent) => void)(e)
   })
 const advance = (ms: number) =>
   act(async () => {
@@ -90,12 +94,14 @@ describe('useComposerMentions', () => {
     mockApi.searchFileNamesStreamCancel.mockResolvedValue({ success: true as const })
     mockApi.onSearchFileNamesBatch.mockClear()
     mockApi.onSearchFileNamesDone.mockClear()
-    batchCb.current = null
-    doneCb.current = null
+    batchCbs.length = 0
+    doneCbs.length = 0
     mockIsTauri.mockReset()
     mockIsTauri.mockReturnValue(true)
     mockLog.mockReset()
     mockLog.mockResolvedValue(undefined)
+    mockUuid.mockReset()
+    mockUuid.mockReturnValue('inst')
   })
 
   afterEach(() => {
@@ -107,8 +113,8 @@ describe('useComposerMentions', () => {
     expect(mockApi.onSearchFileNamesBatch).toHaveBeenCalledTimes(1)
     expect(mockApi.onSearchFileNamesDone).toHaveBeenCalledTimes(1)
     unmount()
-    expect(batchCb.current).toBeNull()
-    expect(doneCb.current).toBeNull()
+    expect(batchCbs).toHaveLength(0)
+    expect(doneCbs).toHaveLength(0)
   })
 
   it('fires a debounced stream on @query and maps SearchFileHit -> MentionMatch', async () => {
@@ -122,7 +128,7 @@ describe('useComposerMentions', () => {
 
     await advance(90)
     expect(mockApi.searchFileNamesStreamStart).toHaveBeenCalledWith(
-      'search-1',
+      'search-inst-1',
       '/work',
       '/work',
       'rea',
@@ -131,7 +137,7 @@ describe('useComposerMentions', () => {
     expect(result.current.loading).toBe(true)
 
     emitBatch({
-      searchId: 'search-1',
+      searchId: 'search-inst-1',
       files: [
         { path: 'src/auth.ts', ignored: false },
         { path: 'build/x.ts', ignored: true }
@@ -147,7 +153,7 @@ describe('useComposerMentions', () => {
     expect(items[1].label).toBe('x.ts')
     expect(items[1].ignored).toBe(true)
 
-    emitDone({ searchId: 'search-1', truncated: false, totalFiles: 2 })
+    emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 2 })
     expect(result.current.loading).toBe(false)
   })
 
@@ -159,7 +165,7 @@ describe('useComposerMentions', () => {
       path: `f${i}.ts`,
       ignored: false
     }))
-    emitBatch({ searchId: 'search-1', files })
+    emitBatch({ searchId: 'search-inst-1', files })
     expect(result.current.sections[0].items).toHaveLength(100)
   })
 
@@ -190,7 +196,7 @@ describe('useComposerMentions', () => {
     // r -> re -> rea
     act(() => result.current.update('@r', 2))
     await advance(180)
-    const firstSid = 'search-1'
+    const firstSid = 'search-inst-1'
     expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
       firstSid,
       '/work',
@@ -203,7 +209,7 @@ describe('useComposerMentions', () => {
     // New keystroke cancels the in-flight stream before scheduling the next.
     expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith(firstSid)
     await advance(180)
-    const secondSid = 'search-2'
+    const secondSid = 'search-inst-2'
     expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
       secondSid,
       '/work',
@@ -215,7 +221,7 @@ describe('useComposerMentions', () => {
     act(() => result.current.update('@rea', 4))
     expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith(secondSid)
     await advance(90)
-    const thirdSid = 'search-3'
+    const thirdSid = 'search-inst-3'
     expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
       thirdSid,
       '/work',
@@ -251,14 +257,14 @@ describe('useComposerMentions', () => {
     act(() => result.current.update('@rea', 4))
     await advance(90)
     // A late done for the cancelled search must not drop loading of the active one.
-    emitDone({ searchId: 'search-1', truncated: false, totalFiles: 0 })
+    emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 0 })
     expect(result.current.loading).toBe(true)
     emitBatch({
-      searchId: 'search-2',
+      searchId: 'search-inst-2',
       files: [{ path: 'real.ts', ignored: false }]
     })
     expect(result.current.sections).toHaveLength(1)
-    emitDone({ searchId: 'search-2', truncated: false, totalFiles: 1 })
+    emitDone({ searchId: 'search-inst-2', truncated: false, totalFiles: 1 })
     expect(result.current.loading).toBe(false)
   })
 
@@ -305,12 +311,12 @@ describe('useComposerMentions', () => {
     act(() => result.current.update('@rea', 4))
     await advance(90)
     emitBatch({
-      searchId: 'search-1',
+      searchId: 'search-inst-1',
       files: [{ path: 'src/auth.ts', ignored: false }]
     })
     expect(result.current.sections).toHaveLength(1)
     emitDone({
-      searchId: 'search-1',
+      searchId: 'search-inst-1',
       truncated: false,
       totalFiles: 1,
       code: 'RG_SPAWN_FAILED',
@@ -331,7 +337,7 @@ describe('useComposerMentions', () => {
     act(() => result.current.update('@rea', 4))
     await advance(90)
     emitBatch({
-      searchId: 'search-1',
+      searchId: 'search-inst-1',
       files: [{ path: 'src/auth.ts', ignored: false }]
     })
     const picked = match('src/auth.ts')
@@ -350,6 +356,33 @@ describe('useComposerMentions', () => {
     await advance(90)
     expect(result.current.loading).toBe(true)
     unmount()
-    expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith('search-1')
+    expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith('search-inst-1')
+  })
+
+  it('uses instance-unique search ids so two hook instances never collide', async () => {
+    // Distinct per-instance prefixes (randomUUID) keep the composer's
+    // `search-<inst>-<n>` namespace disjoint from another hook instance and
+    // from the file-explorer store's `search-<n>` namespace, so broadcast
+    // batch/done events cannot update the wrong consumer.
+    mockUuid.mockReturnValueOnce('a').mockReturnValueOnce('b')
+    const first = renderMentions()
+    act(() => first.result.current.update('@rea', 4))
+    await advance(90)
+    const firstSid = mockApi.searchFileNamesStreamStart.mock.calls[0][0] as string
+
+    const second = renderMentions()
+    act(() => second.result.current.update('@rea', 4))
+    await advance(90)
+    const secondSid = mockApi.searchFileNamesStreamStart.mock.calls[1][0] as string
+
+    expect(firstSid).not.toBe(secondSid)
+    expect(firstSid).toBe('search-a-1')
+    expect(secondSid).toBe('search-b-1')
+    // A batch for the first instance must not land in the second.
+    emitBatch({ searchId: firstSid, files: [{ path: 'a.ts', ignored: false }] })
+    expect(first.result.current.sections).toHaveLength(1)
+    expect(second.result.current.sections).toHaveLength(0)
+    first.unmount()
+    second.unmount()
   })
 })

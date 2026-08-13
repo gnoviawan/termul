@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { basename } from './chat-attachments'
 import type { FileMentionMenuHandle } from './FileMentionMenu'
 import {
@@ -77,6 +78,12 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
 
   const reqIdRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Per-hook-instance prefix so search ids never collide with another
+  // `useComposerMentions` instance or the file-explorer store's `search-N`
+  // namespace — broadcast batch/done events only reach this listener.
+  // Lazy-init so `randomUUID()` runs once per instance, not every render.
+  const instanceIdRef = useRef<string>('')
+  if (instanceIdRef.current === '') instanceIdRef.current = randomUUID()
   // The search id (`search-${reqId}`) whose batch/done events are currently
   // accepted. Stale events from a cancelled stream mismatch and are ignored.
   const activeSearchIdRef = useRef<string | null>(null)
@@ -160,7 +167,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     }
 
     const id = ++reqIdRef.current
-    const sid = `search-${id}`
+    const sid = `search-${instanceIdRef.current}-${id}`
     accumRef.current = []
     timerRef.current = setTimeout(
       () => {
