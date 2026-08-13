@@ -288,12 +288,7 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
   }, [terminal.name])
 
   return (
-    <TabContextMenu
-      kind="terminal"
-      onClose={onClose}
-      onRename={handleRenameFromMenu}
-      onKill={onClose}
-    >
+    <TabContextMenu kind="terminal" onClose={onClose} onRename={handleRenameFromMenu}>
       <div
         onClick={onSelect}
         className={cn(

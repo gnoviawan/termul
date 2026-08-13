@@ -113,7 +113,6 @@ function TerminalTabInline({
       kind="terminal"
       onClose={onClose}
       onRename={handleRenameFromMenu}
-      onKill={onClose}
       isClosing={isClosing}
     >
       <div
