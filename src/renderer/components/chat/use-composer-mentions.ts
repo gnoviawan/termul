@@ -27,6 +27,37 @@ const DEBOUNCE_LONG = 180
 /** Queries of at least this many chars use the short debounce window. */
 const SHORT_QUERY_MIN = 3
 
+/** Normalize a search root to forward slashes without a trailing separator. */
+function normalizeRoot(root: string | null | undefined): string {
+  return root?.replace(/\\/g, '/').replace(/\/$/, '') ?? ''
+}
+
+/**
+ * Cancel an in-flight filename search stream and surface failures. The facade
+ * resolves `{ success: false }` on cancel failure (and may reject on a
+ * transport fault); both are logged so the boundary is never silently swallowed
+ * (AGENTS.md logging rule).
+ */
+function cancelSearchStream(sid: string): void {
+  void filesystemApi
+    .searchFileNamesStreamCancel(sid)
+    .then((res) => {
+      if (res.success) return
+      logFrontendError({
+        level: 'warn',
+        message: `composer mention search cancel failed: code=${res.code ?? 'n/a'} error=${res.error ?? 'n/a'}`,
+        source: 'useComposerMentions'
+      })
+    })
+    .catch((err) => {
+      logFrontendError({
+        level: 'warn',
+        message: `composer mention search cancel rejected: ${err instanceof Error ? err.message : String(err)}`,
+        source: 'useComposerMentions'
+      })
+    })
+}
+
 /** Build a {@link MentionMatch} from a ripgrep `SearchFileHit` + search root. */
 function toMentionMatch(hit: SearchFileHit, root: string): MentionMatch {
   return {
@@ -89,8 +120,13 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const activeSearchIdRef = useRef<string | null>(null)
   // Accumulator for the in-flight search's batches, capped at MAX_RESULTS.
   const accumRef = useRef<MentionMatch[]>([])
+  // The mount-scoped batch listener can't close over `rootPath` (its effect has
+  // no deps), so it reads the current root through this ref. Updated in an
+  // effect, not during render, so the write can't leak from an uncommitted render.
   const rootPathRef = useRef(rootPath)
-  rootPathRef.current = rootPath
+  useEffect(() => {
+    rootPathRef.current = rootPath
+  }, [rootPath])
 
   // Subscribe to the filename-stream events once per mount (desktop only).
   // Web (`!isTauriContext()`) never starts a stream and these return no-ops.
@@ -98,7 +134,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     if (!isTauriContext()) return
     const unsubBatch = filesystemApi.onSearchFileNamesBatch((event) => {
       if (event.searchId !== activeSearchIdRef.current) return
-      const root = rootPathRef.current?.replace(/\\/g, '/').replace(/\/$/, '') ?? ''
+      const root = normalizeRoot(rootPathRef.current)
       const next = accumRef.current
         .concat(event.files.map((f) => toMentionMatch(f, root)))
         .slice(0, MAX_RESULTS)
@@ -130,7 +166,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
       const sid = activeSearchIdRef.current
       if (sid) {
         activeSearchIdRef.current = null
-        filesystemApi.searchFileNamesStreamCancel(sid).catch(() => {})
+        cancelSearchStream(sid)
       }
       setLoading(false)
     }
@@ -148,7 +184,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     const prevSid = activeSearchIdRef.current
     if (prevSid) {
       activeSearchIdRef.current = null
-      filesystemApi.searchFileNamesStreamCancel(prevSid).catch(() => {})
+      cancelSearchStream(prevSid)
     }
 
     if (!menuOpen || disabled || !rootPath || !isTauriContext()) {
@@ -169,29 +205,48 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     const id = ++reqIdRef.current
     const sid = `search-${instanceIdRef.current}-${id}`
     accumRef.current = []
+    // Drop stale matches from the previous query so they don't flash during
+    // the debounce window before the first batch lands.
+    setMatches([])
     timerRef.current = setTimeout(
       () => {
         timerRef.current = null
         activeSearchIdRef.current = sid
-        const root = rootPathRef.current?.replace(/\\/g, '/').replace(/\/$/, '') ?? ''
+        const root = normalizeRoot(rootPath)
         setLoading(true)
-        void filesystemApi.searchFileNamesStreamStart(sid, root, root, f, false).then((res) => {
-          if (res.success) return
-          // Failed start: no stream will emit done — drop loading now and
-          // surface the failure so it is never silently swallowed.
-          if (activeSearchIdRef.current === sid) {
-            activeSearchIdRef.current = null
-            setLoading(false)
-            setMatches([])
-          }
-          logFrontendError({
-            level: 'warn',
-            message:
-              `composer mention search start failed: code=${res.code ?? 'n/a'}` +
-              ` error=${res.error ?? 'n/a'}`,
-            source: 'useComposerMentions'
+        void filesystemApi
+          .searchFileNamesStreamStart(sid, root, root, f, false)
+          .then((res) => {
+            if (res.success) return
+            // Failed start: no stream will emit done — drop loading now and
+            // surface the failure so it is never silently swallowed.
+            if (activeSearchIdRef.current === sid) {
+              activeSearchIdRef.current = null
+              setLoading(false)
+              setMatches([])
+            }
+            logFrontendError({
+              level: 'warn',
+              message:
+                `composer mention search start failed: code=${res.code ?? 'n/a'}` +
+                ` error=${res.error ?? 'n/a'}`,
+              source: 'useComposerMentions'
+            })
           })
-        })
+          .catch((err) => {
+            // Defense-in-depth: the facade resolves even on invoke failure, but
+            // a transport fault rejecting the promise must not pin `loading`.
+            if (activeSearchIdRef.current === sid) {
+              activeSearchIdRef.current = null
+              setLoading(false)
+              setMatches([])
+            }
+            logFrontendError({
+              level: 'warn',
+              message: `composer mention search start rejected: ${err instanceof Error ? err.message : String(err)}`,
+              source: 'useComposerMentions'
+            })
+          })
       },
       f.length >= SHORT_QUERY_MIN ? DEBOUNCE_SHORT : DEBOUNCE_LONG
     )
