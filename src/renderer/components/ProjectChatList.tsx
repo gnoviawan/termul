@@ -2,6 +2,8 @@ import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { AgentGlyph } from '@/components/chat/AgentGlyph'
+import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,8 +11,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
-import { AgentGlyph } from '@/components/chat/AgentGlyph'
-import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { clipboardApi, openerApi } from '@/lib/api'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'

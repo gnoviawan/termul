@@ -84,7 +84,12 @@ vi.mock('@xterm/xterm', async () => {
 
 vi.mock('@xterm/addon-fit', async () => {
   const { vi: v } = await import('vitest')
-  return { FitAddon: class { fit = v.fn(); dispose = v.fn() } }
+  return {
+    FitAddon: class {
+      fit = v.fn()
+      dispose = v.fn()
+    }
+  }
 })
 vi.mock('@xterm/addon-search', async () => {
   const { vi: v } = await import('vitest')
@@ -99,7 +104,12 @@ vi.mock('@xterm/addon-search', async () => {
 })
 vi.mock('@xterm/addon-webgl', async () => {
   const { vi: v } = await import('vitest')
-  return { WebglAddon: class { onContextLoss = v.fn(); dispose = v.fn() } }
+  return {
+    WebglAddon: class {
+      onContextLoss = v.fn()
+      dispose = v.fn()
+    }
+  }
 })
 vi.mock('@xterm/addon-web-links', () => ({
   WebLinksAddon: class {

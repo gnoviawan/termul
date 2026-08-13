@@ -386,9 +386,7 @@ export function ProjectSidebar({
                   <ContextMenuCheckboxItem
                     key={p.id}
                     checked={isProjectInGroup}
-                    onSelect={() =>
-                      moveProjectToGroup(p.id, isProjectInGroup ? null : groupId)
-                    }
+                    onSelect={() => moveProjectToGroup(p.id, isProjectInGroup ? null : groupId)}
                   >
                     {p.name}
                   </ContextMenuCheckboxItem>

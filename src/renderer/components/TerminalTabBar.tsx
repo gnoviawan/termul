@@ -14,8 +14,8 @@ import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import type { Terminal } from '@/types/project'
-import { TabContextMenu } from './workspace/tab-context-menu'
 import { Skeleton } from './ui/skeleton'
+import { TabContextMenu } from './workspace/tab-context-menu'
 
 interface TerminalTabBarProps {
   terminals: Terminal[]

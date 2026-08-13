@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { ContextMenuContent } from '@/components/ui/context-menu'
 import type { SVGProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { ContextMenuContent } from '@/components/ui/context-menu'
 import { FileTreeNode } from './FileTreeNode'
 
 vi.mock('@/hooks/use-pane-dnd', () => ({
