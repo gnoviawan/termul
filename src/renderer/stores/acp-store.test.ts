@@ -6138,7 +6138,11 @@ describe('ACP agent plan store', () => {
     // appendPlanSnapshot filter — regression guard against a filter that
     // accidentally drops all text blocks.
     expect(lastAgent!.blocks).toHaveLength(2)
-    expect(lastAgent!.blocks.find((b) => b.text === 'working on it')).toBeDefined()
+    // The preceding prose block gains a trailing newline so the fence opener
+    // sits on its own line (CommonMark fence requirement). Without it, the
+    // joined text "working on it```termul-plan" is not recognized as a fence
+    // and the snapshot renders as plain text instead of a PlanPanel.
+    expect(lastAgent!.blocks.find((b) => b.text === 'working on it\n')).toBeDefined()
     // The fence JSON decodes to the original PlanEntry[]
     const json = (fenceBlock!.text as string).replace(/^```termul-plan\n/, '').replace(/\n```$/, '')
     expect(JSON.parse(json)).toEqual([
@@ -6147,6 +6151,13 @@ describe('ACP agent plan store', () => {
     ])
     // streaming flag flipped by finalizeStreaming
     expect(lastAgent!.streaming).toBe(false)
+    // Regression guard: when blocksToText joins the prose + fence with '', the
+    // fence opener must be at the start of a line so Streamdown recognizes it.
+    const joined = lastAgent!.blocks
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('')
+    expect(/(^|\n)```termul-plan/.test(joined)).toBe(true)
   })
 
   it('_onPromptComplete writes no fence when plans[sessionId] is empty (non-compliant agent)', () => {

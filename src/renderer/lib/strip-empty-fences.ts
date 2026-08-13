@@ -144,3 +144,20 @@ export function stripEmptyFences(text: string, streaming: boolean): string {
   if (!streaming) return stripTrailingEmptyFence(out)
   return out
 }
+
+/**
+ * Ensure a `termul-plan` fence opener sits on its own line. CommonMark
+ * requires the opening ``` of a fenced code block to be at the start of a
+ * line; when text blocks are joined with '' a preceding block that does not
+ * end in '\n' glues the opener onto the prose (e.g. "prose```termul-plan"),
+ * so Streamdown never recognizes the fence and renders the snapshot as plain
+ * text. This inserts a '\n' before any `termul-plan` opener that is not
+ * already at the start of a line, covering both freshly-appended snapshots
+ * and persisted messages written before the `appendPlanSnapshot` boundary fix.
+ */
+export function normalizePlanFenceBoundary(text: string): string {
+  // `([^``\n])` matches a single non-newline char immediately preceding the
+  // opener; reinsert it with a trailing newline. Opener already at line start
+  // (preceded by '\n' or at position 0) is left untouched.
+  return text.replace(/([^\n])```termul-plan/g, '$1\n```termul-plan')
+}

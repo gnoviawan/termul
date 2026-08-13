@@ -30,7 +30,7 @@ import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { parseSkillSegments, replaceSkillTokensInline } from '@/lib/skill-tokens'
-import { stripEmptyFences } from '@/lib/strip-empty-fences'
+import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
@@ -562,7 +562,7 @@ function ChatMessageComponent({
   }
 
   const streaming = message.streaming && isLast
-  const proseText = stripEmptyFences(text, streaming)
+  const proseText = normalizePlanFenceBoundary(stripEmptyFences(text, streaming))
   const proseDelay = nextDelay()
   const mediaDelay = hasMedia ? nextDelay() : null
   const actionsDelay = nextDelay()

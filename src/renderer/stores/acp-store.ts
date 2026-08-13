@@ -1010,13 +1010,25 @@ function appendPlanSnapshot(
   const filteredBlocks = target.blocks.filter(
     (b) => b.type !== 'text' || !isTermulPlanFenceBlock(b.text)
   )
+  // CommonMark requires the opening ``` of a fenced code block to be at the
+  // start of a line. `blocksToText` joins text blocks with '', so a preceding
+  // prose block that does not end in '\n' would glue the fence opener onto the
+  // prose (e.g. "working on it```termul-plan") and Streamdown would not recognize
+  // the fence — the snapshot would render as plain text instead of a PlanPanel.
+  // Ensure a newline boundary before the fence on the last preceding text block.
+  const blocksWithBoundary = filteredBlocks.map((b, i, arr) => {
+    if (i !== arr.length - 1 || b.type !== 'text') return b
+    const text = b.text ?? ''
+    if (text.length === 0 || text.endsWith('\n')) return b
+    return { ...b, text: `${text}\n` }
+  })
   const fenceBlock: ContentBlock = {
     type: 'text',
     text: `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
   }
   const updatedMessage: ChatMessage = {
     ...target,
-    blocks: [...filteredBlocks, fenceBlock]
+    blocks: [...blocksWithBoundary, fenceBlock]
   }
   const newList = [...list]
   newList[lastAgentIdx] = updatedMessage
