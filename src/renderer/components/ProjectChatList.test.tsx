@@ -38,6 +38,92 @@ vi.mock('sonner', () => ({
   toast: { success: mockToastSuccess, error: mockToastError }
 }))
 
+// Stub the Radix context-menu primitives. The chat list renders one menu per
+// row; the stateful stub opens the menu on `contextmenu` (only if the child's
+// onContextMenu did not call preventDefault — mirrors Radix's
+// composeEventHandlers({ checkForDefaultPrevented: true }) so F1-type
+// regressions surface), renders `<ContextMenuContent>` only while open, closes
+// on Escape, and surfaces `<ContextMenuItem>` as a `<button>` so the existing
+// tests can `getByText(...).closest('button')` and assert disabled state +
+// click wiring. Mirrors the ProjectSidebar / WorkspaceTabBar stub pattern.
+vi.mock('@/components/ui/context-menu', async () => {
+  const React = await import('react')
+  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
+    open: false,
+    setOpen: () => {}
+  })
+  return {
+    ContextMenu: ({ children }: { children: React.ReactNode }) => {
+      const [open, setOpen] = React.useState(false)
+      React.useEffect(() => {
+        if (!open) return
+        const onKey = (e: KeyboardEvent) => {
+          if (e.key === 'Escape') setOpen(false)
+        }
+        document.addEventListener('keydown', onKey)
+        return () => document.removeEventListener('keydown', onKey)
+      }, [open])
+      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
+    },
+    ContextMenuTrigger: ({
+      children,
+      asChild
+    }: {
+      children: React.ReactNode
+      asChild?: boolean
+    }) => {
+      const { setOpen } = React.useContext(MenuCtx)
+      const merged = (e: React.MouseEvent) => {
+        // F2: mirror Radix checkForDefaultPrevented — skip open if the child
+        // handler called preventDefault.
+        if (e.defaultPrevented) return
+        e.preventDefault()
+        setOpen(true)
+      }
+      if (asChild && React.isValidElement(children)) {
+        const child = children as React.ReactElement<{
+          onContextMenu?: (e: React.MouseEvent) => void
+        }>
+        return React.cloneElement(child, {
+          onContextMenu: (e: React.MouseEvent) => {
+            child.props.onContextMenu?.(e)
+            merged(e)
+          }
+        })
+      }
+      return <div onContextMenu={merged}>{children}</div>
+    },
+    ContextMenuContent: ({ children }: { children: React.ReactNode }) => {
+      const { open } = React.useContext(MenuCtx)
+      if (!open) return null
+      return <div>{children}</div>
+    },
+    ContextMenuItem: ({
+      children,
+      disabled,
+      onSelect,
+      variant
+    }: {
+      children: React.ReactNode
+      disabled?: boolean
+      onSelect?: () => void
+      variant?: 'default' | 'destructive'
+    }) => (
+      <button
+        type="button"
+        disabled={disabled}
+        data-variant={variant}
+        onClick={() => {
+          if (!disabled) onSelect?.()
+        }}
+      >
+        {children}
+      </button>
+    ),
+    ContextMenuSeparator: () => <hr />
+  }
+})
+
 beforeEach(() => {
   mockOpenTerminalAtCwd.mockReset()
   mockOpenTerminalAtCwd.mockResolvedValue({ status: 'opened', terminalId: 'term-1' })

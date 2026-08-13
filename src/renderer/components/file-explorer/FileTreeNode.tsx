@@ -1,6 +1,8 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
@@ -18,6 +20,13 @@ interface FileTreeNodeProps {
   onSelect: (path: string) => void
   onContextMenu: (e: React.MouseEvent, entry: DirectoryEntry) => void
   onClick?: (e: React.MouseEvent, entry: DirectoryEntry) => void
+  /**
+   * Builds the declarative `<ContextMenuContent>` for this node. When
+   * provided, the row is wrapped in `<ContextMenu><ContextMenuTrigger
+   * asChild>` so right-click opens the Radix menu at the pointer; the
+   * `onContextMenu` prop still seeds selection + stops the global trigger.
+   */
+  renderContextMenu?: (entry: DirectoryEntry) => ReactNode
 }
 
 export function FileTreeNode({
@@ -30,7 +39,8 @@ export function FileTreeNode({
   onToggle,
   onSelect,
   onContextMenu,
-  onClick
+  onClick,
+  renderContextMenu
 }: FileTreeNodeProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const isIgnored = entry.ignored === true
@@ -90,53 +100,58 @@ export function FileTreeNode({
 
   return (
     <>
-      <div
-        data-path={entry.path}
-        className={cn(
-          'group relative flex min-w-0 items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
-          isIgnored && 'opacity-50',
-          isSelected && 'bg-accent text-accent-foreground'
-        )}
-        title={isIgnored ? `${entry.name} (git-ignored)` : undefined}
-        style={{ paddingLeft: depth * 16 + 4 }}
-        onClick={handleClick}
-        onContextMenu={(e) => onContextMenu(e, entry)}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        draggable={!isDir}
-        onDragStart={handleDragStart}
-      >
-        <div className="flex min-w-0 flex-1 items-center overflow-hidden">
-          {isDir && (
-            <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
-              {isLoading ? (
-                <Loader2 size={12} className="animate-spin text-muted-foreground" />
-              ) : isExpanded ? (
-                <ChevronDown size={12} className="text-muted-foreground" />
-              ) : (
-                <ChevronRight size={12} className="text-muted-foreground" />
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            data-path={entry.path}
+            className={cn(
+              'group relative flex min-w-0 items-center h-7 cursor-pointer text-sm hover:bg-secondary/50 transition-colors select-none',
+              isIgnored && 'opacity-50',
+              isSelected && 'bg-accent text-accent-foreground'
+            )}
+            title={isIgnored ? `${entry.name} (git-ignored)` : undefined}
+            style={{ paddingLeft: depth * 16 + 4 }}
+            onClick={handleClick}
+            onContextMenu={(e) => onContextMenu(e, entry)}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+            draggable={!isDir}
+            onDragStart={handleDragStart}
+          >
+            <div className="flex min-w-0 flex-1 items-center overflow-hidden">
+              {isDir && (
+                <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
+                  {isLoading ? (
+                    <Loader2 size={12} className="animate-spin text-muted-foreground" />
+                  ) : isExpanded ? (
+                    <ChevronDown size={12} className="text-muted-foreground" />
+                  ) : (
+                    <ChevronRight size={12} className="text-muted-foreground" />
+                  )}
+                </span>
               )}
-            </span>
-          )}
-          {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
-          <MaterialFileIcon
-            name={entry.name}
-            extension={entry.extension}
-            isDirectory={isDir}
-            isExpanded={isExpanded}
-            depth={depth}
-            size={14}
-            className="mr-1.5"
-          />
-          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        </div>
+              {!isDir && <span className="w-4 mr-0.5 flex-shrink-0" />}
+              <MaterialFileIcon
+                name={entry.name}
+                extension={entry.extension}
+                isDirectory={isDir}
+                isExpanded={isExpanded}
+                depth={depth}
+                size={14}
+                className="mr-1.5"
+              />
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+            </div>
 
-        {showTooltip && (
-          <div className="pointer-events-none absolute left-2 top-[calc(100%+2px)] z-50 max-w-[420px] rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">
-            {entry.name}
+            {showTooltip && (
+              <div className="pointer-events-none absolute left-2 top-[calc(100%+2px)] z-50 max-w-[420px] rounded border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">
+                {entry.name}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </ContextMenuTrigger>
+        {renderContextMenu?.(entry)}
+      </ContextMenu>
 
       {isDir &&
         (suppressTreeAnimations ? (
@@ -149,6 +164,8 @@ export function FileTreeNode({
               onToggle={onToggle}
               onSelect={onSelect}
               onContextMenu={onContextMenu}
+              onClick={onClick}
+              renderContextMenu={renderContextMenu}
             />
           ))
         ) : (
@@ -164,6 +181,8 @@ export function FileTreeNode({
                 onToggle={onToggle}
                 onSelect={onSelect}
                 onContextMenu={onContextMenu}
+                onClick={onClick}
+                renderContextMenu={renderContextMenu}
               />
             ))}
           </CollapseExpandMotion>
@@ -179,6 +198,7 @@ interface FileTreeNodeWrapperProps {
   onSelect: (path: string) => void
   onContextMenu: (e: React.MouseEvent, entry: DirectoryEntry) => void
   onClick?: (e: React.MouseEvent, entry: DirectoryEntry) => void
+  renderContextMenu?: (entry: DirectoryEntry) => ReactNode
 }
 
 function FileTreeNodeWrapper({
@@ -187,7 +207,8 @@ function FileTreeNodeWrapper({
   onToggle,
   onSelect,
   onContextMenu,
-  onClick
+  onClick,
+  renderContextMenu
 }: FileTreeNodeWrapperProps): React.JSX.Element {
   const isExpanded = useFileExplorerStore((state) => state.expandedDirs.has(entry.path))
   const isSelected = useFileExplorerStore((state) => state.selectedPaths.has(entry.path))
@@ -207,6 +228,7 @@ function FileTreeNodeWrapper({
       onSelect={onSelect}
       onContextMenu={onContextMenu}
       onClick={onClick}
+      renderContextMenu={renderContextMenu}
     />
   )
 }

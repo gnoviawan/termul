@@ -1,18 +1,9 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { Reorder } from 'framer-motion'
-import {
-  ChevronDown,
-  Edit2,
-  GitBranch,
-  Plus,
-  Skull,
-  Terminal as TerminalIcon,
-  X
-} from 'lucide-react'
+import { ChevronDown, GitBranch, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import {
   type FocusEvent,
   type KeyboardEvent,
-  type MouseEvent,
   useCallback,
   useEffect,
   useRef,
@@ -23,7 +14,7 @@ import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import type { Terminal } from '@/types/project'
-import { ContextMenu, type ContextMenuItem } from './ContextMenu'
+import { TabContextMenu } from './workspace/tab-context-menu'
 import { Skeleton } from './ui/skeleton'
 
 interface TerminalTabBarProps {
@@ -237,7 +228,6 @@ interface TerminalTabProps {
 function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: TerminalTabProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(terminal.name)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Worktree context: resolve the worktree associated with this specific terminal
@@ -292,45 +282,20 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
     [handleSave]
   )
 
-  const handleContextMenu = useCallback((e: MouseEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY })
-  }, [])
-
-  const handleCloseContextMenu = useCallback(() => {
-    setContextMenu(null)
-  }, [])
-
   const handleRenameFromMenu = useCallback(() => {
     setEditName(terminal.name)
     setIsEditing(true)
   }, [terminal.name])
 
-  const contextMenuItems: ContextMenuItem[] = [
-    {
-      label: 'Rename',
-      icon: <Edit2 size={12} />,
-      onClick: handleRenameFromMenu
-    },
-    {
-      label: 'Close',
-      icon: <X size={12} />,
-      onClick: onClose
-    },
-    {
-      label: 'Kill Process',
-      icon: <Skull size={12} />,
-      onClick: onClose,
-      variant: 'danger'
-    }
-  ]
-
   return (
-    <>
+    <TabContextMenu
+      kind="terminal"
+      onClose={onClose}
+      onRename={handleRenameFromMenu}
+      onKill={onClose}
+    >
       <div
         onClick={onSelect}
-        onContextMenu={handleContextMenu}
         className={cn(
           'h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-colors',
           isActive
@@ -379,15 +344,6 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
           <X size={11} />
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={contextMenuItems}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={handleCloseContextMenu}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }

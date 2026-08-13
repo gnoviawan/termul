@@ -78,6 +78,170 @@ vi.mock('@/lib/utils', async () => {
   return { ...actual }
 })
 
+// Stub the Radix context-menu primitives. The real primitives render via a
+// portal + Radix positioning + pointer-based `onSelect` that is hard to drive
+// from jsdom; this stub models the open/submenu/radio state in plain DOM so
+// the existing menu tests (open on right-click, click wiring, submenu hover,
+// Escape close, capability-gated items) assert the gating logic without the
+// Radix portal/pointer plumbing. Mirrors the FileTreeContextMenu /
+// GlobalContextMenu stub patterns.
+vi.mock('@/components/ui/context-menu', async () => {
+  const React = await import('react')
+  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
+    open: false,
+    setOpen: () => {}
+  })
+  const SubCtx = React.createContext<{ subOpen: boolean; setSubOpen: (o: boolean) => void }>({
+    subOpen: false,
+    setSubOpen: () => {}
+  })
+  const RadioCtx = React.createContext<{ value: string; onValueChange: (v: string) => void }>({
+    value: '',
+    onValueChange: () => {}
+  })
+
+  const ContextMenu = ({ children }: { children: React.ReactNode }) => {
+    const [open, setOpen] = React.useState(false)
+    React.useEffect(() => {
+      if (!open) return
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') setOpen(false)
+      }
+      document.addEventListener('keydown', onKey)
+      return () => document.removeEventListener('keydown', onKey)
+    }, [open])
+    return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
+  }
+  const ContextMenuTrigger = ({
+    children,
+    asChild
+  }: {
+    children: React.ReactNode
+    asChild?: boolean
+  }) => {
+    const { setOpen } = React.useContext(MenuCtx)
+    const merged = (e: React.MouseEvent) => {
+      // F2: mirror Radix's composeEventHandlers({ checkForDefaultPrevented: true }) —
+      // the child's onContextMenu runs first; if it called preventDefault, do NOT
+      // open. This makes the stub catch F1-type regressions (a handler that
+      // re-introduces preventDefault would suppress the menu open).
+      if (e.defaultPrevented) return
+      e.preventDefault()
+      setOpen(true)
+    }
+    if (asChild && React.isValidElement(children)) {
+      const child = children as React.ReactElement<{
+        onContextMenu?: (e: React.MouseEvent) => void
+      }>
+      return React.cloneElement(child, {
+        onContextMenu: (e: React.MouseEvent) => {
+          child.props.onContextMenu?.(e)
+          merged(e)
+        }
+      })
+    }
+    return <div onContextMenu={merged}>{children}</div>
+  }
+  const ContextMenuContent = ({ children }: { children: React.ReactNode }) => {
+    const { open } = React.useContext(MenuCtx)
+    if (!open) return null
+    return <div role="menu">{children}</div>
+  }
+  const ContextMenuItem = ({
+    children,
+    disabled,
+    onSelect,
+    variant
+  }: {
+    children: React.ReactNode
+    disabled?: boolean
+    onSelect?: () => void
+    variant?: 'default' | 'destructive'
+  }) => (
+    <div
+      role="menuitem"
+      data-disabled={disabled ? '' : undefined}
+      data-variant={variant}
+      onClick={() => {
+        if (!disabled) onSelect?.()
+      }}
+    >
+      {children}
+    </div>
+  )
+  const ContextMenuSeparator = () => <hr />
+  const ContextMenuSub = ({ children }: { children: React.ReactNode }) => {
+    const [subOpen, setSubOpen] = React.useState(false)
+    return <SubCtx.Provider value={{ subOpen, setSubOpen }}>{children}</SubCtx.Provider>
+  }
+  const ContextMenuSubTrigger = ({ children }: { children: React.ReactNode }) => {
+    const { setSubOpen } = React.useContext(SubCtx)
+    return (
+      <div role="menuitem" onMouseEnter={() => setSubOpen(true)}>
+        {children}
+      </div>
+    )
+  }
+  const ContextMenuSubContent = ({ children }: { children: React.ReactNode }) => {
+    const { subOpen } = React.useContext(SubCtx)
+    if (!subOpen) return null
+    return <div>{children}</div>
+  }
+  const ContextMenuRadioGroup = ({
+    children,
+    value,
+    onValueChange
+  }: {
+    children: React.ReactNode
+    value: string
+    onValueChange: (v: string) => void
+  }) => <RadioCtx.Provider value={{ value, onValueChange }}>{children}</RadioCtx.Provider>
+  const ContextMenuRadioItem = ({
+    children,
+    value
+  }: {
+    children: React.ReactNode
+    value: string
+  }) => {
+    const { onValueChange } = React.useContext(RadioCtx)
+    return (
+      <div role="menuitemradio" onClick={() => onValueChange(value)}>
+        {children}
+      </div>
+    )
+  }
+  const ContextMenuCheckboxItem = ({
+    children,
+    checked,
+    onSelect
+  }: {
+    children: React.ReactNode
+    checked?: boolean
+    onSelect?: () => void
+  }) => (
+    <div
+      role="menuitemcheckbox"
+      data-checked={checked ? '' : undefined}
+      onClick={() => onSelect?.()}
+    >
+      {children}
+    </div>
+  )
+  return {
+    ContextMenu,
+    ContextMenuTrigger,
+    ContextMenuContent,
+    ContextMenuItem,
+    ContextMenuSeparator,
+    ContextMenuSub,
+    ContextMenuSubTrigger,
+    ContextMenuSubContent,
+    ContextMenuRadioGroup,
+    ContextMenuRadioItem,
+    ContextMenuCheckboxItem
+  }
+})
+
 // Setup mock data
 beforeEach(() => {
   mockGetAvailableShells.mockReset()
@@ -307,6 +471,62 @@ describe('ProjectSidebar Context Menu', () => {
     await waitFor(() => {
       expect(screen.getByText('Select Color')).toBeInTheDocument()
     })
+  })
+})
+
+// F1/F2 regression guards: assert the menu OPENS on right-click for each
+// surface. The F2 stub (checkForDefaultPrevented) skips open if the child
+// handler calls preventDefault — so if F1's preventDefault removal is ever
+// reverted in handleContextMenu / handleGroupContextMenu, these tests fail
+// (the menu items vanish because Radix's open step is skipped).
+describe('ProjectSidebar context menu open regression (F1/F2)', () => {
+  beforeEach(() => {
+    useProjectStore.setState({ groups: [] })
+  })
+
+  it('project row menu opens on right-click', () => {
+    renderWithRouter()
+
+    fireEvent.contextMenu(screen.getByText('Project One'))
+
+    expect(screen.getByText('Rename')).toBeInTheDocument()
+    expect(screen.getByText('Archive')).toBeInTheDocument()
+    expect(screen.getByText('Delete')).toBeInTheDocument()
+  })
+
+  it('group header menu opens on right-click', () => {
+    useProjectStore.setState({
+      groups: [{ id: 'group-1', name: 'My Folder', projectIds: ['1'], isCollapsed: false }]
+    })
+    renderWithRouter()
+
+    fireEvent.contextMenu(screen.getByText('My Folder'))
+
+    expect(screen.getByText('Rename Group')).toBeInTheDocument()
+    expect(screen.getByText('Change Color')).toBeInTheDocument()
+    expect(screen.getByText('Delete Group (Keep Projects)')).toBeInTheDocument()
+  })
+
+  it('archived project menu opens on right-click', async () => {
+    const archived: Project[] = [
+      { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
+      {
+        id: '2',
+        name: 'Archived Project',
+        color: 'green',
+        gitBranch: 'develop',
+        isArchived: true
+      }
+    ]
+    renderWithRouter({ projects: archived })
+
+    fireEvent.click(screen.getByText(/Archived \(1\)/))
+    await waitFor(() => expect(screen.getByText('Archived Project')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('Archived Project'))
+
+    expect(screen.getByText('Restore')).toBeInTheDocument()
+    expect(screen.getByText('Delete')).toBeInTheDocument()
   })
 })
 

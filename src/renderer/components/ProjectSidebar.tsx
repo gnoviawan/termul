@@ -22,6 +22,19 @@ import {
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
@@ -37,19 +50,10 @@ import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/termina
 import type { Project, ProjectColor } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
-import type { ContextMenuItem, ContextMenuSubItem } from './ContextMenu'
-import { ContextMenu } from './ContextMenu'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
 import { ProjectChatList } from './ProjectChatList'
 import { SSHPanel } from './ssh/SSHPanel'
-
-interface ContextMenuState {
-  isOpen: boolean
-  x: number
-  y: number
-  projectId: string
-}
 
 interface ColorPickerState {
   isOpen: boolean
@@ -139,12 +143,12 @@ export function ProjectSidebar({
     groupName: '',
     deleteProjects: false
   })
-  const [groupContextMenu, setGroupContextMenu] = useState({
-    isOpen: false,
-    x: 0,
-    y: 0,
-    groupId: ''
-  })
+
+  // Last right-click coordinates, captured so the `ColorPickerPopover` (a
+  // Popover, not a Radix context menu — kept as-is per spec) can open near the
+  // pointer after a "Change Color" menu item is selected. The Radix
+  // `<ContextMenuTrigger>` wrapping each row owns menu open/positioning.
+  const contextMenuPosRef = useRef({ x: 0, y: 0 })
 
   const [activeDragOverGroupId, setActiveDragOverGroupId] = useState<string | null>(null)
   const activeDragOverGroupIdRef = useRef<string | null>(null)
@@ -156,14 +160,6 @@ export function ProjectSidebar({
   // Expanded projects — expansion is controlled solely by the chevron.
   // Selecting a project does not auto-expand its chat list, keeping the list uncluttered.
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set<string>())
-
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
-    isOpen: false,
-    x: 0,
-    y: 0,
-    projectId: ''
-  })
 
   // Inline editing state
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -314,25 +310,15 @@ export function ProjectSidebar({
     [addProject, moveProjectToGroup]
   )
 
-  const handleGroupContextMenu = useCallback(
-    (e: React.MouseEvent, groupId: string): void => {
-      e.preventDefault()
-      e.stopPropagation()
-      const group = groups.find((g) => g.id === groupId)
-      if (group) {
-        setGroupContextMenu({
-          isOpen: true,
-          x: e.clientX,
-          y: e.clientY,
-          groupId
-        })
-      }
-    },
-    [groups]
-  )
-
-  const closeGroupContextMenu = useCallback((): void => {
-    setGroupContextMenu((prev) => ({ ...prev, isOpen: false }))
+  const handleGroupContextMenu = useCallback((e: React.MouseEvent): void => {
+    // F1: no preventDefault() — Radix's `<ContextMenuTrigger asChild>` composes
+    // this handler ahead of its own handleOpen (checkForDefaultPrevented: true);
+    // a preventDefault here would make Radix skip opening the menu. Radix's
+    // own handleContextMenu already suppresses the native menu.
+    e.stopPropagation()
+    // Capture the pointer so the `ColorPickerPopover` (opened from the group
+    // menu's "Change Color" item) opens near the right-click.
+    contextMenuPosRef.current = { x: e.clientX, y: e.clientY }
   }, [])
 
   const handleStartRenameGroup = useCallback(
@@ -368,62 +354,64 @@ export function ProjectSidebar({
     setGroupDeleteConfirm({ isOpen: false, groupId: '', groupName: '', deleteProjects: false })
   }, [groupDeleteConfirm.groupId, groupDeleteConfirm.deleteProjects, removeGroup])
 
-  const getGroupMenuItems = useCallback(
-    (groupId: string): ContextMenuItem[] => {
-      const activeProjects = projects.filter((p) => !p.isArchived)
+  const renderGroupContextMenu = useCallback(
+    (groupId: string): React.ReactNode => {
       const currentGroup = groups.find((g) => g.id === groupId)
-      const addProjectSubmenu: ContextMenuSubItem[] = [
-        ...activeProjects.map((p) => {
-          const isProjectInGroup = currentGroup?.projectIds.includes(p.id) ?? false
-          return {
-            label: p.name,
-            value: p.id,
-            isSelected: isProjectInGroup
-          }
-        }),
-        {
-          label: '+ Import Project...',
-          value: 'import-project',
-          isSelected: false
-        }
-      ]
-
-      return [
-        {
-          label: 'Rename Group',
-          icon: <Edit2 size={14} />,
-          onClick: () => handleStartRenameGroup(groupId)
-        },
-        {
-          label: 'Change Color',
-          icon: <Palette size={14} />,
-          onClick: () =>
-            handleOpenColorPicker(groupId, 'group', groupContextMenu.x, groupContextMenu.y)
-        },
-        {
-          label: 'Add Project',
-          icon: <Plus size={14} />,
-          submenu: addProjectSubmenu,
-          onSubmenuSelect: (projectId: string) => {
-            if (projectId === 'import-project') {
-              void handleAddNewProjectToGroup(groupId)
-            } else {
-              moveProjectToGroup(projectId, groupId)
+      const activeProjects = projects.filter((p) => !p.isArchived)
+      return (
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem onSelect={() => handleStartRenameGroup(groupId)}>
+            <Edit2 className="mr-2 h-4 w-4" /> Rename Group
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() =>
+              handleOpenColorPicker(
+                groupId,
+                'group',
+                contextMenuPosRef.current.x,
+                contextMenuPosRef.current.y
+              )
             }
-          }
-        },
-        {
-          label: 'Delete Group (Keep Projects)',
-          icon: <Trash2 size={14} />,
-          onClick: () => handleConfirmDeleteGroup(groupId, false)
-        },
-        {
-          label: 'Delete Group & All Projects',
-          icon: <Trash2 size={14} />,
-          onClick: () => handleConfirmDeleteGroup(groupId, true),
-          variant: 'danger'
-        }
-      ]
+          >
+            <Palette className="mr-2 h-4 w-4" /> Change Color
+          </ContextMenuItem>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Plus className="mr-2 h-4 w-4" /> Add Project
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-48">
+              {activeProjects.map((p) => {
+                const isProjectInGroup = currentGroup?.projectIds.includes(p.id) ?? false
+                return (
+                  <ContextMenuCheckboxItem
+                    key={p.id}
+                    checked={isProjectInGroup}
+                    onSelect={() =>
+                      moveProjectToGroup(p.id, isProjectInGroup ? null : groupId)
+                    }
+                  >
+                    {p.name}
+                  </ContextMenuCheckboxItem>
+                )
+              })}
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => void handleAddNewProjectToGroup(groupId)}>
+                <FolderPlus className="mr-2 h-4 w-4" /> Import Project...
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleConfirmDeleteGroup(groupId, false)}>
+            <Trash2 className="mr-2 h-4 w-4" /> Delete Group (Keep Projects)
+          </ContextMenuItem>
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => handleConfirmDeleteGroup(groupId, true)}
+          >
+            <Trash2 className="mr-2 h-4 w-4" /> Delete Group &amp; All Projects
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )
     },
     [
       handleStartRenameGroup,
@@ -432,25 +420,18 @@ export function ProjectSidebar({
       groups,
       moveProjectToGroup,
       handleAddNewProjectToGroup,
-      handleOpenColorPicker,
-      groupContextMenu.x,
-      groupContextMenu.y
+      handleOpenColorPicker
     ]
   )
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, projectId: string): void => {
-    e.preventDefault()
+  const handleContextMenu = useCallback((e: React.MouseEvent): void => {
+    // F1: no preventDefault() — Radix's `<ContextMenuTrigger asChild>` composes
+    // this handler ahead of its own handleOpen (checkForDefaultPrevented: true);
+    // a preventDefault here would make Radix skip opening the menu. Radix's
+    // own handleContextMenu already suppresses the native menu.
     e.stopPropagation()
-    setContextMenu({
-      isOpen: true,
-      x: e.clientX,
-      y: e.clientY,
-      projectId
-    })
-  }, [])
-
-  const closeContextMenu = useCallback((): void => {
-    setContextMenu((prev) => ({ ...prev, isOpen: false }))
+    // Capture the pointer for the ColorPickerPopover.
+    contextMenuPosRef.current = { x: e.clientX, y: e.clientY }
   }, [])
 
   const handleStartRename = useCallback(
@@ -563,124 +544,121 @@ export function ProjectSidebar({
     }
   }, [])
 
-  const getContextMenuItems = useCallback(
-    (projectId: string): ContextMenuItem[] => {
-      const project = projects.find((p) => p.id === projectId)
-      const isGitRepo = project?.isGitRepo ?? false
-      const shellSubmenu: ContextMenuSubItem[] =
-        availableShells?.available.map((shell) => ({
-          label: shell.displayName,
-          value: shell.path,
-          isSelected: (() => {
-            const projectShell = project?.defaultShell
-            if (!projectShell) return false
-            if (projectShell === shell.path) return true
-            if (projectShell === shell.name) return true
-            const pathBasename = shell.path.split(/[\\/]/).pop()
-            return projectShell === pathBasename
-          })()
-        })) || []
+  const renderProjectContextMenu = useCallback(
+    (project: Project): React.ReactNode => {
+      const isGitRepo = project.isGitRepo ?? false
+      const currentGroup = groups.find((g) => g.projectIds.includes(project.id))
+      const currentShellPath = availableShells?.available.find((s) => {
+        const projectShell = project.defaultShell
+        if (!projectShell) return false
+        if (projectShell === s.path || projectShell === s.name) return true
+        const pathBasename = s.path.split(/[\\/]/).pop()
+        return projectShell === pathBasename
+      })?.path
 
-      const items: ContextMenuItem[] = [
-        {
-          label: 'Settings',
-          icon: <Settings size={14} />,
-          onClick: () => {
-            selectProject(projectId)
-            navigate('/settings')
-          }
-        },
-        {
-          label: 'Rename',
-          icon: <Edit2 size={14} />,
-          onClick: () => handleStartRename(projectId)
-        },
-        {
-          label: 'Project Settings',
-          icon: <Settings size={14} />,
-          onClick: () => handleOpenSettings(projectId)
-        },
-        {
-          label: 'Change Color',
-          icon: <Palette size={14} />,
-          onClick: () => handleOpenColorPicker(projectId, 'project', contextMenu.x, contextMenu.y)
-        }
-      ]
+      return (
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem
+            onSelect={() => {
+              selectProject(project.id)
+              navigate('/settings')
+            }}
+          >
+            <Settings className="mr-2 h-4 w-4" /> Settings
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleStartRename(project.id)}>
+            <Edit2 className="mr-2 h-4 w-4" /> Rename
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleOpenSettings(project.id)}>
+            <Settings className="mr-2 h-4 w-4" /> Project Settings
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() =>
+              handleOpenColorPicker(
+                project.id,
+                'project',
+                contextMenuPosRef.current.x,
+                contextMenuPosRef.current.y
+              )
+            }
+          >
+            <Palette className="mr-2 h-4 w-4" /> Change Color
+          </ContextMenuItem>
 
-      if (shellSubmenu.length > 0) {
-        items.push({
-          label: 'Default Shell',
-          icon: <Terminal size={14} />,
-          submenu: shellSubmenu,
-          onSubmenuSelect: (shellPath: string) => {
-            onUpdateProject(projectId, { defaultShell: shellPath })
-          }
-        })
-      }
+          {availableShells && availableShells.available.length > 0 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <Terminal className="mr-2 h-4 w-4" /> Default Shell
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-48">
+                <ContextMenuRadioGroup
+                  value={currentShellPath ?? ''}
+                  onValueChange={(shellPath: string) =>
+                    onUpdateProject(project.id, { defaultShell: shellPath })
+                  }
+                >
+                  {availableShells.available.map((shell) => (
+                    <ContextMenuRadioItem key={shell.path} value={shell.path}>
+                      {shell.displayName}
+                    </ContextMenuRadioItem>
+                  ))}
+                </ContextMenuRadioGroup>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
 
-      const currentGroup = groups.find((g) => g.projectIds.includes(projectId))
-      const groupSubmenu: ContextMenuSubItem[] = [
-        {
-          label: 'No Group (Root)',
-          value: 'root',
-          isSelected: !currentGroup
-        },
-        ...groups.map((g) => ({
-          label: g.name,
-          value: g.id,
-          isSelected: currentGroup?.id === g.id
-        })),
-        {
-          label: '+ Create New Group...',
-          value: 'new-group',
-          isSelected: false
-        }
-      ]
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Folder className="mr-2 h-4 w-4" /> Move to Group
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-48">
+              <ContextMenuRadioGroup
+                value={currentGroup?.id ?? 'root'}
+                onValueChange={(targetGroupId: string) => {
+                  if (targetGroupId === 'root') {
+                    moveProjectToGroup(project.id, null)
+                  } else {
+                    moveProjectToGroup(project.id, targetGroupId)
+                  }
+                }}
+              >
+                <ContextMenuRadioItem value="root">No Group (Root)</ContextMenuRadioItem>
+                {groups.map((g) => (
+                  <ContextMenuRadioItem key={g.id} value={g.id}>
+                    {g.name}
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onSelect={() => setNewGroupModal({ isOpen: true, projectIdToMove: project.id })}
+              >
+                <FolderPlus className="mr-2 h-4 w-4" /> Create New Group...
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
 
-      items.push({
-        label: 'Move to Group',
-        icon: <Folder size={14} />,
-        submenu: groupSubmenu,
-        onSubmenuSelect: (targetGroupId: string) => {
-          if (targetGroupId === 'root') {
-            moveProjectToGroup(projectId, null)
-          } else if (targetGroupId === 'new-group') {
-            setNewGroupModal({ isOpen: true, projectIdToMove: projectId })
-          } else {
-            moveProjectToGroup(projectId, targetGroupId)
-          }
-        }
-      })
-
-      items.push(
-        {
-          label: isGitRepo ? 'New Worktree' : 'New Worktree (no git repo)',
-          icon: <GitBranch size={14} />,
-          onClick: () => {
-            if (isGitRepo) setNewWorktreeModal({ isOpen: true, projectId })
-          },
-          disabled: !isGitRepo
-        },
-        {
-          label: 'Archive',
-          icon: <Archive size={14} />,
-          onClick: () => onArchiveProject(projectId)
-        },
-        {
-          label: 'Delete',
-          icon: <Trash2 size={14} />,
-          onClick: () => handleConfirmDelete(projectId),
-          variant: 'danger' as const
-        }
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            disabled={!isGitRepo}
+            onSelect={() => {
+              if (isGitRepo) setNewWorktreeModal({ isOpen: true, projectId: project.id })
+            }}
+          >
+            <GitBranch className="mr-2 h-4 w-4" />{' '}
+            {isGitRepo ? 'New Worktree' : 'New Worktree (no git repo)'}
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onArchiveProject(project.id)}>
+            <Archive className="mr-2 h-4 w-4" /> Archive
+          </ContextMenuItem>
+          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
+            <Trash2 className="mr-2 h-4 w-4" /> Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
       )
-
-      return items
     },
     [
-      projects,
       availableShells,
-      contextMenu.x,
-      contextMenu.y,
       handleStartRename,
       handleOpenSettings,
       handleOpenColorPicker,
@@ -694,21 +672,18 @@ export function ProjectSidebar({
     ]
   )
 
-  const getArchivedContextMenuItems = useCallback(
-    (projectId: string): ContextMenuItem[] => {
-      return [
-        {
-          label: 'Restore',
-          icon: <RotateCcw size={14} />,
-          onClick: () => onRestoreProject(projectId)
-        },
-        {
-          label: 'Delete',
-          icon: <Trash2 size={14} />,
-          onClick: () => handleConfirmDelete(projectId),
-          variant: 'danger' as const
-        }
-      ]
+  const renderArchivedProjectContextMenu = useCallback(
+    (project: Project): React.ReactNode => {
+      return (
+        <ContextMenuContent className="w-48">
+          <ContextMenuItem onSelect={() => onRestoreProject(project.id)}>
+            <RotateCcw className="mr-2 h-4 w-4" /> Restore
+          </ContextMenuItem>
+          <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
+            <Trash2 className="mr-2 h-4 w-4" /> Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )
     },
     [onRestoreProject, handleConfirmDelete]
   )
@@ -804,18 +779,6 @@ export function ProjectSidebar({
   }, [activeProjectId, isSearching, filteredActiveProjects, filteredArchivedProjects])
   const hasNoSearchResults =
     isSearching && filteredActiveProjects.length === 0 && filteredArchivedProjects.length === 0
-
-  // Determine which menu items to show based on project archived status
-  const getMenuItems = useCallback(
-    (projectId: string): ContextMenuItem[] => {
-      const project = projects.find((p) => p.id === projectId)
-      if (project?.isArchived) {
-        return getArchivedContextMenuItems(projectId)
-      }
-      return getContextMenuItems(projectId)
-    },
-    [projects, getContextMenuItems, getArchivedContextMenuItems]
-  )
 
   return (
     <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
@@ -940,72 +903,79 @@ export function ProjectSidebar({
                     >
                       <div className="flex flex-col">
                         {/* Folder Header */}
-                        <div
-                          onClick={() => toggleGroupCollapse(group.id)}
-                          onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault()
-                              toggleGroupCollapse(group.id)
-                            }
-                          }}
-                          className={cn(
-                            'w-full flex items-center h-7 px-1.5 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
-                            activeDragOverGroupId === group.id &&
-                              'bg-primary/20 border border-primary/50'
-                          )}
-                          data-group-id={group.id}
-                        >
-                          <span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
-                            {isCollapsed ? (
-                              <ChevronRight size={12} className="text-muted-foreground" />
-                            ) : (
-                              <ChevronDown size={12} className="text-muted-foreground" />
-                            )}
-                          </span>
-                          <span
-                            className={cn(
-                              'mr-1.5 flex-shrink-0 inline-flex items-center',
-                              group.color ? getColorClasses(group.color).text : 'text-primary/80'
-                            )}
-                          >
-                            {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-                          </span>
-                          {editingGroupId === group.id ? (
-                            <input
-                              type="text"
-                              value={editGroupName}
-                              onChange={(e) => setEditGroupName(e.target.value)}
+                        <ContextMenu>
+                          <ContextMenuTrigger asChild>
+                            <div
+                              onClick={() => toggleGroupCollapse(group.id)}
+                              onContextMenu={handleGroupContextMenu}
+                              role="button"
+                              tabIndex={0}
                               onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  if (editGroupName.trim()) {
-                                    renameGroup(group.id, editGroupName.trim())
-                                  }
-                                  setEditingGroupId(null)
-                                } else if (e.key === 'Escape') {
-                                  setEditingGroupId(null)
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  toggleGroupCollapse(group.id)
                                 }
                               }}
-                              onBlur={() => {
-                                if (editGroupName.trim()) {
-                                  renameGroup(group.id, editGroupName.trim())
-                                }
-                                setEditingGroupId(null)
-                              }}
-                              className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span className="text-sm font-medium text-sidebar-foreground truncate flex-1">
-                              {group.name}
-                            </span>
-                          )}
-                          <span className="text-xs text-muted-foreground/60 px-2 font-normal">
-                            {gpProjects.length}
-                          </span>
-                        </div>
+                              className={cn(
+                                'w-full flex items-center h-7 px-1.5 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
+                                activeDragOverGroupId === group.id &&
+                                  'bg-primary/20 border border-primary/50'
+                              )}
+                              data-group-id={group.id}
+                            >
+                              <span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
+                                {isCollapsed ? (
+                                  <ChevronRight size={12} className="text-muted-foreground" />
+                                ) : (
+                                  <ChevronDown size={12} className="text-muted-foreground" />
+                                )}
+                              </span>
+                              <span
+                                className={cn(
+                                  'mr-1.5 flex-shrink-0 inline-flex items-center',
+                                  group.color
+                                    ? getColorClasses(group.color).text
+                                    : 'text-primary/80'
+                                )}
+                              >
+                                {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
+                              </span>
+                              {editingGroupId === group.id ? (
+                                <input
+                                  type="text"
+                                  value={editGroupName}
+                                  onChange={(e) => setEditGroupName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      if (editGroupName.trim()) {
+                                        renameGroup(group.id, editGroupName.trim())
+                                      }
+                                      setEditingGroupId(null)
+                                    } else if (e.key === 'Escape') {
+                                      setEditingGroupId(null)
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    if (editGroupName.trim()) {
+                                      renameGroup(group.id, editGroupName.trim())
+                                    }
+                                    setEditingGroupId(null)
+                                  }}
+                                  className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <span className="text-sm font-medium text-sidebar-foreground truncate flex-1">
+                                  {group.name}
+                                </span>
+                              )}
+                              <span className="text-xs text-muted-foreground/60 px-2 font-normal">
+                                {gpProjects.length}
+                              </span>
+                            </div>
+                          </ContextMenuTrigger>
+                          {renderGroupContextMenu(group.id)}
+                        </ContextMenu>
 
                         {/* Projects in Group */}
                         <CollapseExpandMotion
@@ -1090,7 +1060,8 @@ export function ProjectSidebar({
                                       onSelectProject(project.id)
                                       navigate('/')
                                     }}
-                                    onContextMenu={(e) => handleContextMenu(e, project.id)}
+                                    onContextMenu={handleContextMenu}
+                                    renderContextMenu={renderProjectContextMenu}
                                     onEditNameChange={setEditName}
                                     onSaveRename={() => handleSaveRename(project.id)}
                                     onCancelRename={handleCancelRename}
@@ -1184,7 +1155,8 @@ export function ProjectSidebar({
                             onSelectProject(project.id)
                             navigate('/')
                           }}
-                          onContextMenu={(e) => handleContextMenu(e, project.id)}
+                          onContextMenu={handleContextMenu}
+                          renderContextMenu={renderProjectContextMenu}
                           onEditNameChange={setEditName}
                           onSaveRename={() => handleSaveRename(project.id)}
                           onCancelRename={handleCancelRename}
@@ -1230,7 +1202,8 @@ export function ProjectSidebar({
                           onSelectProject(project.id)
                           navigate('/')
                         }}
-                        onContextMenu={(e) => handleContextMenu(e, project.id)}
+                        onContextMenu={handleContextMenu}
+                        renderContextMenu={renderArchivedProjectContextMenu}
                       />
                     )
                   })}
@@ -1253,26 +1226,6 @@ export function ProjectSidebar({
           <span className="text-xs text-muted-foreground">Termul v0.4.10</span>
         </div>
       </div>
-
-      {/* Context Menu */}
-      {contextMenu.isOpen && (
-        <ContextMenu
-          items={getMenuItems(contextMenu.projectId)}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={closeContextMenu}
-        />
-      )}
-
-      {/* Group Context Menu */}
-      {groupContextMenu.isOpen && (
-        <ContextMenu
-          items={getGroupMenuItems(groupContextMenu.groupId)}
-          x={groupContextMenu.x}
-          y={groupContextMenu.y}
-          onClose={closeGroupContextMenu}
-        />
-      )}
 
       {/* Group Delete Confirmation Dialog */}
       <ConfirmDialog
@@ -1492,6 +1445,7 @@ interface ProjectItemProps {
   onSaveRename: () => void
   onCancelRename: () => void
   onSettingsClick: () => void
+  renderContextMenu?: (project: Project) => React.ReactNode
 }
 
 const ProjectItem = memo(function ProjectItem({
@@ -1509,7 +1463,8 @@ const ProjectItem = memo(function ProjectItem({
   onEditNameChange,
   onSaveRename,
   onCancelRename,
-  onSettingsClick
+  onSettingsClick,
+  renderContextMenu
 }: ProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -1534,114 +1489,119 @@ const ProjectItem = memo(function ProjectItem({
 
   return (
     <div data-testid={`project-item-${project.id}`}>
-      <div
-        onClick={isEditing ? undefined : onClick}
-        onContextMenu={onContextMenu}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            if (!isEditing) onClick()
-          }
-        }}
-        className={cn(
-          'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
-          isActive
-            ? `${colors.border} bg-sidebar-accent`
-            : `${colors.borderMuted} hover:bg-sidebar-accent/50`
-        )}
-        aria-current={isActive ? 'page' : undefined}
-        aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
-      >
-        {/* Expand/collapse chevron — every project can have chats, so the
-            chevron always shows (not only git projects). */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleExpand()
-          }}
-          className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
-          aria-label={isExpanded ? 'Collapse chats' : 'Expand chats'}
-          aria-expanded={isExpanded}
-        >
-          {isExpanded ? (
-            <ChevronDown size={12} className="text-muted-foreground" />
-          ) : (
-            <ChevronRight size={12} className="text-muted-foreground" />
-          )}
-        </button>
-
-        {isEditing ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={editName}
-            onChange={(e) => onEditNameChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={onSaveRename}
-            className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
-            onClick={(e) => e.stopPropagation()}
-          />
-        ) : (
-          <span
-            className={cn(
-              'text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2',
-              // flex-1 min-w-0 is required for truncate to clip inside a flex row
-              isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
-            )}
-            title={project.name}
-          >
-            {project.name}
-          </span>
-        )}
-        {hasError && (
-          <span
-            className="flex items-center mr-2 text-yellow-500 animate-pulse"
-            title="Terminal crashed"
-          >
-            <AlertTriangle size={12} />
-          </span>
-        )}
-        {!isEditing && shortcut && (
-          <span
-            className={cn(
-              'text-xs font-mono text-muted-foreground transition-opacity mr-3',
-              isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-            )}
-          >
-            {shortcut}
-          </span>
-        )}
-        {!isEditing && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onSettingsClick()
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            onClick={isEditing ? undefined : onClick}
+            onContextMenu={onContextMenu}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                if (!isEditing) onClick()
+              }
             }}
-            className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-            title="Project settings"
-            aria-label={`Settings for ${project.name}`}
+            className={cn(
+              'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
+              isActive
+                ? `${colors.border} bg-sidebar-accent`
+                : `${colors.borderMuted} hover:bg-sidebar-accent/50`
+            )}
+            aria-current={isActive ? 'page' : undefined}
+            aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
           >
-            <Settings size={12} className="text-muted-foreground" />
-          </button>
-        )}
-        {!isEditing && hasActivity && (
-          <span
-            className="flex items-center mr-3"
-            title="Activity"
-            style={{ isolation: 'isolate' }}
-          >
-            <MonochromeSpinner
-              pattern="diagonal"
-              cellSize={2}
-              cellGap={1}
-              cellRadius={0.5}
-              label="Project activity"
-            />
-          </span>
-        )}
-      </div>
+            {/* Expand/collapse chevron — every project can have chats, so the
+            chevron always shows (not only git projects). */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleExpand()
+              }}
+              className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
+              aria-label={isExpanded ? 'Collapse chats' : 'Expand chats'}
+              aria-expanded={isExpanded}
+            >
+              {isExpanded ? (
+                <ChevronDown size={12} className="text-muted-foreground" />
+              ) : (
+                <ChevronRight size={12} className="text-muted-foreground" />
+              )}
+            </button>
+
+            {isEditing ? (
+              <input
+                ref={inputRef}
+                type="text"
+                value={editName}
+                onChange={(e) => onEditNameChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={onSaveRename}
+                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span
+                className={cn(
+                  'text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2',
+                  // flex-1 min-w-0 is required for truncate to clip inside a flex row
+                  isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
+                )}
+                title={project.name}
+              >
+                {project.name}
+              </span>
+            )}
+            {hasError && (
+              <span
+                className="flex items-center mr-2 text-yellow-500 animate-pulse"
+                title="Terminal crashed"
+              >
+                <AlertTriangle size={12} />
+              </span>
+            )}
+            {!isEditing && shortcut && (
+              <span
+                className={cn(
+                  'text-xs font-mono text-muted-foreground transition-opacity mr-3',
+                  isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                )}
+              >
+                {shortcut}
+              </span>
+            )}
+            {!isEditing && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSettingsClick()
+                }}
+                className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                title="Project settings"
+                aria-label={`Settings for ${project.name}`}
+              >
+                <Settings size={12} className="text-muted-foreground" />
+              </button>
+            )}
+            {!isEditing && hasActivity && (
+              <span
+                className="flex items-center mr-3"
+                title="Activity"
+                style={{ isolation: 'isolate' }}
+              >
+                <MonochromeSpinner
+                  pattern="diagonal"
+                  cellSize={2}
+                  cellGap={1}
+                  cellRadius={0.5}
+                  label="Project activity"
+                />
+              </span>
+            )}
+          </div>
+        </ContextMenuTrigger>
+        {renderContextMenu?.(project)}
+      </ContextMenu>
 
       {/* Project chat history sub-items */}
       <CollapseExpandMotion open={isExpanded} className="ml-5 border-l border-sidebar-border">
@@ -1657,6 +1617,7 @@ interface ArchivedProjectItemProps {
   project: Project
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
+  renderContextMenu?: (project: Project) => React.ReactNode
 }
 
 function ArchivedProjectItem({
@@ -1664,48 +1625,58 @@ function ArchivedProjectItem({
   hasActivity,
   hasError,
   onClick,
-  onContextMenu
+  onContextMenu,
+  renderContextMenu
 }: ArchivedProjectItemProps): React.JSX.Element {
   const colors = getColorClasses(project.color)
 
   return (
-    <button
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      className={cn(
-        'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
-        colors.borderMuted
-      )}
-      aria-label={`Archived project: ${project.name}`}
-      data-testid={`archived-project-item-${project.id}`}
-    >
-      <span
-        className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
-        title={project.name}
-      >
-        {project.name}
-      </span>
-      {hasActivity && (
-        <span className="flex items-center mr-2" title="Activity" style={{ isolation: 'isolate' }}>
-          <MonochromeSpinner
-            pattern="diagonal"
-            cellSize={2}
-            cellGap={1}
-            cellRadius={0.5}
-            label="Project activity"
-          />
-        </span>
-      )}
-      {hasError && (
-        <span
-          className="flex items-center mr-2 text-yellow-500 animate-pulse"
-          title="Terminal crashed"
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          onClick={onClick}
+          onContextMenu={onContextMenu}
+          className={cn(
+            'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
+            colors.borderMuted
+          )}
+          aria-label={`Archived project: ${project.name}`}
+          data-testid={`archived-project-item-${project.id}`}
         >
-          <AlertTriangle size={10} />
-        </span>
-      )}
-      <Archive size={12} className="text-muted-foreground mr-3" />
-    </button>
+          <span
+            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
+            title={project.name}
+          >
+            {project.name}
+          </span>
+          {hasActivity && (
+            <span
+              className="flex items-center mr-2"
+              title="Activity"
+              style={{ isolation: 'isolate' }}
+            >
+              <MonochromeSpinner
+                pattern="diagonal"
+                cellSize={2}
+                cellGap={1}
+                cellRadius={0.5}
+                label="Project activity"
+              />
+            </span>
+          )}
+          {hasError && (
+            <span
+              className="flex items-center mr-2 text-yellow-500 animate-pulse"
+              title="Terminal crashed"
+            >
+              <AlertTriangle size={10} />
+            </span>
+          )}
+          <Archive size={12} className="text-muted-foreground mr-3" />
+        </button>
+      </ContextMenuTrigger>
+      {renderContextMenu?.(project)}
+    </ContextMenu>
   )
 }
 

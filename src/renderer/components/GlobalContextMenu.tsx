@@ -12,7 +12,7 @@
  * P3: the disabled flags + the focused element are snapshotted synchronously
  * on the capture-phase `contextmenu` event (BEFORE Radix moves focus to the
  * first menu item). `onOpenChange(true)` reads that snapshot. The saved
- * element is re-focused in each item's `onClick` so `execCommand` + the
+ * element is re-focused in each item's `onSelect` so `execCommand` + the
  * `text-edit-ops` helpers operate on the element that was actually right-
  * clicked, not the menu item Radix focused for accessibility.
  *
@@ -137,7 +137,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
       <ContextMenuContent className="w-48">
         <ContextMenuItem
           disabled={!hasSelection}
-          onClick={() => {
+          onSelect={() => {
             refocusEditable()
             void copySelection()
           }}
@@ -146,7 +146,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasSelection || !isMutableEditableFocused}
-          onClick={() => {
+          onSelect={() => {
             refocusEditable()
             void cutSelection()
           }}
@@ -156,7 +156,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
         <ContextMenuSeparator />
         <ContextMenuItem
           disabled={!isMutableEditableFocused}
-          onClick={() => {
+          onSelect={() => {
             refocusEditable()
             void pasteIntoFocused()
           }}
@@ -165,7 +165,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!isMutableEditableFocused}
-          onClick={() => {
+          onSelect={() => {
             refocusEditable()
             selectAllFocused()
           }}

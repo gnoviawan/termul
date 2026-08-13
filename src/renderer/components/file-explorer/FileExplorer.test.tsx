@@ -139,7 +139,7 @@ vi.mock('./FileTreeNode', () => ({
 }))
 
 vi.mock('./FileTreeContextMenu', () => ({
-  FileTreeContextMenu: () => null
+  FileTreeContextMenuContent: () => null
 }))
 
 beforeEach(() => {

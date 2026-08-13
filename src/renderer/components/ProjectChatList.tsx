@@ -2,8 +2,13 @@ import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import type { ContextMenuItem } from '@/components/ContextMenu'
-import { ContextMenu } from '@/components/ContextMenu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
 import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { clipboardApi, openerApi } from '@/lib/api'
@@ -104,13 +109,6 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
     return () => observer.disconnect()
   }, [hasMore, visibleCount])
 
-  const [chatContextMenu, setChatContextMenu] = useState<{
-    isOpen: boolean
-    x: number
-    y: number
-    entry: ProjectChatEntry | null
-  }>({ isOpen: false, x: 0, y: 0, entry: null })
-
   // Delete is irreversible — route it through a confirmation dialog (mirrors
   // the project/group delete pattern) instead of deleting on the first click.
   const [deleteConfirm, setDeleteConfirm] = useState<ProjectChatEntry | null>(null)
@@ -182,54 +180,6 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
     [handleCopyPath]
   )
 
-  const openChatContextMenu = useCallback((e: React.MouseEvent, entry: ProjectChatEntry) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setChatContextMenu({ isOpen: true, x: e.clientX, y: e.clientY, entry })
-  }, [])
-
-  const closeChatContextMenu = useCallback(() => {
-    setChatContextMenu((prev) => ({ ...prev, isOpen: false }))
-  }, [])
-
-  const getChatContextMenuItems = useCallback(
-    (entry: ProjectChatEntry): ContextMenuItem[] => {
-      const hasCwd = Boolean(entry.cwd)
-      return [
-        {
-          label: 'Open Terminal Here',
-          icon: <Terminal size={14} />,
-          onClick: () => void handleOpenTerminal(entry),
-          disabled: !hasCwd
-        },
-        {
-          label: 'Open in File Explorer',
-          icon: <FolderOpen size={14} />,
-          onClick: () => {
-            if (entry.cwd) void handleOpenInFileExplorer(entry.cwd)
-          },
-          disabled: !hasCwd
-        },
-        {
-          label: 'Copy Path',
-          icon: <Copy size={14} />,
-          onClick: () => {
-            if (entry.cwd) void handleCopyPath(entry.cwd)
-          },
-          disabled: !hasCwd
-        },
-        { type: 'separator' as const },
-        {
-          label: 'Delete Chat',
-          icon: <Trash2 size={14} />,
-          onClick: () => setDeleteConfirm(entry),
-          variant: 'danger' as const
-        }
-      ]
-    },
-    [handleOpenTerminal, handleOpenInFileExplorer, handleCopyPath]
-  )
-
   return (
     <div className="flex flex-col">
       {/* Per-project chat search — scoped to this project's chats only. */}
@@ -289,7 +239,9 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
               entry={entry}
               onOpen={handleOpen}
               onOpenTerminal={handleOpenTerminal}
-              onContextMenu={openChatContextMenu}
+              onOpenInFileExplorer={handleOpenInFileExplorer}
+              onCopyPath={handleCopyPath}
+              onDelete={setDeleteConfirm}
             />
           ))
         )}
@@ -305,15 +257,6 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
           </div>
         )}
       </div>
-
-      {chatContextMenu.isOpen && chatContextMenu.entry && (
-        <ContextMenu
-          items={getChatContextMenuItems(chatContextMenu.entry)}
-          x={chatContextMenu.x}
-          y={chatContextMenu.y}
-          onClose={closeChatContextMenu}
-        />
-      )}
 
       <ConfirmDialog
         isOpen={deleteConfirm !== null}
@@ -341,56 +284,87 @@ interface ProjectChatRowProps {
   entry: ProjectChatEntry
   onOpen: (entry: ProjectChatEntry) => void
   onOpenTerminal: (entry: ProjectChatEntry) => void
-  onContextMenu: (e: React.MouseEvent, entry: ProjectChatEntry) => void
+  onOpenInFileExplorer: (cwd: string) => void
+  onCopyPath: (cwd: string) => void
+  onDelete: (entry: ProjectChatEntry) => void
 }
 
 function ProjectChatRow({
   entry,
   onOpen,
   onOpenTerminal,
-  onContextMenu
+  onOpenInFileExplorer,
+  onCopyPath,
+  onDelete
 }: ProjectChatRowProps): React.JSX.Element {
   const hasCwd = Boolean(entry.cwd)
   return (
-    <div
-      className={cn(
-        'group flex w-full items-center pr-2 hover:bg-sidebar-accent',
-        entry.status === 'closed' && 'opacity-70'
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => onOpen(entry)}
-        onContextMenu={(e) => onContextMenu(e, entry)}
-        title={entry.title}
-        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
-      >
-        <ChatRowIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
-        <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-        <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`Open terminal for chat ${entry.title}`}
-        title={hasCwd ? `Open terminal at ${entry.cwd}` : 'No working directory for this chat'}
-        disabled={!hasCwd}
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenTerminal(entry)
-        }}
-        onContextMenu={(e) => onContextMenu(e, entry)}
-        onKeyDown={(e) => e.stopPropagation()}
-        className={cn(
-          'relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground',
-          "after:absolute after:-inset-1.5 after:content-['']",
-          'transition-colors hover:bg-sidebar-accent hover:text-foreground',
-          'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
-          !hasCwd && 'cursor-not-allowed'
-        )}
-      >
-        <Terminal size={12} aria-hidden="true" />
-      </button>
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          className={cn(
+            'group flex w-full items-center pr-2 hover:bg-sidebar-accent',
+            entry.status === 'closed' && 'opacity-70'
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => onOpen(entry)}
+            title={entry.title}
+            className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
+          >
+            <ChatRowIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
+            <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
+            <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
+          </button>
+          <button
+            type="button"
+            aria-label={`Open terminal for chat ${entry.title}`}
+            title={hasCwd ? `Open terminal at ${entry.cwd}` : 'No working directory for this chat'}
+            disabled={!hasCwd}
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenTerminal(entry)
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className={cn(
+              'relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground',
+              "after:absolute after:-inset-1.5 after:content-['']",
+              'transition-colors hover:bg-sidebar-accent hover:text-foreground',
+              'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
+              !hasCwd && 'cursor-not-allowed'
+            )}
+          >
+            <Terminal size={12} aria-hidden="true" />
+          </button>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem disabled={!hasCwd} onSelect={() => void onOpenTerminal(entry)}>
+          <Terminal className="mr-2 h-4 w-4" /> Open Terminal Here
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!hasCwd}
+          onSelect={() => {
+            if (entry.cwd) void onOpenInFileExplorer(entry.cwd)
+          }}
+        >
+          <FolderOpen className="mr-2 h-4 w-4" /> Open in File Explorer
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!hasCwd}
+          onSelect={() => {
+            if (entry.cwd) void onCopyPath(entry.cwd)
+          }}
+        >
+          <Copy className="mr-2 h-4 w-4" /> Copy Path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
+          <Trash2 className="mr-2 h-4 w-4" /> Delete Chat
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

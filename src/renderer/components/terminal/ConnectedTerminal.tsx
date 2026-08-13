@@ -14,6 +14,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
@@ -121,6 +122,10 @@ const VISIBILITY_RECOVERY_DELAY_MS = 150
 const POWER_RESUME_RECOVERY_DELAY_MS = 300
 const ACTIVITY_DEBOUNCE_MS = 1000
 const CLIPBOARD_RATE_LIMIT_MS = 100
+
+// Platform-aware shortcut modifier for the terminal context-menu labels
+// (⌘ on macOS, Ctrl elsewhere). Mirrors GlobalContextMenu's SHORTCUT_MOD.
+const SHORTCUT_MOD = isMac ? '⌘' : 'Ctrl'
 
 const shouldUseWebglRenderer = (rendererPreference: 'auto' | 'webgl' | 'dom'): boolean =>
   rendererPreference !== 'dom'
@@ -1858,22 +1863,22 @@ function ConnectedTerminalComponent({
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">
         <ContextMenuItem
-          onClick={copySelection}
+          onSelect={copySelection}
           disabled={!hasSelection}
           className="cursor-pointer"
         >
-          Copy <span className="ml-auto text-xs text-muted-foreground">Ctrl+C</span>
+          Copy <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem onClick={pasteFromClipboard} className="cursor-pointer">
-          Paste <span className="ml-auto text-xs text-muted-foreground">Ctrl+V</span>
+        <ContextMenuItem onSelect={pasteFromClipboard} className="cursor-pointer">
+          Paste <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={handleSelectAll} className="cursor-pointer">
-          Select All <span className="ml-auto text-xs text-muted-foreground">Ctrl+A</span>
+        <ContextMenuItem onSelect={handleSelectAll} className="cursor-pointer">
+          Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
-          onClick={() => {
+          onSelect={() => {
             if (targetId) restartTerminal(targetId)
           }}
           className="cursor-pointer text-primary focus:text-primary"

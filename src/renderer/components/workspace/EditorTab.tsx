@@ -1,9 +1,7 @@
 import { Check, Loader2, X } from 'lucide-react'
-import { useCallback, useState } from 'react'
-import type { ContextMenuItem } from '@/components/ContextMenu'
-import { ContextMenu } from '@/components/ContextMenu'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { cn } from '@/lib/utils'
+import { TabContextMenu } from './tab-context-menu'
 
 function getBasename(filePath: string): string {
   const parts = filePath.split(/[\\/]/)
@@ -40,49 +38,23 @@ export function EditorTab({
   onCloseAll,
   onCopyPath
 }: EditorTabProps): React.JSX.Element {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
-
   const fileName = getBasename(filePath)
   const ext = getExtname(filePath).slice(1) || null
-
-  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY })
-  }, [])
 
   const isBusy = operationStatus === 'saving' || operationStatus === 'reloading'
   const showSuccess = operationStatus === 'saved'
   const showStatusIndicator = isBusy || showSuccess
 
-  const contextMenuItems: ContextMenuItem[] = [
-    {
-      label: 'Close',
-      icon: <X size={12} />,
-      onClick: onClose
-    },
-    {
-      label: 'Close Others',
-      onClick: onCloseOthers
-    },
-    {
-      label: 'Close All',
-      onClick: onCloseAll
-    },
-    {
-      label: 'Copy Path',
-      onClick: onCopyPath
-    }
-  ]
-
   return (
-    <>
+    <TabContextMenu
+      kind="editor"
+      onClose={onClose}
+      onCloseOthers={onCloseOthers}
+      onCloseAll={onCloseAll}
+      onCopyPath={onCopyPath}
+    >
       <div
         onClick={onSelect}
-        onContextMenu={handleContextMenu}
         className={cn(
           'h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-colors border-b-2 border-b-transparent',
           isActive
@@ -138,15 +110,6 @@ export function EditorTab({
           )}
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={contextMenuItems}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }

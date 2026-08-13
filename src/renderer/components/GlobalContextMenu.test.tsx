@@ -26,42 +26,84 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
 // portal + Radix positioning that is hard to assert in jsdom; this stub
 // renders items as buttons so the test asserts labels + disabled flags +
 // click wiring. The ContextMenu mock captures onOpenChange so the test can
-// fire the menu-open snapshot at a controlled time.
-vi.mock('@/components/ui/context-menu', () => ({
-  ContextMenu: ({
-    children,
-    onOpenChange
-  }: {
-    children: React.ReactNode
-    onOpenChange?: (open: boolean) => void
-  }) => {
-    onOpenChangeRef.current = onOpenChange ?? null
-    return <div data-testid="context-menu">{children}</div>
-  },
-  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="trigger">{children}</div>
-  ),
-  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="content">{children}</div>
-  ),
-  ContextMenuItem: ({
-    children,
-    disabled,
-    onClick
-  }: {
-    children: React.ReactNode
-    disabled?: boolean
-    onClick?: () => void
-  }) => (
-    <button data-testid="item" disabled={disabled} onClick={onClick}>
-      {children}
-    </button>
-  ),
-  ContextMenuSeparator: () => <hr data-testid="separator" />,
-  ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => (
-    <span data-testid="shortcut">{children}</span>
-  )
-}))
+// fire the menu-open snapshot at a controlled time. The ContextMenuTrigger
+// supports `asChild` + mirrors Radix's checkForDefaultPrevented so a child
+// handler that re-introduces preventDefault (F1 regression) is caught.
+vi.mock('@/components/ui/context-menu', async () => {
+  const React = await import('react')
+  return {
+    ContextMenu: ({
+      children,
+      onOpenChange
+    }: {
+      children: React.ReactNode
+      onOpenChange?: (open: boolean) => void
+    }) => {
+      onOpenChangeRef.current = onOpenChange ?? null
+      return <div data-testid="context-menu">{children}</div>
+    },
+    ContextMenuTrigger: ({
+      children,
+      asChild
+    }: {
+      children: React.ReactNode
+      asChild?: boolean
+    }) => {
+      const merged = (e: React.MouseEvent) => {
+        // F2: mirror Radix checkForDefaultPrevented — skip open if the child
+        // handler called preventDefault.
+        if (e.defaultPrevented) return
+        e.preventDefault()
+        onOpenChangeRef.current?.(true)
+      }
+      if (asChild && React.isValidElement(children)) {
+        const child = children as React.ReactElement<{
+          onContextMenu?: (e: React.MouseEvent) => void
+        }>
+        return React.cloneElement(child, {
+          onContextMenu: (e: React.MouseEvent) => {
+            child.props.onContextMenu?.(e)
+            merged(e)
+          }
+        })
+      }
+      return (
+        <div data-testid="trigger" onContextMenu={merged}>
+          {children}
+        </div>
+      )
+    },
+    ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
+      <div data-testid="content">{children}</div>
+    ),
+    ContextMenuItem: ({
+      children,
+      disabled,
+      onClick,
+      onSelect
+    }: {
+      children: React.ReactNode
+      disabled?: boolean
+      onClick?: () => void
+      onSelect?: () => void
+    }) => (
+      <button
+        data-testid="item"
+        disabled={disabled}
+        onClick={() => {
+          onClick?.()
+          onSelect?.()
+        }}
+      >
+        {children}
+      </button>
+    ),
+    ContextMenuSeparator: () => <hr data-testid="separator" />,
+    ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => (
+      <span data-testid="shortcut">{children}</span>
+    )
+  }
+})
 
 /** Focus (or blur) the rendered input to control document.activeElement. */
 function focusInput(focused: boolean): void {
