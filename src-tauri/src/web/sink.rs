@@ -441,8 +441,8 @@ impl WsRelaySink {
                 base_seq: 1,
             });
         // Reconcile the cached frontier with the durable frontier before
-        // incrementing. Background title generation
-        // (`maybe_generate_background_title`) writes a durable
+        // incrementing. The `set_session_title` MCP tool
+        // (`record_local_title`) writes a durable
         // `local_title_generated` event directly through
         // `SessionPersistence::enqueue_event` (advancing durable `last_seq`
         // past the relay's cached value) BEFORE the synthetic
@@ -1857,8 +1857,8 @@ mod tests {
         assert_eq!(relay.session_watermark("sess-coll"), 1);
         assert_eq!(persistence.last_seq("sess-coll").unwrap(), 1);
 
-        // 2. Background title gen writes durable seq 2 directly through
-        //    `SessionPersistence` (mirrors `maybe_generate_background_title`).
+        // 2. The `set_session_title` MCP tool writes durable seq 2 directly
+        //    through `SessionPersistence` (mirrors `record_local_title`).
         //    The relay's cached `last_seq` is still 1.
         let record = PersistedEventRecord {
             schema_version: SESSION_SCHEMA_VERSION,
