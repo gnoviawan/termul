@@ -154,10 +154,24 @@ export function stripEmptyFences(text: string, streaming: boolean): string {
  * text. This inserts a '\n' before any `termul-plan` opener that is not
  * already at the start of a line, covering both freshly-appended snapshots
  * and persisted messages written before the `appendPlanSnapshot` boundary fix.
+ *
+ * Only the exact opener (`termul-plan` followed by a newline or end of input)
+ * is normalized, so a quoted reference like ` ```termul-plan-v2` or a longer
+ * info string is left alone. An opener already at line start (preceded by
+ * only up to three spaces/tabs, or by a backtick run that is part of another
+ * fence construct) is left untouched.
  */
 export function normalizePlanFenceBoundary(text: string): string {
-  // `([^``\n])` matches a single non-newline char immediately preceding the
-  // opener; reinsert it with a trailing newline. Opener already at line start
-  // (preceded by '\n' or at position 0) is left untouched.
-  return text.replace(/([^\n])```termul-plan/g, '$1\n```termul-plan')
+  return text.replace(/```termul-plan(?=\r?\n|$)/g, (opener, offset, source) => {
+    const lineStart = source.lastIndexOf('\n', offset - 1) + 1
+    const linePrefix = source.slice(lineStart, offset)
+    // Valid CommonMark fence position: indented up to 3 spaces/tabs, or the
+    // opener is the first non-newline content on the line. A backtick-only
+    // prefix means the opener is part of a longer backtick run (e.g. a
+    // different fenced construct) — don't split it.
+    if (/^[ \t]{0,3}$/.test(linePrefix) || /^`{1,3}$/.test(linePrefix)) {
+      return opener
+    }
+    return `\n${opener}`
+  })
 }

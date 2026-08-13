@@ -127,4 +127,31 @@ describe('normalizePlanFenceBoundary', () => {
     const out = normalizePlanFenceBoundary(joined)
     expect(/(^|\n)```termul-plan/.test(out)).toBe(true)
   })
+
+  it('leaves a longer info string like termul-plan-v2 untouched', () => {
+    // Only the exact opener (followed by a newline) is normalized; a quoted
+    // reference with a suffix must not be split.
+    const md = 'see ```termul-plan-v2 notes```'
+    expect(normalizePlanFenceBoundary(md)).toBe(md)
+  })
+
+  it('does not split a backtick run that precedes the opener', () => {
+    // A 4-backtick run before `termul-plan` is a longer fenced construct; the
+    // regex matches the trailing 3 backticks, but the line prefix is a single
+    // backtick (the 4th) — that must be left intact, not split.
+    const md = '````termul-plan\n[{"content":"x"}]\n````'
+    expect(normalizePlanFenceBoundary(md)).toBe(md)
+  })
+
+  it('leaves an indented (up to 3 spaces) opener untouched', () => {
+    // CommonMark allows up to 3 leading spaces on a fence opener.
+    const md = `intro\n   ${fence}`
+    expect(normalizePlanFenceBoundary(md)).toBe(md)
+  })
+
+  it('normalizes a glued opener inside a larger prose paragraph', () => {
+    const joined = `here is some prose without a newline${fence}`
+    const out = normalizePlanFenceBoundary(joined)
+    expect(out).toBe(`here is some prose without a newline\n${fence}`)
+  })
 })

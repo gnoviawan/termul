@@ -6160,6 +6160,47 @@ describe('ACP agent plan store', () => {
     expect(/(^|\n)```termul-plan/.test(joined)).toBe(true)
   })
 
+  it('_onPromptComplete normalizes the last non-empty text block even when a non-text block follows it', () => {
+    // blocksToText skips non-text blocks (images, resources) when joining, so
+    // the block that ends up immediately before the fence in the joined text is
+    // the last TEXT block — not the last array element. The boundary newline
+    // must be applied to that text block, or the fence opener stays glued.
+    seedSession('sess-1', 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-1': [
+          {
+            id: 'm-agent',
+            role: 'agent',
+            blocks: [
+              { type: 'text', text: 'working on it' },
+              { type: 'image', source: { uri: 'file:///x.png', mediaType: 'image/png' } }
+            ],
+            streaming: true,
+            timestamp: 0,
+            seq: 1
+          }
+        ]
+      },
+      plans: { 'sess-1': [{ content: 'task', status: 'completed' }] }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 'sess-1',
+      stopReason: 'end_turn'
+    })
+    const lastAgent = useAcpStore.getState().messages['sess-1'].find((m) => m.role === 'agent')!
+    // The text block (not the image) gained the trailing newline boundary.
+    expect(lastAgent.blocks.find((b) => b.text === 'working on it\n')).toBeDefined()
+    // The joined text has the fence opener at the start of a line.
+    const joined = lastAgent.blocks
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('')
+    expect(/(^|\n)```termul-plan/.test(joined)).toBe(true)
+  })
+
   it('_onPromptComplete writes no fence when plans[sessionId] is empty (non-compliant agent)', () => {
     seedSession('sess-1', 'agent-1', true)
     useAcpStore.setState((s) => ({
