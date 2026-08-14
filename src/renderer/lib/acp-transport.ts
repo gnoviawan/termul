@@ -1073,8 +1073,17 @@ export class WsAcpTransport implements AcpTransport {
     if (!socket || socket.readyState !== WebSocket.OPEN || !this.authed) return
     try {
       socket.send(JSON.stringify({ type }))
-    } catch {
-      // Swallow: never throw out of a browser lifecycle event listener.
+    } catch (err) {
+      // Never rethrow out of a browser lifecycle event listener, but emit a
+      // durable boundary log (per AGENTS.md) so a dead/closed socket here is
+      // observable. Safe context only — no frame payload, secrets, or creds.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.sendLifecycleSignal',
+        message: `failed to send a background/foreground lifecycle signal: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      })
     }
   }
 
@@ -1450,6 +1459,13 @@ export class WsAcpTransport implements AcpTransport {
         // + authed — it refreshes the server keepalive watchdog through proxies
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
         this.startHeartbeat()
+        // CAP-3: if the tab is already hidden when auth completes (e.g. a
+        // reconnect that finished while backgrounded), the hide event fired
+        // before we were authed and was a no-op. Re-sync the server's watchdog
+        // to the 5-min background ceiling now that this connection is live.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+          this.sendLifecycleSignal('background')
+        }
       } catch (err) {
         try {
           this.socket?.close()
