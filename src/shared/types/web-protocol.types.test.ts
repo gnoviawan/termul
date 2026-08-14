@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 30 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(30)
+  it('exports exactly 33 request types including discovered-session promotion', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(33)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -93,7 +93,11 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_acp_catalog',
       'set_catalog_opt_in',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.
-      'install_acp_agent'
+      'install_acp_agent',
+      // Issue #613: server-side generic key-value store.
+      'store_read',
+      'store_write',
+      'store_delete'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
