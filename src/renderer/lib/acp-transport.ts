@@ -1094,6 +1094,11 @@ export class WsAcpTransport implements AcpTransport {
       // socket, skip the ping round-trip and force-reconnect directly.
       const hiddenFor = Date.now() - this.lastHiddenAt
       if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.focusStale',
+          message: `focus return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
+        })
         this.lastHiddenAt = null
         this.forceReconnect('window focus: long background')
       } else {
@@ -1197,16 +1202,32 @@ export class WsAcpTransport implements AcpTransport {
    * Pong-timeout, and the client's `onclose` may not have fired yet (or the
    * link is half-open and still reports OPEN). Tears down the suspect socket
    * (detaching its handlers so its eventual close does not double-trigger
-   * `scheduleReconnect`/`rejectAllPending`), resets exponential backoff to
-   * zero (the visibility-triggered path must recover within the server's
-   * grace window; inheriting elevated backoff from prior failures delays
-   * recovery past the deadline), then reuses `scheduleReconnect()` so the
-   * `reconnect()` + cursor-resubscribe + `onReconnectStateChange` machinery
-   * runs unchanged.
+   * `scheduleReconnect`/`rejectAllPending`), cancels any pending reconnect
+   * timer (which may carry elevated backoff from prior failures), resets
+   * exponential backoff to zero (the visibility-triggered path must recover
+   * within the server's grace window), then reuses `scheduleReconnect()` so
+   * the `reconnect()` + cursor-resubscribe + `onReconnectStateChange`
+   * machinery runs unchanged.
    */
   private forceReconnect(reason: string): void {
-    if (this.disposed || this.connecting || this.reconnecting || this.reconnectTimer) return
+    if (this.disposed) return
+    // An active reconnect that has already progressed past socket creation
+    // (in-flight `reconnect()` with no pending timer) means the socket is
+    // being re-established — don't interfere. A pending timer or an in-flight
+    // `connect()` that hasn't opened a socket yet are both safe to cancel:
+    // `scheduleReconnect` queued a future attempt (possibly with elevated
+    // backoff from prior failures), or `connect()` created a socket that the
+    // OS hasn't opened yet (half-open during background throttling).
+    if (this.reconnecting && !this.reconnectTimer && !this.connecting) return
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.discardSocket(reason)
+    // Clear any in-flight connect attempt — the old socket is gone, so the
+    // pending Promise will reject via the detached handlers. Setting to null
+    // allows `connect()` to start a fresh attempt from `scheduleReconnect`.
+    this.connecting = null
     this.reconnectAttempt = 0
     this.scheduleReconnect()
   }

@@ -1969,6 +1969,57 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     transport.dispose()
   })
 
+  // Regression: forceReconnect must cancel a pending reconnect timer (from a
+  // prior close during backgrounding) instead of returning early. Without
+  // this, a stale-return after the socket closed in the background would be
+  // stranded on the old elevated backoff timer.
+  it('cancels pending reconnect timer and resets backoff on stale visibility return', async () => {
+    vi.useFakeTimers()
+    DelayedOpenWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: DelayedOpenWebSocket as unknown as typeof WebSocket
+    })
+    // Open + authenticate the initial socket manually.
+    const connecting = transport.connect()
+    await Promise.resolve()
+    const internals = transport as unknown as TransportInternals
+    const initSocket = internals.socket as DelayedOpenWebSocket
+    initSocket.openAndAuthenticate()
+    await connecting
+
+    // Simulate backgrounding.
+    dispatchVisibility('hidden')
+
+    // Close the socket — scheduleReconnect sets a timer.
+    initSocket.close()
+    expect(internals.reconnectTimer).not.toBeNull()
+    expect(internals.reconnecting).toBe(true)
+    const oldTimer = internals.reconnectTimer
+
+    // Manually elevate reconnectAttempt to simulate prior failures that
+    // happened before the background period.
+    internals.reconnectAttempt = 4
+
+    // Advance into background (>30s).
+    await vi.advanceTimersByTimeAsync(31_000)
+
+    // Stale visibility return should cancel the pending timer and force reconnect.
+    dispatchVisibility('visible')
+
+    // forceReconnect cancelled the old timer, reset backoff to 0, and
+    // scheduleReconnect created a new timer with RECONNECT_BASE_MS delay.
+    expect(internals.reconnectTimer).not.toBe(oldTimer)
+    // forceReconnect reset backoff to 0, scheduleReconnect incremented to 1.
+    expect(internals.reconnectAttempt).toBeLessThanOrEqual(1)
+
+    // The new timer fires at 500ms (base delay, not elevated).
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+
+    transport.dispose()
+  })
+
   it('drops a permanently obsolete not_found subscription and completes reconnect', async () => {
     vi.useFakeTimers()
     class ReconnectSubscribeFailureSocket extends FakeWebSocket {
