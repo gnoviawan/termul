@@ -26,6 +26,7 @@ pub mod mcp_servers_api;
 pub mod search_api;
 pub mod skills_api;
 pub mod permissions;
+pub mod store;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;

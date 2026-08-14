@@ -357,6 +357,9 @@ impl RemoteServerState {
             // from the config here — `None` degrades nothing on this path.
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
+            // Issue #613: `None` → resolve `<service_account_state_dir>/store.json`
+            // at serve time (the shared-live host gets a durable store too).
+            store_file: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
