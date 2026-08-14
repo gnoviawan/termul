@@ -1810,9 +1810,14 @@ async fn handle_store_read(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
-    match store.read(&parsed.key) {
-        Ok(value) => WsReply::ok(id, Some(json!({ "value": value }))),
-        Err(e) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
+    let result = tokio::task::spawn_blocking(move || store.read(&parsed.key)).await;
+    match result {
+        Ok(Ok(value)) => WsReply::ok(id, Some(json!({ "value": value }))),
+        Ok(Err(e)) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
+        Err(join_err) => {
+            tracing::warn!("store_read task failed: {join_err}");
+            WsReply::err_with_code(id, "STORE_UNAVAILABLE", format!("store read task failed: {join_err}"))
+        }
     }
 }
 
@@ -1849,7 +1854,10 @@ async fn handle_store_write(
             tracing::warn!("store_write failed: {error}");
             WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("store write failed: {error}"))
         }
-        Err(join_err) => WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("task failed: {join_err}")),
+        Err(join_err) => {
+            tracing::warn!("store_write task failed: {join_err}");
+            WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("task failed: {join_err}"))
+        }
     }
 }
 
@@ -1882,7 +1890,10 @@ async fn handle_store_delete(
             tracing::warn!("store_delete failed: {error}");
             WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("store delete failed: {error}"))
         }
-        Err(join_err) => WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("task failed: {join_err}")),
+        Err(join_err) => {
+            tracing::warn!("store_delete task failed: {join_err}");
+            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("task failed: {join_err}"))
+        }
     }
 }
 
