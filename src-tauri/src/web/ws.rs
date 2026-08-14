@@ -3110,6 +3110,24 @@ async fn handle_subscribe(
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
 
+    // CAP-1: Reopen the durable session writer before subscribing so every
+    // event flowing after a reconnect-based subscribe is persisted. Idempotent
+    // for already-active sessions. A missing persistence layer (desktop path)
+    // or an unknown session is logged but never blocks the subscribe.
+    match relay.persistence() {
+        Some(persistence) => {
+            if let Err(error) = persistence.reopen_writer(&parsed.session_id).await {
+                warn!(
+                    "subscribe: reopen_writer failed for session {}: {error}",
+                    parsed.session_id
+                );
+            }
+        }
+        None => {
+            debug!("subscribe: reopen_writer skipped (no persistence)");
+        }
+    }
+
     // Do not drop the currently-live subscription until the replacement is
     // successfully registered. This preserves pending-permission ownership on
     // stale/failure and lets grace cancellation happen only after resubscribe.

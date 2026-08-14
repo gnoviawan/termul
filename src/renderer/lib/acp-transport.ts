@@ -390,6 +390,16 @@ const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
 /** Bounded application round-trip check used for browser resume signals. */
 const RESUME_VALIDATION_TIMEOUT_MS = 5_000
+/**
+ * Hidden duration above which the client skips round-trip validation and goes
+ * directly to {@link WsAcpTransport.forceReconnect}. At 30s of hidden time
+ * the heartbeat is throttled or paused by the OS, so the server will kill the
+ * socket within ~45s (75s `PONG_TIMEOUT` minus 30s already elapsed). A ping
+ * validation round-trip would waste `RESUME_VALIDATION_TIMEOUT_MS` on a link
+ * that is dead or about to die. 30s is 40% of the 75s server timeout —
+ * principled, not a workaround.
+ */
+const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
 /**
  * Application-level heartbeat interval. A client-emitted `ping` text request
@@ -1060,10 +1070,35 @@ export class WsAcpTransport implements AcpTransport {
         this.lastHiddenAt = Date.now()
         return
       }
-      this.validateOnResume('visibility return')
+      // CAP-2: Skip round-trip ping validation on long background returns.
+      // After VISIBILITY_STALE_THRESHOLD_MS, the heartbeat is throttled and
+      // the server will kill the socket within ~45s, so a ping wastes up to
+      // 5s on a dead/dying link. Go directly to reconnect with backoff reset.
+      const hiddenFor = this.lastHiddenAt != null ? Date.now() - this.lastHiddenAt : 0
+      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
+        this.lastHiddenAt = null
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.visibilityStale',
+          message: `visibility return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
+        })
+        this.forceReconnect('visibility return: long background')
+      } else {
+        this.validateOnResume('visibility return')
+      }
     }
     const onFocus = (): void => {
-      if (this.lastHiddenAt != null) this.validateOnResume('window focus')
+      if (this.lastHiddenAt == null) return
+      // Same stale-threshold check as the visibility handler: if the tab was
+      // hidden long enough for the server to kill (or be about to kill) the
+      // socket, skip the ping round-trip and force-reconnect directly.
+      const hiddenFor = Date.now() - this.lastHiddenAt
+      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
+        this.lastHiddenAt = null
+        this.forceReconnect('window focus: long background')
+      } else {
+        this.validateOnResume('window focus')
+      }
     }
     const onPageShow = (): void => this.validateOnResume('pageshow')
     const onResume = (): void => this.validateOnResume('browser resume')
@@ -1162,13 +1197,17 @@ export class WsAcpTransport implements AcpTransport {
    * Pong-timeout, and the client's `onclose` may not have fired yet (or the
    * link is half-open and still reports OPEN). Tears down the suspect socket
    * (detaching its handlers so its eventual close does not double-trigger
-   * `scheduleReconnect`/`rejectAllPending`), then reuses `scheduleReconnect()`
-   * so the existing backoff + `reconnect()` + cursor-resubscribe +
-   * `onReconnectStateChange` machinery runs unchanged.
+   * `scheduleReconnect`/`rejectAllPending`), resets exponential backoff to
+   * zero (the visibility-triggered path must recover within the server's
+   * grace window; inheriting elevated backoff from prior failures delays
+   * recovery past the deadline), then reuses `scheduleReconnect()` so the
+   * `reconnect()` + cursor-resubscribe + `onReconnectStateChange` machinery
+   * runs unchanged.
    */
   private forceReconnect(reason: string): void {
     if (this.disposed || this.connecting || this.reconnecting || this.reconnectTimer) return
     this.discardSocket(reason)
+    this.reconnectAttempt = 0
     this.scheduleReconnect()
   }
 
