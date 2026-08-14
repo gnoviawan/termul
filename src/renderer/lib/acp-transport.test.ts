@@ -2094,6 +2094,83 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
   })
 })
 
+describe('WsAcpTransport background/foreground lifecycle signals (CAP-3)', () => {
+  afterEach(() => {
+    restoreVisibility()
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+  })
+
+  /** True if a raw frame of the given type was sent on the socket. */
+  const sentType = (sock: FakeWebSocket, type: string): boolean =>
+    sock.sent.some((raw) => {
+      try {
+        return (JSON.parse(raw) as { type?: string }).type === type
+      } catch {
+        return false
+      }
+    })
+
+  it('sends a background frame on tab hide and foreground on return', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    await transport.subscribeSession('sess-cap3')
+    const internals = transport as unknown as TransportInternals
+    const socket = internals.socket
+
+    dispatchVisibility('hidden')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sentType(socket, 'background')).toBe(true)
+
+    dispatchVisibility('visible')
+    await Promise.resolve()
+    expect(sentType(socket, 'foreground')).toBe(true)
+
+    transport.dispose()
+  })
+
+  it('does not send lifecycle signals before authentication completes', async () => {
+    vi.useFakeTimers()
+    DelayedOpenWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: DelayedOpenWebSocket as unknown as typeof WebSocket
+    })
+    const connecting = transport.connect()
+    await Promise.resolve()
+    const internals = transport as unknown as TransportInternals
+    const openingSocket = internals.socket as DelayedOpenWebSocket
+
+    // While CONNECTING (not OPEN, not authed), hide must not send background.
+    dispatchVisibility('hidden')
+    expect(sentType(openingSocket, 'background')).toBe(false)
+
+    openingSocket.openAndAuthenticate()
+    await connecting
+    transport.dispose()
+  })
+
+  it('does not send lifecycle signals after dispose', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    await transport.subscribeSession('sess-cap3')
+    const internals = transport as unknown as TransportInternals
+    const socket = internals.socket
+    transport.dispose()
+
+    dispatchVisibility('hidden')
+    expect(sentType(socket, 'background')).toBe(false)
+  })
+})
+
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)

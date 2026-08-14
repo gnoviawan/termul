@@ -1060,6 +1060,25 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /**
+   * CAP-3: send an id-less `background`/`foreground` WS control frame so the
+   * server extends (background) or resets (foreground, or any normal frame)
+   * its keepalive watchdog ceiling. Fire-and-forget — no reply, no
+   * request/reply correlation id. Guarded to a live, authenticated socket;
+   * never throws (a failed lifecycle signal is harmless — the watchdog closes
+   * a dead socket on the next ping tick and the reconnect path engages).
+   */
+  private sendLifecycleSignal(type: 'background' | 'foreground'): void {
+    if (this.disposed) return
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN || !this.authed) return
+    try {
+      socket.send(JSON.stringify({ type }))
+    } catch {
+      // Swallow: never throw out of a browser lifecycle event listener.
+    }
+  }
+
+  /**
    * Attach browser lifecycle listeners so every resume signal validates the
    * application round trip instead of trusting `readyState === OPEN`.
    */
@@ -1068,8 +1087,17 @@ export class WsAcpTransport implements AcpTransport {
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
         this.lastHiddenAt = Date.now()
+        // CAP-3: signal the server to extend its keepalive watchdog to the
+        // 5-min background ceiling before the tab suspends (the OS will
+        // throttle/pause this transport's timers).
+        this.sendLifecycleSignal('background')
         return
       }
+      // CAP-3: signal the server to resume the normal 75s watchdog ceiling
+      // (a no-op if the socket is already dead — sendLifecycleSignal guards on
+      // readyState === OPEN). Then CAP-2's stale-threshold branching decides
+      // whether to validate the round trip or force-reconnect.
+      this.sendLifecycleSignal('foreground')
       // CAP-2: Skip round-trip ping validation on long background returns.
       // After VISIBILITY_STALE_THRESHOLD_MS, the heartbeat is throttled and
       // the server will kill the socket within ~45s, so a ping wastes up to

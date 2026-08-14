@@ -267,7 +267,7 @@ impl ServerConfig {
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
-        let mut permission_reconnect_grace_secs: u64 = 15;
+        let mut permission_reconnect_grace_secs: u64 = 60;
         // PR-S4: when `--project-root` is absent, fall back to the env var or
         // the user's home directory via `default_project_root()`. The
         // resolved value is run through `resolve_and_validate_project_root`
@@ -682,8 +682,8 @@ mod tests {
             "default permission-timeout is 60s (Story 1.7 / FR14)"
         );
         assert_eq!(
-            cfg.permission_reconnect_grace_secs, 15,
-            "default reconnect grace is 15s"
+            cfg.permission_reconnect_grace_secs, 60,
+            "default reconnect grace is 60s (CAP-4: mobile wake + reconnect chain)"
         );
         // PR-S4: project_root defaults to $HOME / $USERPROFILE when the env var
         // is unset. The CI hosts in this repo all set $HOME, so the resolved

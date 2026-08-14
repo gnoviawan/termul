@@ -26,7 +26,7 @@
 //! `err.code: "not_implemented"` until Stories 1.7/1.8/Epic 4.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -474,18 +474,70 @@ const PING_INTERVAL: Duration = Duration::from_secs(20);
 /// browser's reconnect+cursor-resubscribe path can engage.
 const PONG_TIMEOUT: Duration = Duration::from_secs(75);
 
+/// Signal-gated keepalive ceiling (CAP-3): while a web client has sent a
+/// `type:"background"` control frame and not yet sent `foreground` (or any
+/// normal frame), the watchdog tolerates up to 5 minutes of inactivity so a
+/// backgrounded mobile tab (whose `setInterval` the OS throttles/pauses)
+/// survives an app-switch round-trip. `PONG_TIMEOUT` is NOT raised — the
+/// 5-min ceiling applies only while `backgrounded=true`. 5 min balances
+/// mobile battery against reconnect latency (codeg tolerates 1h; buzz 30s).
+const BACKGROUND_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Reusable Ping payload (opaque; browsers must echo it back in the Pong, but
 /// the relay does not correlate — any inbound frame resets the watchdog).
 /// Must stay under 125 bytes per RFC 6455 control-frame limits.
 const PING_PAYLOAD: &[u8] = b"keepalive";
 
 /// Pure keepalive-watchdog decision: returns true when no inbound frame
-/// (text request, Pong, or client Ping) has arrived for longer than
-/// `PONG_TIMEOUT`. Extracted from the write task so the threshold semantics
-/// (strict `>`) are unit-testable without spinning up a real socket. The write
-/// task calls this with `last_activity.load()` + `now_ms()` on each ping tick.
-fn watchdog_is_stale(last_activity_ms: u64, now_ms_value: u64) -> bool {
-    now_ms_value.saturating_sub(last_activity_ms) > PONG_TIMEOUT.as_millis() as u64
+/// (text request, Pong, or client Ping) has arrived for longer than `ceiling`
+/// — `PONG_TIMEOUT` for an active/foreground connection, or `BACKGROUND_TIMEOUT`
+/// while a `background` signal is in effect (CAP-3). Extracted from the write
+/// task so the threshold semantics (strict `>`) are unit-testable without
+/// spinning up a real socket. The write task calls this with
+/// `last_activity.load()` + `now_ms()` + the active ceiling on each tick.
+fn watchdog_is_stale(last_activity_ms: u64, now_ms_value: u64, ceiling_ms: u64) -> bool {
+    now_ms_value.saturating_sub(last_activity_ms) > ceiling_ms
+}
+
+/// Cheaply extract the `type` field of a client WS text frame (CAP-3 control
+/// signals). Returns `None` for non-JSON or frames without a string `type`.
+/// The read task uses this to recognize id-less `background`/`foreground`
+/// lifecycle frames before the strict `WsRequest` parse (which requires `id`).
+fn peer_frame_type(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    value.get("type")?.as_str().map(str::to_owned)
+}
+
+/// CAP-3: consume an id-less `background`/`foreground` lifecycle control frame.
+/// Returns `true` when the frame was a lifecycle signal and the caller should
+/// skip dispatch (no reply, no `WsRequest` parse). The `backgrounded` flag is
+/// toggled ONLY when `authed` (an unauthenticated peer cannot manipulate the
+/// watchdog ceiling); an unauthenticated signal is still consumed (ignored,
+/// no dispatch, no error). Returns `false` for any other frame — the caller
+/// then resets the flag ("any normal frame resets the normal timeout") and
+/// dispatches as a normal ACP request.
+fn handle_lifecycle_signal(text: &str, authed: bool, backgrounded: &AtomicBool) -> bool {
+    if let Some(type_) = peer_frame_type(text) {
+        match type_.as_str() {
+            "background" => {
+                if authed {
+                    backgrounded.store(true, Ordering::Relaxed);
+                } else {
+                    debug!("[ws] ignoring background signal from unauthenticated connection");
+                }
+                true
+            }
+            "foreground" => {
+                if authed {
+                    backgrounded.store(false, Ordering::Relaxed);
+                }
+                true
+            }
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 /// Epoch-millis timestamp for the keepalive watchdog. Uses `SystemTime` (not
@@ -550,7 +602,13 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // the only way to refresh NAT/proxy/browser idle timers during silent
     // reasoning phases and to surface a dead client promptly.
     let last_activity = Arc::new(AtomicU64::new(now_ms()));
+    // CAP-3: per-connection background flag. `true` while a web client has
+    // signaled `type:"background"` (tab suspending); the watchdog then uses
+    // BACKGROUND_TIMEOUT (5min) instead of PONG_TIMEOUT (75s). Reset to
+    // false by `foreground` or any normal client frame.
+    let backgrounded = Arc::new(AtomicBool::new(false));
     let write_last_activity = Arc::clone(&last_activity);
+    let write_backgrounded = Arc::clone(&backgrounded);
 
     let write_tx = out_tx.clone();
     let mut write_task = tokio::spawn(async move {
@@ -600,10 +658,17 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     let last = write_last_activity.load(Ordering::Relaxed);
                     let now = now_ms();
                     let stale = now.saturating_sub(last);
-                    if watchdog_is_stale(last, now) {
+                    // CAP-3: a backgrounded client (sent `type:"background"`)
+                    // gets the 5-min ceiling; any other state gets 75s.
+                    let ceiling = if write_backgrounded.load(Ordering::Relaxed) {
+                        BACKGROUND_TIMEOUT
+                    } else {
+                        PONG_TIMEOUT
+                    };
+                    if watchdog_is_stale(last, now, ceiling.as_millis() as u64) {
                         warn!(
                             "[ws] keepalive: no client activity for {stale} ms \
-                             (>{PONG_TIMEOUT:?}); closing connection"
+                             (>{ceiling:?}); closing connection"
                         );
                         break;
                     }
@@ -613,6 +678,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     });
 
     let read_last_activity = Arc::clone(&last_activity);
+    let read_backgrounded = Arc::clone(&backgrounded);
     let read_subscribed_clients = Arc::clone(&subscribed_clients);
     let read_relay = Arc::clone(&relay);
     let mut read_task = tokio::spawn(async move {
@@ -632,6 +698,19 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             read_last_activity.store(now_ms(), Ordering::Relaxed);
             match msg {
                 Message::Text(t) => {
+                    // CAP-3: consume id-less `background`/`foreground`
+                    // lifecycle control frames before the strict `WsRequest`
+                    // parse (which requires `id`). These are fire-and-forget
+                    // (no reply) and toggle the keepalive ceiling; an
+                    // unauthenticated connection's signal is ignored (no flag
+                    // set, no dispatch, no error).
+                    if handle_lifecycle_signal(&t, authed, &read_backgrounded) {
+                        continue;
+                    }
+                    // Any other text frame resets the background flag (CAP-3:
+                    // "resets on foreground or any normal frame") and dispatches
+                    // as a normal ACP request.
+                    read_backgrounded.store(false, Ordering::Relaxed);
                     if !dispatch_connection_text(
                         &t,
                         &mut authed,
@@ -4532,31 +4611,94 @@ mod tests {
     #[test]
     fn watchdog_is_stale_only_past_pong_timeout() {
         // Pure threshold semantics for the keepalive watchdog: a connection is
-        // torn down only after strictly more than PONG_TIMEOUT with no inbound
-        // frame. Tests the decision the write task consults on each ping tick
-        // (the false-positive symptom behind issue: a focused tab through a
-        // proxy dropped every ~75s because Pongs didn't round-trip; a client
-        // `ping` text frame refreshes this and stays open).
+        // torn down only after strictly more than the active ceiling with no
+        // inbound frame. Tests the decision the write task consults on each
+        // ping tick (the false-positive symptom behind issue: a focused tab
+        // through a proxy dropped every ~75s because Pongs didn't round-trip;
+        // a client `ping` text frame refreshes this and stays open).
         let base = 1_000_000_u64;
         let timeout = PONG_TIMEOUT.as_millis() as u64;
         assert!(
-            !watchdog_is_stale(base, base),
+            !watchdog_is_stale(base, base, timeout),
             "fresh connection is not stale"
         );
         assert!(
-            !watchdog_is_stale(base, base + timeout),
+            !watchdog_is_stale(base, base + timeout, timeout),
             "exactly at timeout is not stale (strict >)"
         );
         assert!(
-            !watchdog_is_stale(base, base + timeout - 1),
+            !watchdog_is_stale(base, base + timeout - 1, timeout),
             "just under timeout is not stale"
         );
         assert!(
-            watchdog_is_stale(base, base + timeout + 1),
+            watchdog_is_stale(base, base + timeout + 1, timeout),
             "just past timeout is stale"
         );
         // Clock-skew safe: a future `last_activity` saturates to 0 (not stale).
-        assert!(!watchdog_is_stale(base + 10_000, base));
+        assert!(!watchdog_is_stale(base + 10_000, base, timeout));
+    }
+
+    #[test]
+    fn watchdog_backgrounded_uses_five_minute_ceiling() {
+        // CAP-3: while backgrounded, the watchdog tolerates up to
+        // BACKGROUND_TIMEOUT (5min) — 90s of inactivity must NOT close a
+        // backgrounded connection (would close under the 75s PONG_TIMEOUT).
+        let base = 1_000_000_u64;
+        let ceiling = BACKGROUND_TIMEOUT.as_millis() as u64;
+        assert!(
+            !watchdog_is_stale(base, base + 90_000, ceiling),
+            "90s idle is not stale under the 5-min background ceiling"
+        );
+        assert!(
+            watchdog_is_stale(base, base + ceiling + 1, ceiling),
+            "just past 5-min ceiling is stale"
+        );
+        // 90s idle WOULD close under the normal 75s ceiling.
+        assert!(
+            watchdog_is_stale(base, base + 90_000, PONG_TIMEOUT.as_millis() as u64),
+            "90s idle is stale under the normal 75s ceiling"
+        );
+    }
+
+    #[test]
+    fn peer_frame_type_extracts_background_and_foreground() {
+        // CAP-3: id-less lifecycle frames are recognized by `type` without a
+        // strict `WsRequest` parse (which requires `id`).
+        assert_eq!(peer_frame_type(r#"{"type":"background"}"#).as_deref(), Some("background"));
+        assert_eq!(peer_frame_type(r#"{"type":"foreground"}"#).as_deref(), Some("foreground"));
+        // Normal ACP request frames still report their type (dispatched below).
+        assert_eq!(
+            peer_frame_type(r#"{"id":"p1","type":"send_prompt","payload":{}}"#).as_deref(),
+            Some("send_prompt")
+        );
+        // Malformed / typeless frames yield None (dispatch handles the error).
+        assert!(peer_frame_type("not json").is_none());
+        assert!(peer_frame_type(r#"{"id":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn handle_lifecycle_signal_toggles_background_flag() {
+        // CAP-3: a background frame sets the flag (authed); foreground clears
+        // it; an unauthed background is ignored (no flag, still consumed); a
+        // normal request frame is NOT consumed (dispatched).
+        let flag = Arc::new(AtomicBool::new(false));
+        // Unauthed background: consumed, no flag set.
+        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, false, &flag));
+        assert!(!flag.load(Ordering::Relaxed), "unauthed background does not set flag");
+        // Authed background: consumed, flag set.
+        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, true, &flag));
+        assert!(flag.load(Ordering::Relaxed), "authed background sets flag");
+        // Authed foreground: consumed, flag cleared.
+        assert!(handle_lifecycle_signal(r#"{"type":"foreground"}"#, true, &flag));
+        assert!(!flag.load(Ordering::Relaxed), "foreground clears flag");
+        // Normal request frame: NOT consumed (returns false) — dispatched.
+        assert!(!handle_lifecycle_signal(
+            r#"{"id":"p1","type":"send_prompt","payload":{}}"#,
+            true,
+            &flag,
+        ));
+        // Malformed frame: NOT consumed.
+        assert!(!handle_lifecycle_signal("not json", true, &flag));
     }
 
     #[test]
