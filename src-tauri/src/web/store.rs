@@ -32,7 +32,7 @@ use crate::acp::atomic_file;
 /// bare JSON object (`{ "key": value }`); an empty store is `{}`.
 pub struct WebStore {
     path: PathBuf,
-    inner: Mutex<HashMap<String, Value>>,
+    inner: Mutex<Option<HashMap<String, Value>>>,
 }
 
 impl WebStore {
@@ -49,19 +49,24 @@ impl WebStore {
     pub fn open(path: PathBuf) -> Self {
         let data = match fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<HashMap<String, Value>>(&bytes) {
-                Ok(map) => map,
+                Ok(map) => Some(map),
                 Err(e) => {
-                    if let Err(backup_err) = atomic_file::backup_corrupt(&path, &bytes) {
-                        warn!(
-                            "could not back up corrupt store file '{}': {backup_err}",
-                            path.display()
-                        );
+                    match atomic_file::backup_corrupt(&path, &bytes) {
+                        Ok(_) => {
+                            warn!(
+                                "store file '{}' is corrupt ({e}); backed up and starting with an empty store",
+                                path.display()
+                            );
+                            Some(HashMap::new())
+                        }
+                        Err(backup_err) => {
+                            warn!(
+                                "store file '{}' is corrupt ({e}) and backup failed: {backup_err}; store is unavailable",
+                                path.display()
+                            );
+                            None
+                        }
                     }
-                    warn!(
-                        "store file '{}' is corrupt ({e}); starting with an empty store",
-                        path.display()
-                    );
-                    HashMap::new()
                 }
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -69,14 +74,14 @@ impl WebStore {
                     "store file '{}' not found; starting with an empty store",
                     path.display()
                 );
-                HashMap::new()
+                Some(HashMap::new())
             }
             Err(e) => {
                 warn!(
-                    "could not read store file '{}': {e}; starting with an empty store",
+                    "could not read store file '{}': {e}; store is unavailable",
                     path.display()
                 );
-                HashMap::new()
+                None
             }
         };
         Self {
@@ -87,31 +92,47 @@ impl WebStore {
 
     /// Read a value, or `None` when the key is absent.
     #[must_use]
-    pub fn read(&self, key: &str) -> Option<Value> {
-        self.inner.lock().get(key).cloned()
+    pub fn read(&self, key: &str) -> Result<Option<Value>, io::Error> {
+        let lock = self.inner.lock();
+        let map = lock.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        Ok(map.get(key).cloned())
     }
 
     /// Write a value, persisting atomically. Returns the IO error on failure.
-    pub fn write(&self, key: &str, value: Value) -> io::Result<()> {
-        let bytes = {
-            let mut map = self.inner.lock();
-            map.insert(key.to_string(), value);
-            serde_json::to_vec(&*map).map_err(|e| io::Error::other(e.to_string()))?
-        };
-        atomic_file::replace(&self.path, &bytes)
+    pub fn write(&self, key: &str, value: Value, expected: Option<Value>) -> io::Result<bool> {
+        let mut lock = self.inner.lock();
+        let map = lock.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        
+        if expected.is_some() && map.get(key) != expected.as_ref() {
+            return Ok(false); // CAS failed
+        }
+        
+        let mut next = map.clone();
+        next.insert(key.to_string(), value);
+        
+        let bytes = serde_json::to_vec(&next).map_err(|e| io::Error::other(e.to_string()))?;
+        if bytes.len() > 10 * 1024 * 1024 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "store file exceeds 10MB limit"));
+        }
+        atomic_file::replace(&self.path, &bytes)?;
+        
+        *map = next;
+        Ok(true)
     }
 
     /// Delete a key, persisting atomically. Returns whether the key existed.
     pub fn delete(&self, key: &str) -> io::Result<bool> {
-        let bytes = {
-            let mut map = self.inner.lock();
-            let removed = map.remove(key).is_some();
-            let bytes =
-                serde_json::to_vec(&*map).map_err(|e| io::Error::other(e.to_string()))?;
-            (removed, bytes)
-        };
-        atomic_file::replace(&self.path, &bytes.1)?;
-        Ok(bytes.0)
+        let mut lock = self.inner.lock();
+        let map = lock.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        
+        let mut next = map.clone();
+        let removed = next.remove(key).is_some();
+        
+        let bytes = serde_json::to_vec(&next).map_err(|e| io::Error::other(e.to_string()))?;
+        atomic_file::replace(&self.path, &bytes)?;
+        
+        *map = next;
+        Ok(removed)
     }
 }
 
@@ -143,31 +164,31 @@ mod tests {
         let dir = tempdir_like("roundtrip");
         let file = dir.join("store.json");
         let store = WebStore::open(file.clone());
-        assert_eq!(store.read("missing"), None);
+        assert_eq!(store.read("missing").unwrap(), None);
 
-        store.write("terminals/p1", serde_json::json!({ "active": "t1" })).unwrap();
-        store.write("settings", serde_json::json!({ "theme": "dark" })).unwrap();
+        store.write("terminals/p1", serde_json::json!({ "active": "t1" }), None).unwrap();
+        store.write("settings", serde_json::json!({ "theme": "dark" }), None).unwrap();
         assert_eq!(
-            store.read("settings"),
+            store.read("settings").unwrap(),
             Some(serde_json::json!({ "theme": "dark" }))
         );
         assert_eq!(
-            store.read("terminals/p1"),
+            store.read("terminals/p1").unwrap(),
             Some(serde_json::json!({ "active": "t1" }))
         );
 
         // A second open (simulating a restart) reloads the persisted map.
         let reloaded = WebStore::open(file.clone());
-        assert_eq!(reloaded.read("settings"), Some(serde_json::json!({ "theme": "dark" })));
+        assert_eq!(reloaded.read("settings").unwrap(), Some(serde_json::json!({ "theme": "dark" })));
 
         // delete removes + persists.
         assert!(reloaded.delete("settings").unwrap());
-        assert_eq!(reloaded.read("settings"), None);
+        assert_eq!(reloaded.read("settings").unwrap(), None);
         assert!(!reloaded.delete("settings").unwrap());
         let reloaded_again = WebStore::open(file.clone());
-        assert_eq!(reloaded_again.read("settings"), None);
+        assert_eq!(reloaded_again.read("settings").unwrap(), None);
         assert_eq!(
-            reloaded_again.read("terminals/p1"),
+            reloaded_again.read("terminals/p1").unwrap(),
             Some(serde_json::json!({ "active": "t1" }))
         );
         cleanup(&dir);
@@ -178,9 +199,9 @@ mod tests {
         let dir = tempdir_like("replace");
         let file = dir.join("store.json");
         let store = WebStore::open(file.clone());
-        store.write("k", serde_json::json!(1)).unwrap();
-        store.write("k", serde_json::json!(2)).unwrap();
-        assert_eq!(store.read("k"), Some(serde_json::json!(2)));
+        store.write("k", serde_json::json!(1), None).unwrap();
+        store.write("k", serde_json::json!(2), None).unwrap();
+        assert_eq!(store.read("k").unwrap(), Some(serde_json::json!(2)));
 
         let temps: Vec<_> = std::fs::read_dir(&dir)
             .expect("read dir")
@@ -203,7 +224,7 @@ mod tests {
         std::fs::write(&file, "{ not valid json").expect("write garbage");
 
         let store = WebStore::open(file.clone());
-        assert_eq!(store.read("anything"), None);
+        assert_eq!(store.read("anything").unwrap(), None);
 
         let backups: Vec<_> = std::fs::read_dir(&dir)
             .expect("read dir")
@@ -218,9 +239,9 @@ mod tests {
         assert_eq!(backups.len(), 1, "exactly one corrupt backup");
 
         // A write after recovery recreates a valid file.
-        store.write("k", serde_json::json!("v")).unwrap();
+        store.write("k", serde_json::json!("v"), None).unwrap();
         let reloaded = WebStore::open(file);
-        assert_eq!(reloaded.read("k"), Some(serde_json::json!("v")));
+        assert_eq!(reloaded.read("k").unwrap(), Some(serde_json::json!("v")));
         cleanup(&dir);
     }
 }

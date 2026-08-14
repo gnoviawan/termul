@@ -105,23 +105,34 @@ export function createSSHApi(): SSHApi {
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
-        const list = await readProfilesFromStore()
-        if (!list.success) return list
-        const updated = list.data.filter((p) => p.id !== profile.id)
-        updated.push(toStoredProfile(profile))
-        return persistenceApi.write(SSH_PROFILES_KEY, updated)
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const list = await readProfilesFromStore()
+          if (!list.success) return list
+          const updated = list.data.filter((p) => p.id !== profile.id)
+          updated.push(toStoredProfile(profile))
+
+          // webPersistenceApi supports CAS via an undocumented 3rd parameter `expected`
+          // We cast it to any to bypass the strict signature in ipc.types.ts
+          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          if (res.success || res.code !== 'STORE_CAS_FAILED') return res
+        }
+        return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
       }
       return invokeIpc<void>(SSH_COMMANDS.SAVE_PROFILE, { profile })
     },
 
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
-        const list = await readProfilesFromStore()
-        if (!list.success) return list
-        return persistenceApi.write(
-          SSH_PROFILES_KEY,
-          list.data.filter((p) => p.id !== profileId)
-        )
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const list = await readProfilesFromStore()
+          if (!list.success) return list
+          const updated = list.data.filter((p) => p.id !== profileId)
+          if (updated.length === list.data.length) return { success: true, data: undefined }
+
+          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          if (res.success || res.code !== 'STORE_CAS_FAILED') return res
+        }
+        return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
       }
       return invokeIpc<void>(SSH_COMMANDS.DELETE_PROFILE, { profileId })
     },

@@ -74,9 +74,19 @@ export class WebStoreSocket {
     return new Promise<T>((resolve, reject) => {
       const id = randomUUID()
       const frame: WsRequest = { id, type, payload }
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject({ code: 'WS_TIMEOUT', message: 'store request timed out' })
+      }, 15000)
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value as T)
+        },
+        reject: (err) => {
+          clearTimeout(timer)
+          reject(err)
+        }
       })
       this.socket?.send(JSON.stringify(frame))
     })
@@ -100,6 +110,13 @@ export class WebStoreSocket {
       this.socket = ws
       this.authed = false
 
+      ws.onopen = () => {
+        void this.authenticate().then(() => {
+          this.authed = true
+          settleOk()
+        }, settleErr)
+      }
+
       ws.onmessage = (ev) => {
         let parsed: unknown
         try {
@@ -110,14 +127,7 @@ export class WebStoreSocket {
         if (!parsed || typeof parsed !== 'object') return
         const obj = parsed as Record<string, unknown>
 
-        // Server asks the client to authenticate before any other request.
-        if (obj.type === 'auth_required') {
-          void this.authenticate().then(() => {
-            this.authed = true
-            settleOk()
-          }, settleErr)
-          return
-        }
+        if (obj.type === 'auth_required') return
 
         // Reply frame: { id, ok, payload | err }.
         if (typeof obj.id === 'string' && typeof obj.ok === 'boolean') {
@@ -190,13 +200,38 @@ export function createWebPersistenceApi(opts?: {
     }
   }
 
-  async function persist<T>(key: string, data: T): Promise<IpcResult<void>> {
-    return toResult(async () => {
-      await socket.request('store_write', {
-        key,
-        value: { _version: CURRENT_VERSION, data }
+  async function flushOrSupersede(
+    key: string,
+    supersedeAction: () => Promise<IpcResult<void>>
+  ): Promise<IpcResult<void>> {
+    const existing = pendingDebounce.get(key)
+    if (existing?.timer) {
+      clearTimeout(existing.timer)
+      existing.timer = null
+    }
+    pendingDebounce.delete(key)
+    const result = await supersedeAction()
+    if (existing) {
+      existing.resolvers.forEach((resolve) => {
+        resolve(result)
       })
-    })
+    }
+    return result
+  }
+
+  async function persist<T>(key: string, data: T, expected?: T): Promise<IpcResult<void>> {
+    return flushOrSupersede(key, () =>
+      toResult(async () => {
+        const payload: Record<string, unknown> = {
+          key,
+          value: { _version: CURRENT_VERSION, data }
+        }
+        if (expected !== undefined) {
+          payload.expected = { _version: CURRENT_VERSION, data: expected }
+        }
+        await socket.request('store_write', payload)
+      })
+    )
   }
 
   async function flushEntry(key: string, entry: PendingDebounceEntry): Promise<IpcResult<void>> {
@@ -251,9 +286,11 @@ export function createWebPersistenceApi(opts?: {
     },
 
     async delete(key: string): Promise<IpcResult<void>> {
-      return toResult(async () => {
-        await socket.request('store_delete', { key })
-      })
+      return flushOrSupersede(key, () =>
+        toResult(async () => {
+          await socket.request('store_delete', { key })
+        })
+      )
     },
 
     async flushPendingWrites(): Promise<IpcResult<void>> {

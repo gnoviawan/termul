@@ -1779,6 +1779,8 @@ struct StoreReadPayload {
 struct StoreWritePayload {
     key: String,
     value: Value,
+    #[serde(default)]
+    expected: Option<Value>,
 }
 
 /// `store_delete` WS request payload.
@@ -1808,7 +1810,10 @@ async fn handle_store_read(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
-    WsReply::ok(id, Some(json!({ "value": store.read(&parsed.key) })))
+    match store.read(&parsed.key) {
+        Ok(value) => WsReply::ok(id, Some(json!({ "value": value }))),
+        Err(e) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
+    }
 }
 
 /// `store_write` → `WebStore::write` (atomic replace). Reply = `{}`.
@@ -1830,13 +1835,21 @@ async fn handle_store_write(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
-    match store.write(&parsed.key, parsed.value) {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
-        Err(error) => WsReply::err_with_code(
-            id,
-            "STORE_WRITE_FAILED",
-            format!("store write failed: {error}"),
-        ),
+    if parsed.key.len() > 1024 {
+        return WsReply::err_with_code(id, "VALIDATION_ERROR", "key too long");
+    }
+    let store_clone = store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store_clone.write(&parsed.key, parsed.value, parsed.expected)
+    }).await;
+    match result {
+        Ok(Ok(true)) => WsReply::ok(id, Some(json!({}))),
+        Ok(Ok(false)) => WsReply::err_with_code(id, "STORE_CAS_FAILED", "store write rejected: value changed concurrently"),
+        Ok(Err(error)) => {
+            tracing::warn!("store_write failed: {error}");
+            WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("store write failed: {error}"))
+        }
+        Err(join_err) => WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("task failed: {join_err}")),
     }
 }
 
@@ -1859,13 +1872,17 @@ async fn handle_store_delete(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
-    match store.delete(&parsed.key) {
-        Ok(existed) => WsReply::ok(id, Some(json!({ "existed": existed }))),
-        Err(error) => WsReply::err_with_code(
-            id,
-            "STORE_DELETE_FAILED",
-            format!("store delete failed: {error}"),
-        ),
+    let store_clone = store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store_clone.delete(&parsed.key)
+    }).await;
+    match result {
+        Ok(Ok(existed)) => WsReply::ok(id, Some(json!({ "existed": existed }))),
+        Ok(Err(error)) => {
+            tracing::warn!("store_delete failed: {error}");
+            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("store delete failed: {error}"))
+        }
+        Err(join_err) => WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("task failed: {join_err}")),
     }
 }
 
@@ -4357,7 +4374,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
-        store.write("k", json!("v")).unwrap();
+        store.write("k", json!("v"), None).unwrap();
 
         let del = handle_request_with_store(
             r#"{"id":"r1","type":"store_delete","payload":{"key":"k"}}"#,
@@ -4366,7 +4383,7 @@ mod tests {
         .await;
         assert!(del.ok, "delete ok: {:?}", del.err);
         assert_eq!(del.payload.as_ref().and_then(|p| p.get("existed")), Some(&json!(true)));
-        assert_eq!(store.read("k"), None);
+        assert_eq!(store.read("k").unwrap(), None);
 
         let del2 = handle_request_with_store(
             r#"{"id":"r2","type":"store_delete","payload":{"key":"k"}}"#,
