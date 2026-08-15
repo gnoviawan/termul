@@ -1,12 +1,8 @@
 import { Circle } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
-
-function connectionLabel(connected: boolean, reconnecting: boolean): string {
-  if (reconnecting) return 'Reconnecting'
-  return connected ? 'Connected' : 'Disconnected'
-}
 
 interface AgentConnectionLampProps {
   connected: boolean
@@ -39,7 +35,12 @@ export function AgentConnectionLamp({
   reconnecting = false,
   decorative = false
 }: AgentConnectionLampProps): ReactNode {
-  const label = connectionLabel(connected, reconnecting)
+  const t = useRuntimeTranslation('chat')
+  const label = reconnecting
+    ? t('connection.reconnecting', 'Reconnecting')
+    : connected
+      ? t('connection.connected', 'Connected')
+      : t('connection.disconnected', 'Disconnected')
   const colorClass = reconnecting
     ? 'text-warning animate-pulse'
     : connected

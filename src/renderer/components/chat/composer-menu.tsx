@@ -10,6 +10,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
 export interface ComposerMenuItem {
@@ -78,6 +79,7 @@ function flatten(sections: ComposerMenuSection[]): FlatRow[] {
  */
 export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
   ({ sections, onSelect, emptyLabel, inputRef }, ref) => {
+    const { t } = useTranslation('chat')
     const flat = useMemo(() => flatten(sections), [sections])
     const [highlight, setHighlight] = useState(0)
     const listRef = useRef<HTMLDivElement>(null)
@@ -146,7 +148,7 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
           id={listboxId}
           className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md"
         >
-          {emptyLabel ?? 'No items available.'}
+          {emptyLabel ?? t('selectors.noItems')}
         </div>
       )
     }

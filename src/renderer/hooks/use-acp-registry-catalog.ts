@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { runtimeT } from '@/i18n/runtime'
 import { acpApi } from '@/lib/acp-api'
 import {
   compareRegistryVersions,
@@ -95,7 +96,11 @@ export function useAcpRegistryCatalog(): {
         // that surfaces the error as a toast, so the user is told to check for
         // updates before applying.
         throw new Error(
-          'No remote registry snapshot has been fetched. Check for updates before applying.'
+          runtimeT(
+            'settings',
+            'registry.snapshotRequired',
+            'No remote registry snapshot has been fetched. Check for updates before applying.'
+          )
         )
       }
       // CAP-6 / Story 8: the opt-in is now host-persisted. The renderer's
@@ -107,7 +112,11 @@ export function useAcpRegistryCatalog(): {
       // persisted (UI/host split-brain).
       const result = await acpCatalogApi.setCatalogOptIn(true)
       if (!result.success) {
-        throw new Error(result.error ?? result.code ?? 'Could not apply the remote registry.')
+        throw new Error(
+          result.error ??
+            result.code ??
+            runtimeT('settings', 'registry.applyFailed', 'Could not apply the remote registry.')
+        )
       }
       sharedActiveRemote = true
       notifyRegistryCatalogListeners()
@@ -124,7 +133,15 @@ export function useAcpRegistryCatalog(): {
       // caller does not clear local state the host kept opted-in.
       const result = await acpCatalogApi.setCatalogOptIn(false)
       if (!result.success) {
-        throw new Error(result.error ?? result.code ?? 'Could not switch to the bundled registry.')
+        throw new Error(
+          result.error ??
+            result.code ??
+            runtimeT(
+              'settings',
+              'registry.bundledFailed',
+              'Could not switch to the bundled registry.'
+            )
+        )
       }
       sharedAdvisoryAgents = null
       sharedAdvisorySummary = null

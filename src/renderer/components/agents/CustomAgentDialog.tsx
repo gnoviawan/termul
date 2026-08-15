@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { AgentPromptMode, TerminalAgentDefinition } from '@/lib/agents/agent-registry'
 import { toAgentDefinition, validateCustomAgent } from '@/lib/agents/custom-agents'
 import { parseBaseArgsInput } from '@/lib/agents/parse-base-args'
@@ -54,6 +55,7 @@ export function CustomAgentDialog({
   onOpenChange,
   onAgentCreated
 }: CustomAgentDialogProps): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [saving, setSaving] = useState(false)
 
@@ -92,10 +94,13 @@ export function CustomAgentDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus size={18} />
-            New Custom Agent
+            {t('customCli.title', 'New Custom Agent')}
           </DialogTitle>
           <DialogDescription>
-            Add a CLI agent to the launcher. Configure how to call it and how prompts are passed.
+            {t(
+              'customCli.description',
+              'Add a CLI agent to the launcher. Configure how to call it and how prompts are passed.'
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -103,7 +108,7 @@ export function CustomAgentDialog({
           {/* Icon + Name row */}
           <div className="flex items-end gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label className="text-xs">Icon</Label>
+              <Label className="text-xs">{t('customCli.icon', 'Icon')}</Label>
               <IconPicker
                 value={form.icon}
                 onChange={(icon) => setForm((prev) => ({ ...prev, icon }))}
@@ -111,13 +116,13 @@ export function CustomAgentDialog({
             </div>
             <div className="flex-1 flex flex-col gap-1.5">
               <Label htmlFor="agent-name" className="text-xs">
-                Name
+                {t('customCli.name', 'Name')}
               </Label>
               <Input
                 id="agent-name"
                 value={form.name}
                 onChange={(e) => update('name', e.target.value)}
-                placeholder="My Agent"
+                placeholder={t('customCli.namePlaceholder', 'My Agent')}
                 className="h-9"
               />
             </div>
@@ -126,13 +131,13 @@ export function CustomAgentDialog({
           {/* Command */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="agent-command" className="text-xs">
-              Command
+              {t('customCli.command', 'Command')}
             </Label>
             <Input
               id="agent-command"
               value={form.command}
               onChange={(e) => update('command', e.target.value)}
-              placeholder="e.g. claude, codex, my-agent"
+              placeholder={t('customCli.commandPlaceholder', 'e.g. claude, codex, my-agent')}
               className="h-9 font-mono text-sm"
             />
           </div>
@@ -140,21 +145,23 @@ export function CustomAgentDialog({
           {/* Base Args */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="agent-base-args" className="text-xs">
-              Base arguments{' '}
-              <span className="text-muted-foreground font-normal">(space-separated, optional)</span>
+              {t('customCli.baseArguments', 'Base arguments')}{' '}
+              <span className="text-muted-foreground font-normal">
+                {t('customCli.baseArgumentsHint', '(space-separated, optional)')}
+              </span>
             </Label>
             <Input
               id="agent-base-args"
               value={form.baseArgs}
               onChange={(e) => update('baseArgs', e.target.value)}
-              placeholder="e.g. --interactive"
+              placeholder={t('customCli.baseArgumentsPlaceholder', 'e.g. --interactive')}
               className="h-9 font-mono text-sm"
             />
           </div>
 
           {/* Prompt Mode */}
           <div className="flex flex-col gap-1.5">
-            <Label className="text-xs">Prompt mode</Label>
+            <Label className="text-xs">{t('customCli.promptMode', 'Prompt mode')}</Label>
             <Select
               value={form.promptMode}
               onValueChange={(v) => update('promptMode', v as AgentPromptMode)}
@@ -163,11 +170,18 @@ export function CustomAgentDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="positional">Positional — prompt appended after args</SelectItem>
-                <SelectItem value="flag">
-                  Flag — prompt follows a flag (e.g. -i "prompt")
+                <SelectItem value="positional">
+                  {t('customCli.promptModes.positional', 'Positional — prompt appended after args')}
                 </SelectItem>
-                <SelectItem value="none">None — no seed prompt</SelectItem>
+                <SelectItem value="flag">
+                  {t(
+                    'customCli.promptModes.flag',
+                    'Flag — prompt follows a flag (e.g. -i "prompt")'
+                  )}
+                </SelectItem>
+                <SelectItem value="none">
+                  {t('customCli.promptModes.none', 'None — no seed prompt')}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -176,13 +190,13 @@ export function CustomAgentDialog({
           {form.promptMode === 'flag' && (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="agent-prompt-flag" className="text-xs">
-                Prompt flag
+                {t('customCli.promptFlag', 'Prompt flag')}
               </Label>
               <Input
                 id="agent-prompt-flag"
                 value={form.promptFlag}
                 onChange={(e) => update('promptFlag', e.target.value)}
-                placeholder="e.g. -i, --prompt"
+                placeholder={t('customCli.promptFlagPlaceholder', 'e.g. -i, --prompt')}
                 className="h-9 font-mono text-sm"
               />
             </div>
@@ -198,14 +212,14 @@ export function CustomAgentDialog({
               onOpenChange(false)
             }}
           >
-            Cancel
+            {t('common.cancel', 'Cancel')}
           </Button>
           <Button
             size="sm"
             onClick={() => void handleSave()}
             disabled={saving || !form.name.trim() || !form.command.trim()}
           >
-            {saving ? 'Saving…' : 'Create Agent'}
+            {saving ? t('common.saving', 'Saving…') : t('customCli.create', 'Create Agent')}
           </Button>
         </div>
       </DialogContent>

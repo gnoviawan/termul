@@ -13,6 +13,7 @@ import {
   Trash2
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import {
@@ -90,6 +91,7 @@ export function MobileFileExplorer({
   open,
   onOpenChange
 }: MobileFileExplorerProps): React.JSX.Element {
+  const { t } = useTranslation('mobile')
   const { rootPath, directoryContents, loadingDirs, rootLoadError } = useFileExplorer()
   const { toggleDirectory, refreshDirectory, selectPath } = useFileExplorerActions()
   const reducedMotion = useReducedMotion() ?? false
@@ -198,7 +200,7 @@ export function MobileFileExplorer({
       useWorkspaceStore.getState().addEditorTab(entry.path)
       onOpenChange(false)
     } catch (error) {
-      toast.error('Failed to open file', {
+      toast.error(t('files.openFailed'), {
         description: error instanceof Error ? error.message : String(error)
       })
     }
@@ -242,7 +244,7 @@ export function MobileFileExplorer({
           ? await filesystemApi.createFile(fullPath)
           : await filesystemApi.createDirectory(fullPath)
       if (!result.success) {
-        toast.error('Failed to create', { description: result.error })
+        toast.error(t('files.createFailed'), { description: result.error })
         return
       }
       setCreating(null)
@@ -267,7 +269,7 @@ export function MobileFileExplorer({
     setRenaming(null)
     const result = await filesystemApi.renameFile(entry.path, newPath)
     if (!result.success) {
-      toast.error('Failed to rename', { description: result.error })
+      toast.error(t('files.renameFailed'), { description: result.error })
       return
     }
     closeAffectedTabs(entry)
@@ -284,7 +286,7 @@ export function MobileFileExplorer({
       recursive: entry.type === 'directory'
     })
     if (!result.success) {
-      toast.error('Failed to delete', { description: result.error })
+      toast.error(t('files.deleteFailed'), { description: result.error })
       return
     }
     closeAffectedTabs(entry)
@@ -308,7 +310,7 @@ export function MobileFileExplorer({
     const parent = parentOf(entry.path)
     const result = await filesystemApi.copyFile(entry.path, joinPath(parent, `${stem} copy${ext}`))
     if (!result.success) {
-      toast.error('Failed to copy', { description: result.error })
+      toast.error(t('files.copyFailed'), { description: result.error })
       return
     }
     await refreshDirectory(parent)
@@ -329,7 +331,7 @@ export function MobileFileExplorer({
               if (event.key === 'Escape') setRenaming(null)
             }}
             className="m-1 h-11"
-            aria-label={`Rename ${entry.name}`}
+            aria-label={t('files.renameAria', { name: entry.name })}
           />
         ) : (
           <div className="flex h-11 items-center gap-2 px-2">
@@ -338,7 +340,9 @@ export function MobileFileExplorer({
               className="flex h-11 min-w-0 flex-1 items-center gap-2 text-left"
               onClick={() => handleRowTap(entry)}
               aria-label={
-                entry.type === 'directory' ? `Open folder ${entry.name}` : `Open ${entry.name}`
+                entry.type === 'directory'
+                  ? t('files.openFolderAria', { name: entry.name })
+                  : t('files.openFileAria', { name: entry.name })
               }
             >
               <MaterialFileIcon
@@ -363,7 +367,7 @@ export function MobileFileExplorer({
               variant="ghost"
               size="icon"
               className="size-9 shrink-0"
-              aria-label={`Actions for ${entry.name}`}
+              aria-label={t('files.actionsAria', { name: entry.name })}
               onClick={(event) => {
                 event.stopPropagation()
                 setActionEntry(entry)
@@ -395,7 +399,7 @@ export function MobileFileExplorer({
       ? isAtRoot
         ? normalizedRoot.split('/').filter(Boolean).at(-1) || normalizedRoot
         : normalizedCurrent.split('/').filter(Boolean).at(-1) || normalizedCurrent
-      : 'Files'
+      : t('files.title')
   const currentEntries = currentPath
     ? sortDirectoryEntries(directoryContents.get(currentPath) ?? [])
     : []
@@ -415,7 +419,7 @@ export function MobileFileExplorer({
               variant="ghost"
               size="icon"
               className="-ml-2 size-9 shrink-0"
-              aria-label="Back to parent folder"
+              aria-label={t('files.back')}
               disabled={isAtRoot || createSubmitting}
               onClick={navigateBack}
             >
@@ -427,11 +431,11 @@ export function MobileFileExplorer({
                 className="truncate text-xs text-muted-foreground"
                 title={normalizedCurrent ?? undefined}
               >
-                {isAtRoot ? 'Project files' : normalizedCurrent?.slice(rootPrefixLength)}
+                {isAtRoot ? t('files.projectFiles') : normalizedCurrent?.slice(rootPrefixLength)}
               </p>
             </div>
           </div>
-          <SheetDescription className="sr-only">Browse project files</SheetDescription>
+          <SheetDescription className="sr-only">{t('files.browseDescription')}</SheetDescription>
         </SheetHeader>
 
         <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1">
@@ -440,7 +444,7 @@ export function MobileFileExplorer({
             variant="ghost"
             size="icon"
             className="size-9"
-            aria-label="Refresh current folder"
+            aria-label={t('files.refresh')}
             disabled={!currentPath || createSubmitting}
             onClick={() => currentPath && void refreshDirectory(currentPath)}
           >
@@ -451,7 +455,7 @@ export function MobileFileExplorer({
             variant="ghost"
             size="icon"
             className="size-9"
-            aria-label="New file"
+            aria-label={t('files.newFile')}
             disabled={!currentPath || createSubmitting}
             onClick={() => setCreating({ type: 'file', value: '' })}
           >
@@ -462,7 +466,7 @@ export function MobileFileExplorer({
             variant="ghost"
             size="icon"
             className="size-9"
-            aria-label="New folder"
+            aria-label={t('files.newFolder')}
             disabled={!currentPath || createSubmitting}
             onClick={() => setCreating({ type: 'directory', value: '' })}
           >
@@ -481,16 +485,18 @@ export function MobileFileExplorer({
                   size="sm"
                   onClick={() => void refreshDirectory(currentPath)}
                 >
-                  Retry
+                  {t('files.retry')}
                 </Button>
               )}
             </div>
           ) : !currentPath ? (
             rootPath ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</div>
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                {t('files.loading')}
+              </div>
             ) : (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                No active project
+                {t('files.noProject')}
               </div>
             )
           ) : (
@@ -521,24 +527,34 @@ export function MobileFileExplorer({
                     <Input
                       autoFocus
                       disabled={createSubmitting}
-                      placeholder={creating.type === 'file' ? 'new-file.txt' : 'new-folder'}
+                      placeholder={
+                        creating.type === 'file'
+                          ? t('files.newFilePlaceholder')
+                          : t('files.newFolderPlaceholder')
+                      }
                       onChange={(event) => setCreating({ ...creating, value: event.target.value })}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') void handleCreate()
                         if (event.key === 'Escape') setCreating(null)
                       }}
                       className="h-11"
-                      aria-label={creating.type === 'file' ? 'New file name' : 'New folder name'}
+                      aria-label={
+                        creating.type === 'file' ? t('files.newFileName') : t('files.newFolderName')
+                      }
                     />
                   </div>
                 ) : isCurrentLoading && !directoryContents.has(currentPath) ? (
                   <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                    Loading…
+                    {t('files.loading')}
                   </div>
                 ) : currentEntries.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-sm text-muted-foreground">Empty</div>
+                  <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    {t('files.empty')}
+                  </div>
                 ) : (
-                  <ul aria-label={`Files in ${currentName}`}>{currentEntries.map(renderRow)}</ul>
+                  <ul aria-label={t('files.filesIn', { name: currentName })}>
+                    {currentEntries.map(renderRow)}
+                  </ul>
                 )}
               </motion.div>
             </AnimatePresence>
@@ -549,7 +565,9 @@ export function MobileFileExplorer({
           <SheetContent
             side="bottom"
             className="flex flex-col gap-0 rounded-t-xl p-2"
-            aria-label={actionEntry ? `Actions for ${actionEntry.name}` : undefined}
+            aria-label={
+              actionEntry ? t('files.actionsAria', { name: actionEntry.name }) : undefined
+            }
           >
             {actionEntry && (
               <>
@@ -564,7 +582,7 @@ export function MobileFileExplorer({
                     setActionEntry(null)
                   }}
                 >
-                  <Pencil size={16} /> Rename
+                  <Pencil size={16} /> {t('files.rename')}
                 </button>
                 <button
                   type="button"
@@ -575,7 +593,7 @@ export function MobileFileExplorer({
                     void handleDuplicate(entry)
                   }}
                 >
-                  <Copy size={16} /> Duplicate
+                  <Copy size={16} /> {t('files.duplicate')}
                 </button>
                 <button
                   type="button"
@@ -585,7 +603,7 @@ export function MobileFileExplorer({
                     setActionEntry(null)
                   }}
                 >
-                  <Trash2 size={16} /> Delete
+                  <Trash2 size={16} /> {t('files.delete')}
                 </button>
               </>
             )}
@@ -601,15 +619,17 @@ export function MobileFileExplorer({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {pendingDelete?.name ?? ''}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {t('files.deleteTitle', { name: pendingDelete?.name ?? '' })}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDelete?.type === 'directory'
-                ? 'This will delete the folder and all its contents. This cannot be undone.'
-                : 'This will delete the file. This cannot be undone.'}
+                ? t('files.deleteFolderDescription')
+                : t('files.deleteFileDescription')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('files.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-red-500 text-white hover:bg-red-600"
               onClick={() => {
@@ -617,7 +637,7 @@ export function MobileFileExplorer({
                 setPendingDelete(null)
               }}
             >
-              Delete
+              {t('files.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

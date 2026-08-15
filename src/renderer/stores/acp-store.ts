@@ -31,6 +31,7 @@ import type {
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { runtimeT } from '@/i18n/runtime'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   type StoredAgentConfig,
@@ -674,21 +675,23 @@ function nextSeq(): number {
 let untitledChatCounter = 0
 function nextUntitledTitle(): string {
   untitledChatCounter += 1
-  return `Untitled Chat ${untitledChatCounter}`
+  return runtimeT('chat', 'store.untitled', 'Untitled Chat {{count}}', {
+    count: untitledChatCounter
+  })
 }
 
-/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
-const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+/** Matches supported localized placeholder titles and captures the numeric suffix. */
+const UNTITLED_CHAT_RES = [/^Untitled Chat (\d+)$/, /^未命名对话 (\d+)$/]
 
 /**
- * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
+ * Lift `untitledChatCounter` to at least the highest localized placeholder suffix
  * found across the persisted index, so placeholders assigned after a restart
  * never collide with ones already on disk.
  */
 function rebaseUntitledCounter(entries: SessionIndexEntry[]): void {
   let maxSuffix = untitledChatCounter
   for (const entry of entries) {
-    const match = UNTITLED_CHAT_RE.exec(entry.title)
+    const match = UNTITLED_CHAT_RES.map((pattern) => pattern.exec(entry.title)).find(Boolean)
     if (match) {
       const n = Number.parseInt(match[1], 10)
       if (Number.isFinite(n) && n > maxSuffix) maxSuffix = n
@@ -773,16 +776,16 @@ function appendBlocks(existing: ContentBlock[], incoming: ContentBlock): Content
 function noteForStopReason(reason: StopReason): string | null {
   switch (reason) {
     case 'refusal':
-      return 'The agent refused to continue.'
+      return runtimeT('chat', 'store.stopRefusal', 'The agent refused to continue.')
     case 'max_tokens':
-      return 'Response stopped: token limit reached.'
+      return runtimeT('chat', 'store.stopTokens', 'Response stopped: token limit reached.')
     case 'max_turn_requests':
-      return 'Response stopped: too many tool-call rounds.'
+      return runtimeT('chat', 'store.stopRounds', 'Response stopped: too many tool-call rounds.')
     case 'end_turn':
     case 'cancelled':
       return null
     default:
-      return `Response stopped: ${reason}`
+      return runtimeT('chat', 'store.stopOther', 'Response stopped: {{reason}}', { reason })
   }
 }
 
@@ -824,7 +827,13 @@ function withSessionResumeError(
   if (!session) return sessions
   return {
     ...sessions,
-    [sessionId]: { ...session, replaying: null, lastError: `Resume failed: ${String(err)}` }
+    [sessionId]: {
+      ...session,
+      replaying: null,
+      lastError: runtimeT('chat', 'store.resumeFailed', 'Resume failed: {{error}}', {
+        error: String(err)
+      })
+    }
   }
 }
 
@@ -1225,7 +1234,11 @@ function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
     if (isPromptTurnInProgressError(err)) return
     // Agent-dead rejections are surfaced by the crash/disconnect events.
     if (isAgentDeadError(err)) return
-    toast.error(`Failed to send queued message: ${String(err)}`)
+    toast.error(
+      runtimeT('chat', 'store.sendQueuedFailed', 'Failed to send queued message: {{error}}', {
+        error: String(err)
+      })
+    )
   })
 }
 
@@ -1779,23 +1792,47 @@ function parseGeneratedCommitMessage(raw: string): GeneratedCommitMessage {
   try {
     value = JSON.parse(jsonText)
   } catch {
-    throw new Error('The ACP agent returned an invalid commit message response')
+    throw new Error(
+      runtimeT(
+        'chat',
+        'store.commitInvalidResponse',
+        'The ACP agent returned an invalid commit message response'
+      )
+    )
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('The ACP agent returned an invalid commit message response')
+    throw new Error(
+      runtimeT(
+        'chat',
+        'store.commitInvalidResponse',
+        'The ACP agent returned an invalid commit message response'
+      )
+    )
   }
   const record = value as Record<string, unknown>
   if (typeof record.summary !== 'string' || record.summary.trim().length === 0) {
-    throw new Error('The ACP agent returned a blank commit summary')
+    throw new Error(
+      runtimeT('chat', 'store.commitBlankSummary', 'The ACP agent returned a blank commit summary')
+    )
   }
   const summary = record.summary.trim()
   if (/\r|\n/.test(summary) || summary.length > 72) {
     throw new Error(
-      'The ACP agent returned a commit summary that is longer than 72 characters or contains a newline'
+      runtimeT(
+        'chat',
+        'store.commitSummaryInvalid',
+        'The ACP agent returned a commit summary that is longer than 72 characters or contains a newline'
+      )
     )
   }
   if (record.description !== undefined && typeof record.description !== 'string') {
-    throw new Error('The ACP agent returned an invalid commit description')
+    throw new Error(
+      runtimeT(
+        'chat',
+        'store.commitDescriptionInvalid',
+        'The ACP agent returned an invalid commit description'
+      )
+    )
   }
   return {
     summary,
@@ -2966,8 +3003,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           : { servers: mcpServers, skipped: [], pending: false }
       const sessionMcpServers = selection.servers
       if (!selection.pending && selection.skipped.length > 0) {
-        toast.warning('Some MCP servers were skipped', {
-          description: `${selection.skipped.map((server) => server.name).join(', ')} require HTTP or SSE support from this agent.`
+        toast.warning(runtimeT('mcp', 'skippedTitle', 'Some MCP servers were skipped'), {
+          description: runtimeT(
+            'mcp',
+            'skippedDescription',
+            '{{names}} require HTTP or SSE support from this agent.',
+            {
+              names: selection.skipped.map((server) => server.name).join(', ')
+            }
+          )
         })
       }
       const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers, {
@@ -3629,9 +3673,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
       if (!applied) {
-        toast.error('Selected model is not available in this session', {
-          description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
-        })
+        toast.error(
+          runtimeT(
+            'chat',
+            'store.modelUnavailable',
+            'Selected model is not available in this session'
+          ),
+          {
+            description: runtimeT(
+              'chat',
+              'store.modelUnavailableDescription',
+              'The model "{{model}}" is not advertised by the agent and no model config option exists. Falling back to the agent\'s default model.',
+              {
+                model: pending.modelId
+              }
+            )
+          }
+        )
       }
     }
     for (const [configId, valueId] of Object.entries(pending.configValues)) {
@@ -3767,13 +3825,27 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   generateCommitMessage: async (cwd, stagedDiff) => {
     const trimmedDiff = stagedDiff.trim()
-    if (trimmedDiff.length === 0) throw new Error('The staged diff is empty')
+    if (trimmedDiff.length === 0) {
+      throw new Error(runtimeT('chat', 'store.stagedDiffEmpty', 'The staged diff is empty'))
+    }
     if (trimmedDiff.length > MAX_COMMIT_MESSAGE_DIFF_CHARS) {
-      throw new Error('The staged diff is too large to generate safely')
+      throw new Error(
+        runtimeT(
+          'chat',
+          'store.stagedDiffTooLarge',
+          'The staged diff is too large to generate safely'
+        )
+      )
     }
     const configId = get().selectedAgentConfigId
     if (!configId || !get().agentConfigs.some((config) => config.id === configId)) {
-      throw new Error('Configure and select an ACP agent before generating a commit message')
+      throw new Error(
+        runtimeT(
+          'chat',
+          'store.selectAgentForCommit',
+          'Configure and select an ACP agent before generating a commit message'
+        )
+      )
     }
 
     let sessionId: SessionId | null = null
@@ -3794,7 +3866,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     try {
       agentId = await Promise.race([ensureLiveAgent(get, set, configId, cwd), timeoutPromise])
       if (!agentId) {
-        throw new Error('The selected ACP agent is unavailable. Check its configuration and retry')
+        throw new Error(
+          runtimeT(
+            'chat',
+            'store.selectedAgentUnavailable',
+            'The selected ACP agent is unavailable. Check its configuration and retry'
+          )
+        )
       }
       const sessionAgentId = agentId
       const createSessionPromise = get().createSession(sessionAgentId, cwd, [], '', {
@@ -3856,7 +3934,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       )
       const stopReason = await Promise.race([collector.completed, sendFailure, timeoutPromise])
       if (stopReason !== 'end_turn') {
-        throw new Error(`The ACP agent did not complete normally (${stopReason})`)
+        throw new Error(
+          runtimeT(
+            'chat',
+            'store.agentDidNotComplete',
+            'The ACP agent did not complete normally ({{reason}})',
+            { reason: stopReason }
+          )
+        )
       }
       await Promise.race([sendPromise, timeoutPromise])
       const generated = parseGeneratedCommitMessage(collector.chunks.join(''))
@@ -4492,7 +4577,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         source: 'acp-store.loadMcpServers',
         message: `Failed to load MCP registry (${String(err)})`
       })
-      toast.error('Could not load MCP servers. Try reopening Settings.')
+      toast.error(
+        runtimeT('mcp', 'loadFailed', 'Could not load MCP servers. Try reopening Settings.')
+      )
     }
   },
 
@@ -4921,7 +5008,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (e.role === 'agent' && e.content.type === 'text' && typeof e.content.text === 'string') {
         commitCollector.length += e.content.text.length
         if (commitCollector.length > MAX_COMMIT_MESSAGE_RESPONSE_CHARS) {
-          commitCollector.reject(new Error('The ACP agent response was too large'))
+          commitCollector.reject(
+            new Error(
+              runtimeT('chat', 'store.responseTooLarge', 'The ACP agent response was too large')
+            )
+          )
         } else {
           commitCollector.chunks.push(e.content.text)
         }
@@ -5010,7 +5101,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onToolCall: (e) => {
     if (commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, 'The ACP agent attempted to use a tool')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        runtimeT('chat', 'store.attemptedTool', 'The ACP agent attempted to use a tool')
+      )
       return
     }
     const session = get().sessions[e.sessionId]
@@ -5180,7 +5274,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onPermissionRequest: (e) => {
     if (commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, 'The ACP agent requested permission')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        runtimeT('chat', 'store.requestedPermission', 'The ACP agent requested permission')
+      )
       return
     }
     set((s) => {
@@ -5203,7 +5300,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onQuestionRequest: (e) => {
     if (commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, 'The ACP agent asked an interactive question')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        runtimeT('chat', 'store.askedQuestion', 'The ACP agent asked an interactive question')
+      )
       return
     }
     set((s) => {
@@ -5330,7 +5430,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onAgentError: (e) => {
     if (e.sessionId && commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, e.message || 'The ACP agent reported an error')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        e.message || runtimeT('chat', 'store.reportedError', 'The ACP agent reported an error')
+      )
       return
     }
     // Flush coalesced updates so the error reflects the final transcript state.
@@ -5392,7 +5495,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   // (no silent respawn, honoring ADR-003).
   _onAgentCrashed: (e) => {
     if (e.sessionId && commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, e.message || 'The ACP agent crashed')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        e.message || runtimeT('chat', 'store.crashed', 'The ACP agent crashed')
+      )
       return
     }
     // Flush coalesced updates so the crash reflects the final transcript state.
@@ -5444,7 +5550,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onAgentDisconnected: (e) => {
     for (const [sessionId, collector] of commitMessageCollectors) {
       if (collector.agentId === e.agentId) {
-        rejectCommitMessageCollector(sessionId, 'The ACP agent disconnected')
+        rejectCommitMessageCollector(
+          sessionId,
+          runtimeT('chat', 'store.disconnected', 'The ACP agent disconnected')
+        )
       }
     }
     // Flush coalesced updates so the disconnect reflects the final transcript state.
@@ -5539,7 +5648,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onSessionClosed: (e) => {
     if (commitMessageCollectors.has(e.sessionId)) {
-      rejectCommitMessageCollector(e.sessionId, 'The temporary ACP session closed unexpectedly')
+      rejectCommitMessageCollector(
+        e.sessionId,
+        runtimeT(
+          'chat',
+          'store.temporarySessionClosed',
+          'The temporary ACP session closed unexpectedly'
+        )
+      )
       return
     }
     // Flush coalesced updates so transcript eviction sees the final state.
@@ -5640,8 +5756,11 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
               ...state.sessions,
               [recovery.sessionId]: {
                 ...session,
-                lastError:
+                lastError: runtimeT(
+                  'chat',
+                  'store.recoveryDegraded',
                   'Connection recovered live-only; events emitted while disconnected may be missing.'
+                )
               }
             }
           : state.sessions
@@ -5834,7 +5953,9 @@ export function initAcpEventListeners(): () => void {
       queuedProjectSwitchId: null,
       failedProjectSwitchId: event.projectId
     })
-    toast.error(event.message || 'Project switch failed')
+    toast.error(
+      event.message || runtimeT('chat', 'store.projectSwitchFailed', 'Project switch failed')
+    )
   }
   teardown = [
     transport.onEvent<ProjectSwitchCompletedEvent>(
@@ -5889,11 +6010,11 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
       useAcpStore.getState()._onAgentCrashed(e)
-      toast.error(e.message || 'Agent crashed')
+      toast.error(e.message || runtimeT('chat', 'store.agentCrashed', 'Agent crashed'))
     }),
     acpApi.onEvent<AgentErrorEvent>(ACP_EVENTS.agentError, (e) => {
       useAcpStore.getState()._onAgentError(e)
-      toast.error(e.message || 'Agent error')
+      toast.error(e.message || runtimeT('chat', 'store.agentError', 'Agent error'))
     }),
     acpApi.onEvent<AgentDisconnectedEvent>(ACP_EVENTS.agentDisconnected, (e) =>
       useAcpStore.getState()._onAgentDisconnected(e)

@@ -15,10 +15,12 @@ import {
   Wrench
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { IconActionButton } from '@/components/ui/icon-action-button'
+import { runtimeT } from '@/i18n/runtime'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
@@ -135,7 +137,9 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
         key={key}
         className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground"
       >
-        {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
+        {terminalId
+          ? runtimeT('chat', 'tool.terminalWithId', 'Terminal {{id}}', { id: terminalId })
+          : runtimeT('chat', 'tool.terminal', 'Terminal')}
       </div>
     )
   }
@@ -197,6 +201,7 @@ function ToolCallCardComponent({
   animateEnter = true,
   filePathContext
 }: ToolCallCardProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const reduced = useReducedMotion() ?? false
   const Icon = ICONS[toolIconName(toolCall)]
   const content = toolCall.content ?? []
@@ -240,9 +245,9 @@ function ToolCallCardComponent({
           source: 'ToolCallCard.openFile',
           message: `Failed to open ${openFilePath}: ${String(error)}`
         })
-        toast.error('Failed to open file from chat.')
+        toast.error(t('messages.openFileFailed'))
       })
-  }, [openFilePath, filePathContext])
+  }, [openFilePath, filePathContext, t])
 
   // Row summary (icon + label + meta) lives inside the disclosure button so
   // clicking the label toggles details. The open-file button and chevron are
@@ -323,7 +328,7 @@ function ToolCallCardComponent({
             </motion.span>
           )}
           {openFilePath ? (
-            <IconActionButton label="Open file" onClick={openFile} size="sm">
+            <IconActionButton label={t('tool.openFile')} onClick={openFile} size="sm">
               <ExternalLink />
             </IconActionButton>
           ) : null}

@@ -6,6 +6,7 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
 
+import { i18n } from '@/i18n'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpTransportForTests,
@@ -384,6 +385,34 @@ describe('acp-transport helpers', () => {
 describe('WsAcpTransport', () => {
   afterEach(() => {
     _resetAcpTransportForTests(null)
+  })
+
+  it('localizes application-owned transport errors at call time', async () => {
+    const previousLanguage = i18n.language
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    try {
+      const request = {
+        agentId: 'test',
+        archiveUrl: 'https://example.test',
+        cmd: 'test'
+      }
+      await i18n.changeLanguage('en')
+      await expect(transport.installRegistryBinary(request)).rejects.toMatchObject({
+        code: 'unsupported',
+        message: 'Registry binary install is desktop-only'
+      })
+      await i18n.changeLanguage('zh-CN')
+      await expect(transport.installRegistryBinary(request)).rejects.toMatchObject({
+        code: 'unsupported',
+        message: 'Registry 二进制安装仅支持桌面端'
+      })
+    } finally {
+      transport.dispose()
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('spawnAgent / listAgents / killAgent mirror desktop lifecycle over WS', async () => {

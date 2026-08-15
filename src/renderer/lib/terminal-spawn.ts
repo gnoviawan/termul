@@ -6,6 +6,8 @@
  * open a terminal without duplicating the spawn pipeline.
  */
 
+import { i18n } from '@/i18n'
+import { formatNumber } from '@/i18n/format'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
@@ -53,7 +55,12 @@ export async function spawnTerminalInPane(
     if (projectTerminalCount >= options.maxTerminalsPerProject) {
       return {
         success: false,
-        error: `Maximum ${options.maxTerminalsPerProject} terminals per project`
+        error: i18n.t('limits.perProject', {
+          ns: 'terminal',
+          count: options.maxTerminalsPerProject,
+          formattedCount: formatNumber(options.maxTerminalsPerProject),
+          defaultValue: 'Maximum {{formattedCount}} terminals per project'
+        })
       }
     }
   }
@@ -62,7 +69,12 @@ export async function spawnTerminalInPane(
   if (terminalStore.isTerminalLimitReached()) {
     return {
       success: false,
-      error: `Maximum ${terminalStore.terminals.length} terminals allowed across all projects`
+      error: i18n.t('limits.global', {
+        ns: 'terminal',
+        count: terminalStore.terminals.length,
+        formattedCount: formatNumber(terminalStore.terminals.length),
+        defaultValue: 'Maximum {{formattedCount}} terminals allowed across all projects'
+      })
     }
   }
 
@@ -89,14 +101,23 @@ export async function spawnTerminalInPane(
     if (!spawnResult.success) {
       return {
         success: false,
-        error: spawnResult.error || 'Failed to create terminal'
+        error:
+          spawnResult.error ||
+          i18n.t('errors.createFailed', {
+            ns: 'terminal',
+            defaultValue: 'Failed to create terminal'
+          })
       }
     }
 
     // Create terminal record in store
     const terminalCount = terminalStore.terminals.length
     const terminal = terminalStore.addTerminal(
-      `Terminal ${terminalCount + 1}`,
+      i18n.t('defaultName', {
+        ns: 'terminal',
+        number: formatNumber(terminalCount + 1),
+        defaultValue: 'Terminal {{number}}'
+      }),
       projectId,
       shell,
       cwd

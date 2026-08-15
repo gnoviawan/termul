@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
@@ -63,6 +64,7 @@ export function SSHFileExplorer({
   onDelete,
   onRename
 }: SSHFileExplorerProps): React.JSX.Element {
+  const t = useSshTranslation()
   const { setEditingFile: setStoreFile, setEditingContent: setStoreContent } = useSSHActions()
 
   const handleOpenFile = useCallback(
@@ -79,13 +81,15 @@ export function SSHFileExplorer({
           })
           setStoreContent(result.data)
         } else {
-          toast.error(`Failed to open: ${result.error}`)
+          toast.error(t('files.openFailed', { error: result.error }))
         }
       } catch (error) {
-        toast.error(`Failed to open: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          t('files.openFailed', { error: error instanceof Error ? error.message : String(error) })
+        )
       }
     },
-    [connectionId, setStoreFile, setStoreContent]
+    [connectionId, setStoreFile, setStoreContent, t]
   )
 
   const handleDelete = useCallback(
@@ -156,7 +160,7 @@ export function SSHFileExplorer({
                   handleOpenFile(entry)
                 }}
                 className="p-0.5 rounded hover:bg-accent"
-                title="Edit"
+                title={t('files.edit')}
               >
                 <FileEdit className="h-3 w-3 text-muted-foreground" />
               </button>
@@ -167,7 +171,7 @@ export function SSHFileExplorer({
                 handleRename(entry)
               }}
               className="p-0.5 rounded hover:bg-accent"
-              title="Rename"
+              title={t('files.rename')}
             >
               <Pencil className="h-3 w-3 text-muted-foreground" />
             </button>
@@ -177,7 +181,7 @@ export function SSHFileExplorer({
                 handleDelete(entry)
               }}
               className="p-0.5 rounded hover:bg-destructive/20"
-              title="Delete"
+              title={t('files.delete')}
             >
               <Trash2 className="h-3 w-3 text-muted-foreground" />
             </button>
@@ -201,21 +205,21 @@ export function SSHFileExplorer({
               <button
                 onClick={onMkdir}
                 className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="New folder"
+                title={t('files.newFolder')}
               >
                 <FolderPlus className="h-3 w-3" />
               </button>
               <button
                 onClick={onCreateFile}
                 className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="New file"
+                title={t('files.newFile')}
               >
                 <FilePlus className="h-3 w-3" />
               </button>
               <button
                 onClick={() => onLoadDir(currentPath)}
                 className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="Refresh"
+                title={t('files.refresh')}
               >
                 <RefreshCw className="h-3 w-3" />
               </button>
@@ -224,7 +228,7 @@ export function SSHFileExplorer({
             <button
               onClick={onConnect}
               className="p-1 rounded hover:bg-accent text-green-500"
-              title="Connect"
+              title={t('connection.connect')}
             >
               <Wifi className="h-3.5 w-3.5" />
             </button>
@@ -244,23 +248,23 @@ export function SSHFileExplorer({
         {!isConnected ? (
           <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
             <WifiOff className="h-6 w-6 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">Not connected</p>
+            <p className="text-xs text-muted-foreground">{t('files.notConnected')}</p>
             <button
               onClick={onConnect}
               className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              Connect
+              {t('connection.connect')}
             </button>
           </div>
         ) : !sftpReady ? (
           <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
             <FolderTree className="h-6 w-6 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">SFTP not started</p>
+            <p className="text-xs text-muted-foreground">{t('files.sftpNotStarted')}</p>
             <button
               onClick={onBrowseFiles}
               className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              Browse Files
+              {t('files.browse')}
             </button>
           </div>
         ) : isLoadingRoot ? (
@@ -269,7 +273,7 @@ export function SSHFileExplorer({
           </div>
         ) : entries.length === 0 ? (
           <div className="p-4 text-center">
-            <p className="text-xs text-muted-foreground">Empty directory</p>
+            <p className="text-xs text-muted-foreground">{t('files.empty')}</p>
           </div>
         ) : (
           <div className="py-1">{entries.map((e) => renderEntry(e))}</div>

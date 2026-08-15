@@ -1,5 +1,6 @@
 import { Clipboard, Plus, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
 import { Badge } from '@/components/ui/badge'
@@ -31,6 +32,7 @@ function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
 }
 
 function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element | null {
+  const { t } = useTranslation('agents')
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
   const [path, setPath] = useState(entry.config?.command ?? '')
@@ -47,7 +49,7 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
     if (!base) return
     const command = path.trim()
     if (!command) {
-      toast.error('Enter the path to the ACP binary.')
+      toast.error(t('settings.enterBinaryPath'))
       return
     }
     setSaving(true)
@@ -62,7 +64,7 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
         command,
         args: wasLauncherBacked ? [] : base.args
       })
-      toast.success(`${entry.agent.name} path updated`)
+      toast.success(t('settings.pathUpdated', { name: entry.agent.name }))
     } catch (err) {
       toast.error(String(err))
     } finally {
@@ -80,7 +82,7 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
       // `entry.config` is guaranteed non-null here (AgentPathEditor returns
       // null when it is absent).
       await deleteAgentConfig(entry.config!.id)
-      toast.success(`${entry.agent.name} custom path cleared`)
+      toast.success(t('settings.pathCleared', { name: entry.agent.name }))
     } catch (err) {
       toast.error(String(err))
     } finally {
@@ -94,8 +96,8 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
         <Input
           value={path}
           onChange={(event) => setPath(event.target.value)}
-          placeholder="Path to ACP binary"
-          aria-label={`${entry.agent.name} executable path`}
+          placeholder={t('settings.pathPlaceholder')}
+          aria-label={t('settings.pathAria', { name: entry.agent.name })}
           className="h-7 font-mono text-xs"
           disabled={saving}
         />
@@ -105,12 +107,12 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
           variant="outline"
           disabled={saving}
           onClick={() =>
-            void dialogApi.selectFile({ title: 'Select ACP agent executable' }).then((result) => {
+            void dialogApi.selectFile({ title: t('settings.selectExecutable') }).then((result) => {
               if (result.success && result.data) setPath(result.data)
             })
           }
         >
-          Browse
+          {t('settings.browse')}
         </Button>
       </div>
       <div className="flex items-center gap-2">
@@ -120,7 +122,7 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
           disabled={saving || path.trim().length === 0}
           onClick={() => void savePath()}
         >
-          Save path
+          {t('settings.savePath')}
         </Button>
         <Button
           type="button"
@@ -129,7 +131,7 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
           disabled={saving}
           onClick={() => void clearPath()}
         >
-          Clear saved path
+          {t('settings.clearPath')}
         </Button>
       </div>
     </div>
@@ -141,31 +143,35 @@ interface AgentRowProps {
 }
 
 function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
+  const { t } = useTranslation('agents')
   const warmState = useConfigWarmState(entry.configId)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
 
   const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
-    ? { label: 'Session ready', tone: 'ready' }
+    ? { label: t('settings.status.sessionReady'), tone: 'ready' }
     : warmState.warming || warmState.warmingSession
-      ? { label: 'Warming…', tone: 'muted' }
+      ? { label: t('settings.status.warming'), tone: 'muted' }
       : warmState.connected
-        ? { label: 'Warm', tone: 'ready' }
+        ? { label: t('settings.status.warm'), tone: 'ready' }
         : entry.status === 'ready'
-          ? { label: 'Available', tone: 'ready' }
+          ? { label: t('settings.status.available'), tone: 'ready' }
           : entry.status === 'install-required'
-            ? { label: 'Install from Agent Chat', tone: 'warn' }
+            ? { label: t('settings.status.installFromChat'), tone: 'warn' }
             : entry.status === 'needs-runtime'
               ? {
-                  label: entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node.js',
+                  label:
+                    entry.runtimeLauncher === 'uvx'
+                      ? t('settings.status.needsUv')
+                      : t('settings.status.needsNode'),
                   tone: 'warn'
                 }
               : entry.status === 'manual-install'
-                ? { label: 'Manual install', tone: 'warn' }
-                : { label: 'Unavailable', tone: 'muted' }
+                ? { label: t('settings.status.manualInstall'), tone: 'warn' }
+                : { label: t('settings.status.unavailable'), tone: 'muted' }
 
   const handleCopyJson = async (): Promise<void> => {
     if (!entry.config) {
-      toast.error('No saved config to copy.')
+      toast.error(t('settings.noSavedConfig'))
       return
     }
     try {
@@ -174,7 +180,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
       // clipboard failures (log + toast), not an uncaught rejection.
       const json = exportAgentConfig(entry.config)
       await navigator.clipboard.writeText(json)
-      toast.success(`Copied ${entry.agent.name} config JSON`)
+      toast.success(t('settings.copiedConfig', { name: entry.agent.name }))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       void logFrontendError({
@@ -182,7 +188,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
         source: 'AcpAgentsSettings:copyJson',
         message: `Failed to copy custom agent config "${entry.agent.name}": ${message}`
       })
-      toast.error('Failed to copy JSON to clipboard.')
+      toast.error(t('settings.copyFailed'))
     }
   }
 
@@ -225,9 +231,9 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
         {entry.status !== 'ready' && (
           <p className="mt-1 text-2xs text-amber-500">
             {entry.status === 'install-required'
-              ? 'Open Agent Chat and choose Install before first use.'
+              ? t('settings.installHint')
               : entry.status === 'manual-install'
-                ? 'Open Agent Chat and save the path to your installed binary.'
+                ? t('settings.manualHint')
                 : entry.unavailableReason}
           </p>
         )}
@@ -237,15 +243,16 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
           entry.config.command !== 'uvx' && <AgentPathEditor entry={entry} />}
         {entry.status === 'manual-install' && entry.manualInstall && (
           <p className="mt-1 font-mono text-2xs text-muted-foreground">
-            Expected: {entry.manualInstall.cmd}
-            {entry.manualInstall.args.length > 0 ? ` ${entry.manualInstall.args.join(' ')}` : ''}
+            {t('settings.expected', {
+              command: [entry.manualInstall.cmd, ...entry.manualInstall.args].join(' ')
+            })}
           </p>
         )}
         {isCustomAgentEntry(entry) && entry.config && (
           <div className="mt-1.5 flex items-center">
             <Button type="button" size="sm" variant="ghost" onClick={() => void handleCopyJson()}>
               <Clipboard size={13} className="mr-1.5" />
-              Copy JSON
+              {t('settings.copyJson')}
             </Button>
           </div>
         )}
@@ -259,6 +266,7 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
  * requiring a Preferences toggle; this view only shows availability/debug state.
  */
 export function AcpAgentsSettings(): React.JSX.Element {
+  const { t } = useTranslation('agents')
   const [filter, setFilter] = useState('')
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const {
@@ -284,16 +292,14 @@ export function AcpAgentsSettings(): React.JSX.Element {
       try {
         const summary = await checkForUpdates(true)
         if (!summary) {
-          toast.error('Could not fetch the ACP registry.')
+          toast.error(t('settings.fetchRegistryFailed'))
           return
         }
         if (summary.updatedCount === 0) {
-          toast.success('ACP registry is up to date.')
+          toast.success(t('settings.registryUpToDate'))
           return
         }
-        toast.success(
-          `${summary.updatedCount} agent${summary.updatedCount === 1 ? '' : 's'} available from the registry. Review and apply to use them.`
-        )
+        toast.success(t('settings.registryUpdates', { count: summary.updatedCount }))
       } catch (err) {
         toast.error(String(err))
       }
@@ -305,9 +311,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
       await applyRemoteRegistry()
       const count = advisorySummary?.updatedCount ?? 0
       toast.success(
-        count > 0
-          ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
-          : 'Using remote registry.'
+        count > 0 ? t('settings.usingRemoteWithUpdates', { count }) : t('settings.usingRemote')
       )
     } catch (err) {
       toast.error(String(err))
@@ -337,16 +341,16 @@ export function AcpAgentsSettings(): React.JSX.Element {
           ) : (
             <RefreshCw size={14} className="mr-1.5" />
           )}
-          Check for registry updates
+          {t('settings.checkUpdates')}
         </Button>
         {remoteAvailable && (
           <Button type="button" size="sm" variant="secondary" onClick={handleApplyRemote}>
-            Apply remote registry
+            {t('settings.applyRemote')}
           </Button>
         )}
         {usingRemoteRegistry && (
           <Button type="button" size="sm" variant="ghost" onClick={handleUseBundled}>
-            Use bundled registry
+            {t('settings.useBundled')}
           </Button>
         )}
         <Button
@@ -356,15 +360,15 @@ export function AcpAgentsSettings(): React.JSX.Element {
           onClick={() => setCustomDialogOpen(true)}
         >
           <Plus size={14} className="mr-1.5" />
-          Add Custom Agent
+          {t('settings.addCustom')}
         </Button>
         {lastCheckedAt && (
           <span className="text-2xs text-muted-foreground">
             {usingRemoteRegistry
-              ? 'Using remote registry'
+              ? t('settings.usingRemote')
               : remoteAvailable
-                ? `${advisorySummary?.updatedCount ?? 0} update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
-                : 'Last checked'}{' '}
+                ? t('settings.updatesAvailable', { count: advisorySummary?.updatedCount ?? 0 })
+                : t('settings.lastChecked')}{' '}
             · {lastCheckedAt}
           </span>
         )}
@@ -378,14 +382,16 @@ export function AcpAgentsSettings(): React.JSX.Element {
         <Input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter agents…"
+          placeholder={t('settings.filter')}
           className="h-8 pl-8 text-sm"
         />
       </div>
 
       <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
         {visible.length === 0 ? (
-          <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            {t('settings.noMatches')}
+          </p>
         ) : (
           visible.map((entry) => <AgentRow key={entry.id} entry={entry} />)
         )}

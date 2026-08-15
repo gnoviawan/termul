@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface NewGroupModalProps {
   isOpen: boolean
@@ -16,11 +17,15 @@ export function NewGroupModal({
   isOpen,
   onClose,
   onSubmit,
-  title = 'Create New Group',
-  submitLabel = 'Create',
+  title,
+  submitLabel,
   initialValue = '',
-  placeholder = 'Enter group name...'
+  placeholder
 }: NewGroupModalProps) {
+  const { t } = useTranslation('projects')
+  const resolvedTitle = title ?? t('createGroup')
+  const resolvedSubmitLabel = submitLabel ?? t('create')
+  const resolvedPlaceholder = placeholder ?? t('enterGroupName')
   const [name, setName] = useState(initialValue)
 
   // Reset name when modal opens
@@ -87,7 +92,7 @@ export function NewGroupModal({
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
-              <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+              <h3 className="text-sm font-semibold text-foreground">{resolvedTitle}</h3>
               <button
                 onClick={onClose}
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -100,13 +105,13 @@ export function NewGroupModal({
             <div className="p-4 space-y-4">
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Group Folder Name
+                  {t('groupName')}
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder={placeholder}
+                  placeholder={resolvedPlaceholder}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
               </div>
@@ -118,14 +123,14 @@ export function NewGroupModal({
                 onClick={onClose}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={!name.trim()}
                 className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitLabel}
+                {resolvedSubmitLabel}
               </button>
             </div>
           </motion.div>

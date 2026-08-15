@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { ProjectColor } from '@/types/project'
@@ -18,6 +19,7 @@ export function ColorPickerPopover({
   onSelectColor,
   onClose
 }: ColorPickerPopoverProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const popoverRef = useRef<HTMLDivElement>(null)
 
   // Adjust position if popover would overflow viewport
@@ -74,7 +76,7 @@ export function ColorPickerPopover({
       className="fixed z-50 bg-card border border-border rounded-lg shadow-lg p-3"
       style={{ left: position.left, top: position.top }}
     >
-      <p className="text-xs text-muted-foreground mb-2">Select Color</p>
+      <p className="text-xs text-muted-foreground mb-2">{t('selectColor')}</p>
       <div className="flex gap-2 flex-wrap">
         {availableColors.map((color) => {
           const colors = getColorClasses(color)

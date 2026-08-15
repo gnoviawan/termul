@@ -1,3 +1,4 @@
+import i18n from 'i18next'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
@@ -300,6 +301,38 @@ describe('resolveSupportedAcpAgents', () => {
       configId: 'acp-registry:test',
       status: 'ready'
     })
+  })
+
+  it('localizes catalog platform-unavailable reasons', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      listCatalogMock.mockResolvedValueOnce({
+        success: true,
+        data: {
+          host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+          agents: [
+            {
+              id: 'unsupported',
+              name: 'Unsupported',
+              version: '1.0.0',
+              description: 'd',
+              source: 'bundled',
+              distribution: {},
+              runtimeRequirements: [],
+              status: 'unavailable',
+              platformTargets: []
+            }
+          ]
+        }
+      })
+
+      const entries = await resolveSupportedAcpAgents([])
+
+      expect(entries[0]?.unavailableReason).toBe('此平台不支持该代理。')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('prefers a persisted config and marks it ready', async () => {

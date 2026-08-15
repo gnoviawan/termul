@@ -4,6 +4,7 @@
  * sections and honors the "config options supersede modes" precedence
  * (ADR-003.4).
  */
+import { runtimeT } from '@/i18n/runtime'
 import type {
   AvailableCommand,
   SessionConfigOption,
@@ -70,14 +71,15 @@ function matches(filter: string, ...fields: (string | null | undefined)[]): bool
   return fields.some((x) => (x ?? '').toLowerCase().includes(f))
 }
 
-export const KNOWN_CATEGORY_HEADINGS: Record<string, string> = {
-  mode: 'Mode',
-  model: 'Model',
-  thought_level: 'Thinking Level'
-}
+export const KNOWN_CATEGORY_HEADINGS = {
+  mode: 'selectors.mode',
+  model: 'selectors.model',
+  thought_level: 'selectors.thinkingLevel'
+} as const
 
 function headingForCategory(category: string | null | undefined, fallbackName: string): string {
-  if (category && KNOWN_CATEGORY_HEADINGS[category]) return KNOWN_CATEGORY_HEADINGS[category]
+  const key = category ? (KNOWN_CATEGORY_HEADINGS as Record<string, string>)[category] : undefined
+  if (key) return runtimeT('chat', key, fallbackName)
   // Unknown/custom categories: use the option's own name as the heading.
   return fallbackName
 }
@@ -110,14 +112,22 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
       path: s.path
     }))
   if (skillItems.length > 0) {
-    sections.push({ id: 'skills', heading: 'Skills', items: skillItems })
+    sections.push({
+      id: 'skills',
+      heading: runtimeT('chat', 'selectors.skills', 'Skills'),
+      items: skillItems
+    })
   }
 
   const commandItems: SlashItem[] = commands
     .filter((c) => matches(filter, c.name, c.description))
     .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
   if (commandItems.length > 0) {
-    sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
+    sections.push({
+      id: 'commands',
+      heading: runtimeT('chat', 'selectors.commands', 'Commands'),
+      items: commandItems
+    })
   }
 
   if (configOptions.length > 0) {
@@ -151,7 +161,7 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
         selected: m.id === modes.currentModeId
       }))
     if (items.length > 0) {
-      sections.push({ id: 'modes', heading: 'Mode', items })
+      sections.push({ id: 'modes', heading: runtimeT('chat', 'selectors.mode', 'Mode'), items })
     }
   }
 

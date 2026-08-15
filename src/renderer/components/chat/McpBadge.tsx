@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
+import { runtimeT } from '@/i18n/runtime'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 
@@ -49,15 +51,29 @@ function statusColor(status: ProbeStatus | undefined): string {
 
 /** Short visible status for the server row (pairs with the color dot). */
 function statusShortLabel(status: ProbeStatus | undefined): string {
-  if (status === 'connected') return 'Connected'
-  if (status === 'disconnected') return 'Disconnected'
-  return 'Not probed'
+  if (status === 'connected') return runtimeT('mcp', 'badge.status.connected', 'Connected')
+  if (status === 'disconnected') {
+    return runtimeT('mcp', 'badge.status.disconnected', 'Disconnected')
+  }
+  return runtimeT('mcp', 'badge.status.notProbed', 'Not probed')
 }
 
 function statusLabel(status: ProbeStatus | undefined): string {
-  if (status === 'connected') return 'Connected (Termul can reach this server)'
-  if (status === 'disconnected') return 'Disconnected (Termul could not reach this server)'
-  return 'Not probed yet — click to test'
+  if (status === 'connected') {
+    return runtimeT(
+      'mcp',
+      'badge.status.connectedDetail',
+      'Connected (Termul can reach this server)'
+    )
+  }
+  if (status === 'disconnected') {
+    return runtimeT(
+      'mcp',
+      'badge.status.disconnectedDetail',
+      'Disconnected (Termul could not reach this server)'
+    )
+  }
+  return runtimeT('mcp', 'badge.status.notProbedDetail', 'Not probed yet — click to test')
 }
 
 /**
@@ -78,6 +94,7 @@ export function McpBadge({
   tools,
   onLoadTools
 }: McpBadgeProps): React.JSX.Element | null {
+  const t = useRuntimeTranslation('mcp')
   const hasServerList = servers != null && servers.length > 0
   if (count <= 0 && !hasServerList) return null
 
@@ -91,11 +108,15 @@ export function McpBadge({
             : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground',
           className
         )}
-        title={compact ? `${count} MCP servers attached` : undefined}
+        title={
+          compact
+            ? t('badge.attachedTitle', '{{count}} MCP servers attached', { count })
+            : undefined
+        }
       >
         <Plug className="size-3" aria-hidden="true" />
         <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
-        <span className="sr-only">MCP servers attached</span>
+        <span className="sr-only">{t('badge.attachedSr', 'MCP servers attached')}</span>
       </span>
     )
   }
@@ -138,6 +159,7 @@ function McpPopover({
   className,
   compact
 }: PopoverProps): React.JSX.Element {
+  const t = useRuntimeTranslation('mcp')
   const [open, setOpen] = useState(false)
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -150,16 +172,22 @@ function McpPopover({
               : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             className
           )}
-          aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
+          aria-label={t(
+            'badge.manageAria',
+            'MCP servers — {{count}} attached. Click to manage per-server enable/disable.',
+            { count }
+          )}
         >
           <PlugZap className="size-3" aria-hidden="true" />
           <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-3 text-xs">
-        <p className="font-medium text-foreground">MCP servers</p>
+        <p className="font-medium text-foreground">{t('common.servers', 'MCP servers')}</p>
         <p className="mt-0.5 text-muted-foreground">
-          {count > 0 ? `${count} attached to this session.` : 'No servers attached yet.'}
+          {count > 0
+            ? t('badge.attached', '{{count}} attached to this session.', { count })
+            : t('badge.noneAttached', 'No servers attached yet.')}
         </p>
         <ul className="mt-2 space-y-2">
           {servers.map((server) => (
@@ -175,7 +203,7 @@ function McpPopover({
           ))}
         </ul>
         <p className="mt-3 text-3xs text-muted-foreground/80">
-          Takes effect on the next chat; per-tool toggle coming soon.
+          {t('badge.nextChat', 'Takes effect on the next chat; per-tool toggle coming soon.')}
         </p>
       </PopoverContent>
     </Popover>
@@ -199,6 +227,7 @@ function McpServerRow({
   tools,
   onLoadTools
 }: ServerRowProps): React.JSX.Element {
+  const t = useRuntimeTranslation('mcp')
   const enabled = server.enabled !== false
   return (
     <li className="space-y-1.5 rounded-md border border-border/50 p-2">
@@ -219,7 +248,11 @@ function McpServerRow({
           <Switch
             checked={enabled}
             className="h-4 w-7 border [&>span]:h-3 [&>span]:w-3 [&>span[data-state=checked]]:translate-x-3"
-            aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
+            aria-label={
+              enabled
+                ? t('common.disable', 'Disable {{name}}', { name: server.name })
+                : t('common.enable', 'Enable {{name}}', { name: server.name })
+            }
             onCheckedChange={(checked) => {
               if (checked === enabled) return
               onToggle(server.id, checked)
@@ -234,8 +267,8 @@ function McpServerRow({
       >
         <CollapsibleTrigger className="text-3xs text-muted-foreground underline-offset-2 hover:underline">
           {tools && tools.length > 0
-            ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
-            : 'Show tools'}
+            ? t('common.tools', '{{count}} tools', { count: tools.length })
+            : t('common.showTools', 'Show tools')}
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-1">
           {tools && tools.length > 0 ? (
@@ -252,13 +285,18 @@ function McpServerRow({
               ))}
             </ul>
           ) : probeStatus === 'disconnected' ? (
-            <p className="text-3xs text-destructive" title={probeError ?? 'Probe failed.'}>
-              Probe failed — check the server config.
+            <p
+              className="text-3xs text-destructive"
+              title={probeError ?? t('common.probeFailed', 'Probe failed.')}
+            >
+              {t('badge.probeConfig', 'Probe failed — check the server config.')}
             </p>
           ) : probeStatus === 'connected' ? (
-            <p className="text-3xs text-muted-foreground">No tools available.</p>
+            <p className="text-3xs text-muted-foreground">
+              {t('badge.noTools', 'No tools available.')}
+            </p>
           ) : (
-            <p className="text-3xs text-muted-foreground">Probing…</p>
+            <p className="text-3xs text-muted-foreground">{t('common.probing', 'Probing…')}</p>
           )}
         </CollapsibleContent>
       </Collapsible>

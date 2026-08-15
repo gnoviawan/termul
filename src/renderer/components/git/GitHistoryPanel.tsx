@@ -2,6 +2,7 @@ import type { GitCommit } from '@shared/types/ipc.types'
 import { GitBranch, History, RefreshCw, Search, Tag } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { computeGraphLayout, type GraphLayout } from '@/lib/git-graph-layout'
@@ -48,6 +49,7 @@ function rowY(row: number): number {
 /** Parse a raw `%D` decoration into a display label + kind for chip styling. */
 
 export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React.JSX.Element {
+  const { t } = useTranslation('git')
   const commits = useGitHistoryStore((state) => state.commits[cwd])
   const isLoading = useGitHistoryStore((state) => state.loading[cwd] ?? false)
   const error = useGitHistoryStore((state) => state.error[cwd] ?? null)
@@ -96,7 +98,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
       <div className="p-3 border-b border-border flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
           <History size={15} className="text-primary" />
-          Git History
+          {t('history.title')}
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -106,8 +108,8 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             />
             <input
               type="text"
-              placeholder="Filter commits..."
-              aria-label="Filter commits"
+              placeholder={t('history.filterPlaceholder')}
+              aria-label={t('history.filterLabel')}
               className="w-44 bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -119,8 +121,8 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             className="h-8 w-8"
             onClick={() => refreshLog(cwd)}
             disabled={isLoading}
-            title="Refresh history"
-            aria-label="Refresh history"
+            title={t('history.refresh')}
+            aria-label={t('history.refresh')}
           >
             <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           </Button>
@@ -130,7 +132,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
       {commits === undefined && isLoading ? (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
           <RefreshCw className="animate-spin mr-2" size={16} />
-          Loading history...
+          {t('history.loading')}
         </div>
       ) : (commits?.length ?? 0) === 0 ? (
         <EmptyState error={error} />
@@ -194,7 +196,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             <div style={{ paddingLeft: isFiltering ? undefined : graphWidth }}>
               {isFiltering && filteredCommits.length === 0 ? (
                 <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-                  No commits match "{searchQuery}"
+                  {t('history.noMatches', { query: searchQuery })}
                 </div>
               ) : (
                 (isFiltering ? filteredCommits : layout.rows.map((r) => r.commit)).map((commit) => (
@@ -254,16 +256,16 @@ function RefChip({ raw }: { raw: string }): React.JSX.Element {
 }
 
 function EmptyState({ error }: { error: string | null }): React.JSX.Element {
+  const { t } = useTranslation('git')
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
       <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-4 text-muted-foreground/50">
         <History size={24} />
       </div>
-      <h3 className="text-sm font-medium text-foreground mb-1">No commit history</h3>
+      <h3 className="text-sm font-medium text-foreground mb-1">{t('history.empty.title')}</h3>
       <p className="text-xs max-w-[260px]">
-        {error
-          ? 'This folder may not be a Git repository, or git is unavailable.'
-          : 'There are no commits to show yet. Make your first commit to see it here.'}
+        {error ? t('history.empty.repositoryUnavailable') : t('history.empty.noCommits')}
       </p>
     </div>
   )

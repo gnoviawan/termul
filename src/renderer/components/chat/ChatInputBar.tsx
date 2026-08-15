@@ -3,6 +3,7 @@ import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
 import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -41,7 +42,7 @@ import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
-import { useChatComposer } from './use-chat-composer'
+import { SkillPathError, useChatComposer } from './use-chat-composer'
 import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
@@ -119,6 +120,7 @@ export function ChatInputBar({
   onRemoveQueued,
   onSendQueuedNow
 }: ChatInputBarProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
   // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
@@ -131,11 +133,11 @@ export function ChatInputBar({
   )
   const isolationLabel =
     session.worktreePath && session.worktreeBranch
-      ? `${session.worktreeBranch} · New worktree`
+      ? `${session.worktreeBranch} · ${t('common.newWorktree')}`
       : projectGitBranch
-        ? `${projectGitBranch} · Local`
+        ? `${projectGitBranch} · ${t('common.local')}`
         : (session.worktreeBranch ?? null)
-  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const isolationModeLabel = session.worktreePath ? t('common.newWorktree') : t('common.local')
   const isolationBranch = session.worktreeBranch ?? projectGitBranch
   const isolationTitle =
     isolationLabel && session.worktreePath
@@ -335,7 +337,7 @@ export function ChatInputBar({
   const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? t('composer.searchingFiles') : t('composer.noMatchingFiles')
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -424,8 +426,8 @@ export function ChatInputBar({
       resetMentions()
     } catch (err) {
       // Skill path resolution throws a specific user-facing message — keep it.
-      const msg = err instanceof Error ? err.message : ''
-      toast.error(msg.includes('missing a path') ? msg : 'Could not send your message. Try again.')
+      const msg = err instanceof SkillPathError ? err.message : ''
+      toast.error(msg || t('composer.sendFailed'))
     } finally {
       setSending(false)
     }
@@ -441,7 +443,8 @@ export function ChatInputBar({
     resetMentions,
     session.id,
     buildPromptParts,
-    skillPathsRef
+    skillPathsRef,
+    t
   ])
 
   const handleKeyDown = useCallback(
@@ -556,7 +559,12 @@ export function ChatInputBar({
       : null
 
   const agentModeChip = (
-    <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
+    <ModeChip
+      session={session}
+      disabled={disabled}
+      onSelect={onSetMode}
+      label={t('common.agent')}
+    />
   )
 
   const mcpBadge = (
@@ -565,7 +573,7 @@ export function ChatInputBar({
       servers={mcpServers}
       onToggle={(id, enabled) => {
         void setMcpServerEnabled(id, enabled).catch(() => {
-          toast.error('Could not update the MCP server. Your previous setting was restored.')
+          toast.error(t('composer.updateMcpFailed'))
         })
       }}
       probeStatus={mcpProbeStatus}
@@ -586,7 +594,7 @@ export function ChatInputBar({
             role="status"
             className="mb-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            Session closed
+            {t('composer.sessionClosed')}
           </div>
         )}
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
@@ -626,7 +634,7 @@ export function ChatInputBar({
             {dragActive && canDropPaste && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
                 <span className="flex items-center gap-2">
-                  <Paperclip size={16} /> Drop files to attach
+                  <Paperclip size={16} /> {t('composer.dropFiles')}
                 </span>
               </div>
             )}
@@ -653,10 +661,10 @@ export function ChatInputBar({
                 maxHeight={160}
                 placeholder={
                   disabled
-                    ? 'Composer unavailable'
+                    ? t('composer.unavailable')
                     : hasCommandToken
-                      ? 'Add a message (optional)…'
-                      : 'Ask anything.. (/ for commands, @ for files )'
+                      ? t('composer.optionalMessage')
+                      : t('composer.askAnything')
                 }
               />
             </div>
@@ -730,8 +738,8 @@ export function ChatInputBar({
                         type="button"
                         data-press-feedback="off"
                         onClick={onCancel}
-                        title="Cancel turn"
-                        aria-label="Cancel turn"
+                        title={t('composer.cancelTurn')}
+                        aria-label={t('composer.cancelTurn')}
                         initial={iconMotion.initial}
                         animate={iconMotion.animate}
                         exit={iconMotion.exit}
@@ -750,8 +758,8 @@ export function ChatInputBar({
                         data-press-feedback="off"
                         onClick={() => void submit()}
                         disabled={!canSend}
-                        title={busy ? 'Queue message' : 'Send'}
-                        aria-label={busy ? 'Queue message' : 'Send message'}
+                        title={busy ? t('composer.queueMessage') : t('common.send')}
+                        aria-label={busy ? t('composer.queueMessage') : t('composer.sendMessage')}
                         initial={iconMotion.initial}
                         animate={iconMotion.animate}
                         exit={iconMotion.exit}

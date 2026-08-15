@@ -1,5 +1,6 @@
 import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -41,6 +42,7 @@ export function ProjectSwitcherDrawer({
   open,
   onOpenChange
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const switchProject = useAcpStore((s) => s.switchProject)
@@ -92,7 +94,7 @@ export function ProjectSwitcherDrawer({
         : await webServerProjects.setDefaultProject(project.id)
       if (!result.success) {
         // P15: guard against undefined error string (avoid "undefined" toast).
-        toast.error('Failed to set host default: ' + (result.error ?? 'unknown error'))
+        toast.error(t('failedSetHostDefault', { message: result.error ?? t('unknownError') }))
       } else {
         // P6: update isDefault flags locally so the badge refreshes
         // immediately (desktop-hosted mode doesn't refetch on set_default;
@@ -101,7 +103,7 @@ export function ProjectSwitcherDrawer({
         useProjectStore.setState((s) => ({
           projects: s.projects.map((p) => ({ ...p, isDefault: p.id === project.id }))
         }))
-        toast.success(`"${project.name}" is now the host default`)
+        toast.success(t('hostDefaultToast', { name: project.name }))
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
@@ -119,17 +121,13 @@ export function ProjectSwitcherDrawer({
         <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
           <div className="flex items-center gap-2 pr-8">
             <FolderGit2 size={20} />
-            <SheetTitle className="text-base">Projects</SheetTitle>
+            <SheetTitle className="text-base">{t('title')}</SheetTitle>
           </div>
-          <SheetDescription className="sr-only">
-            Switch the shared session to a desktop project
-          </SheetDescription>
+          <SheetDescription className="sr-only">{t('projectsDrawerDescription')}</SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {projects.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-muted-foreground">
-              No projects available. Add a project on the desktop.
-            </p>
+            <p className="px-2 py-4 text-sm text-muted-foreground">{t('noProjectsAvailable')}</p>
           ) : (
             <ul className="flex flex-col gap-0.5">
               {projects.map((project) => {
@@ -168,11 +166,11 @@ export function ProjectSwitcherDrawer({
                       </span>
                       {isHostDefault && !isSwitching && !isQueued && !isFailed && (
                         <span
-                          title="Host default (new clients start here)"
+                          title={t('hostDefault')}
                           className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
                         >
                           <Home size={12} />
-                          Default
+                          {t('default')}
                         </span>
                       )}
                       {isSwitching ? (
@@ -183,12 +181,12 @@ export function ProjectSwitcherDrawer({
                       ) : isQueued ? (
                         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 size={13} />
-                          Queued
+                          {t('queued')}
                         </span>
                       ) : isFailed ? (
                         <span className="flex shrink-0 items-center gap-1 text-xs text-destructive">
                           <AlertCircle size={13} />
-                          Failed
+                          {t('failed')}
                         </span>
                       ) : isActive ? (
                         <Check size={14} className="shrink-0 text-primary" />
@@ -205,8 +203,8 @@ export function ProjectSwitcherDrawer({
                       <button
                         type="button"
                         disabled={isSettingDefault || defaultingId !== null}
-                        aria-label={`Set "${project.name}" as host default`}
-                        title="Set as host default"
+                        aria-label={t('setProjectAsHostDefault', { name: project.name })}
+                        title={t('setAsHostDefault')}
                         onClick={(e) => {
                           e.stopPropagation()
                           void handleSetDefault(project)

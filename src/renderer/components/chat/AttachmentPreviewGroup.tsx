@@ -9,6 +9,7 @@ import {
   AttachmentRemove,
   Attachments
 } from '@/components/ai-elements/attachments'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
 import {
   attachmentAriaLabel,
@@ -28,6 +29,7 @@ export function AttachmentPreviewGroup({
   onRemove,
   className
 }: AttachmentPreviewGroupProps): React.JSX.Element | null {
+  const t = useRuntimeTranslation('chat')
   const reduced = useReducedMotion() ?? false
 
   if (attachments.length === 0) return null
@@ -79,7 +81,9 @@ export function AttachmentPreviewGroup({
                     <AttachmentInfo />
                   </>
                 )}
-                <AttachmentRemove label={`Remove ${ariaLabel}`} />
+                <AttachmentRemove
+                  label={t('attachments.remove', 'Remove {{name}}', { name: ariaLabel })}
+                />
               </Attachment>
             </motion.div>
           )

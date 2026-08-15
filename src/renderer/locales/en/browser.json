@@ -1,0 +1,99 @@
+{
+  "controls": {
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "enterUrl": "Enter URL...",
+    "openDebugConsole": "Open debug console",
+    "debugConsole": "Debug Console",
+    "disableAnnotationMode": "Disable annotation mode",
+    "enableAnnotationMode": "Enable annotation mode"
+  },
+  "panel": {
+    "loading": "Loading...",
+    "annotationUnavailable": "Annotation mode is not available on this page due to security policies"
+  },
+  "annotation": {
+    "title": "Annotations",
+    "delete": "Delete annotation",
+    "descriptionPlaceholder": "Add a description...",
+    "descriptionEmpty": "Click to add description...",
+    "cancel": "Cancel",
+    "save": "Save",
+    "exit": "Exit annotation mode",
+    "tools": "Annotation tools",
+    "mode": "Annotation mode",
+    "drawRectangle": "Draw rectangle annotations",
+    "drawRectangleTooltip": "Draw rectangle",
+    "selectUnavailable": "Select unavailable on this page",
+    "selectElements": "Select elements",
+    "selectUnavailableTooltip": "Annotation unavailable on this page",
+    "addNote": "Add page note",
+    "export": "Export annotations",
+    "noExport": "No annotations to export",
+    "sessionScoped": "Session-scoped: annotations last until app close",
+    "empty": "No annotations on this page.",
+    "noText": "(no text)",
+    "intent": {
+      "fix": "Fix",
+      "change": "Change",
+      "question": "Question",
+      "approve": "Approve"
+    },
+    "severity": {
+      "blocking": "Blocking",
+      "important": "Important",
+      "suggestion": "Suggestion"
+    },
+    "selectorConfidence": {
+      "unique-id": "Unique ID",
+      "unique-class": "Unique class",
+      "fallback": "Fallback"
+    }
+  },
+  "export": {
+    "title": "Export Annotations",
+    "markdown": "Markdown",
+    "json": "JSON",
+    "afs": "AFS (Agentation Format)",
+    "compact": "Compact",
+    "standard": "Standard",
+    "detailed": "Detailed",
+    "copy": "Copy",
+    "copied": "Copied",
+    "failed": "Failed",
+    "copyFailed": "Copy failed",
+    "markdownLabels": {
+      "noAnnotations": "No annotations.",
+      "titleFallback": "Annotations",
+      "noText": "(no text)",
+      "noComment": "(no comment)",
+      "noDescription": "(no description)",
+      "none": "(none)",
+      "annotation": "Annotation",
+      "note": "note",
+      "region": "Region",
+      "element": "Element",
+      "text": "Text",
+      "type": "Type",
+      "intent": "Intent",
+      "severity": "Severity",
+      "description": "Description",
+      "geometry": "Geometry",
+      "tag": "Tag",
+      "selector": "Selector",
+      "selectorConfidence": "Selector Confidence",
+      "textPreview": "Text Preview",
+      "boundingBox": "Bounding Box",
+      "attribute": "Attribute",
+      "value": "Value",
+      "viewport": "Viewport",
+      "created": "Created"
+    },
+    "annotationType": {
+      "element": "Element",
+      "region": "Region",
+      "note": "Note"
+    }
+  }
+}

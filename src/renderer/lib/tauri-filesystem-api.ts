@@ -23,6 +23,7 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { runtimeT } from '../i18n/runtime'
 import { sortDirectoryEntries } from './filesystem-sort'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { webServerFilesystem } from './web-server-api'
@@ -51,6 +52,14 @@ const ALWAYS_IGNORE = [
 const MAX_FILE_SIZE = 1024 * 1024 // 1MB
 const _SEARCH_MAX_FILES_WITH_MATCHES = 100
 const _SEARCH_MAX_MATCHES_PER_FILE = 30
+
+function streamingSearchWebUnsupported(): string {
+  return runtimeT(
+    'projects',
+    'filesystemErrors.streamingSearchWebUnsupported',
+    'Streaming search is not available in the web client'
+  )
+}
 
 async function searchWithRipgrep(
   scopeRoot: string,
@@ -294,7 +303,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (info.size > MAX_FILE_SIZE) {
           return {
             success: false,
-            error: `File too large (${info.size} bytes, max ${MAX_FILE_SIZE})`,
+            error: runtimeT(
+              'projects',
+              'filesystemErrors.fileTooLarge',
+              'File too large ({{size}} bytes, max {{max}})',
+              { size: info.size, max: MAX_FILE_SIZE }
+            ),
             code: 'FILE_TOO_LARGE'
           }
         }
@@ -306,7 +320,11 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (isBinaryFile(content)) {
           return {
             success: false,
-            error: 'Binary file cannot be displayed',
+            error: runtimeT(
+              'projects',
+              'filesystemErrors.binaryFile',
+              'Binary file cannot be displayed'
+            ),
             code: 'BINARY_FILE'
           }
         }
@@ -396,7 +414,11 @@ export function createTauriFilesystemApi(): FilesystemApi {
 
       return {
         success: false,
-        error: 'Search backend unavailable (ripgrep command failed)',
+        error: runtimeT(
+          'projects',
+          'filesystemErrors.searchBackendUnavailable',
+          'Search backend unavailable (ripgrep command failed)'
+        ),
         code: 'SEARCH_BACKEND_UNAVAILABLE'
       }
 
@@ -490,7 +512,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return {
           success: false as const,
           code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
+          error: streamingSearchWebUnsupported()
         }
       }
       try {
@@ -501,7 +523,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to start search stream',
+            error:
+              response?.error ??
+              runtimeT(
+                'projects',
+                'filesystemErrors.startSearchStream',
+                'Failed to start search stream'
+              ),
             code: response?.code ?? 'SEARCH_STREAM_ERROR'
           }
         }
@@ -516,7 +544,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return {
           success: false as const,
           code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
+          error: streamingSearchWebUnsupported()
         }
       }
       try {
@@ -527,7 +555,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to cancel search stream',
+            error:
+              response?.error ??
+              runtimeT(
+                'projects',
+                'filesystemErrors.cancelSearchStream',
+                'Failed to cancel search stream'
+              ),
             code: response?.code ?? 'SEARCH_STREAM_CANCEL_ERROR'
           }
         }
@@ -570,7 +604,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return {
           success: false as const,
           code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
+          error: streamingSearchWebUnsupported()
         }
       }
       try {
@@ -589,7 +623,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to start file names stream',
+            error:
+              response?.error ??
+              runtimeT(
+                'projects',
+                'filesystemErrors.startFileNamesStream',
+                'Failed to start file names stream'
+              ),
             code: response?.code ?? 'SEARCH_FILENAMES_STREAM_ERROR'
           }
         }
@@ -608,7 +648,7 @@ export function createTauriFilesystemApi(): FilesystemApi {
         return {
           success: false as const,
           code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
+          error: streamingSearchWebUnsupported()
         }
       }
       try {
@@ -619,7 +659,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
         if (!response?.success) {
           return {
             success: false as const,
-            error: response?.error ?? 'Failed to cancel file names stream',
+            error:
+              response?.error ??
+              runtimeT(
+                'projects',
+                'filesystemErrors.cancelFileNamesStream',
+                'Failed to cancel file names stream'
+              ),
             code: response?.code ?? 'SEARCH_FILENAMES_CANCEL_ERROR'
           }
         }

@@ -1,3 +1,4 @@
+import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from '@/lib/api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -382,15 +383,34 @@ function getErrorMessage(
 
   switch (reason) {
     case 'missing-context':
-      return `No project or working directory found; set a project/cwd to open paths: ${candidate}`
+      return runtimeT(
+        'terminal',
+        'links.missingContext',
+        'No project or working directory found; set a project/cwd to open paths: {{path}}',
+        { path: candidate }
+      )
     case 'not-file':
-      return `Path is a directory, not a file: ${candidate}`
+      return runtimeT(
+        'terminal',
+        'links.pathIsDirectory',
+        'Path is a directory, not a file: {{path}}',
+        { path: candidate }
+      )
     case 'not-found':
-      return `File not found: ${candidate}`
+      return runtimeT('terminal', 'links.fileNotFound', 'File not found: {{path}}', {
+        path: candidate
+      })
     case 'open-failed':
       return details
-        ? `Failed to open file: ${candidate} (${details})`
-        : `Failed to open file: ${candidate}`
+        ? runtimeT(
+            'terminal',
+            'links.openFileFailedWithDetails',
+            'Failed to open file: {{path}} ({{details}})',
+            { path: candidate, details }
+          )
+        : runtimeT('terminal', 'links.openFileFailedForPath', 'Failed to open file: {{path}}', {
+            path: candidate
+          })
   }
 }
 

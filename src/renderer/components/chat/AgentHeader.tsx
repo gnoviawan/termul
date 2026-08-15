@@ -1,5 +1,6 @@
 import { Bot, Brain } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -19,15 +20,10 @@ const SELECTOR_OPTION_SELECTED = 'bg-accent text-accent-foreground'
 const SELECTOR_OPTION_DESCRIPTION = 'text-xs opacity-70'
 const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
 
-/**
- * Resolve the display label for a config chip. Promoted chips (e.g.
- * `thought_level`) use the shared category heading; generic chips keep their
- * original `option.name` fallback unchanged.
- */
-function getLabelForConfigChip(option: SessionConfigOption, promoted: boolean): string {
-  if (!promoted || !option.category) return option.name
-  return KNOWN_CATEGORY_HEADINGS[option.category] ?? option.name
-}
+const KNOWN_HEADING_KEYS: Record<
+  string,
+  'selectors.mode' | 'selectors.model' | 'selectors.thinkingLevel'
+> = KNOWN_CATEGORY_HEADINGS
 
 /**
  * A popover selector for one config option. When `promoted` is set (e.g. a
@@ -57,11 +53,13 @@ export function ConfigChip({
   /** Optional leading glyph (e.g. agent icon on the model pill). */
   leading?: ReactNode
 }): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const { displayValue, pending, select } = useOptimisticSelect(option.currentValue, onSelect)
   const current = option.options.find((o) => o.value === displayValue)
-  const fallbackLabel = getLabelForConfigChip(option, promoted)
+  const headingKey = promoted && option.category ? KNOWN_HEADING_KEYS[option.category] : undefined
+  const fallbackLabel = headingKey ? t(headingKey) : option.name
   const showSearch = searchable && option.options.length > (maxVisibleOptions ?? 0)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredOptions = option.options.filter((value) => {
@@ -93,8 +91,8 @@ export function ConfigChip({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search models..."
-            aria-label="Search models"
+            placeholder={t('selectors.searchModels')}
+            aria-label={t('selectors.searchModels')}
             className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
           />
         )}
@@ -130,7 +128,9 @@ export function ConfigChip({
               </button>
             ))
           ) : (
-            <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              {t('selectors.noModels')}
+            </div>
           )}
         </div>
       </PopoverContent>
@@ -146,13 +146,15 @@ export function ModeChip({
   session,
   disabled,
   onSelect,
-  label = 'Mode'
+  label
 }: {
   session: AcpSession
   disabled: boolean
   onSelect: (modeId: string) => void | Promise<void>
   label?: string
 }): React.JSX.Element | null {
+  const { t } = useTranslation('chat')
+  const resolvedLabel = label ?? t('selectors.mode')
   const modes = session.modes
   const [open, setOpen] = useState(false)
   const { displayValue, pending, select } = useOptimisticSelect(modes?.currentModeId, onSelect)
@@ -171,11 +173,11 @@ export function ModeChip({
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill disabled={disabled} chevron pending={pending}>
           <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-          {current?.name ?? label}
+          {current?.name ?? resolvedLabel}
         </ComposerPill>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" collisionPadding={8} className="w-56 p-1">
-        <div className={SELECTOR_SECTION_LABEL}>{label}</div>
+        <div className={SELECTOR_SECTION_LABEL}>{resolvedLabel}</div>
         <div
           data-testid="mode-chip-options"
           className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"

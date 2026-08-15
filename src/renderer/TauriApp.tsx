@@ -27,6 +27,7 @@ import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
+import { useAppliedLanguageSync } from './hooks/use-language'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
@@ -61,6 +62,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedLanguageSync()
   useAppliedColorThemeSync()
   useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
@@ -145,7 +147,7 @@ export default function TauriApp(): React.JSX.Element {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <GlobalContextMenu>
-          <ErrorBoundary context="App Root">
+          <ErrorBoundary context="appRoot">
             <AppEffects />
             <Toaster />
             <Sonner />

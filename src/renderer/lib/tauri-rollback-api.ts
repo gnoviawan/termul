@@ -2,6 +2,7 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { appDataDir } from '@tauri-apps/api/path'
 import { mkdir, readDir, remove, stat, writeTextFile } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
+import { runtimeT } from '@/i18n/runtime'
 
 // Rollback error codes
 export const RollbackErrorCodes = {
@@ -20,6 +21,24 @@ const MAX_PREVIOUS_VERSIONS = 3
 // Store file for rollback metadata
 const ROLLBACK_STORE_FILE = 'rollback-metadata.json'
 const PENDING_ROLLBACK_KEY = 'rollback_pending'
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message
+  }
+  if (typeof err === 'string' && err.trim()) {
+    return err
+  }
+  try {
+    const serialized = JSON.stringify(err)
+    if (serialized && serialized !== '{}' && serialized !== 'null') {
+      return serialized
+    }
+  } catch {
+    // Fall through to the localized fallback.
+  }
+  return runtimeT('shell', 'updates.errors.unknown', 'Unknown error')
+}
 
 /**
  * Metadata for a stored rollback version
@@ -188,7 +207,12 @@ async function readMetadata(): Promise<IpcResult<Map<string, RollbackVersionMeta
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to read metadata',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackMetadataReadFailed',
+        'Failed to read rollback metadata: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.METADATA_ERROR
     }
   }
@@ -222,7 +246,12 @@ async function writeMetadata(
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to write metadata',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackMetadataWriteFailed',
+        'Failed to write rollback metadata: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.METADATA_ERROR
     }
   }
@@ -290,7 +319,12 @@ async function cleanupOldVersions(
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to cleanup old versions',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackCleanupFailed',
+        'Failed to clean up old rollback versions: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.DELETE_ERROR
     }
   }
@@ -328,7 +362,12 @@ export async function availableRollbacks(): Promise<IpcResult<RollbackVersions>>
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to list rollback versions',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackListFailed',
+        'Failed to list rollback versions: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.METADATA_ERROR
     }
   }
@@ -345,7 +384,12 @@ export async function keepPreviousVersion(version: string): Promise<IpcResult<Pr
   if (!validateVersion(version)) {
     return {
       success: false,
-      error: `Invalid version format: ${version}`,
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackInvalidVersion',
+        'Invalid version format: {{version}}',
+        { version }
+      ),
       code: RollbackErrorCodes.VERSION_NOT_FOUND
     }
   }
@@ -409,7 +453,12 @@ export async function keepPreviousVersion(version: string): Promise<IpcResult<Pr
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to preserve version',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackPreserveFailed',
+        'Failed to preserve version: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.COPY_ERROR
     }
   }
@@ -428,7 +477,12 @@ export async function installRollback(
   if (!validateVersion(version)) {
     return {
       success: false,
-      error: `Invalid version format: ${version}`,
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackInvalidVersion',
+        'Invalid version format: {{version}}',
+        { version }
+      ),
       code: RollbackErrorCodes.VERSION_NOT_FOUND
     }
   }
@@ -449,7 +503,12 @@ export async function installRollback(
     if (!versionMetadata) {
       return {
         success: false,
-        error: `Version ${version} not found in rollback history`,
+        error: runtimeT(
+          'shell',
+          'updates.errors.rollbackVersionNotFound',
+          'Version {{version}} was not found in rollback history',
+          { version }
+        ),
         code: RollbackErrorCodes.VERSION_NOT_FOUND
       }
     }
@@ -464,7 +523,12 @@ export async function installRollback(
 
       return {
         success: false,
-        error: `Version ${version} files not found`,
+        error: runtimeT(
+          'shell',
+          'updates.errors.rollbackFilesNotFound',
+          'Files for version {{version}} were not found',
+          { version }
+        ),
         code: RollbackErrorCodes.VERSION_NOT_FOUND
       }
     }
@@ -487,13 +551,23 @@ export async function installRollback(
       data: {
         version,
         path: versionMetadata.path,
-        instructions: `Rollback to v${version} prepared. Restart the application to complete the rollback.`
+        instructions: runtimeT(
+          'shell',
+          'updates.errors.rollbackPrepared',
+          'Rollback to v{{version}} is ready. Restart the application to complete the rollback.',
+          { version }
+        )
       }
     }
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to install rollback',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackInstallFailed',
+        'Failed to install rollback: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.COPY_ERROR
     }
   }
@@ -524,7 +598,12 @@ export async function checkPendingRollback(): Promise<
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to check pending rollback',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackPendingCheckFailed',
+        'Failed to check pending rollback: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.METADATA_ERROR
     }
   }
@@ -543,7 +622,12 @@ export async function clearPendingRollback(): Promise<IpcResult<void>> {
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to clear pending rollback',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackPendingClearFailed',
+        'Failed to clear pending rollback: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.DELETE_ERROR
     }
   }
@@ -586,7 +670,12 @@ export async function getRollbackStatus(): Promise<IpcResult<RollbackStatus>> {
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to get rollback status',
+      error: runtimeT(
+        'shell',
+        'updates.errors.rollbackStatusFailed',
+        'Failed to get rollback status: {{details}}',
+        { details: extractErrorMessage(err) }
+      ),
       code: RollbackErrorCodes.METADATA_ERROR
     }
   }

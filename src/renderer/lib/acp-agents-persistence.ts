@@ -7,6 +7,7 @@
  * lives in OS secure storage.
  */
 
+import { runtimeT } from '@/i18n/runtime'
 import type { AgentConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 
@@ -27,24 +28,36 @@ export interface AgentConfigValidation {
 /** Validate a config for saving: non-empty name and command are required. */
 export function validateAgentConfig(cfg: Partial<AgentConfig>): AgentConfigValidation {
   const errors: string[] = []
-  if (!cfg.name || cfg.name.trim().length === 0) errors.push('Name is required.')
-  if (!cfg.command || cfg.command.trim().length === 0) errors.push('Command is required.')
+  if (!cfg.name || cfg.name.trim().length === 0) {
+    errors.push(runtimeT('agents', 'customAcp.errors.nameRequired', 'Name is required.'))
+  }
+  if (!cfg.command || cfg.command.trim().length === 0) {
+    errors.push(runtimeT('agents', 'customAcp.errors.commandRequired', 'Command is required.'))
+  }
   if (cfg.args !== undefined) {
     if (!Array.isArray(cfg.args)) {
-      errors.push('args must be an array.')
+      errors.push(runtimeT('agents', 'customAcp.errors.argsArray', 'args must be an array.'))
     } else if (cfg.args.some((a) => typeof a !== 'string')) {
-      errors.push('args must be an array of strings.')
+      errors.push(
+        runtimeT('agents', 'customAcp.errors.argsStrings', 'args must be an array of strings.')
+      )
     }
   }
   if (cfg.env !== undefined) {
     if (typeof cfg.env !== 'object' || cfg.env === null || Array.isArray(cfg.env)) {
-      errors.push('env must be an object.')
+      errors.push(runtimeT('agents', 'customAcp.errors.envObject', 'env must be an object.'))
     } else if (Object.values(cfg.env).some((v) => typeof v !== 'string')) {
-      errors.push('env values must be strings.')
+      errors.push(runtimeT('agents', 'customAcp.errors.envStrings', 'env values must be strings.'))
     }
   }
   if (cfg.allowTerminal !== undefined && typeof cfg.allowTerminal !== 'boolean') {
-    errors.push('allowTerminal must be a boolean.')
+    errors.push(
+      runtimeT(
+        'agents',
+        'customAcp.errors.allowTerminalBoolean',
+        'allowTerminal must be a boolean.'
+      )
+    )
   }
   return { valid: errors.length === 0, errors }
 }
@@ -124,7 +137,9 @@ export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
   // A missing key is the normal empty state; any other failure is a real
   // storage/backend error and must not be silently collapsed to [].
   if (res.code === 'KEY_NOT_FOUND') return []
-  throw new Error(res.error ?? 'Failed to load agent configs')
+  throw new Error(
+    res.error ?? runtimeT('agents', 'customAcp.errors.loadConfigs', 'Failed to load agent configs')
+  )
 }
 
 /** Persist the full agent-config list. */
@@ -137,14 +152,21 @@ export async function saveAgentConfigs(list: StoredAgentConfig[]): Promise<void>
     for (const [key, value] of Object.entries(cfg.env)) {
       if (looksLikeSecretValue(value)) {
         throw new Error(
-          `refusing to persist a raw secret for env "${key}" on agent "${cfg.name}"; ` +
-            `store it in secure storage and reference it as $${key}`
+          runtimeT(
+            'agents',
+            'customAcp.errors.rawSecret',
+            'refusing to persist a raw secret for env "{{key}}" on agent "{{name}}"; store it in secure storage and reference it as ${{key}}',
+            { key, name: cfg.name }
+          )
         )
       }
     }
   }
   const res = await persistenceApi.write(ACP_AGENTS_KEY, list)
   if (!res.success) {
-    throw new Error(res.error ?? 'Failed to persist agent configs')
+    throw new Error(
+      res.error ??
+        runtimeT('agents', 'customAcp.errors.persistConfigs', 'Failed to persist agent configs')
+    )
   }
 }

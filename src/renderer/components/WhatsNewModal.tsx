@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { ExternalLink, Sparkles, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { openerApi } from '@/lib/tauri-opener-api'
 
@@ -19,6 +20,8 @@ export function WhatsNewModal({
   htmlUrl,
   onClose
 }: WhatsNewModalProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
+
   useEffect(() => {
     if (!isOpen) return
 
@@ -86,13 +89,14 @@ export function WhatsNewModal({
                   <Sparkles className="w-3 h-3 text-primary" />
                 </div>
                 <h3 id="whats-new-title" className="text-sm font-semibold text-foreground">
-                  What's New
+                  {t('whatsNew.title')}
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={onClose}
                 className="text-muted-foreground hover:text-foreground transition-colors"
+                aria-label={t('whatsNew.close')}
               >
                 <X size={14} />
               </button>
@@ -103,7 +107,7 @@ export function WhatsNewModal({
               {/* Version Info */}
               <div className="flex items-baseline gap-2">
                 <span className="text-xs font-medium text-muted-foreground">
-                  Updated to version
+                  {t('whatsNew.updatedTo')}
                 </span>
                 <span className="text-sm font-semibold text-foreground">{version}</span>
               </div>
@@ -111,7 +115,7 @@ export function WhatsNewModal({
               {/* Release Notes */}
               <div>
                 <span className="block text-xs font-medium text-muted-foreground mb-1.5">
-                  Release Notes
+                  {t('whatsNew.releaseNotes')}
                 </span>
                 <div className="max-h-[320px] overflow-y-auto pr-1">
                   {notesHtml ? (
@@ -122,7 +126,7 @@ export function WhatsNewModal({
                     />
                   ) : (
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Release notes aren't available for this version.
+                      {t('whatsNew.unavailable')}
                     </p>
                   )}
                 </div>
@@ -138,7 +142,7 @@ export function WhatsNewModal({
                   className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
                 >
                   <ExternalLink size={13} />
-                  <span>View on GitHub</span>
+                  <span>{t('whatsNew.viewGithub')}</span>
                 </button>
               )}
               <button
@@ -146,7 +150,7 @@ export function WhatsNewModal({
                 onClick={onClose}
                 className="px-3 py-1.5 text-xs font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20 transition-all"
               >
-                Got it
+                {t('whatsNew.gotIt')}
               </button>
             </div>
           </motion.div>

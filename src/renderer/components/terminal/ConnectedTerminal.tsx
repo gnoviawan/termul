@@ -5,6 +5,7 @@ import type { IDisposable } from '@xterm/xterm'
 import { Terminal } from '@xterm/xterm'
 import { AlertTriangle, RefreshCcw } from 'lucide-react'
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import '@xterm/xterm/css/xterm.css'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -160,9 +161,6 @@ export interface ConnectedTerminalProps {
   isVisible?: boolean
 }
 
-const PARTIAL_RESTORE_NOTE =
-  '\x1b[33m\r\n[Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay]\x1b[0m\r\n'
-
 function getInstrumentationProjectId(spawnOptions?: TerminalSpawnOptions): string | undefined {
   const candidate = spawnOptions?.projectId
   return typeof candidate === 'string' ? candidate : undefined
@@ -185,6 +183,10 @@ function ConnectedTerminalComponent({
   searchRef,
   isVisible = true
 }: ConnectedTerminalProps): React.JSX.Element {
+  const { t } = useTranslation('terminal')
+  const tRef = useRef(t)
+  tRef.current = t
+
   // 1. STABLE ID DERIVATION
   const targetId = storeTerminalId || externalTerminalId
 
@@ -366,7 +368,9 @@ function ConnectedTerminalComponent({
         }
       } catch (err) {
         if (onErrorRef.current) {
-          onErrorRef.current(err instanceof Error ? err.message : 'Paste write failed')
+          onErrorRef.current(
+            err instanceof Error ? err.message : tRef.current('errors.pasteWriteFailed')
+          )
         }
       }
     },
@@ -455,7 +459,7 @@ function ConnectedTerminalComponent({
       }
     } catch (err) {
       if (onErrorRef.current) {
-        onErrorRef.current(err instanceof Error ? err.message : 'Write failed')
+        onErrorRef.current(err instanceof Error ? err.message : tRef.current('errors.writeFailed'))
       }
     }
   }, [])
@@ -547,7 +551,7 @@ function ConnectedTerminalComponent({
         }
       } catch (error) {
         console.error('[Terminal File Link Open Failed]', error)
-        toast.error('Failed to open file from terminal output.')
+        toast.error(tRef.current('links.openFileFailed'))
       }
     }
 
@@ -559,7 +563,7 @@ function ConnectedTerminalComponent({
       event.preventDefault()
 
       if (!isSupportedTerminalUrl(url)) {
-        toast.error('Only http/https URLs are supported from terminal output.')
+        toast.error(tRef.current('links.unsupportedUrl'))
         return
       }
 
@@ -567,7 +571,7 @@ function ConnectedTerminalComponent({
         await openTerminalUrl(url)
       } catch (error) {
         console.error('[Terminal URL Link Open Failed]', error)
-        toast.error('Failed to open URL from terminal output.')
+        toast.error(tRef.current('links.openUrlFailed'))
       }
     }
 
@@ -995,7 +999,7 @@ function ConnectedTerminalComponent({
                   // may miss the initial mode sequences. Idempotent with modes in the stream.
                   terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
-                  terminal.write(PARTIAL_RESTORE_NOTE)
+                  terminal.write(`\x1b[33m\r\n[${tRef.current('restore.partialNote')}]\x1b[0m\r\n`)
                 } else {
                   terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
@@ -1063,7 +1067,10 @@ function ConnectedTerminalComponent({
             if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
               const envCount = Object.keys(memoizedSpawnOptions.env).length
               terminal.write(
-                `\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`
+                `\x1b[36m\r\n[${tRef.current('environment.applied', {
+                  count: envCount,
+                  formattedCount: envCount.toLocaleString()
+                })}]\x1b[0m\r\n`
               )
             }
             // Restore scroll position if cached from previous pane
@@ -1081,17 +1088,19 @@ function ConnectedTerminalComponent({
               useTerminalStore.getState().setTerminalClaim(result.data.id, result.data.claim)
             }
           } else {
-            const errorMsg = result.error || 'Unknown spawn error'
+            const errorMsg = result.error || tRef.current('errors.unknownSpawn')
             console.error('[Terminal Spawn Failed]', errorMsg)
             terminal.write(
-              `\x1b[31m\r\nFailed to spawn terminal process:\r\n${errorMsg}\x1b[0m\r\n`
+              `\x1b[31m\r\n${tRef.current('errors.spawnProcessFailed')}:\r\n${errorMsg}\x1b[0m\r\n`
             )
             if (onErrorRef.current) onErrorRef.current(errorMsg)
           }
         } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : 'Spawn failed'
+          const errorMsg = err instanceof Error ? err.message : tRef.current('errors.spawnFailed')
           console.error('[Terminal Spawn Exception]', errorMsg)
-          terminal.write(`\x1b[31m\r\nTerminal spawn exception:\r\n${errorMsg}\x1b[0m\r\n`)
+          terminal.write(
+            `\x1b[31m\r\n${tRef.current('errors.spawnException')}:\r\n${errorMsg}\x1b[0m\r\n`
+          )
           if (onErrorRef.current) onErrorRef.current(errorMsg)
         } finally {
           spawnInFlightRef.current = false
@@ -1149,7 +1158,7 @@ function ConnectedTerminalComponent({
               // R3: replay the full captured DEC mode set, not just alt-screen.
               terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
-              terminal.write(PARTIAL_RESTORE_NOTE)
+              terminal.write(`\x1b[33m\r\n[${tRef.current('restore.partialNote')}]\x1b[0m\r\n`)
             } else {
               terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
@@ -1214,7 +1223,10 @@ function ConnectedTerminalComponent({
         if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
           const envCount = Object.keys(memoizedSpawnOptions.env).length
           terminal.write(
-            `\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`
+            `\x1b[36m\r\n[${tRef.current('environment.applied', {
+              count: envCount,
+              formattedCount: envCount.toLocaleString()
+            })}]\x1b[0m\r\n`
           )
         }
         // Restore scroll position if cached from previous pane
@@ -1740,7 +1752,9 @@ function ConnectedTerminalComponent({
           } else if (onErrorRef.current) onErrorRef.current(result.error)
         } catch (err) {
           if (onErrorRef.current)
-            onErrorRef.current(err instanceof Error ? err.message : 'Spawn failed')
+            onErrorRef.current(
+              err instanceof Error ? err.message : tRef.current('errors.spawnFailed')
+            )
         } finally {
           spawnInFlightRef.current = false
         }
@@ -1826,19 +1840,18 @@ function ConnectedTerminalComponent({
                     <AlertTriangle className="text-destructive" size={40} />
                   </div>
                   <span className="text-3xs uppercase tracking-[0.2em] font-black text-destructive/80 text-center">
-                    CRITICAL ERROR
+                    {t('crash.criticalError')}
                   </span>
                 </div>
                 <div className="flex flex-col justify-center text-center md:text-left">
                   <div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider opacity-70">
-                    Terminal Pane Exception
+                    {t('crash.paneException')}
                   </div>
                   <h3 className="text-2xl md:text-3xl font-bold tracking-tighter mb-3">
-                    Session Interrupted
+                    {t('crash.sessionInterrupted')}
                   </h3>
                   <p className="text-muted-foreground leading-relaxed text-sm md:text-base mb-8">
-                    The terminal process exited unexpectedly. This usually happens if the shell
-                    crashes or the PTY is killed by the OS.
+                    {t('crash.description')}
                   </p>
                   <div className="flex flex-col sm:flex-row items-center gap-4">
                     <button
@@ -1848,7 +1861,7 @@ function ConnectedTerminalComponent({
                       }}
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/20 active:scale-95 transition-all font-bold shadow-md"
                     >
-                      <RefreshCcw size={20} /> Reconnect Session
+                      <RefreshCcw size={20} /> {t('crash.reconnect')}
                     </button>
                     <div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
                     <div className="text-3xs text-muted-foreground/60 font-mono">
@@ -1867,14 +1880,14 @@ function ConnectedTerminalComponent({
           disabled={!hasSelection}
           className="cursor-pointer"
         >
-          Copy <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
+          {t('contextMenu.copy')} <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem onSelect={pasteFromClipboard} className="cursor-pointer">
-          Paste <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
+          {t('contextMenu.paste')} <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={handleSelectAll} className="cursor-pointer">
-          Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
+          {t('contextMenu.selectAll')} <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -1883,7 +1896,7 @@ function ConnectedTerminalComponent({
           }}
           className="cursor-pointer text-primary focus:text-primary"
         >
-          <RefreshCcw size={14} className="mr-2" /> Restart Terminal
+          <RefreshCcw size={14} className="mr-2" /> {t('contextMenu.restart')}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

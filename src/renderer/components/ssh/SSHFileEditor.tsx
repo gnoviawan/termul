@@ -1,6 +1,7 @@
 import { FileEdit, Save, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
@@ -10,6 +11,7 @@ interface SSHFileEditorProps {
 }
 
 export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.Element {
+  const t = useSshTranslation()
   const { setEditingFile: setStoreFile, setEditingContent: setStoreContent } = useSSHActions()
   const editingFile = useSSHEditorFile()
   const editingContent = useSSHEditorContent()
@@ -28,19 +30,23 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
       if (result.success) {
         setStoreFile({ ...editingFile, originalContent: editingContent })
         setConfirmClose(false)
-        toast.success(`Saved: ${editingFile.name}`)
+        toast.success(t('fileEditor.saved', { name: editingFile.name }))
         setTimeout(() => setSaveAnimating(false), 600)
       } else {
-        toast.error(`Save failed: ${result.error}`)
+        toast.error(t('fileEditor.saveFailed', { error: result.error }))
         setSaveAnimating(false)
       }
     } catch (error) {
-      toast.error(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        t('fileEditor.saveFailed', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
       setSaveAnimating(false)
     } finally {
       setIsSaving(false)
     }
-  }, [editingFile, connectionId, editingContent, setStoreFile])
+  }, [editingFile, connectionId, editingContent, setStoreFile, t])
 
   const handleClose = useCallback(() => {
     if (isDirty) setConfirmClose(true)
@@ -69,14 +75,14 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                     ? 'bg-amber-500/20 text-amber-500'
                     : 'hover:bg-accent text-muted-foreground'
               )}
-              title="Save"
+              title={t('actions.save')}
             >
               <Save className={cn('h-3 w-3', saveAnimating && 'animate-pulse')} />
             </button>
             <button
               onClick={handleClose}
               className="p-1 rounded hover:bg-accent text-muted-foreground"
-              title="Close"
+              title={t('actions.close')}
             >
               <X className="h-3 w-3" />
             </button>
@@ -93,23 +99,23 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
       {confirmClose && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[340px] p-4">
-            <h3 className="text-sm font-semibold mb-2">Unsaved Changes</h3>
+            <h3 className="text-sm font-semibold mb-2">{t('fileEditor.unsavedTitle')}</h3>
             <p className="text-xs text-muted-foreground mb-4">
-              &ldquo;{editingFile.name}&rdquo; has unsaved changes.
+              {t('fileEditor.unsavedMessage', { name: editingFile.name })}
             </p>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setConfirmClose(false)}
                 className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
               >
-                Continue Editing
+                {t('fileEditor.continueEditing')}
               </button>
               <button
                 onClick={handleSave}
                 disabled={isSaving}
                 className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                Save
+                {t('actions.save')}
               </button>
               <button
                 onClick={() => {
@@ -118,7 +124,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                 }}
                 className="px-3 py-1.5 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                Discard
+                {t('actions.discard')}
               </button>
             </div>
           </div>

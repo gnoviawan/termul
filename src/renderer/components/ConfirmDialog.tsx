@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
 interface ConfirmDialogProps {
@@ -25,14 +26,16 @@ export function ConfirmDialog({
   title,
   message,
   children,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  confirmLabel,
+  cancelLabel,
   secondaryAction,
   variant = 'default',
   isLoading = false,
   onConfirm,
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
+  const { t } = useTranslation('common')
+
   // Handle Escape key to close dialog
   useEffect(() => {
     if (!isOpen) return
@@ -104,7 +107,7 @@ export function ConfirmDialog({
                 disabled={isLoading}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {cancelLabel}
+                {cancelLabel ?? t('actions.cancel')}
               </button>
               {secondaryAction && (
                 <button
@@ -125,7 +128,7 @@ export function ConfirmDialog({
                     : 'bg-primary text-primary-foreground hover:bg-primary/90'
                 )}
               >
-                {isLoading ? 'Loading...' : confirmLabel}
+                {isLoading ? t('dialog.loading') : (confirmLabel ?? t('actions.confirm'))}
               </button>
             </div>
           </motion.div>

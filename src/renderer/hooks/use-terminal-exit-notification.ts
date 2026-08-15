@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { i18n } from '@/i18n'
 import { terminalApi } from '@/lib/api'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { useProjectStore } from '@/stores/project-store'
@@ -63,7 +64,9 @@ export function useTerminalExitNotification(): void {
       const terminalName = sanitizeNotificationText(terminal.name)
 
       const body =
-        exitCode === 0 ? `${terminalName} — DONE` : `${terminalName} — Failed (exit ${exitCode})`
+        exitCode === 0
+          ? i18n.t('exitNotification.done', { ns: 'terminal', terminalName })
+          : i18n.t('exitNotification.failed', { ns: 'terminal', terminalName, exitCode })
 
       sendDesktopNotification(title, body)
     })

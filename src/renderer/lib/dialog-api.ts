@@ -11,6 +11,7 @@
 
 import type { DialogApi, IpcResult } from '@shared/types/ipc.types'
 import { confirm, open } from '@tauri-apps/plugin-dialog'
+import { runtimeT } from '@/i18n/runtime'
 import { isTauriContext } from './tauri-runtime'
 
 /**
@@ -50,16 +51,24 @@ function createTauriDialogApi(): DialogApi {
         if (webDirectoryPicker) {
           return webDirectoryPicker()
         }
-        return { success: false, error: 'No directory selected', code: 'CANCELLED' }
+        return {
+          success: false,
+          error: runtimeT('common', 'dialog.noDirectorySelected', 'No directory selected'),
+          code: 'CANCELLED'
+        }
       }
       try {
         const selected = await open({
           directory: true,
           multiple: false,
-          title: 'Select Project Folder'
+          title: runtimeT('common', 'dialog.selectProjectFolder', 'Select Project Folder')
         })
         if (!selected) {
-          return { success: false, error: 'No directory selected', code: 'CANCELLED' }
+          return {
+            success: false,
+            error: runtimeT('common', 'dialog.noDirectorySelected', 'No directory selected'),
+            code: 'CANCELLED'
+          }
         }
         return { success: true, data: selected as string }
       } catch (err) {
@@ -75,10 +84,14 @@ function createTauriDialogApi(): DialogApi {
         const selected = await open({
           multiple: false,
           filters: options?.filters,
-          title: options?.title || 'Select File'
+          title: options?.title || runtimeT('common', 'dialog.selectFile', 'Select File')
         })
         if (!selected) {
-          return { success: false, error: 'No file selected', code: 'CANCELLED' }
+          return {
+            success: false,
+            error: runtimeT('common', 'dialog.noFileSelected', 'No file selected'),
+            code: 'CANCELLED'
+          }
         }
         return { success: true, data: selected as string }
       } catch (err) {
@@ -100,6 +113,9 @@ export const dialogApi: DialogApi = createTauriDialogApi()
 /**
  * Helper function for confirm dialogs (not part of DialogApi interface but useful)
  */
-export async function confirmDialog(message: string, title = 'Confirm'): Promise<boolean> {
-  return await confirm(message, { title, kind: 'warning' })
+export async function confirmDialog(message: string, title?: string): Promise<boolean> {
+  return await confirm(message, {
+    title: title ?? runtimeT('common', 'dialog.confirm', 'Confirm'),
+    kind: 'warning'
+  })
 }

@@ -14,6 +14,7 @@ import {
   Terminal
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Command,
   CommandEmpty,
@@ -55,13 +56,6 @@ interface CommandPaletteProps {
 
 type CommandCategory = 'workspace' | 'navigation' | 'projects' | 'tools'
 
-const COMMAND_CATEGORY_LABELS: Record<CommandCategory, string> = {
-  workspace: 'Workspace',
-  navigation: 'Navigation',
-  projects: 'Projects',
-  tools: 'Tools'
-}
-
 const COMMAND_CATEGORY_ORDER: CommandCategory[] = ['projects', 'workspace', 'navigation', 'tools']
 
 interface CommandDef {
@@ -76,14 +70,8 @@ interface CommandDef {
   projectColor?: ProjectColor
 }
 
-function getSearchableValue(cmd: CommandDef): string {
-  return [
-    cmd.label,
-    cmd.description,
-    cmd.category,
-    COMMAND_CATEGORY_LABELS[cmd.category],
-    ...(cmd.keywords ?? [])
-  ]
+function getSearchableValue(cmd: CommandDef, categoryLabel: string): string {
+  return [cmd.label, cmd.description, cmd.category, categoryLabel, ...(cmd.keywords ?? [])]
     .filter(Boolean)
     .join(' ')
 }
@@ -108,6 +96,7 @@ export function CommandPalette({
   getShortcutLabel,
   getProjectShortcutLabel
 }: CommandPaletteProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const [query, setQuery] = useState('')
   const recentCommandIds = useRecentCommandIds()
   const saveRecentCommand = useSaveRecentCommand()
@@ -122,8 +111,8 @@ export function CommandPalette({
               id: 'new-terminal',
               category: 'workspace' as const,
               icon: <Terminal aria-hidden="true" size={16} />,
-              label: 'New Terminal',
-              description: 'Open a new shell in the active pane',
+              label: t('commandPalette.newTerminal'),
+              description: t('commandPalette.newTerminalDescription'),
               keywords: ['shell', 'console', 'pty', 'workspace'],
               execute: onAddTerminal
             }
@@ -135,8 +124,8 @@ export function CommandPalette({
               id: 'show-agent-launcher',
               category: 'workspace' as const,
               icon: <Bot aria-hidden="true" size={16} />,
-              label: 'Agent Launcher',
-              description: 'Show the agent launcher prompt in the active pane',
+              label: t('commandPalette.agentLauncher'),
+              description: t('commandPalette.agentLauncherDescription'),
               keywords: ['agent', 'ai', 'claude', 'codex', 'prompt', 'launcher'],
               shortcut: getShortcutLabel?.('newTerminal'),
               execute: onShowAgentLauncher
@@ -149,8 +138,8 @@ export function CommandPalette({
               id: 'launch-agent',
               category: 'workspace' as const,
               icon: <Bot aria-hidden="true" size={16} />,
-              label: 'Launch Agent',
-              description: "Open a CLI agent's TUI in the active pane",
+              label: t('commandPalette.launchAgent'),
+              description: t('commandPalette.launchAgentDescription'),
               keywords: ['agent', 'ai', 'claude', 'codex', 'gemini', 'cursor', 'opencode', 'cli'],
               execute: onLaunchAgent
             }
@@ -162,8 +151,8 @@ export function CommandPalette({
               id: 'new-browser-tab',
               category: 'workspace' as const,
               icon: <Globe aria-hidden="true" size={16} />,
-              label: 'New Browser Tab',
-              description: 'Open a browser tab in the active pane',
+              label: t('commandPalette.newBrowserTab'),
+              description: t('commandPalette.newBrowserTabDescription'),
               keywords: ['web', 'url', 'workspace'],
               shortcut: getShortcutLabel?.('newBrowserTab'),
               execute: onNewBrowserTab
@@ -176,8 +165,8 @@ export function CommandPalette({
               id: 'save-snapshot',
               category: 'workspace' as const,
               icon: <Save aria-hidden="true" size={16} />,
-              label: 'Save Workspace Snapshot',
-              description: 'Capture the current workspace layout',
+              label: t('commandPalette.saveSnapshot'),
+              description: t('commandPalette.saveSnapshotDescription'),
               keywords: ['snapshot', 'checkpoint', 'layout', 'save'],
               execute: onSaveSnapshot
             }
@@ -189,8 +178,8 @@ export function CommandPalette({
               id: 'open-project-settings',
               category: 'navigation' as const,
               icon: <Settings aria-hidden="true" size={16} />,
-              label: 'Project Settings',
-              description: 'Configure the active project workspace',
+              label: t('commandPalette.projectSettings'),
+              description: t('commandPalette.projectSettingsDescription'),
               keywords: ['settings', 'project', 'configure', 'config'],
               execute: onOpenProjectSettings
             }
@@ -202,8 +191,8 @@ export function CommandPalette({
               id: 'open-app-preferences',
               category: 'navigation' as const,
               icon: <SlidersHorizontal aria-hidden="true" size={16} />,
-              label: 'App Preferences',
-              description: 'Open global application preferences',
+              label: t('commandPalette.appPreferences'),
+              description: t('commandPalette.appPreferencesDescription'),
               keywords: ['preferences', 'prefs', 'settings', 'app', 'global'],
               execute: onOpenAppPreferences
             }
@@ -216,7 +205,7 @@ export function CommandPalette({
           <Layers aria-hidden="true" size={16} className={getColorClasses(project.color).text} />
         ),
         label: project.name,
-        description: project.path ?? 'Switch active workspace project',
+        description: project.path ?? t('commandPalette.switchProject'),
         keywords: ['project', 'switch', project.name, project.path].filter(
           (keyword): keyword is string => Boolean(keyword)
         ),
@@ -230,8 +219,8 @@ export function CommandPalette({
               id: 'open-command-history',
               category: 'tools' as const,
               icon: <History aria-hidden="true" size={16} />,
-              label: 'Command History',
-              description: 'Review and reuse recent terminal commands',
+              label: t('commandPalette.commandHistory'),
+              description: t('commandPalette.commandHistoryDescription'),
               keywords: ['history', 'recent', 'terminal', 'commands', 'shell'],
               shortcut: getShortcutLabel?.('commandHistory'),
               execute: onOpenCommandHistory
@@ -244,8 +233,8 @@ export function CommandPalette({
               id: 'change-color-theme',
               category: 'tools' as const,
               icon: <Palette aria-hidden="true" size={16} />,
-              label: 'Change Color Theme',
-              description: 'Preview and apply a UI color theme',
+              label: t('commandPalette.colorTheme'),
+              description: t('commandPalette.colorThemeDescription'),
               keywords: ['theme', 'color', 'appearance', 'palette', 'dark', 'dracula', 'nord'],
               shortcut: getShortcutLabel?.('colorThemePicker'),
               execute: onOpenThemePicker
@@ -258,8 +247,8 @@ export function CommandPalette({
               id: 'open-shortcut-menu',
               category: 'tools' as const,
               icon: <Keyboard aria-hidden="true" size={16} />,
-              label: 'Open Shortcut Menu',
-              description: 'View and edit common keyboard shortcuts',
+              label: t('commandPalette.shortcutMenu'),
+              description: t('commandPalette.shortcutMenuDescription'),
               keywords: ['keyboard', 'shortcuts', 'hotkeys', 'keys'],
               execute: onOpenShortcutMenu
             }
@@ -270,8 +259,11 @@ export function CommandPalette({
             id: `ssh-${profile.id}`,
             category: 'tools' as const,
             icon: <Monitor aria-hidden="true" size={16} />,
-            label: `SSH: ${profile.name}`,
-            description: `${profile.username}@${profile.host}`,
+            label: t('commandPalette.sshLabel', { name: profile.name }),
+            description: t('commandPalette.sshDescription', {
+              username: profile.username,
+              host: profile.host
+            }),
             keywords: ['ssh', 'remote', 'connect', profile.name, profile.host, profile.username],
             execute: () => onSSHConnect(profile.id)
           }))
@@ -293,7 +285,8 @@ export function CommandPalette({
       onSSHConnect,
       sshProfiles,
       getShortcutLabel,
-      getProjectShortcutLabel
+      getProjectShortcutLabel,
+      t
     ]
   )
 
@@ -393,7 +386,14 @@ export function CommandPalette({
     return (
       <CommandItem
         key={keyPrefix ? `${keyPrefix}:${cmd.id}` : cmd.id}
-        value={keyPrefix ? `${keyPrefix}:${getSearchableValue(cmd)}` : getSearchableValue(cmd)}
+        value={
+          keyPrefix
+            ? `${keyPrefix}:${getSearchableValue(
+                cmd,
+                t(`commandPalette.categories.${cmd.category}`)
+              )}`
+            : getSearchableValue(cmd, t(`commandPalette.categories.${cmd.category}`))
+        }
         onSelect={() => executeCommand(cmd)}
         className="group flex items-center justify-between gap-3 px-2.5 py-1.5 cursor-pointer rounded-md data-[selected='true']:bg-background data-[selected=true]:text-foreground"
       >
@@ -423,9 +423,12 @@ export function CommandPalette({
           )}
           <button
             type="button"
-            aria-label={isPinned ? `Unpin ${cmd.label}` : `Pin ${cmd.label}`}
+            aria-label={t('commandPalette.pinCommand', {
+              action: isPinned ? t('commandPalette.unpin') : t('commandPalette.pin'),
+              label: cmd.label
+            })}
             aria-pressed={isPinned}
-            title={isPinned ? 'Unpin' : 'Pin'}
+            title={isPinned ? t('commandPalette.unpin') : t('commandPalette.pin')}
             onMouseDown={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -473,28 +476,28 @@ export function CommandPalette({
             >
               <CommandInput
                 ref={inputRef}
-                placeholder="Search commands, projects, settings..."
+                placeholder={t('commandPalette.searchPlaceholder')}
                 value={query}
                 onValueChange={setQuery}
                 className="h-10 py-2 text-sm"
               />
               <CommandList className="max-h-[52vh] px-1 py-1">
-                <CommandEmpty>No commands found.</CommandEmpty>
+                <CommandEmpty>{t('commandPalette.empty')}</CommandEmpty>
 
                 {pinnedCommands.length > 0 && query === '' && (
-                  <CommandGroup heading="Pinned">
+                  <CommandGroup heading={t('commandPalette.pinned')}>
                     {pinnedCommands.map((cmd) => renderCommandItem(cmd, 'pinned'))}
                   </CommandGroup>
                 )}
 
                 {recentCommands.length > 0 && query === '' && (
-                  <CommandGroup heading="Recent">
+                  <CommandGroup heading={t('commandPalette.recent')}>
                     {recentCommands.map((cmd) => renderCommandItem(cmd, 'recent'))}
                   </CommandGroup>
                 )}
 
                 {commandsByCategory.map(({ category, commands: categoryCommands }) => (
-                  <CommandGroup key={category} heading={COMMAND_CATEGORY_LABELS[category]}>
+                  <CommandGroup key={category} heading={t(`commandPalette.categories.${category}`)}>
                     {categoryCommands.map((cmd) => renderCommandItem(cmd))}
                   </CommandGroup>
                 ))}
@@ -504,15 +507,15 @@ export function CommandPalette({
                 <span className="flex items-center gap-3">
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
-                    Navigate
+                    {t('commandPalette.navigate')}
                   </span>
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↵</kbd>
-                    Select
+                    {t('commandPalette.select')}
                   </span>
                   <span className="flex items-center">
                     <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">Esc</kbd>
-                    Close
+                    {t('commandPalette.close')}
                   </span>
                 </span>
               </div>

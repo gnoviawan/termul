@@ -1,5 +1,6 @@
 import { Check } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -25,6 +26,7 @@ function isMulti(question: PendingQuestion): boolean {
  * question as cancelled.
  */
 export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const answer = useAcpStore((s) => s.answerQuestion)
   const multi = useMemo(() => isMulti(question), [question])
   const [selected, setSelected] = useState<string[]>([])
@@ -45,10 +47,10 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
     (values?: string[]) => {
       const payload = values && values.length > 0 ? values : undefined
       void answer(question.questionId, payload).catch(() => {
-        toast.error('Could not send your answer. Try again.')
+        toast.error(t('question.sendFailed'))
       })
     },
-    [answer, question.questionId]
+    [answer, question.questionId, t]
   )
 
   const cancel = useCallback(() => submit(undefined), [submit])
@@ -63,7 +65,7 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
       <div className="mx-auto w-full max-w-3xl rounded-2xl border border-border/60 bg-card px-4 py-3">
         <p className="text-sm font-medium">{question.question}</p>
         {question.options.length === 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">The agent provided no options.</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('question.noOptions')}</p>
         )}
         <div className="mt-2 flex flex-col gap-1.5">
           {question.options.map((option) => (
@@ -103,10 +105,10 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
         </div>
         <div className="mt-3 flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={cancel}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button size="sm" disabled={selected.length === 0} onClick={() => submit(selected)}>
-            {multi ? 'Confirm' : 'Choose'}
+            {multi ? t('question.confirm') : t('question.choose')}
           </Button>
         </div>
       </div>

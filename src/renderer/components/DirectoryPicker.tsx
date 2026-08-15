@@ -24,6 +24,8 @@ import type { DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowUp, ChevronRight, Folder, Loader2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { runtimeT } from '@/i18n/runtime'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -175,6 +177,8 @@ function deriveCurrentFromEntries(entries: DirectoryEntry[]): string | null {
 export function DirectoryPicker(): React.JSX.Element {
   // Desktop mode never mounts this component (see App.tsx), but guard anyway so
   // a misconfigured import is a no-op rather than a broken modal.
+  const { t } = useTranslation('common')
+  const { t: projectT } = useTranslation('projects')
   const [isOpen, setIsOpen] = useState(false)
   // Empty until the opener resolves the host OS initial path (CAP-3). The
   // picker is closed while empty, so the brief pre-resolve state is invisible.
@@ -231,7 +235,10 @@ export function DirectoryPicker(): React.JSX.Element {
       setEntries([])
       setCurrentPath(path)
       if (!result.success) {
-        setError(result.error || 'Unable to list this directory')
+        setError(
+          result.error ||
+            runtimeT('common', 'directoryPicker.listFailed', 'Unable to list this directory')
+        )
       }
     }
     setLoading(false)
@@ -270,7 +277,7 @@ export function DirectoryPicker(): React.JSX.Element {
       if (outstanding) {
         outstanding.resolve({
           success: false,
-          error: 'Picker closed',
+          error: runtimeT('common', 'directoryPicker.pickerClosed', 'Picker closed'),
           code: 'CANCELLED'
         })
       }
@@ -297,14 +304,22 @@ export function DirectoryPicker(): React.JSX.Element {
 
   const handleSelectCurrent = useCallback(() => {
     if (!currentPath) {
-      close({ success: false, error: 'No directory selected', code: 'CANCELLED' })
+      close({
+        success: false,
+        error: runtimeT('common', 'directoryPicker.noSelection', 'No directory selected'),
+        code: 'CANCELLED'
+      })
       return
     }
     close({ success: true, data: currentPath })
   }, [currentPath, close])
 
   const handleCancel = useCallback(() => {
-    close({ success: false, error: 'No directory selected', code: 'CANCELLED' })
+    close({
+      success: false,
+      error: runtimeT('common', 'directoryPicker.noSelection', 'No directory selected'),
+      code: 'CANCELLED'
+    })
   }, [close])
 
   const handleNavigateInto = useCallback(
@@ -357,11 +372,13 @@ export function DirectoryPicker(): React.JSX.Element {
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50 flex-shrink-0">
-              <h3 className="text-sm font-semibold text-foreground">Select Project Folder</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                {t('directoryPicker.title')}
+              </h3>
               <button
                 onClick={handleCancel}
                 className="text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Cancel directory picker"
+                aria-label={t('directoryPicker.cancelAria')}
               >
                 <X size={14} />
               </button>
@@ -378,16 +395,16 @@ export function DirectoryPicker(): React.JSX.Element {
                     ? 'text-foreground hover:bg-muted'
                     : 'text-muted-foreground/50 cursor-not-allowed'
                 )}
-                aria-label="Go up one directory"
+                aria-label={t('directoryPicker.goUpAria')}
               >
                 <ArrowUp size={12} />
-                <span>Up</span>
+                <span>{t('directoryPicker.up')}</span>
               </button>
               <div
                 className="flex-1 text-xs font-mono text-muted-foreground truncate px-2 py-1 bg-background border border-border rounded"
                 title={currentPath}
               >
-                {currentPath || '(no path)'}
+                {currentPath || projectT('fileContext.noPath')}
               </div>
             </div>
 
@@ -396,11 +413,11 @@ export function DirectoryPicker(): React.JSX.Element {
               {loading ? (
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-xs">
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Listing directory...
+                  {t('directoryPicker.listing')}
                 </div>
               ) : entries.length === 0 ? (
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-xs">
-                  {error ? error : 'No subdirectories in this folder'}
+                  {error ? error : t('directoryPicker.empty')}
                 </div>
               ) : (
                 <ul className="space-y-0.5">
@@ -438,7 +455,7 @@ export function DirectoryPicker(): React.JSX.Element {
                 onClick={handleCancel}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('actions.cancel')}
               </button>
               <button
                 onClick={handleSelectCurrent}
@@ -450,7 +467,7 @@ export function DirectoryPicker(): React.JSX.Element {
                     : 'bg-primary/50 text-primary-foreground/70 cursor-not-allowed'
                 )}
               >
-                Select Current Folder
+                {t('directoryPicker.selectCurrent')}
               </button>
             </div>
           </motion.div>

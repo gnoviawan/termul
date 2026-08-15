@@ -14,6 +14,7 @@ import {
   X
 } from 'lucide-react'
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { NewProjectModal } from '@/components/NewProjectModal'
@@ -36,78 +37,83 @@ import {
 } from '@/stores/project-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
 
-const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
-  { id: 'general', label: 'General', icon: <Settings size={16} /> },
-  { id: 'env-vars', label: 'Environment Variables', icon: <KeySquare size={16} /> },
-  { id: 'shell', label: 'Shell Settings', icon: <TerminalSquare size={16} /> },
-  { id: 'symlinks', label: 'Worktree Symlinks', icon: <Link2 size={16} /> },
-  { id: 'emergency', label: 'Emergency Mode', icon: <ShieldAlert size={16} /> }
-]
+const PROJECT_SETTINGS_CATEGORIES = [
+  { id: 'general', labelKey: 'settingsCategoryGeneral', icon: <Settings size={16} /> },
+  { id: 'env-vars', labelKey: 'settingsCategoryEnvVars', icon: <KeySquare size={16} /> },
+  { id: 'shell', labelKey: 'settingsCategoryShell', icon: <TerminalSquare size={16} /> },
+  { id: 'symlinks', labelKey: 'settingsCategorySymlinks', icon: <Link2 size={16} /> },
+  {
+    id: 'emergency',
+    labelKey: 'settingsCategoryEmergency',
+    icon: <ShieldAlert size={16} />
+  }
+] as const
 
-const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+const PROJECT_SETTINGS_SEARCH_INDEX = [
   {
     categoryId: 'general',
-    label: 'Project Name',
-    description: 'Basic project identification.',
+    labelKey: 'settingsSearchProjectName',
+    descriptionKey: 'settingsSearchProjectNameDescription',
     keywords: ['rename', 'title']
   },
   {
     categoryId: 'general',
-    label: 'Root Directory',
-    description: 'Project location on disk.',
+    labelKey: 'settingsSearchRootDirectory',
+    descriptionKey: 'settingsSearchRootDirectoryDescription',
     keywords: ['path', 'folder', 'location']
   },
   {
     categoryId: 'general',
-    label: 'Color & Appearance',
-    description: 'Project color and appearance.',
+    labelKey: 'settingsSearchAppearance',
+    descriptionKey: 'settingsSearchAppearanceDescription',
     keywords: ['theme', 'color']
   },
   {
     categoryId: 'env-vars',
-    label: 'Environment Variables',
-    description: 'Secrets and config injected into your shell session.',
+    labelKey: 'settingsCategoryEnvVars',
+    descriptionKey: 'settingsSearchEnvDescription',
     keywords: ['env', 'secrets', 'config', 'dotenv']
   },
   {
     categoryId: 'shell',
-    label: 'Default Shell',
-    description: 'Customize the terminal experience for this workspace.',
+    labelKey: 'defaultShell',
+    descriptionKey: 'settingsSearchDefaultShellDescription',
     keywords: ['bash', 'zsh', 'powershell']
   },
   {
     categoryId: 'shell',
-    label: 'Startup Command',
-    description: 'Command to execute when a new terminal session starts.',
+    labelKey: 'settingsSearchStartupCommand',
+    descriptionKey: 'settingsSearchStartupDescription',
     keywords: ['init', 'startup', 'command']
   },
   {
     categoryId: 'symlinks',
-    label: 'Worktree Symlinks',
-    description: 'Directories to symlink from the project root into worktrees.',
+    labelKey: 'settingsCategorySymlinks',
+    descriptionKey: 'settingsSearchSymlinkDescription',
     keywords: ['node_modules', 'gitignore', 'shared dependencies']
   },
   {
     categoryId: 'emergency',
-    label: 'Skip Confirmation Dialogs',
-    description: 'Bypass non-essential prompts during worktree operations.',
+    labelKey: 'settingsSearchSkipConfirmations',
+    descriptionKey: 'settingsSearchSkipConfirmationsDescription',
     keywords: ['emergency', 'confirm']
   },
   {
     categoryId: 'emergency',
-    label: 'Skip .gitignore Selection',
-    description: 'Use default symlink settings when creating worktrees.',
+    labelKey: 'settingsSearchSkipGitignore',
+    descriptionKey: 'settingsSearchSkipGitignoreDescription',
     keywords: ['emergency', 'gitignore']
   },
   {
     categoryId: 'emergency',
-    label: 'Default Branch Prefix',
-    description: 'Prefix for new branch naming.',
+    labelKey: 'settingsSearchBranchPrefix',
+    descriptionKey: 'settingsSearchBranchPrefixDescription',
     keywords: ['branch', 'feature', 'hotfix']
   }
-]
+] as const
 
 export default function ProjectSettings() {
+  const { t } = useTranslation('projects')
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
@@ -133,6 +139,20 @@ export default function ProjectSettings() {
   const [skipConfirmations, setSkipConfirmations] = useState(false)
   const [skipGitignoreSelection, setSkipGitignoreSelection] = useState(false)
   const [defaultBranchPrefix, setDefaultBranchPrefix] = useState('feature/')
+  const localizedCategories: SettingsCategory[] = PROJECT_SETTINGS_CATEGORIES.map(
+    ({ labelKey, ...category }) => ({
+      ...category,
+      label: t(labelKey)
+    })
+  )
+  const localizedSearchIndex: SettingsSearchEntry[] = PROJECT_SETTINGS_SEARCH_INDEX.map(
+    ({ labelKey, descriptionKey, ...entry }) => ({
+      ...entry,
+      keywords: [...entry.keywords],
+      label: t(labelKey),
+      description: t(descriptionKey)
+    })
+  )
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -315,7 +335,7 @@ export default function ProjectSettings() {
     setImportWarnings(null)
 
     if (normalizedRoot === '') {
-      setImportError('Project root is required to import .env.')
+      setImportError(t('projectRootRequired'))
       return
     }
 
@@ -336,14 +356,14 @@ export default function ProjectSettings() {
       }
 
       if (!readResult.success) {
-        setImportError(`Failed to read .env: ${readResult.error}`)
+        setImportError(t('failedReadEnv', { message: readResult.error }))
         return
       }
 
       const parseResult = parseEnvFile(readResult.data.content)
 
       if (parseResult.vars.length === 0 && parseResult.invalidLines.length === 0) {
-        setImportError('The .env file is empty.')
+        setImportError(t('envEmpty'))
         return
       }
 
@@ -358,14 +378,19 @@ export default function ProjectSettings() {
       if (parseResult.invalidLines.length > 0) {
         const warningDetails = parseResult.invalidLines
           .slice(0, 3)
-          .map((l) => `Line ${l.line}: ${l.content}`)
+          .map((l) => t('envInvalidLine', { line: l.line, content: l.content }))
           .join('\n')
         const moreCount =
           parseResult.invalidLines.length > 3
-            ? ` (+${parseResult.invalidLines.length - 3} more)`
+            ? t('envMoreInvalid', { count: parseResult.invalidLines.length - 3 })
             : ''
         setImportWarnings(
-          `Imported ${parseResult.vars.length} variables.\nSkipped ${parseResult.invalidLines.length} invalid line(s):\n${warningDetails}${moreCount}`
+          t('envImportWarning', {
+            count: parseResult.vars.length,
+            invalidCount: parseResult.invalidLines.length,
+            details: warningDetails,
+            more: moreCount
+          })
         )
       }
     } catch (error) {
@@ -378,7 +403,7 @@ export default function ProjectSettings() {
       }
 
       const message = error instanceof Error ? error.message : String(error)
-      setImportError(`Failed to read .env: ${message}`)
+      setImportError(t('failedReadEnv', { message }))
     }
   }
 
@@ -393,10 +418,10 @@ export default function ProjectSettings() {
             </div>
             <div>
               <h1 className="text-xl font-semibold text-foreground leading-tight">
-                Project Settings
+                {t('projectSettings')}
               </h1>
               <p className="text-xs text-muted-foreground">
-                Configuration for{' '}
+                {t('configurationFor')}{' '}
                 <span className="font-semibold text-secondary-foreground">
                   {activeProject?.name}
                 </span>
@@ -412,31 +437,30 @@ export default function ProjectSettings() {
               }
             }}
             className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="Close"
-            aria-label="Close project settings"
+            title={t('close')}
+            aria-label={t('projectSettingsAria')}
           >
             <X size={18} className="text-muted-foreground group-hover:text-foreground" />
           </button>
         </div>
 
         {/* Content */}
-        <SettingsLayout
-          categories={PROJECT_SETTINGS_CATEGORIES}
-          searchIndex={PROJECT_SETTINGS_SEARCH_INDEX}
-        >
+        <SettingsLayout categories={localizedCategories} searchIndex={localizedSearchIndex}>
           {/* General Section */}
           <SettingsSection id="general">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">General</h2>
+                <h2 className="text-lg font-medium text-foreground">
+                  {t('settingsCategoryGeneral')}
+                </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Basic project identification and location.
+                  {t('basicIdentificationLocation')}
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Project Name
+                    {t('projectName')}
                   </label>
                   <input
                     type="text"
@@ -451,7 +475,7 @@ export default function ProjectSettings() {
 
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Root Directory
+                    {t('rootDirectory')}
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -473,17 +497,17 @@ export default function ProjectSettings() {
                       }}
                       className="px-4 py-2 bg-card hover:bg-secondary border border-border rounded-md text-sm text-foreground transition-colors shadow-sm"
                     >
-                      Browse
+                      {t('browse')}
                     </button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Changing the root directory only affects new terminals.
+                    {t('changingRootAffectsTerminals')}
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-3">
-                    Color & Appearance
+                    {t('settingsSearchAppearance')}
                   </label>
                   <div className="flex gap-2 flex-wrap">
                     {availableColors.map((color) => {
@@ -515,22 +539,23 @@ export default function ProjectSettings() {
           <SettingsSection id="env-vars">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
+                <h2 className="text-lg font-medium text-foreground">
+                  {t('settingsCategoryEnvVars')}
+                </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Secrets and config injected into your shell session. Secret values are cleared on
-                  app restart until secure storage is added.
+                  {t('secretsConfigDescription')}
                 </p>
                 <button
                   onClick={addEnvVar}
                   className="mt-4 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
                 >
-                  <Plus size={14} className="mr-1" /> Add Variable
+                  <Plus size={14} className="mr-1" /> {t('addVariable')}
                 </button>
                 <button
                   onClick={handleImportEnvFile}
                   className="mt-2 text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
                 >
-                  <Upload size={14} className="mr-1" /> Import from .env
+                  <Upload size={14} className="mr-1" /> {t('importFromEnv')}
                 </button>
                 {importError && <p className="mt-2 text-xs text-destructive">{importError}</p>}
                 {importWarnings && (
@@ -543,10 +568,10 @@ export default function ProjectSettings() {
                 <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">
                   <div className="grid grid-cols-[1fr_1.5fr_auto] gap-px bg-border">
                     <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
-                      Key
+                      {t('key')}
                     </div>
                     <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
-                      Value
+                      {t('value')}
                     </div>
                     <div className="bg-secondary/80 w-10"></div>
 
@@ -562,7 +587,7 @@ export default function ProjectSettings() {
                               setEnvVars(newVars)
                               setHasChanges(true)
                             }}
-                            placeholder="KEY"
+                            placeholder={t('key')}
                             className="w-full bg-transparent border-none text-sm font-mono text-primary focus:ring-0 px-2 py-1"
                           />
                         </div>
@@ -576,7 +601,7 @@ export default function ProjectSettings() {
                               setEnvVars(newVars)
                               setHasChanges(true)
                             }}
-                            placeholder="Value"
+                            placeholder={t('value')}
                             className={cn(
                               'w-full bg-transparent border-none text-sm font-mono focus:ring-0 px-2 py-1',
                               envVar.isSecret ? 'text-muted-foreground' : 'text-green-400'
@@ -603,15 +628,15 @@ export default function ProjectSettings() {
           <SettingsSection id="shell">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Customize the terminal experience for this workspace.
-                </p>
+                <h2 className="text-lg font-medium text-foreground">
+                  {t('settingsCategoryShell')}
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1">{t('customizeTerminal')}</p>
               </div>
               <div className="w-2/3 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                    Default Shell
+                    {t('defaultShell')}
                   </label>
                   {shellsLoading ? (
                     <Skeleton className="w-full h-10" />
@@ -632,7 +657,7 @@ export default function ProjectSettings() {
                             </option>
                           ))
                         ) : (
-                          <option value="">No shells detected</option>
+                          <option value="">{t('noShellsDetected')}</option>
                         )}
                       </select>
                       <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground">
@@ -649,12 +674,13 @@ export default function ProjectSettings() {
           <SettingsSection id="symlinks">
             <div className="flex items-start gap-6 border-b border-border pb-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
+                <h2 className="text-lg font-medium text-foreground">
+                  {t('settingsCategorySymlinks')}
+                </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Directories to symlink from the project root into worktrees. This allows shared
-                  dependencies (like{' '}
-                  <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>) across
-                  worktrees without reinstalling.
+                  {t('symlinkDescriptionBefore')}{' '}
+                  <code className="text-xs bg-secondary/50 px-1 rounded">node_modules</code>
+                  {t('symlinkDescriptionAfter')}
                 </p>
                 <div className="mt-4 space-y-2">
                   <button
@@ -666,13 +692,13 @@ export default function ProjectSettings() {
                       size={14}
                       className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`}
                     />
-                    Sync from .gitignore
+                    {t('syncGitignore')}
                   </button>
                   <button
                     onClick={addSymlinkDir}
                     className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors"
                   >
-                    <Plus size={14} className="mr-1" /> Add Directory
+                    <Plus size={14} className="mr-1" /> {t('addDirectory')}
                   </button>
                 </div>
               </div>
@@ -680,8 +706,7 @@ export default function ProjectSettings() {
                 <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
                   {symlinkDirs.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-4">
-                      No symlink directories configured. Click "Sync from .gitignore" to
-                      auto-detect.
+                      {t('noSymlinkDirs')}
                     </p>
                   ) : (
                     symlinkDirs.map((dir, index) => (
@@ -691,7 +716,7 @@ export default function ProjectSettings() {
                           type="text"
                           value={dir}
                           onChange={(e) => updateSymlinkDir(index, e.target.value)}
-                          placeholder="e.g. node_modules"
+                          placeholder={t('symlinkPlaceholder')}
                           className="flex-1 bg-secondary/50 border border-border rounded px-2 py-1 text-sm font-mono text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                         />
                         <button
@@ -712,21 +737,19 @@ export default function ProjectSettings() {
           <SettingsSection id="emergency">
             <div className="flex items-start gap-6">
               <div className="w-1/3 pt-1">
-                <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Power-user workflow settings for incident response and rapid worktree operations.
-                </p>
+                <h2 className="text-lg font-medium text-foreground">
+                  {t('settingsCategoryEmergency')}
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1">{t('emergencyDescription')}</p>
               </div>
               <div className="w-2/3">
                 <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-foreground">
-                        Skip Confirmation Dialogs
+                        {t('skipConfirmationDialogs')}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Bypass non-essential prompts during worktree operations.
-                      </p>
+                      <p className="text-xs text-muted-foreground">{t('bypassPrompts')}</p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input
@@ -743,11 +766,9 @@ export default function ProjectSettings() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-foreground">
-                        Skip .gitignore Selection
+                        {t('skipGitignoreSelection')}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Use default symlink settings when creating worktrees.
-                      </p>
+                      <p className="text-xs text-muted-foreground">{t('useDefaultSymlink')}</p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input
@@ -763,7 +784,7 @@ export default function ProjectSettings() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1">
-                      Default Branch Prefix
+                      {t('defaultBranchPrefix')}
                     </label>
                     <input
                       type="text"
@@ -775,7 +796,7 @@ export default function ProjectSettings() {
                       className="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm font-mono text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Prefix for new branch naming (e.g. "feature/", "hotfix/").
+                      {t('branchPrefixDescription')}
                     </p>
                   </div>
                 </div>
@@ -789,20 +810,20 @@ export default function ProjectSettings() {
           <div className="absolute bottom-0 left-0 right-0 p-4 bg-card border-t border-border flex justify-end items-center gap-4 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
             <span className="text-sm text-muted-foreground mr-auto flex items-center">
               <Info size={14} className="mr-2 text-yellow-500" />
-              <span className="opacity-80">You have unsaved changes</span>
+              <span className="opacity-80">{t('unsavedChanges')}</span>
             </span>
             <button
               onClick={() => setHasChanges(false)}
               className="px-4 py-2 text-sm font-medium text-secondary-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
             >
-              Discard
+              {t('discard')}
             </button>
             <button
               onClick={handleSave}
               className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
             >
               <Save size={14} className="mr-2" />
-              Save Changes
+              {t('saveChanges')}
             </button>
           </div>
         )}
@@ -816,10 +837,12 @@ export default function ProjectSettings() {
 
       <ConfirmDialog
         isOpen={isCloseConfirmOpen}
-        title="Unsaved Changes"
-        message={`You have unsaved changes in ${activeProject?.name ?? 'this project'}. Leaving will discard them.`}
-        confirmLabel="Leave"
-        cancelLabel="Cancel"
+        title={t('unsavedChangesTitle')}
+        message={t('unsavedProjectChanges', {
+          name: activeProject?.name ?? t('thisProject')
+        })}
+        confirmLabel={t('leave')}
+        cancelLabel={t('cancel')}
         variant="danger"
         onConfirm={() => {
           setIsCloseConfirmOpen(false)

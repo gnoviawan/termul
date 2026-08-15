@@ -1,6 +1,7 @@
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { runtimeT } from '@/i18n/runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
   getUpdateChannel,
@@ -174,7 +175,10 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         isManualUpdateMode: false
       })
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to check for updates'
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.checkFailed', 'Failed to check for updates')
       set({ error: errorMessage })
     } finally {
       set({ isChecking: false })
@@ -203,12 +207,17 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         })
       } else {
         set({
-          error: result.error ?? 'Failed to download update',
+          error:
+            result.error ??
+            runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update'),
           downloaded: false
         })
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update')
       set({ error: errorMessage })
     } finally {
       set({ isDownloading: false })
@@ -227,10 +236,17 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     try {
       const result = await tauriInstallAndRestart()
       if (!result.success) {
-        set({ error: result.error ?? 'Failed to install update' })
+        set({
+          error:
+            result.error ??
+            runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
+        })
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to install update'
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.installFailed', 'Failed to install update')
       set({ error: errorMessage })
     }
   },
@@ -245,7 +261,10 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       await tauriSkipVersion(version)
       set({ skippedVersion: version, updateAvailable: false, downloaded: false })
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to skip version'
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.skipVersionFailed', 'Failed to skip version')
       set({ error: errorMessage })
     }
   },
@@ -283,13 +302,27 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     try {
       const result = await tauriSetAutoUpdateEnabled(enabled)
       if (!result.success) {
-        set({ error: result.error ?? 'Failed to update auto-update setting' })
+        set({
+          error:
+            result.error ??
+            runtimeT(
+              'shell',
+              'updates.errors.autoUpdateSettingFailed',
+              'Failed to update auto-update setting'
+            )
+        })
       } else {
         await applyAutoUpdateSetting()
       }
     } catch (err) {
       const errorMessage =
-        err instanceof Error ? err.message : 'Failed to update auto-update setting'
+        err instanceof Error
+          ? err.message
+          : runtimeT(
+              'shell',
+              'updates.errors.autoUpdateSettingFailed',
+              'Failed to update auto-update setting'
+            )
       set({ error: errorMessage })
     }
   },
@@ -337,7 +370,14 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         await get().runCheckWithRetry(generation)
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to switch update channel'
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : runtimeT(
+              'shell',
+              'updates.errors.switchChannelFailed',
+              'Failed to switch update channel'
+            )
       set({ error: errorMessage })
     }
   },
@@ -406,7 +446,10 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         if (stateResult.success) {
           get()._initializeState(stateResult.data)
         } else {
-          get()._setUpdaterError(stateResult.error ?? 'Failed to load updater state')
+          get()._setUpdaterError(
+            stateResult.error ??
+              runtimeT('shell', 'updates.errors.loadStateFailed', 'Failed to load updater state')
+          )
         }
 
         const autoUpdateResult = await tauriGetAutoUpdateEnabled()
@@ -439,7 +482,10 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         }
       } catch (err) {
         isInitialized = false
-        const errorMessage = err instanceof Error ? err.message : 'Failed to initialize updater'
+        const errorMessage =
+          err instanceof Error
+            ? err.message
+            : runtimeT('shell', 'updates.errors.initializeFailed', 'Failed to initialize updater')
         set({ error: errorMessage })
       } finally {
         initializationPromise = null

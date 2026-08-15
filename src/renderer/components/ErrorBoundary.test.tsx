@@ -1,5 +1,6 @@
-import { render } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { changeUiLanguage } from '@/i18n'
 
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
@@ -21,9 +22,13 @@ describe('ErrorBoundary error forwarding', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
   })
 
+  afterEach(async () => {
+    await changeUiLanguage('en')
+  })
+
   it('forwards caught render errors to the backend log with the context label', () => {
     render(
-      <ErrorBoundary context="Terminal Pane">
+      <ErrorBoundary context="terminalPane">
         <Bomb />
       </ErrorBoundary>
     )
@@ -31,7 +36,7 @@ describe('ErrorBoundary error forwarding', () => {
     expect(mockLog).toHaveBeenCalledTimes(1)
     expect(mockLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: 'ErrorBoundary:Terminal Pane',
+        source: 'ErrorBoundary:terminalPane',
         message: 'render exploded'
       })
     )
@@ -46,5 +51,17 @@ describe('ErrorBoundary error forwarding', () => {
       </ErrorBoundary>
     )
     expect(container.textContent).toBeTruthy()
+  })
+
+  it('localizes stable context keys in the fallback UI', async () => {
+    await changeUiLanguage('zh-CN')
+
+    render(
+      <ErrorBoundary context="terminalPane">
+        <Bomb />
+      </ErrorBoundary>
+    )
+
+    expect(screen.getByText(/终端窗格/)).toBeTruthy()
   })
 })

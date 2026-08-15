@@ -1,3 +1,4 @@
+import { runtimeT } from '@/i18n/runtime'
 import type { AgentCapabilities, McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
@@ -34,22 +35,26 @@ export function transportOf(server: McpServerConfig): McpTransport {
 
 export function validateMcpServer(server: Partial<McpServerConfig>): McpValidation {
   const errors: string[] = []
-  if (!server.name || server.name.trim().length === 0) errors.push('Name is required.')
+  if (!server.name || server.name.trim().length === 0) {
+    errors.push(runtimeT('mcp', 'validation.nameRequired', 'Name is required.'))
+  }
   const type = (server.type ?? 'stdio') as McpTransport
   if (type === 'stdio') {
     const value = server as Partial<{ command: string }>
     if (!value.command || value.command.trim().length === 0) {
-      errors.push('Command is required for stdio.')
+      errors.push(
+        runtimeT('mcp', 'validation.commandRequiredForStdio', 'Command is required for stdio.')
+      )
     }
   } else {
     const value = server as Partial<{ url: string }>
     if (!value.url || value.url.trim().length === 0) {
-      errors.push('URL is required.')
+      errors.push(runtimeT('mcp', 'validation.urlRequired', 'URL is required.'))
     } else {
       try {
         new URL(value.url)
       } catch {
-        errors.push('URL is invalid.')
+        errors.push(runtimeT('mcp', 'validation.urlInvalid', 'URL is invalid.'))
       }
     }
   }
@@ -180,7 +185,9 @@ export async function loadMcpServers(): Promise<StoredMcpServer[]> {
     : await webServerMcpServers.get()
   if (res.success) return normalizeMcpRegistry(res.data)
   if (res.code === 'KEY_NOT_FOUND') return []
-  throw new Error(res.error ?? 'Failed to load MCP servers')
+  throw new Error(
+    res.error ?? runtimeT('mcp', 'persistence.loadFailed', 'Failed to load MCP servers')
+  )
 }
 
 export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
@@ -188,7 +195,9 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
   if (isTauriContext()) {
     const res = await persistenceApi.write(ACP_MCP_KEY, normalized)
     if (!res.success) {
-      throw new Error(res.error ?? 'Failed to persist MCP servers')
+      throw new Error(
+        res.error ?? runtimeT('mcp', 'persistence.saveFailed', 'Failed to persist MCP servers')
+      )
     }
     // CAP-7: mirror the app-store registry to the active project's
     // `.termul/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
@@ -199,7 +208,9 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
   }
   const res = await webServerMcpServers.put(normalized)
   if (!res.success) {
-    throw new Error(res.error ?? 'Failed to persist MCP servers')
+    throw new Error(
+      res.error ?? runtimeT('mcp', 'persistence.saveFailed', 'Failed to persist MCP servers')
+    )
   }
 }
 

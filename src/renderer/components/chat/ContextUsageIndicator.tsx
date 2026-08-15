@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import type { SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -31,6 +32,7 @@ export function ContextUsageIndicator({
   messages,
   className
 }: ContextUsageIndicatorProps): React.JSX.Element | null {
+  const { t } = useTranslation('chat')
   const visible = shouldShowSessionUsage(usage, messages)
   if (!visible || !isDisplayableSessionUsage(visible)) return null
 
@@ -43,7 +45,7 @@ export function ContextUsageIndicator({
       <HoverCardTrigger asChild>
         <button
           type="button"
-          aria-label={`Context ${Math.round(percent)} percent used`}
+          aria-label={t('context.aria', { percent: Math.round(percent) })}
           className={cn(
             'flex size-8 items-center justify-center text-muted-foreground transition-colors',
             'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -83,26 +85,36 @@ export function ContextUsageIndicator({
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-56 space-y-2.5 p-3 text-xs">
         <div className="space-y-1">
-          <p className="font-medium text-foreground">Context window</p>
-          <p className="text-muted-foreground">{Math.round(percent)}% conversation used</p>
+          <p className="font-medium text-foreground">{t('context.title')}</p>
           <p className="text-muted-foreground">
-            {formatTokenCount(conversationUsed)} / {formatTokenCount(conversationSize)} tokens
+            {t('context.conversationUsed', { percent: Math.round(percent) })}
           </p>
-          <p className="text-muted-foreground">{formatTokenCount(remaining)} remaining</p>
+          <p className="text-muted-foreground">
+            {t('context.tokens', {
+              used: formatTokenCount(conversationUsed),
+              size: formatTokenCount(conversationSize)
+            })}
+          </p>
+          <p className="text-muted-foreground">
+            {t('context.remaining', { count: formatTokenCount(remaining) })}
+          </p>
           <p className="text-3xs text-muted-foreground/80">
-            Total in context: {formatTokenCount(totalUsed)} / {formatTokenCount(totalSize)}
+            {t('context.total', {
+              used: formatTokenCount(totalUsed),
+              size: formatTokenCount(totalSize)
+            })}
           </p>
         </div>
         {isMeaningfulReportedCost(visible.cost) && visible.cost && (
           <div className="space-y-0.5 border-t border-border/60 pt-2">
-            <p className="text-muted-foreground">Reported cost</p>
+            <p className="text-muted-foreground">{t('context.cost')}</p>
             <p className="font-medium tabular-nums text-foreground">
               {formatReportedCost(visible.cost.amount, visible.cost.currency)}
             </p>
           </div>
         )}
         <p className="border-t border-border/60 pt-2 text-3xs text-muted-foreground">
-          Reported by agent
+          {t('context.reportedBy')}
         </p>
       </HoverCardContent>
     </HoverCard>

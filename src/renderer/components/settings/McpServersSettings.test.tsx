@@ -471,7 +471,9 @@ describe('McpServersSettings', () => {
     expect(screen.getByRole('button', { name: /edit files/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /delete files/i })).toBeInTheDocument()
     // Preserved surfaces: storage warning + experimental MCP-over-ACP card.
-    expect(screen.getByText('$VARIABLE')).toBeInTheDocument()
+    expect(
+      screen.getByText(/\$VARIABLE references instead of literal credentials/i)
+    ).toBeInTheDocument()
     expect(screen.getByText(/experimental mcp-over-acp/i)).toBeInTheDocument()
   })
 })

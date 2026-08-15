@@ -1,5 +1,6 @@
 import { Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
 import { useAcpStore } from '@/stores/acp-store'
@@ -12,6 +13,12 @@ const SIDEBAR_PAGE_SIZE = 50
 
 type SidebarEntry = ChatHistorySidebarEntry
 
+const RECENCY_GROUP_KEYS = {
+  Today: 'history.today',
+  Yesterday: 'history.yesterday',
+  Earlier: 'history.earlier'
+} as const
+
 /** Sidebar tab listing persisted Termul-created chat sessions, grouped by recency with search. */
 export function ChatHistoryTab({
   onSessionOpened
@@ -19,6 +26,7 @@ export function ChatHistoryTab({
   /** Optional callback after a chat row successfully opens (e.g. close a mobile drawer). */
   onSessionOpened?: () => void
 } = {}): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
@@ -141,7 +149,7 @@ export function ChatHistoryTab({
           const opening = openDiscoveredSession(entry.agentId, entry.id, entry.cwd, activeProjectId)
           addAgentChatTab(entry.id)
           void opening.catch(() => {
-            toast.error('Could not open that chat. Try again.')
+            toast.error(t('history.openFailed'))
           })
         } else {
           // Register the restore synchronously before focusing the tab so its
@@ -150,24 +158,31 @@ export function ChatHistoryTab({
           const opening = openHistorySession(entry.id)
           addAgentChatTab(entry.id)
           void opening.catch(() => {
-            toast.error('Could not reconnect. Try again.')
+            toast.error(t('history.reconnectFailed'))
           })
         }
         onSessionOpened?.()
       } catch {
-        toast.error('Could not open that chat. Try again.')
+        toast.error(t('history.openFailed'))
       }
     },
-    [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
+    [
+      addAgentChatTab,
+      openHistorySession,
+      openDiscoveredSession,
+      activeProjectId,
+      onSessionOpened,
+      t
+    ]
   )
 
   const handleDelete = useCallback(
     (id: string) => {
       void deleteHistorySession(id).catch(() => {
-        toast.error('Could not delete that chat. Try again.')
+        toast.error(t('history.deleteFailed'))
       })
     },
-    [deleteHistorySession]
+    [deleteHistorySession, t]
   )
 
   return (
@@ -181,7 +196,7 @@ export function ChatHistoryTab({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search chats…"
+            placeholder={t('history.search')}
             className="w-full rounded-md bg-background pl-7 pr-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
         </div>
@@ -190,14 +205,18 @@ export function ChatHistoryTab({
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-1">
         {mergedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New Chat button.
+            {t('history.empty')}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
+          <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+            {t('history.noMatches')}
+          </div>
         ) : (
           groups.map(({ group, entries }) => (
             <div key={group}>
-              <div className="label-group px-3 py-1 text-muted-foreground/70">{group}</div>
+              <div className="label-group px-3 py-1 text-muted-foreground/70">
+                {t(RECENCY_GROUP_KEYS[group])}
+              </div>
               {entries.map((entry) => (
                 <ChatHistoryEntryRow
                   key={entry.id}
@@ -216,7 +235,7 @@ export function ChatHistoryTab({
               onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
               className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
             >
-              Load more ({filtered.length - visible.length} more)
+              {t('history.loadMore', { count: filtered.length - visible.length })}
             </button>
           </div>
         )}

@@ -123,7 +123,7 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
 
   it('surfaces the error via ErrorBoundary + logFrontendError when the editor chunk fails', async () => {
     render(
-      <ErrorBoundary context="Editor Pane">
+      <ErrorBoundary context="editorPane">
         <PaneContent pane={editorPane} />
       </ErrorBoundary>
     )
@@ -132,7 +132,7 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
     // and renders the ErrorFallback UI with the error message.
     await waitFor(() => {
       expect(logFrontendError).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'ErrorBoundary:Editor Pane' })
+        expect.objectContaining({ source: 'ErrorBoundary:editorPane' })
       )
     })
 

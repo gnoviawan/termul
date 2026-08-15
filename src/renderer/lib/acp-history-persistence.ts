@@ -1,6 +1,7 @@
 /** Desktop ACP history persistence boundary. */
 
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
+import { runtimeT } from '@/i18n/runtime'
 import type { ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
@@ -340,7 +341,7 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
     agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
       ? entry.stableAgentNamespace.slice('config:'.length)
       : undefined,
-    title: entry.title ?? 'Untitled Chat',
+    title: entry.title ?? runtimeT('chat', 'store.untitledFallback', 'Untitled Chat'),
     cwd: entry.cwd,
     projectId: entry.projectId ?? '',
     createdAt: entry.createdAt,

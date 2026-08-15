@@ -7,6 +7,7 @@ import {
   Palette,
   SlidersHorizontal
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { TermulMark } from '@/components/TermulMark'
@@ -72,6 +73,7 @@ export function ActivityRail({
   isThemePickerOpen = false,
   onToggleThemePicker
 }: ActivityRailProps = {}): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const navigate = useNavigate()
@@ -82,14 +84,14 @@ export function ActivityRail({
     try {
       await updatePanelVisibility('sshPanelVisible', !isSSHPanelVisible)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update SSH panel visibility')
+      toast.error(error instanceof Error ? error.message : t('activityRail.failedSsh'))
     }
   }
 
   return (
     <nav
       className="w-12 flex flex-col items-center bg-background select-none shrink-0"
-      aria-label="Global actions"
+      aria-label={t('activityRail.globalActions')}
     >
       {/* Brand mark */}
       <div
@@ -108,8 +110,8 @@ export function ActivityRail({
           onOpenCommandPalette?.()
         }}
         className={railButtonClass}
-        title="Projects"
-        aria-label="Open projects"
+        title={t('activityRail.projects')}
+        aria-label={t('activityRail.openProjects')}
         disabled={!onOpenCommandPalette}
       >
         <FolderKanban size={18} className="text-muted-foreground" />
@@ -122,8 +124,12 @@ export function ActivityRail({
           onOpenGitChanges?.()
         }}
         className={railButtonClass}
-        title={canOpenGitChanges ? 'Git changes' : 'Git changes (open a project first)'}
-        aria-label="Open git changes"
+        title={
+          canOpenGitChanges
+            ? t('activityRail.gitChanges')
+            : t('activityRail.gitChangesNeedsProject')
+        }
+        aria-label={t('activityRail.openGitChanges')}
         disabled={!onOpenGitChanges || !canOpenGitChanges}
       >
         <GitBranch
@@ -139,8 +145,12 @@ export function ActivityRail({
           onOpenAgentChat?.()
         }}
         className={railButtonClass}
-        title={canOpenAgentChat ? 'New agent chat' : 'New agent chat (open a project first)'}
-        aria-label="New agent chat"
+        title={
+          canOpenAgentChat
+            ? t('activityRail.newAgentChat')
+            : t('activityRail.newAgentChatNeedsProject')
+        }
+        aria-label={t('activityRail.newAgentChat')}
         disabled={!onOpenAgentChat || !canOpenAgentChat}
       >
         <MessageSquarePlus
@@ -156,8 +166,12 @@ export function ActivityRail({
           onOpenGitHistory?.()
         }}
         className={railButtonClass}
-        title={canOpenGitHistory ? 'Git history' : 'Git history (open a project first)'}
-        aria-label="Open git history"
+        title={
+          canOpenGitHistory
+            ? t('activityRail.gitHistory')
+            : t('activityRail.gitHistoryNeedsProject')
+        }
+        aria-label={t('activityRail.openGitHistory')}
         disabled={!onOpenGitHistory || !canOpenGitHistory}
       >
         <History
@@ -172,8 +186,8 @@ export function ActivityRail({
           void handleToggleSSHPanel(e)
         }}
         className={railButtonClass}
-        title={isTauriContext() ? 'Toggle SSH panel' : 'SSH is desktop-only'}
-        aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
+        title={isTauriContext() ? t('activityRail.toggleSsh') : t('activityRail.sshDesktopOnly')}
+        aria-label={isSSHPanelVisible ? t('activityRail.hideSsh') : t('activityRail.showSsh')}
         aria-pressed={isSSHPanelVisible}
         disabled={!isTauriContext()}
       >
@@ -203,8 +217,8 @@ export function ActivityRail({
             navigate('/preferences')
           }}
           className={railButtonClass}
-          title="Preferences"
-          aria-label="Open preferences"
+          title={t('activityRail.preferences')}
+          aria-label={t('activityRail.openPreferences')}
           aria-current={location.pathname === '/preferences' ? 'page' : undefined}
         >
           <SlidersHorizontal
@@ -226,8 +240,8 @@ export function ActivityRail({
               : undefined
           }
           className={railButtonClass}
-          title="Color themes"
-          aria-label="Color themes"
+          title={t('activityRail.colorThemes')}
+          aria-label={t('activityRail.colorThemes')}
           aria-pressed={onToggleThemePicker ? isThemePickerOpen : undefined}
           aria-disabled={!onToggleThemePicker}
           disabled={!onToggleThemePicker}

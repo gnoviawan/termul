@@ -9,6 +9,7 @@ import {
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -42,6 +43,8 @@ interface FileExplorerProps {
 }
 
 export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const { t: projectT } = useTranslation('projects')
   const {
     rootPath,
     directoryContents,
@@ -643,8 +646,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         // switched projects while the chain was expanding.
         if (result.status !== 'expanded' || inlineInputRef.current) {
           if (result.status === 'load-failed') {
-            toast.error('Could not open the target directory', {
-              description: 'The folder could not be expanded. Try again once the tree is loaded.'
+            toast.error(t('fileExplorer.targetDirectoryFailed'), {
+              description: t('fileExplorer.targetDirectoryFailedDescription')
             })
           }
           return
@@ -656,7 +659,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         headerCreateInFlightRef.current = false
       }
     },
-    [getCreateTargetDir, expandDirectoryChain, revealTreePath]
+    [getCreateTargetDir, expandDirectoryChain, revealTreePath, t]
   )
 
   /** Header Refresh (GH-540): re-read root + expanded dirs, keeping state. */
@@ -705,7 +708,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     // the target directory (GH-539). Release the submission lock here — this
     // branch returns before the try/finally that resets it.
     if (name === '.' || name === '..' || /[/\\]/.test(name)) {
-      toast.error('Invalid name: file and folder names cannot contain path separators')
+      toast.error(t('fileExplorer.invalidName'))
       submitFailedRef.current = true
       isSubmittingRef.current = false
       return
@@ -730,7 +733,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       }
 
       if (!result?.success) {
-        toast.error(result?.error || 'Operation failed')
+        toast.error(result?.error || t('fileExplorer.operationFailed'))
         submitFailedRef.current = true
         return
       }
@@ -752,12 +755,12 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       setInlineInput(null)
       setInputValue('')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Unknown error')
+      toast.error(err instanceof Error ? err.message : t('fileExplorer.unknownError'))
       submitFailedRef.current = true
     } finally {
       isSubmittingRef.current = false
     }
-  }, [inlineInput, inputValue, refreshDirectory, revealCreatedEntry])
+  }, [inlineInput, inputValue, refreshDirectory, revealCreatedEntry, t])
 
   const handleInlineInputCancel = useCallback(() => {
     if (isSubmittingRef.current) return
@@ -778,7 +781,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     })
 
     if (!result.success) {
-      toast.error(`Failed to delete ${deleteConfirm.path}: ${result.error}`)
+      toast.error(
+        t('fileExplorer.deleteFailed', { path: deleteConfirm.path, message: result.error })
+      )
       return
     }
 
@@ -832,7 +837,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     useFileExplorerStore.getState().clearSelection()
     await refreshDirectory(parentPath)
     setDeleteConfirm(null)
-  }, [deleteConfirm, refreshDirectory])
+  }, [deleteConfirm, refreshDirectory, t])
 
   const handleSearchMatchClick = useCallback(
     async (filePath: string, lineNumber: number) => {
@@ -863,10 +868,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
           )
         })
       } catch {
-        toast.warning('File opened, but failed to focus target line')
+        toast.warning(t('fileExplorer.fileFocusFailed'))
       }
     },
-    [searchLastCompletedQuery, selectPath]
+    [searchLastCompletedQuery, selectPath, t]
   )
 
   const handleRootRetry = useCallback(() => {
@@ -943,37 +948,52 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   )
 
   // Open terminal in directory
-  const handleOpenInTerminal = useCallback((dirPath: string) => {
-    const activeProjectId = useProjectStore.getState().activeProjectId
-    if (!activeProjectId) {
-      toast.error('No active project')
-      return
-    }
+  const handleOpenInTerminal = useCallback(
+    (dirPath: string) => {
+      const activeProjectId = useProjectStore.getState().activeProjectId
+      if (!activeProjectId) {
+        toast.error(t('fileExplorer.noActiveProject'))
+        return
+      }
 
-    const terminalStore = useTerminalStore.getState()
-    try {
-      terminalStore.addTerminal('Terminal', activeProjectId, 'powershell', dirPath)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to open terminal'
-      toast.error(message)
-    }
-  }, [])
+      const terminalStore = useTerminalStore.getState()
+      try {
+        terminalStore.addTerminal(
+          projectT('fileContext.defaultTerminalName'),
+          activeProjectId,
+          'powershell',
+          dirPath
+        )
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : t('fileExplorer.failedOpenTerminal')
+        toast.error(message)
+      }
+    },
+    [projectT, t]
+  )
 
   // Open with external app
-  const handleOpenWithExternal = useCallback(async (filePath: string) => {
-    const result = await openerApi.openWithExternalApp(filePath)
-    if (!result.success) {
-      toast.error(`Failed to open file: ${result.error}`)
-    }
-  }, [])
+  const handleOpenWithExternal = useCallback(
+    async (filePath: string) => {
+      const result = await openerApi.openWithExternalApp(filePath)
+      if (!result.success) {
+        toast.error(t('fileExplorer.failedOpenFile', { message: result.error }))
+      }
+    },
+    [t]
+  )
 
   // Show in file manager
-  const handleShowInFileManager = useCallback(async (path: string) => {
-    const result = await openerApi.revealInFileManager(path)
-    if (!result.success) {
-      toast.error(`Failed to reveal in file manager: ${result.error}`)
-    }
-  }, [])
+  const handleShowInFileManager = useCallback(
+    async (path: string) => {
+      const result = await openerApi.revealInFileManager(path)
+      if (!result.success) {
+        toast.error(t('fileExplorer.failedReveal', { message: result.error }))
+      }
+    },
+    [t]
+  )
 
   // Copy handler
   const handleCopy = useCallback(() => {
@@ -1053,15 +1073,17 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
-        <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Explorer</span>
+        <span className="text-xs tracking-wider text-sidebar-foreground uppercase">
+          {t('fileExplorer.title')}
+        </span>
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => void startHeaderCreate('file')}
             disabled={!rootPath || !!rootLoadError}
             className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
-            title="New File"
-            aria-label="New File"
+            title={t('fileExplorer.newFile')}
+            aria-label={t('fileExplorer.newFile')}
           >
             <FilePlus size={14} />
           </button>
@@ -1070,8 +1092,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             onClick={() => void startHeaderCreate('folder')}
             disabled={!rootPath || !!rootLoadError}
             className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
-            title="New Folder"
-            aria-label="New Folder"
+            title={t('fileExplorer.newFolder')}
+            aria-label={t('fileExplorer.newFolder')}
           >
             <FolderPlus size={14} />
           </button>
@@ -1080,8 +1102,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             onClick={handleHeaderRefresh}
             disabled={!rootPath || !!rootLoadError}
             className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Refresh"
-            aria-label="Refresh"
+            title={t('fileExplorer.refresh')}
+            aria-label={t('fileExplorer.refresh')}
           >
             <RefreshCw size={14} />
           </button>
@@ -1090,8 +1112,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             onClick={collapseAll}
             disabled={!rootPath || !!rootLoadError}
             className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Collapse All"
-            aria-label="Collapse All"
+            title={t('fileExplorer.collapseAll')}
+            aria-label={t('fileExplorer.collapseAll')}
           >
             <ChevronsDownUp size={14} />
           </button>
@@ -1108,16 +1130,16 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
             type="text"
             value={normalizedSearchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search files and content…"
+            placeholder={t('fileExplorer.searchPlaceholder')}
             className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0"
-            aria-label="Search files and content"
+            aria-label={t('fileExplorer.searchAria')}
           />
           {hasSearchInput && (
             <button
               onClick={() => resetSearch()}
               className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('fileExplorer.clearSearch')}
+              aria-label={t('fileExplorer.clearSearch')}
             >
               <X size={11} />
             </button>
@@ -1128,24 +1150,26 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       {/* Tree / Search Results */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
         {!rootPath && (
-          <div className="px-3 py-4 text-sm text-muted-foreground">No project selected</div>
+          <div className="px-3 py-4 text-sm text-muted-foreground">
+            {t('fileExplorer.noProject')}
+          </div>
         )}
 
         {rootPath && rootLoadError && (
           <div className="px-3 py-4 space-y-2">
-            <p className="text-sm text-red-400">Failed to load project files.</p>
+            <p className="text-sm text-red-400">{t('fileExplorer.loadFailed')}</p>
             <p className="text-xs text-muted-foreground break-words">{rootLoadError.message}</p>
             <button
               onClick={handleRootRetry}
               className="px-2 py-1 text-xs rounded bg-secondary text-foreground hover:bg-secondary/80"
             >
-              Retry
+              {t('fileExplorer.retry')}
             </button>
           </div>
         )}
 
         {rootPath && !rootEntries && !rootLoadError && (
-          <div className="px-3 py-4 text-sm text-muted-foreground">Loading...</div>
+          <div className="px-3 py-4 text-sm text-muted-foreground">{t('fileExplorer.loading')}</div>
         )}
 
         {rootPath &&
@@ -1177,41 +1201,39 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-3xs leading-relaxed text-muted-foreground">
                 <p className="text-3xs font-medium text-foreground">
                   {searchLoading
-                    ? `Searching for “${trimmedSearchQuery}”…`
+                    ? t('fileExplorer.searching', { query: trimmedSearchQuery })
                     : hasPartialSearchError
-                      ? `Partial results for “${trimmedSearchQuery}”`
+                      ? t('fileExplorer.partialResults', { query: trimmedSearchQuery })
                       : searchError
-                        ? 'Search unavailable'
+                        ? t('fileExplorer.searchUnavailable')
                         : isSearchTooShort
-                          ? 'Keep typing to start searching'
+                          ? t('fileExplorer.keepTyping')
                           : showSearchEmptyState
-                            ? `No matches for “${trimmedSearchQuery}”`
-                            : `Updating results for “${trimmedSearchQuery}”…`}
+                            ? t('fileExplorer.noMatches', { query: trimmedSearchQuery })
+                            : t('fileExplorer.updatingResults', { query: trimmedSearchQuery })}
                 </p>
                 <p className="mt-0.5">
                   {hasPartialSearchError
-                    ? `${searchError} Showing the matches that were found before the search stopped.`
+                    ? t('fileExplorer.partialDescription', { error: searchError })
                     : searchError
                       ? searchError
                       : isSearchTooShort
-                        ? 'Type at least 2 characters to search file names and content.'
+                        ? t('fileExplorer.minimumCharacters')
                         : showSearchEmptyState
-                          ? 'Try a different term or a shorter phrase to broaden the search.'
-                          : 'Finishing the latest search before showing refreshed matches.'}
+                          ? t('fileExplorer.broadenSearch')
+                          : t('fileExplorer.finishingSearch')}
                 </p>
               </div>
             )}
 
             {(searchTruncated || searchFailedFiles > 0) && (
               <div className="rounded-md border border-border/70 bg-background/60 px-2 py-1.5 text-3xs leading-relaxed text-muted-foreground">
-                {searchTruncated
-                  ? 'Results were truncated for performance.'
-                  : 'Some files could not be fully searched.'}
+                {searchTruncated ? t('fileExplorer.truncated') : t('fileExplorer.someFilesFailed')}
                 {searchFailedFiles > 0
-                  ? ` ${searchFailedFiles} file${searchFailedFiles === 1 ? ' was' : 's were'} skipped.`
+                  ? ` ${t('fileExplorer.filesSkipped', { count: searchFailedFiles })}`
                   : ''}
                 {searchScannedFiles > 0
-                  ? ` Scanned ${searchScannedFiles} file${searchScannedFiles === 1 ? '' : 's'}.`
+                  ? ` ${t('fileExplorer.filesScanned', { count: searchScannedFiles })}`
                   : ''}
               </div>
             )}
@@ -1221,7 +1243,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                 <div
                   className="grid grid-cols-2 gap-1"
                   role="tablist"
-                  aria-label="Search result types"
+                  aria-label={t('fileExplorer.resultTypes')}
                 >
                   <button
                     onClick={() => {
@@ -1239,7 +1261,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     aria-selected={searchResultTab === 'content'}
                   >
                     {searchLoading && <LoaderCircle size={10} className="animate-spin" />}
-                    Content{' '}
+                    {t('fileExplorer.content')}{' '}
                     <span className="text-muted-foreground">{safeSearchResults.length}</span>
                   </button>
                   <button
@@ -1258,7 +1280,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     aria-selected={searchResultTab === 'files'}
                   >
                     {searchLoading && <LoaderCircle size={10} className="animate-spin" />}
-                    Files{' '}
+                    {t('fileExplorer.files')}{' '}
                     <span className="text-muted-foreground">
                       {fileNameMatchesPending ? '…' : safeSearchFileNameMatches.length}
                     </span>
@@ -1325,8 +1347,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                             </span>
                           </div>
                           <span className="shrink-0 text-4xs text-muted-foreground">
-                            {fileResult.matches.length} hit
-                            {fileResult.matches.length === 1 ? '' : 's'}
+                            {t('fileExplorer.hits', { count: fileResult.matches.length })}
                           </span>
                         </div>
                       </button>
@@ -1353,7 +1374,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                             onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
                             className="px-2 py-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
                           >
-                            Show {hiddenCount} more
+                            {t('fileExplorer.showMore', { count: hiddenCount })}
                           </button>
                         )}
                         {isExpanded && fileResult.matches.length > 3 && (
@@ -1362,7 +1383,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                             onClick={() => toggleExpandedSearchResult(fileResult.filePath)}
                             className="px-2 py-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
                           >
-                            Show less
+                            {t('fileExplorer.showLess')}
                           </button>
                         )}
                       </div>
@@ -1397,9 +1418,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               placeholder={
                 inlineInput.mode === 'create'
                   ? inlineInput.type === 'file'
-                    ? 'File name...'
-                    : 'Folder name...'
-                  : 'New name...'
+                    ? t('fileExplorer.fileNamePlaceholder')
+                    : t('fileExplorer.folderNamePlaceholder')
+                  : t('fileExplorer.newNamePlaceholder')
               }
             />
           </div>
@@ -1411,8 +1432,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         onMouseDown={handleResizeMouseDown}
         onKeyDown={handleResizeKeyDown}
         className={`absolute ${side === 'right' ? 'left-0' : 'right-0'} top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/20`}
-        title="Drag to resize explorer"
-        aria-label="Resize file explorer"
+        title={t('fileExplorer.resizeTitle')}
+        aria-label={t('fileExplorer.resizeAria')}
         role="separator"
         aria-controls="file-explorer-panel"
         aria-valuenow={explorerWidth}
@@ -1425,20 +1446,20 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg p-4 shadow-xl max-w-sm">
             <p className="text-sm text-foreground mb-4">
-              Delete &quot;{deleteConfirm.name}&quot;? This cannot be undone.
+              {t('fileExplorer.deleteConfirm', { name: deleteConfirm.name })}
             </p>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setDeleteConfirm(null)}
                 className="px-3 py-1.5 text-sm rounded bg-secondary text-foreground hover:bg-secondary/80"
               >
-                Cancel
+                {t('fileExplorer.cancel')}
               </button>
               <button
                 onClick={handleDeleteConfirm}
                 className="px-3 py-1.5 text-sm rounded bg-red-600 text-white hover:bg-red-700"
               >
-                Delete
+                {t('fileExplorer.delete')}
               </button>
             </div>
           </div>

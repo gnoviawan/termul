@@ -20,6 +20,7 @@ import {
   X
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {
@@ -108,6 +109,7 @@ export function ProjectSidebar({
   onSelectSSHProfile,
   activeSSHProfileId
 }: ProjectSidebarProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const navigate = useNavigate()
   const {
     selectProject,
@@ -290,24 +292,24 @@ export function ProjectSidebar({
         const result = await dialogApi.selectDirectory()
         if (result.success && result.data) {
           const projectPath = result.data
-          const folderName = projectPath.split(/[\\/]/).pop() || 'New Project'
+          const folderName = projectPath.split(/[\\/]/).pop() || t('newProject')
           const newProject = addProject(folderName, 'blue', projectPath)
           moveProjectToGroup(newProject.id, groupId)
           toast({
-            title: 'Project created',
-            description: `Created project "${folderName}" and added to group.`
+            title: t('projectCreated'),
+            description: t('projectCreatedInGroup', { name: folderName })
           })
         }
       } catch (err) {
         console.error('Failed to create project:', err)
         toast({
-          title: 'Error',
-          description: 'Failed to create project from folder.',
+          title: t('error'),
+          description: t('failedCreateFromFolder'),
           variant: 'destructive'
         })
       }
     },
-    [addProject, moveProjectToGroup]
+    [addProject, moveProjectToGroup, t]
   )
 
   const handleGroupContextMenu = useCallback((e: React.MouseEvent): void => {
@@ -361,7 +363,7 @@ export function ProjectSidebar({
       return (
         <ContextMenuContent className="w-56">
           <ContextMenuItem onSelect={() => handleStartRenameGroup(groupId)}>
-            <Edit2 className="mr-2 h-4 w-4" /> Rename Group
+            <Edit2 className="mr-2 h-4 w-4" /> {t('renameGroup')}
           </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
@@ -373,11 +375,11 @@ export function ProjectSidebar({
               )
             }
           >
-            <Palette className="mr-2 h-4 w-4" /> Change Color
+            <Palette className="mr-2 h-4 w-4" /> {t('changeColor')}
           </ContextMenuItem>
           <ContextMenuSub>
             <ContextMenuSubTrigger>
-              <Plus className="mr-2 h-4 w-4" /> Add Project
+              <Plus className="mr-2 h-4 w-4" /> {t('addProject')}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-48">
               {activeProjects.map((p) => {
@@ -397,19 +399,19 @@ export function ProjectSidebar({
               })}
               <ContextMenuSeparator />
               <ContextMenuItem onSelect={() => void handleAddNewProjectToGroup(groupId)}>
-                <FolderPlus className="mr-2 h-4 w-4" /> Import Project...
+                <FolderPlus className="mr-2 h-4 w-4" /> {t('importProject')}
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleConfirmDeleteGroup(groupId, false)}>
-            <Trash2 className="mr-2 h-4 w-4" /> Delete Group (Keep Projects)
+            <Trash2 className="mr-2 h-4 w-4" /> {t('deleteGroupKeep')}
           </ContextMenuItem>
           <ContextMenuItem
             variant="destructive"
             onSelect={() => handleConfirmDeleteGroup(groupId, true)}
           >
-            <Trash2 className="mr-2 h-4 w-4" /> Delete Group &amp; All Projects
+            <Trash2 className="mr-2 h-4 w-4" /> {t('deleteGroupAll')}
           </ContextMenuItem>
         </ContextMenuContent>
       )
@@ -421,7 +423,8 @@ export function ProjectSidebar({
       groups,
       moveProjectToGroup,
       handleAddNewProjectToGroup,
-      handleOpenColorPicker
+      handleOpenColorPicker,
+      t
     ]
   )
 
@@ -565,13 +568,13 @@ export function ProjectSidebar({
               navigate('/settings')
             }}
           >
-            <Settings className="mr-2 h-4 w-4" /> Settings
+            <Settings className="mr-2 h-4 w-4" /> {t('settings')}
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleStartRename(project.id)}>
-            <Edit2 className="mr-2 h-4 w-4" /> Rename
+            <Edit2 className="mr-2 h-4 w-4" /> {t('rename')}
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleOpenSettings(project.id)}>
-            <Settings className="mr-2 h-4 w-4" /> Project Settings
+            <Settings className="mr-2 h-4 w-4" /> {t('projectSettings')}
           </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
@@ -583,13 +586,13 @@ export function ProjectSidebar({
               )
             }
           >
-            <Palette className="mr-2 h-4 w-4" /> Change Color
+            <Palette className="mr-2 h-4 w-4" /> {t('changeColor')}
           </ContextMenuItem>
 
           {availableShells && availableShells.available.length > 0 && (
             <ContextMenuSub>
               <ContextMenuSubTrigger>
-                <Terminal className="mr-2 h-4 w-4" /> Default Shell
+                <Terminal className="mr-2 h-4 w-4" /> {t('defaultShell')}
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="w-48">
                 <ContextMenuRadioGroup
@@ -610,7 +613,7 @@ export function ProjectSidebar({
 
           <ContextMenuSub>
             <ContextMenuSubTrigger>
-              <Folder className="mr-2 h-4 w-4" /> Move to Group
+              <Folder className="mr-2 h-4 w-4" /> {t('moveToGroup')}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-48">
               <ContextMenuRadioGroup
@@ -623,7 +626,7 @@ export function ProjectSidebar({
                   }
                 }}
               >
-                <ContextMenuRadioItem value="root">No Group (Root)</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="root">{t('noGroupRoot')}</ContextMenuRadioItem>
                 {groups.map((g) => (
                   <ContextMenuRadioItem key={g.id} value={g.id}>
                     {g.name}
@@ -634,7 +637,7 @@ export function ProjectSidebar({
               <ContextMenuItem
                 onSelect={() => setNewGroupModal({ isOpen: true, projectIdToMove: project.id })}
               >
-                <FolderPlus className="mr-2 h-4 w-4" /> Create New Group...
+                <FolderPlus className="mr-2 h-4 w-4" /> {t('createNewGroup')}
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
@@ -647,13 +650,13 @@ export function ProjectSidebar({
             }}
           >
             <GitBranch className="mr-2 h-4 w-4" />{' '}
-            {isGitRepo ? 'New Worktree' : 'New Worktree (no git repo)'}
+            {isGitRepo ? t('newWorktree') : t('newWorktreeNoGit')}
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => onArchiveProject(project.id)}>
-            <Archive className="mr-2 h-4 w-4" /> Archive
+            <Archive className="mr-2 h-4 w-4" /> {t('archive')}
           </ContextMenuItem>
           <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
-            <Trash2 className="mr-2 h-4 w-4" /> Delete
+            <Trash2 className="mr-2 h-4 w-4" /> {t('delete')}
           </ContextMenuItem>
         </ContextMenuContent>
       )
@@ -669,7 +672,8 @@ export function ProjectSidebar({
       selectProject,
       navigate,
       groups,
-      moveProjectToGroup
+      moveProjectToGroup,
+      t
     ]
   )
 
@@ -678,15 +682,15 @@ export function ProjectSidebar({
       return (
         <ContextMenuContent className="w-48">
           <ContextMenuItem onSelect={() => onRestoreProject(project.id)}>
-            <RotateCcw className="mr-2 h-4 w-4" /> Restore
+            <RotateCcw className="mr-2 h-4 w-4" /> {t('restore')}
           </ContextMenuItem>
           <ContextMenuItem variant="destructive" onSelect={() => handleConfirmDelete(project.id)}>
-            <Trash2 className="mr-2 h-4 w-4" /> Delete
+            <Trash2 className="mr-2 h-4 w-4" /> {t('delete')}
           </ContextMenuItem>
         </ContextMenuContent>
       )
     },
-    [onRestoreProject, handleConfirmDelete]
+    [onRestoreProject, handleConfirmDelete, t]
   )
 
   const colorPickerTarget =
@@ -785,21 +789,21 @@ export function ProjectSidebar({
     <aside className="w-64 bg-sidebar flex flex-col flex-shrink-0 rounded-xl h-full">
       {/* Header with inline + button */}
       <div className="h-9 flex items-center justify-between px-3 border-b border-sidebar-border rounded-t-xl">
-        <span className="label-section text-sidebar-foreground">Projects</span>
+        <span className="label-section text-sidebar-foreground">{t('title')}</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleCreateGroup}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="New Group Folder"
-            aria-label="Create new group folder"
+            title={t('newGroupFolder')}
+            aria-label={t('newGroupFolder')}
           >
             <FolderPlus size={14} className="text-muted-foreground group-hover:text-foreground" />
           </button>
           <button
             onClick={onNewProject}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="New Project"
-            aria-label="Create new project from header"
+            title={t('newProject')}
+            aria-label={t('newProject')}
             data-testid="header-new-project"
           >
             <Plus size={14} className="text-muted-foreground group-hover:text-foreground" />
@@ -819,7 +823,7 @@ export function ProjectSidebar({
             <input
               ref={searchInputRef}
               type="search"
-              placeholder="Search projects…"
+              placeholder={t('searchProjects')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -830,7 +834,7 @@ export function ProjectSidebar({
                 }
               }}
               className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
-              aria-label="Search projects"
+              aria-label={t('searchProjects')}
               data-testid="project-search-input"
             />
             {searchQuery && (
@@ -841,8 +845,8 @@ export function ProjectSidebar({
                   searchInputRef.current?.focus()
                 }}
                 className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-                title="Clear search"
-                aria-label="Clear project search"
+                title={t('clearSearch')}
+                aria-label={t('clearSearch')}
                 data-testid="project-search-clear"
               >
                 <X size={11} />
@@ -856,10 +860,8 @@ export function ProjectSidebar({
       <div className="flex-1 overflow-y-auto py-1" data-group-id="root">
         {projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
-            <p className="text-sm text-muted-foreground">No projects yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Create your first project to get started
-            </p>
+            <p className="text-sm text-muted-foreground">{t('noProjects')}</p>
+            <p className="text-xs text-muted-foreground mt-1">{t('createFirstProject')}</p>
           </div>
         ) : hasNoSearchResults ? (
           <div
@@ -868,9 +870,9 @@ export function ProjectSidebar({
             role="status"
             aria-live="polite"
           >
-            <p className="text-sm text-muted-foreground">No projects found</p>
+            <p className="text-sm text-muted-foreground">{t('noProjectsFound')}</p>
             <p className="text-xs text-muted-foreground mt-1 break-words">
-              Nothing matches “{trimmedQuery}”
+              {t('nothingMatches', { query: trimmedQuery })}
             </p>
           </div>
         ) : (
@@ -1181,14 +1183,14 @@ export function ProjectSidebar({
                   disabled={isSearching}
                   className="label-section w-full flex items-center px-3 py-1.5 text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
                   aria-expanded={showArchived || isSearching}
-                  aria-label={`Archived projects (${filteredArchivedProjects.length})`}
+                  aria-label={t('archivedToggleAria')}
                 >
                   {showArchived || isSearching ? (
                     <ChevronDown size={14} className="mr-2" />
                   ) : (
                     <ChevronRight size={14} className="mr-2" />
                   )}
-                  Archived ({filteredArchivedProjects.length})
+                  {t('archived', { count: filteredArchivedProjects.length })}
                 </button>
                 {(showArchived || isSearching) &&
                   filteredArchivedProjects.map((project) => {
@@ -1231,14 +1233,14 @@ export function ProjectSidebar({
       {/* Group Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={groupDeleteConfirm.isOpen}
-        title="Delete Group Folder"
+        title={t('deleteGroupFolder')}
         message={
           groupDeleteConfirm.deleteProjects
-            ? `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}" and all projects inside it? This action cannot be undone.`
-            : `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}"? Projects inside this group will be moved to the root folder list.`
+            ? t('deleteGroupAllConfirm', { name: groupDeleteConfirm.groupName })
+            : t('deleteGroupKeepConfirm', { name: groupDeleteConfirm.groupName })
         }
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        confirmLabel={t('delete')}
+        cancelLabel={t('cancel')}
         variant="danger"
         onConfirm={handleDeleteGroup}
         onCancel={() =>
@@ -1281,7 +1283,7 @@ export function ProjectSidebar({
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
-              <h3 className="text-sm font-semibold text-foreground">Project Settings</h3>
+              <h3 className="text-sm font-semibold text-foreground">{t('projectSettings')}</h3>
               <button
                 onClick={handleCloseSettings}
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -1294,44 +1296,46 @@ export function ProjectSidebar({
             <div className="p-6 space-y-4">
               {/* Name Field */}
               <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">Project Name</label>
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('projectName')}
+                </label>
                 <input
                   type="text"
                   value={settingsName}
                   onChange={(e) => setSettingsName(e.target.value)}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-                  placeholder="My Project"
+                  placeholder={t('projectName')}
                 />
               </div>
 
               {/* Path Field */}
               <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">Project Path</label>
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('projectPath')}
+                </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={settingsPath}
                     onChange={(e) => setSettingsPath(e.target.value)}
                     className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-                    placeholder="No directory selected"
+                    placeholder={t('noDirectorySelected')}
                   />
                   <button
                     onClick={handleBrowsePath}
                     disabled={settingsPathLoading}
                     className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Browse
+                    {t('browse')}
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Optional: leave empty to use default project directory
-                </p>
+                <p className="text-xs text-muted-foreground">{t('optionalDefaultDirectory')}</p>
               </div>
 
               {/* Color Picker */}
               <div className="space-y-2 mt-4">
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Color
+                  {t('color')}
                 </label>
                 <div className="flex gap-2">
                   {availableColors.map((color) => {
@@ -1357,7 +1361,7 @@ export function ProjectSidebar({
               {/* Shell Field */}
               <div className="space-y-2">
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Default Terminal
+                  {t('defaultTerminal')}
                 </label>
                 {availableShells ? (
                   <div className="relative">
@@ -1388,13 +1392,13 @@ export function ProjectSidebar({
                 onClick={handleCloseSettings}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 onClick={handleSaveSettings}
                 className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-colors"
               >
-                Save Changes
+                {t('saveChanges')}
               </button>
             </div>
           </motion.div>
@@ -1404,10 +1408,10 @@ export function ProjectSidebar({
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={deleteConfirm.isOpen}
-        title="Delete Project"
-        message={`Are you sure you want to delete "${deleteConfirm.projectName}"? This action cannot be undone.`}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title={t('deleteProject')}
+        message={t('deleteProjectConfirm', { name: deleteConfirm.projectName })}
+        confirmLabel={t('delete')}
+        cancelLabel={t('cancel')}
         variant="danger"
         onConfirm={handleDelete}
         onCancel={handleCancelDelete}
@@ -1467,6 +1471,7 @@ const ProjectItem = memo(function ProjectItem({
   onSettingsClick,
   renderContextMenu
 }: ProjectItemProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -1510,7 +1515,11 @@ const ProjectItem = memo(function ProjectItem({
                 : `${colors.borderMuted} hover:bg-sidebar-accent/50`
             )}
             aria-current={isActive ? 'page' : undefined}
-            aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
+            aria-label={
+              isActive
+                ? t('activeProjectAria', { name: project.name })
+                : t('projectAria', { name: project.name })
+            }
           >
             {/* Expand/collapse chevron — every project can have chats, so the
             chevron always shows (not only git projects). */}
@@ -1520,7 +1529,7 @@ const ProjectItem = memo(function ProjectItem({
                 onToggleExpand()
               }}
               className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
-              aria-label={isExpanded ? 'Collapse chats' : 'Expand chats'}
+              aria-label={isExpanded ? t('collapseChats') : t('expandChats')}
               aria-expanded={isExpanded}
             >
               {isExpanded ? (
@@ -1556,7 +1565,7 @@ const ProjectItem = memo(function ProjectItem({
             {hasError && (
               <span
                 className="flex items-center mr-2 text-yellow-500 animate-pulse"
-                title="Terminal crashed"
+                title={t('terminalCrashed')}
               >
                 <AlertTriangle size={12} />
               </span>
@@ -1578,8 +1587,8 @@ const ProjectItem = memo(function ProjectItem({
                   onSettingsClick()
                 }}
                 className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                title="Project settings"
-                aria-label={`Settings for ${project.name}`}
+                title={t('projectSettings')}
+                aria-label={t('settingsFor', { name: project.name })}
               >
                 <Settings size={12} className="text-muted-foreground" />
               </button>
@@ -1587,7 +1596,7 @@ const ProjectItem = memo(function ProjectItem({
             {!isEditing && hasActivity && (
               <span
                 className="flex items-center mr-3"
-                title="Activity"
+                title={t('activity')}
                 style={{ isolation: 'isolate' }}
               >
                 <MonochromeSpinner
@@ -1595,7 +1604,7 @@ const ProjectItem = memo(function ProjectItem({
                   cellSize={2}
                   cellGap={1}
                   cellRadius={0.5}
-                  label="Project activity"
+                  label={t('projectActivity')}
                 />
               </span>
             )}
@@ -1629,6 +1638,7 @@ function ArchivedProjectItem({
   onContextMenu,
   renderContextMenu
 }: ArchivedProjectItemProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const colors = getColorClasses(project.color)
 
   return (
@@ -1641,7 +1651,7 @@ function ArchivedProjectItem({
             'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
             colors.borderMuted
           )}
-          aria-label={`Archived project: ${project.name}`}
+          aria-label={t('archivedProjectAria', { name: project.name })}
           data-testid={`archived-project-item-${project.id}`}
         >
           <span
@@ -1653,7 +1663,7 @@ function ArchivedProjectItem({
           {hasActivity && (
             <span
               className="flex items-center mr-2"
-              title="Activity"
+              title={t('activity')}
               style={{ isolation: 'isolate' }}
             >
               <MonochromeSpinner
@@ -1661,14 +1671,14 @@ function ArchivedProjectItem({
                 cellSize={2}
                 cellGap={1}
                 cellRadius={0.5}
-                label="Project activity"
+                label={t('projectActivity')}
               />
             </span>
           )}
           {hasError && (
             <span
               className="flex items-center mr-2 text-yellow-500 animate-pulse"
-              title="Terminal crashed"
+              title={t('terminalCrashed')}
             >
               <AlertTriangle size={10} />
             </span>
@@ -1699,6 +1709,7 @@ function SSHResizableSection({
   onSelectProfile?: (profileId: string) => void
   activeProfileId?: string | null
 }): React.JSX.Element | null {
+  const { t } = useTranslation('projects')
   const isVisible = useSSHPanelVisible()
   const [height, setHeight] = useState(() => {
     try {
@@ -1819,7 +1830,7 @@ function SSHResizableSection({
       <div
         onMouseDown={handleMouseDown}
         className="h-[3px] border-t border-sidebar-border cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors group flex items-center justify-center"
-        title="Drag to resize"
+        title={t('dragToResize')}
       >
         <div className="w-8 h-[2px] rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
       </div>

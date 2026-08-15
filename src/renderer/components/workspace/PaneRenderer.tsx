@@ -78,7 +78,7 @@ const PaneLeafRenderer = memo(
     defaultShell
   }: PaneLeafRendererProps): React.JSX.Element => {
     return (
-      <ErrorBoundary context="Terminal Pane">
+      <ErrorBoundary context="terminalPane">
         <PaneContent
           pane={pane}
           onAddTerminal={onAddTerminal}

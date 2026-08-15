@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, Pencil, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   browserTabGoBack,
@@ -15,6 +16,7 @@ interface BrowserControlsProps {
 }
 
 export function BrowserControls({ browserTabId }: BrowserControlsProps): React.JSX.Element {
+  const { t } = useTranslation('browser')
   const tabUrl = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url ?? '')
   const tabLoading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
@@ -63,21 +65,21 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
         <button
           onClick={() => browserTabGoBack(browserTabId).catch(console.error)}
           className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-          title="Back"
+          title={t('controls.back')}
         >
           <ArrowLeft size={14} />
         </button>
         <button
           onClick={() => browserTabGoForward(browserTabId).catch(console.error)}
           className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-          title="Forward"
+          title={t('controls.forward')}
         >
           <ArrowRight size={14} />
         </button>
         <button
           onClick={() => browserTabReload(browserTabId).catch(console.error)}
           className="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-          title="Reload"
+          title={t('controls.reload')}
         >
           <RotateCcw size={14} />
         </button>
@@ -94,7 +96,7 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
             onKeyDown={handleKeyDown}
             onBlur={handleNavigate}
             className="flex-1 bg-transparent text-sm text-foreground outline-none min-w-0"
-            placeholder="Enter URL..."
+            placeholder={t('controls.enterUrl')}
           />
         </div>
         {!import.meta.env.PROD && (
@@ -103,13 +105,13 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
               <button
                 onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
                 className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Open debug console"
-                title="Debug Console"
+                aria-label={t('controls.openDebugConsole')}
+                title={t('controls.debugConsole')}
               >
                 <Bug size={14} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Debug Console</TooltipContent>
+            <TooltipContent side="bottom">{t('controls.debugConsole')}</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>
@@ -123,13 +125,19 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20'
                   : 'hover:bg-secondary text-muted-foreground hover:text-foreground'
               )}
-              aria-label={tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
+              aria-label={
+                tabAnnotationMode
+                  ? t('controls.disableAnnotationMode')
+                  : t('controls.enableAnnotationMode')
+              }
             >
               <Pencil size={14} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
+            {tabAnnotationMode
+              ? t('controls.disableAnnotationMode')
+              : t('controls.enableAnnotationMode')}
           </TooltipContent>
         </Tooltip>
       </div>

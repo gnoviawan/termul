@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { i18n } from '@/i18n'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, skillToken } from '@/lib/skill-tokens'
@@ -371,13 +372,13 @@ describe('ChatInputBar config controls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'OpenAI/GPT-5.4 mini Fast' }))
 
-    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
+    expect(screen.getByLabelText('Search models...')).toBeInTheDocument()
     expect(screen.getByTestId('config-chip-model-options')).toHaveClass(
       'max-h-[180px]',
       'overflow-y-auto'
     )
 
-    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+    fireEvent.change(screen.getByLabelText('Search models...'), { target: { value: 'grok 4.3' } })
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
@@ -694,6 +695,34 @@ describe('ChatInputBar command chip', () => {
     await waitFor(() => {
       expect(screen.queryByText('/compact')).not.toBeInTheDocument()
     })
+  })
+
+  it('updates an open slash menu when the UI language changes', async () => {
+    await act(async () => {
+      await i18n.changeLanguage('en')
+    })
+
+    try {
+      renderInputBar({ commands: [{ name: 'compact', description: 'Compact' }] })
+      setComposerValue('/')
+
+      const listbox = await screen.findByRole('listbox')
+      expect(within(listbox).getByText('Commands')).toBeInTheDocument()
+
+      await act(async () => {
+        await i18n.changeLanguage('zh-CN')
+      })
+
+      await waitFor(() => {
+        expect(screen.getByRole('listbox')).toBeInTheDocument()
+        expect(within(screen.getByRole('listbox')).getByText('命令')).toBeInTheDocument()
+        expect(getComposerValue()).toBe('/')
+      })
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage('en')
+      })
+    }
   })
 
   it('opens the slash menu when / is typed with an active command pill', async () => {

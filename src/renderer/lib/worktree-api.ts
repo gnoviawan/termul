@@ -8,6 +8,7 @@ import type {
   WorktreeInfo
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
+import { runtimeT } from '@/i18n/runtime'
 import type { Worktree } from '@/types/project'
 import { isTauriContext } from './tauri-runtime'
 import { webServerWorktree } from './web-server-api'
@@ -81,7 +82,11 @@ async function worktreeInvoke<T>(
     // ops that stay WEB_UNSUPPORTED on web.
     return {
       success: false,
-      error: 'Worktrees are not available in the web client',
+      error: runtimeT(
+        'projects',
+        'webUnsupported.worktrees',
+        'Worktrees are not available in the web client'
+      ),
       code: 'WEB_UNSUPPORTED'
     }
   }

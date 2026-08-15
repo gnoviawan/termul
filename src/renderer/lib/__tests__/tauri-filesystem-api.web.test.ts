@@ -39,6 +39,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   watchImmediate: vi.fn()
 }))
 
+import { i18n } from '../../i18n'
 import { _resetFilesystemStateForTesting, tauriFilesystemApi } from '../tauri-filesystem-api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -51,7 +52,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('tauriFilesystemApi (web branch)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     _resetFilesystemStateForTesting()
     mockIsTauriContext.mockReturnValue(false)
@@ -278,6 +280,27 @@ describe('tauriFilesystemApi (web branch)', () => {
     expect(result.success).toBe(false)
     if (!result.success) {
       expect(result.code).toBe('WEB_UNSUPPORTED')
+      expect(result.error).toBe('Streaming search is not available in the web client')
+    }
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('localizes unsupported streaming search errors in Simplified Chinese', async () => {
+    await i18n.changeLanguage('zh-CN')
+
+    const results = await Promise.all([
+      tauriFilesystemApi.searchContentStreamStart('id1', '/scope', '/root', 'query'),
+      tauriFilesystemApi.searchContentStreamCancel('id1'),
+      tauriFilesystemApi.searchFileNamesStreamStart('id2', '/scope', '/root', 'query'),
+      tauriFilesystemApi.searchFileNamesStreamCancel('id2')
+    ])
+
+    for (const result of results) {
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('WEB_UNSUPPORTED')
+        expect(result.error).toBe('网页客户端暂不支持流式搜索')
+      }
     }
     expect(mockFetch).not.toHaveBeenCalled()
   })

@@ -1,4 +1,5 @@
 import { PanelLeft, PanelRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
@@ -36,6 +37,7 @@ interface ToggleButtonProps {
 export function SidebarToggleButton({
   className = titlebarToggleButtonClass
 }: ToggleButtonProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const isVisible = useSidebarVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
 
@@ -44,7 +46,7 @@ export function SidebarToggleButton({
     try {
       await updatePanelVisibility('sidebarVisible', !isVisible)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+      toast.error(error instanceof Error ? error.message : t('titleBar.failedSidebar'))
     }
   }
 
@@ -55,8 +57,8 @@ export function SidebarToggleButton({
         void handleClick(e)
       }}
       className={className}
-      title="Toggle sidebar"
-      aria-label={isVisible ? 'Hide sidebar' : 'Show sidebar'}
+      title={t('titleBar.toggleSidebar')}
+      aria-label={isVisible ? t('titleBar.hideSidebar') : t('titleBar.showSidebar')}
       aria-pressed={isVisible}
     >
       <PanelLeft size={16} className={isVisible ? 'text-foreground' : 'text-muted-foreground'} />
@@ -74,6 +76,7 @@ export function SidebarToggleButton({
 export function FileExplorerToggleButton({
   className = titlebarToggleButtonClass
 }: ToggleButtonProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const isVisible = useFileExplorerVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
 
@@ -82,9 +85,7 @@ export function FileExplorerToggleButton({
     try {
       await updatePanelVisibility('fileExplorerVisible', !isVisible)
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : 'Failed to update file explorer visibility'
-      )
+      toast.error(error instanceof Error ? error.message : t('titleBar.failedFileExplorer'))
     }
   }
 
@@ -95,8 +96,8 @@ export function FileExplorerToggleButton({
         void handleClick(e)
       }}
       className={className}
-      title="Toggle file explorer"
-      aria-label={isVisible ? 'Hide file explorer' : 'Show file explorer'}
+      title={t('titleBar.toggleFileExplorer')}
+      aria-label={isVisible ? t('titleBar.hideFileExplorer') : t('titleBar.showFileExplorer')}
       aria-pressed={isVisible}
     >
       <PanelRight size={16} className={isVisible ? 'text-foreground' : 'text-muted-foreground'} />

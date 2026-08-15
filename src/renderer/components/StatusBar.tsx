@@ -1,4 +1,5 @@
 import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
@@ -21,6 +22,7 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const bgColor = project ? statusBarColors[project.color] : 'bg-status-bar'
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
@@ -116,14 +118,14 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
                       lastExitCode === 0 ? 'bg-green-400' : 'bg-red-400'
                     )}
                   />
-                  Exit: {lastExitCode}
+                  {t('statusBar.exit', { code: lastExitCode })}
                 </StatusItem>
               </div>
             </TooltipTrigger>
             <TooltipContent side="top">
               {lastExitCode === 0
-                ? 'Last command succeeded'
-                : `Last command failed with exit code ${lastExitCode}`}
+                ? t('statusBar.lastCommandSucceeded')
+                : t('statusBar.lastCommandFailed', { code: lastExitCode })}
             </TooltipContent>
           </Tooltip>
         )}
@@ -136,7 +138,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
               </div>
             </TooltipTrigger>
             <TooltipContent side="top">
-              Update ready to install (version {updateVersion})
+              {t('statusBar.updateReady', { version: updateVersion })}
             </TooltipContent>
           </Tooltip>
         )}
@@ -179,6 +181,7 @@ function GitStatusIndicator({
   staged,
   untracked
 }: GitStatusIndicatorProps): React.JSX.Element | null {
+  const { t } = useTranslation('shell')
   const items: React.ReactNode[] = []
 
   if (modified > 0) {
@@ -190,9 +193,7 @@ function GitStatusIndicator({
             {modified}
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">
-          {modified} modified {modified === 1 ? 'file' : 'files'}
-        </TooltipContent>
+        <TooltipContent side="top">{t('statusBar.modified', { count: modified })}</TooltipContent>
       </Tooltip>
     )
   }
@@ -206,9 +207,7 @@ function GitStatusIndicator({
             {staged}
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">
-          {staged} staged {staged === 1 ? 'file' : 'files'}
-        </TooltipContent>
+        <TooltipContent side="top">{t('statusBar.staged', { count: staged })}</TooltipContent>
       </Tooltip>
     )
   }
@@ -222,9 +221,7 @@ function GitStatusIndicator({
             {untracked}
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">
-          {untracked} untracked {untracked === 1 ? 'file' : 'files'}
-        </TooltipContent>
+        <TooltipContent side="top">{t('statusBar.untracked', { count: untracked })}</TooltipContent>
       </Tooltip>
     )
   }

@@ -1,5 +1,6 @@
 import { Check, Copy, X } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -29,6 +30,7 @@ export function AnnotationExportModal({
   onOpenChange,
   annotations
 }: AnnotationExportModalProps): React.JSX.Element {
+  const { t } = useTranslation('browser')
   const [activeTab, setActiveTab] = useState<'markdown' | 'json' | 'afs'>('markdown')
   const [level, setLevel] = useState<OutputLevel>('standard')
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -59,7 +61,7 @@ export function AnnotationExportModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl w-full">
         <DialogHeader>
-          <DialogTitle>Export Annotations</DialogTitle>
+          <DialogTitle>{t('export.title')}</DialogTitle>
         </DialogHeader>
 
         <Tabs
@@ -69,13 +71,13 @@ export function AnnotationExportModal({
           <div className="flex items-center justify-between mb-3">
             <TabsList>
               <TabsTrigger value="markdown" className="text-xs">
-                Markdown
+                {t('export.markdown')}
               </TabsTrigger>
               <TabsTrigger value="json" className="text-xs">
-                JSON
+                {t('export.json')}
               </TabsTrigger>
               <TabsTrigger value="afs" className="text-xs">
-                AFS (Agentation Format)
+                {t('export.afs')}
               </TabsTrigger>
             </TabsList>
 
@@ -86,13 +88,13 @@ export function AnnotationExportModal({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="compact" className="text-xs">
-                    Compact
+                    {t('export.compact')}
                   </SelectItem>
                   <SelectItem value="standard" className="text-xs">
-                    Standard
+                    {t('export.standard')}
                   </SelectItem>
                   <SelectItem value="detailed" className="text-xs">
-                    Detailed
+                    {t('export.detailed')}
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -103,7 +105,7 @@ export function AnnotationExportModal({
               variant="outline"
               className={`h-8 text-xs gap-1.5 ${copyState === 'error' ? 'text-red-500 border-red-300' : ''}`}
               onClick={handleCopy}
-              aria-label={copyState === 'error' ? 'Copy failed' : undefined}
+              aria-label={copyState === 'error' ? t('export.copyFailed') : undefined}
             >
               {copyState === 'copied' ? (
                 <Check size={14} className="text-green-500" />
@@ -112,7 +114,11 @@ export function AnnotationExportModal({
               ) : (
                 <Copy size={14} />
               )}
-              {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Failed' : 'Copy'}
+              {copyState === 'copied'
+                ? t('export.copied')
+                : copyState === 'error'
+                  ? t('export.failed')
+                  : t('export.copy')}
             </Button>
           </div>
 

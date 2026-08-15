@@ -1,5 +1,6 @@
 import { Copy, CopyX, Edit2, Skull, X, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,6 +59,7 @@ export function TabContextMenu({
   isClosing = false,
   children
 }: TabContextMenuProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const closeDisabled = isClosing
   return (
     <ContextMenu>
@@ -67,15 +69,15 @@ export function TabContextMenu({
           <>
             {onRename && (
               <ContextMenuItem onSelect={onRename}>
-                <Edit2 className="mr-2 h-4 w-4" /> Rename
+                <Edit2 className="mr-2 h-4 w-4" /> {t('tabs.rename')}
               </ContextMenuItem>
             )}
             <ContextMenuItem onSelect={onClose} disabled={closeDisabled}>
-              <X className="mr-2 h-4 w-4" /> Close
+              <X className="mr-2 h-4 w-4" /> {t('tabs.close')}
             </ContextMenuItem>
             {onKill && (
               <ContextMenuItem variant="destructive" onSelect={onKill} disabled={closeDisabled}>
-                <Skull className="mr-2 h-4 w-4" /> Kill Process
+                <Skull className="mr-2 h-4 w-4" /> {t('tabs.killProcess')}
               </ContextMenuItem>
             )}
           </>
@@ -84,21 +86,21 @@ export function TabContextMenu({
         {kind === 'editor' && (
           <>
             <ContextMenuItem onSelect={onClose}>
-              <X className="mr-2 h-4 w-4" /> Close
+              <X className="mr-2 h-4 w-4" /> {t('tabs.close')}
             </ContextMenuItem>
             {onCloseOthers && (
               <ContextMenuItem onSelect={onCloseOthers}>
-                <CopyX className="mr-2 h-4 w-4" /> Close Others
+                <CopyX className="mr-2 h-4 w-4" /> {t('tabs.closeOthers')}
               </ContextMenuItem>
             )}
             {onCloseAll && (
               <ContextMenuItem onSelect={onCloseAll}>
-                <XCircle className="mr-2 h-4 w-4" /> Close All
+                <XCircle className="mr-2 h-4 w-4" /> {t('tabs.closeAll')}
               </ContextMenuItem>
             )}
             {onCopyPath && (
               <ContextMenuItem onSelect={onCopyPath}>
-                <Copy className="mr-2 h-4 w-4" /> Copy Path
+                <Copy className="mr-2 h-4 w-4" /> {t('tabs.copyPath')}
               </ContextMenuItem>
             )}
           </>
@@ -109,7 +111,7 @@ export function TabContextMenu({
           kind === 'git-history' ||
           kind === 'agent-chat') && (
           <ContextMenuItem onSelect={onClose}>
-            <X className="mr-2 h-4 w-4" /> Close
+            <X className="mr-2 h-4 w-4" /> {t('tabs.close')}
           </ContextMenuItem>
         )}
       </ContextMenuContent>

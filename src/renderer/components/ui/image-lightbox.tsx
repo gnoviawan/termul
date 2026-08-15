@@ -1,5 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
 
@@ -21,12 +22,13 @@ interface ImageLightboxProps {
  * supply the interactive element ourselves.
  */
 export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React.JSX.Element {
+  const { t } = useTranslation('common')
   return (
     <DialogPrimitive.Root>
       <DialogPrimitive.Trigger asChild>
         <button
           type="button"
-          aria-label={`Open image: ${alt}`}
+          aria-label={t('lightbox.open', { name: alt })}
           className="inline-flex cursor-zoom-in items-center bg-transparent p-0"
         >
           {children}
@@ -48,7 +50,7 @@ export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React
             className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl outline outline-1 -outline-offset-1 outline-white/10"
           />
           <DialogPrimitive.Close
-            aria-label="Close image"
+            aria-label={t('lightbox.close')}
             className="fixed right-4 top-4 flex size-9 items-center justify-center rounded-full bg-white/10 text-white/90 backdrop-blur transition-colors hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           >
             <X className="size-4" />

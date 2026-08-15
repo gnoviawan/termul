@@ -1,0 +1,334 @@
+{
+  "titleBar": {
+    "keyboardShortcuts": "Keyboard shortcuts",
+    "openKeyboardShortcuts": "Open keyboard shortcuts menu",
+    "shortcutMenu": "Shortcut Menu",
+    "shortcutMenuDescription": "View and edit common workspace shortcuts.",
+    "noShortcuts": "No shortcuts available.",
+    "minimize": "Minimize",
+    "minimizeWindow": "Minimize window",
+    "maximize": "Maximize",
+    "maximizeWindow": "Maximize window",
+    "restore": "Restore",
+    "restoreWindow": "Restore window",
+    "close": "Close",
+    "closeWindow": "Close window",
+    "toggleSidebar": "Toggle sidebar",
+    "hideSidebar": "Hide sidebar",
+    "showSidebar": "Show sidebar",
+    "toggleFileExplorer": "Toggle file explorer",
+    "hideFileExplorer": "Hide file explorer",
+    "showFileExplorer": "Show file explorer",
+    "failedSidebar": "Failed to update sidebar visibility",
+    "failedFileExplorer": "Failed to update file explorer visibility"
+  },
+  "activityRail": {
+    "globalActions": "Global actions",
+    "projects": "Projects",
+    "openProjects": "Open projects",
+    "gitChanges": "Git changes",
+    "gitChangesNeedsProject": "Git changes (open a project first)",
+    "openGitChanges": "Open git changes",
+    "newAgentChat": "New agent chat",
+    "newAgentChatNeedsProject": "New agent chat (open a project first)",
+    "gitHistory": "Git history",
+    "gitHistoryNeedsProject": "Git history (open a project first)",
+    "openGitHistory": "Open git history",
+    "toggleSsh": "Toggle SSH panel",
+    "sshDesktopOnly": "SSH is desktop-only",
+    "hideSsh": "Hide SSH panel",
+    "showSsh": "Show SSH panel",
+    "preferences": "Preferences",
+    "openPreferences": "Open preferences",
+    "colorThemes": "Color themes",
+    "failedSsh": "Failed to update SSH panel visibility"
+  },
+  "contextBar": {
+    "settings": "Context bar settings",
+    "showInBar": "Show in Context Bar",
+    "gitBranch": "Git Branch",
+    "gitStatus": "Git Status",
+    "workingDirectory": "Working Directory",
+    "exitCode": "Exit Code"
+  },
+  "terminalTabs": {
+    "newTerminalDefault": "New terminal (default shell)",
+    "selectShell": "Select shell",
+    "default": "(default)",
+    "noShells": "No shells detected",
+    "closeTerminal": "Close {{name}}"
+  },
+  "statusBar": {
+    "exit": "Exit: {{code}}",
+    "lastCommandSucceeded": "Last command succeeded",
+    "lastCommandFailed": "Last command failed with exit code {{code}}",
+    "updateReady": "Update ready to install (version {{version}})",
+    "modified_one": "{{count}} modified file",
+    "modified_other": "{{count}} modified files",
+    "staged_one": "{{count}} staged file",
+    "staged_other": "{{count}} staged files",
+    "untracked_one": "{{count}} untracked file",
+    "untracked_other": "{{count}} untracked files"
+  },
+  "commandPalette": {
+    "categories": {
+      "workspace": "Workspace",
+      "navigation": "Navigation",
+      "projects": "Projects",
+      "tools": "Tools"
+    },
+    "newTerminal": "New Terminal",
+    "newTerminalDescription": "Open a new shell in the active pane",
+    "agentLauncher": "Agent Launcher",
+    "agentLauncherDescription": "Show the agent launcher prompt in the active pane",
+    "launchAgent": "Launch Agent",
+    "launchAgentDescription": "Open a CLI agent's TUI in the active pane",
+    "newBrowserTab": "New Browser Tab",
+    "newBrowserTabDescription": "Open a browser tab in the active pane",
+    "saveSnapshot": "Save Workspace Snapshot",
+    "saveSnapshotDescription": "Capture the current workspace layout",
+    "projectSettings": "Project Settings",
+    "projectSettingsDescription": "Configure the active project workspace",
+    "appPreferences": "App Preferences",
+    "appPreferencesDescription": "Open global application preferences",
+    "switchProject": "Switch active workspace project",
+    "commandHistory": "Command History",
+    "commandHistoryDescription": "Review and reuse recent terminal commands",
+    "colorTheme": "Change Color Theme",
+    "colorThemeDescription": "Preview and apply a UI color theme",
+    "shortcutMenu": "Open Shortcut Menu",
+    "shortcutMenuDescription": "View and edit common keyboard shortcuts",
+    "sshLabel": "SSH: {{name}}",
+    "sshDescription": "{{username}}@{{host}}",
+    "searchPlaceholder": "Search commands, projects, settings...",
+    "empty": "No commands found.",
+    "pinned": "Pinned",
+    "recent": "Recent",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "pinCommand": "{{action}} {{label}}"
+  },
+  "commandHistory": {
+    "title": "Command History",
+    "thisProject": "This Project",
+    "allProjects": "All Projects",
+    "searchPlaceholder": "Search commands...",
+    "noHistory": "No command history yet",
+    "noMatches": "No matching commands",
+    "navigate": "to navigate",
+    "insert": "to insert",
+    "close": "to close",
+    "clear": "Clear History",
+    "clearing": "Clearing...",
+    "clearTitle": "Clear Command History",
+    "clearMessage": "Are you sure you want to clear the command history for this project? This action cannot be undone.",
+    "clearOtherProjectHint": "Switch to \"This Project\" to clear history",
+    "clearFailed": "Failed to clear history: {{error}}"
+  },
+  "shortcuts": {
+    "saveFailed": "Failed to save shortcut",
+    "resetFailed": "Failed to reset shortcut",
+    "reset": "Reset to default",
+    "resetAria": "Reset {{label}} shortcut to default",
+    "recordAria": "Record {{label}} shortcut",
+    "pressKeys": "Press keys...",
+    "conflict": "Conflicts with \"{{label}}\".",
+    "useAnyway": "Use anyway",
+    "items": {
+      "commandPalette": {
+        "label": "Command Palette",
+        "description": "Open the command palette for quick actions"
+      },
+      "commandPaletteAlt": {
+        "label": "Command Palette (Alt)",
+        "description": "Open command palette (VS Code style)"
+      },
+      "terminalSearch": {
+        "label": "Terminal Search",
+        "description": "Search within terminal output"
+      },
+      "commandHistory": { "label": "Command History", "description": "Search command history" },
+      "newProject": { "label": "New Project", "description": "Create a new project" },
+      "newTerminal": {
+        "label": "Agent Launcher",
+        "description": "Show the agent launcher prompt in the active pane"
+      },
+      "newBrowserTab": { "label": "New Browser Tab", "description": "Create a new browser tab" },
+      "nextTerminal": {
+        "label": "Next Tab",
+        "description": "Switch to next tab (terminal or editor)"
+      },
+      "prevTerminal": {
+        "label": "Previous Tab",
+        "description": "Switch to previous tab (terminal or editor)"
+      },
+      "zoomIn": { "label": "Zoom In", "description": "Zoom in the entire UI" },
+      "zoomOut": { "label": "Zoom Out", "description": "Zoom out the entire UI" },
+      "zoomReset": { "label": "Reset Zoom", "description": "Reset the whole-UI zoom to 100%" },
+      "sidebarToggle": {
+        "label": "Toggle Sidebar",
+        "description": "Show or hide the project sidebar"
+      },
+      "closeTab": { "label": "Close Tab", "description": "Close the active tab" },
+      "saveFile": { "label": "Save File", "description": "Save the current editor file" },
+      "toggleFileExplorer": {
+        "label": "Toggle File Explorer",
+        "description": "Show or hide the file explorer panel"
+      },
+      "fileExplorerRename": { "label": "Rename File", "description": "Rename selected file" },
+      "fileExplorerDelete": { "label": "Delete Files", "description": "Delete selected files" },
+      "worktreeCreate": {
+        "label": "Create Worktree",
+        "description": "Open the new worktree creation modal"
+      },
+      "worktreeSwitchNext": {
+        "label": "Switch to Next Worktree",
+        "description": "Cycle to the next worktree in the sidebar"
+      },
+      "worktreeSwitchPrev": {
+        "label": "Switch to Previous Worktree",
+        "description": "Cycle to the previous worktree in the sidebar"
+      },
+      "worktreeOpenTerminal": {
+        "label": "Open Terminal in Worktree",
+        "description": "Spawn a new terminal in the active worktree"
+      },
+      "worktreeMergeToMain": {
+        "label": "Merge Worktree to Main",
+        "description": "Start merge workflow: worktree branch to main"
+      },
+      "worktreeSyncMain": {
+        "label": "Sync Main into Worktree",
+        "description": "Start merge workflow: main into worktree branch"
+      },
+      "worktreeArchive": {
+        "label": "Archive Active Worktree",
+        "description": "Archive the current active worktree"
+      },
+      "worktreeSwitchRoot": {
+        "label": "Switch to Project Root",
+        "description": "Switch active context to the project root directory"
+      },
+      "colorThemePicker": {
+        "label": "Change Color Theme",
+        "description": "Open the color theme picker with live preview"
+      }
+    }
+  },
+  "themes": {
+    "lightVariant": "{{name}} Light",
+    "dialogLabel": "Color theme picker",
+    "title": "Color Themes",
+    "hint": "Hover to preview · Enter to apply",
+    "close": "Close theme picker",
+    "searchPlaceholder": "Search themes…",
+    "searchAria": "Search themes",
+    "listAria": "Themes",
+    "empty": "No themes match.",
+    "applied": "Currently applied",
+    "cancel": "Esc cancel",
+    "apply": "Enter apply"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "return": "Return to Workspace"
+  },
+  "updates": {
+    "channels": {
+      "insider": "Insider",
+      "nightly": "Nightly"
+    },
+    "available": "{{channel}}Update available: version {{version}}",
+    "whatsNew": "What's new:\n{{notes}}",
+    "aurAvailable": "A new version is available. Update with yay.",
+    "manualChannel": "A new {{channel}} build is available. Open the download page to install it manually.",
+    "downloadAvailable": "A new version is available for download.",
+    "useYay": "Use yay",
+    "downloadPage": "Open Download Page",
+    "download": "Download",
+    "runInTerminal": "Run in terminal",
+    "downloadFailed": "Update download failed",
+    "unexpectedDownload": "Unexpected error during download",
+    "remind": "Remind Me",
+    "ready": "Update ready to install",
+    "downloaded": "Version {{version}} has been downloaded. Install now to apply it — the app will restart and any running terminal sessions will close.",
+    "installRestart": "Install & Restart",
+    "installTitle": "Install update",
+    "installWithTerminals": "Termul will install version {{version}} and restart. Your running terminal sessions will be closed. Continue?",
+    "installWithoutTerminals": "Termul will install version {{version}} and restart now. Continue?",
+    "notNow": "Not now",
+    "installFailed": "Update install failed",
+    "unexpectedInstall": "Unexpected error during install",
+    "downloading": "Downloading update {{version}}...",
+    "complete": "{{progress}}% complete",
+    "skipped": "Skipped version {{version}}",
+    "skippedDescription": "You will not be notified about this version again.",
+    "reminderSet": "Reminder set",
+    "reminderDescription": "We will remind you about the update tomorrow.",
+    "errors": {
+      "checkFailed": "Failed to check for updates",
+      "downloadFailed": "Failed to download update",
+      "installFailed": "Failed to install update",
+      "skipVersionFailed": "Failed to skip version",
+      "autoUpdateSettingFailed": "Failed to update auto-update setting",
+      "switchChannelFailed": "Failed to switch update channel",
+      "loadStateFailed": "Failed to load updater state",
+      "initializeFailed": "Failed to initialize updater",
+      "unknownUpdater": "Unknown updater error",
+      "checkSourceFailed": "Failed to check for updates from {{sourceUrl}}: {{details}}",
+      "currentVersionFailed": "Failed to determine current app version: {{details}}",
+      "unknown": "Unknown error",
+      "backupFailed": "Failed to create backup before update",
+      "backupInvalidId": "Invalid backup ID: {{backupId}}",
+      "backupPathTraversal": "Backup path traversal detected: {{backupId}}",
+      "backupInsufficientSpace": "Insufficient disk space to create backup: {{details}}",
+      "backupCreateFailed": "Failed to create backup: {{details}}",
+      "backupListFailed": "Failed to list backups",
+      "backupNotFound": "Backup not found or invalid: {{backupId}}",
+      "backupRestoreInsufficientSpace": "Insufficient disk space to restore backup: {{details}}",
+      "backupRestoreFailed": "Failed to restore backup: {{details}}",
+      "backupCleanupFailed": "Failed to clean up old backups",
+      "preserveVersionFailed": "Failed to preserve current version before update",
+      "rollbackMetadataReadFailed": "Failed to read rollback metadata: {{details}}",
+      "rollbackMetadataWriteFailed": "Failed to write rollback metadata: {{details}}",
+      "rollbackCleanupFailed": "Failed to clean up old rollback versions: {{details}}",
+      "rollbackListFailed": "Failed to list rollback versions: {{details}}",
+      "rollbackInvalidVersion": "Invalid version format: {{version}}",
+      "rollbackPreserveFailed": "Failed to preserve version: {{details}}",
+      "rollbackVersionNotFound": "Version {{version}} was not found in rollback history",
+      "rollbackFilesNotFound": "Files for version {{version}} were not found",
+      "rollbackPrepared": "Rollback to v{{version}} is ready. Restart the application to complete the rollback.",
+      "rollbackInstallFailed": "Failed to install rollback: {{details}}",
+      "rollbackPendingCheckFailed": "Failed to check pending rollback: {{details}}",
+      "rollbackPendingClearFailed": "Failed to clear pending rollback: {{details}}",
+      "rollbackStatusFailed": "Failed to get rollback status: {{details}}",
+      "noUpdateAvailable": "No update available to download",
+      "aurSelfUpdate": "AUR build cannot self-update. Update with: {{command}}",
+      "aurSelfInstall": "AUR build cannot self-install updates. Update with: {{command}}",
+      "noDownloadedUpdate": "No downloaded update ready to install",
+      "installRestartFailed": "Failed to install and restart after update",
+      "recoveryMetadataFailed": "Failed to initialize updater recovery metadata: {{details}}"
+    }
+  },
+  "updateReadyModal": {
+    "title": "Update Ready to Apply",
+    "close": "Close",
+    "version": "Version",
+    "releaseNotes": "Release Notes",
+    "warning": "Restarting now will close all active terminal sessions. Make sure you've saved any important work before applying the update.",
+    "skip": "Skip This Version",
+    "restart": "Restart to Update"
+  },
+  "whatsNew": {
+    "title": "What's New",
+    "close": "Close",
+    "updatedTo": "Updated to version",
+    "releaseNotes": "Release Notes",
+    "unavailable": "Release notes aren't available for this version.",
+    "viewGithub": "View on GitHub",
+    "gotIt": "Got it"
+  }
+}

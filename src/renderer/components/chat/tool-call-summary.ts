@@ -6,6 +6,7 @@
  * Tool input shapes vary per agent, so extraction is best-effort across a set of
  * common key names, with graceful fallbacks to the agent-provided title.
  */
+import { runtimeT } from '@/i18n/runtime'
 import type { ToolCall, ToolCallContent, ToolKind } from '@/lib/acp-api'
 import { diffLineCounts } from './tool-call-format'
 
@@ -170,23 +171,23 @@ export function readableOutput(value: unknown): string {
 function verbForKind(kind: ToolKind | undefined): string {
   switch (kind) {
     case 'read':
-      return 'Read'
+      return runtimeT('chat', 'tool.verbs.read', 'Read')
     case 'edit':
-      return 'Edited'
+      return runtimeT('chat', 'tool.verbs.edit', 'Edited')
     case 'delete':
-      return 'Deleted'
+      return runtimeT('chat', 'tool.verbs.delete', 'Deleted')
     case 'move':
-      return 'Moved'
+      return runtimeT('chat', 'tool.verbs.move', 'Moved')
     case 'search':
-      return 'Searched'
+      return runtimeT('chat', 'tool.verbs.search', 'Searched')
     case 'execute':
-      return 'Ran'
+      return runtimeT('chat', 'tool.verbs.execute', 'Ran')
     case 'think':
-      return 'Thinking'
+      return runtimeT('chat', 'tool.verbs.think', 'Thinking')
     case 'fetch':
-      return 'Fetched'
+      return runtimeT('chat', 'tool.verbs.fetch', 'Fetched')
     case 'switch_mode':
-      return 'Switched mode'
+      return runtimeT('chat', 'tool.verbs.switchMode', 'Switched mode')
     default:
       return ''
   }
@@ -205,7 +206,10 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
   // Subagent/Task dispatch: render as the task name with no verb (the robot
   // icon carries the meaning), rather than the misleading "Thinking" of `think`.
   if (isSubagentCall(toolCall)) {
-    const name = firstString(input, TASK_NAME_KEYS) ?? title ?? 'Subagent task'
+    const name =
+      firstString(input, TASK_NAME_KEYS) ??
+      title ??
+      runtimeT('chat', 'tool.subagentTask', 'Subagent task')
     return { verb: '', primary: name, detail: null }
   }
 
@@ -214,13 +218,13 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
     case 'delete':
     case 'move': {
       const p = toolCallPath(toolCall)
-      const primary = p ? baseName(p) : (title ?? 'file')
+      const primary = p ? baseName(p) : (title ?? runtimeT('chat', 'tool.file', 'file'))
       return { verb, primary, detail: toolCall.kind === 'read' ? lineRange(input) : null }
     }
     case 'edit': {
       const diff = diffInfo(content)
       const p = toolCallPath(toolCall)
-      const primary = p ? baseName(p) : (title ?? 'file')
+      const primary = p ? baseName(p) : (title ?? runtimeT('chat', 'tool.file', 'file'))
       let detail: string | null = null
       let diffStat: { added: number; removed: number } | null = null
       if (diff.hasDiff) {
@@ -230,7 +234,8 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
       return { verb, primary, detail, diffStat }
     }
     case 'execute': {
-      const cmd = firstString(input, COMMAND_KEYS) ?? title ?? 'command'
+      const cmd =
+        firstString(input, COMMAND_KEYS) ?? title ?? runtimeT('chat', 'tool.command', 'command')
       return { verb, primary: cmd, detail: null }
     }
     case 'search': {
@@ -243,11 +248,19 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
     }
     case 'think': {
       const thought = firstString(input, ['thought', 'text', 'message'])
-      return { verb, primary: thought ?? title ?? 'Thinking', detail: null }
+      return {
+        verb,
+        primary: thought ?? title ?? runtimeT('chat', 'tool.thinking', 'Thinking'),
+        detail: null
+      }
     }
     default: {
       // Unknown/generic tool: lean on whatever title the agent provided.
-      return { verb, primary: title ?? toolCall.kind ?? 'Tool call', detail: null }
+      return {
+        verb,
+        primary: title ?? toolCall.kind ?? runtimeT('chat', 'tool.call', 'Tool call'),
+        detail: null
+      }
     }
   }
 }

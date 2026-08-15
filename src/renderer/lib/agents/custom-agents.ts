@@ -9,6 +9,7 @@
  */
 
 import { PersistenceKeys } from '@shared/types/persistence.types'
+import { runtimeT } from '@/i18n/runtime'
 import {
   type AgentPromptMode,
   BUILT_IN_AGENTS,
@@ -74,16 +75,23 @@ interface PersistedCustomAgents {
 /** Validate a custom-agent input, returning an error string or null when valid. */
 export function validateCustomAgent(input: CustomAgentInput): string | null {
   if (!input.name || input.name.trim().length === 0) {
-    return 'Agent name is required'
+    return runtimeT('settings', 'customAgents.nameRequired', 'Agent name is required')
   }
   if (!input.command || input.command.trim().length === 0) {
-    return 'Agent command is required'
+    return runtimeT('settings', 'customAgents.commandRequired', 'Agent command is required')
   }
   if (!VALID_PROMPT_MODES.includes(input.promptMode)) {
-    return `Invalid prompt mode: ${input.promptMode}`
+    return runtimeT('settings', 'customAgents.invalidPromptMode', 'Invalid prompt mode: {{mode}}', {
+      mode: input.promptMode
+    })
   }
   if (input.promptMode === 'flag' && (!input.promptFlag || input.promptFlag.trim().length === 0)) {
-    return "Prompt flag is required when prompt mode is 'flag'"
+    return runtimeT(
+      'settings',
+      'customAgents.promptFlagRequired',
+      "Prompt flag is required when prompt mode is 'flag'",
+      { mode: input.promptMode }
+    )
   }
   return null
 }
@@ -124,7 +132,10 @@ async function saveCustomAgents(agents: TerminalAgentDefinition[]): Promise<void
   const payload: PersistedCustomAgents = { agents }
   const result = await persistenceApi.write(PersistenceKeys.customAgents, payload)
   if (!result.success) {
-    throw new Error(result.error || 'Failed to save custom agents')
+    throw new Error(
+      result.error ||
+        runtimeT('settings', 'customAgents.saveFailed', 'Failed to save custom agents')
+    )
   }
   updateCustomAgentsCache(agents)
 }

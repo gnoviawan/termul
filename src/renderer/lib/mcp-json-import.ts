@@ -1,3 +1,4 @@
+import { runtimeT } from '@/i18n/runtime'
 import type { McpEnvVar, McpServerConfig } from '@/lib/acp-api'
 import { validateMcpServer } from '@/lib/acp-mcp-persistence'
 
@@ -127,10 +128,22 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
   try {
     parsed = JSON.parse(text)
   } catch (error) {
-    return { servers: [], errors: [`Invalid JSON: ${String(error)}`] }
+    return {
+      servers: [],
+      errors: [
+        runtimeT('mcp', 'import.invalidJson', `Invalid JSON: ${String(error)}`, {
+          message: String(error)
+        })
+      ]
+    }
   }
   if (!isRecord(parsed)) {
-    return { servers: [], errors: ['Invalid JSON: expected a top-level object'] }
+    return {
+      servers: [],
+      errors: [
+        runtimeT('mcp', 'import.topLevelObject', 'Invalid JSON: expected a top-level object')
+      ]
+    }
   }
 
   const entries: Array<[string, unknown]> = []
@@ -139,7 +152,12 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       entries.push([name, value])
     }
   } else if (parsed.mcpServers !== undefined) {
-    return { servers: [], errors: ['Invalid JSON: "mcpServers" must be an object'] }
+    return {
+      servers: [],
+      errors: [
+        runtimeT('mcp', 'import.serversObject', 'Invalid JSON: "mcpServers" must be an object')
+      ]
+    }
   } else {
     // Bare single-server object.
     entries.push(['', parsed])
@@ -151,22 +169,50 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
     const name =
       keyName.length > 0 || !isRecord(raw) ? keyName : typeof raw.name === 'string' ? raw.name : ''
     if (!isRecord(raw)) {
-      errors.push(`${name || '<unknown>'}: expected a server object`)
+      errors.push(
+        runtimeT('mcp', 'import.serverObject', `${name || '<unknown>'}: expected a server object`, {
+          name: name || runtimeT('mcp', 'import.unknown', '<unknown>')
+        })
+      )
       continue
     }
     const env = normalizeEnv(raw.env)
     if (raw.env !== undefined && env === undefined) {
-      errors.push(`${name || '<unnamed>'}: env must be an object map or name/value pairs`)
+      errors.push(
+        runtimeT(
+          'mcp',
+          'import.envShape',
+          `${name || '<unnamed>'}: env must be an object map or name/value pairs`,
+          { name: name || runtimeT('mcp', 'import.unnamed', '<unnamed>') }
+        )
+      )
       continue
     }
     const server = buildServer(raw, name, env)
     if (!server) {
-      errors.push(`${name || '<unnamed>'}: invalid server configuration`)
+      errors.push(
+        runtimeT(
+          'mcp',
+          'import.invalidServer',
+          `${name || '<unnamed>'}: invalid server configuration`,
+          { name: name || runtimeT('mcp', 'import.unnamed', '<unnamed>') }
+        )
+      )
       continue
     }
     const validation = validateMcpServer(server)
     if (!validation.valid) {
-      errors.push(`${name || '<unnamed>'}: ${validation.errors.join(' ')}`)
+      errors.push(
+        runtimeT(
+          'mcp',
+          'import.validation',
+          `${name || '<unnamed>'}: ${validation.errors.join(' ')}`,
+          {
+            name: name || runtimeT('mcp', 'import.unnamed', '<unnamed>'),
+            errors: validation.errors.join(' ')
+          }
+        )
+      )
       continue
     }
     servers.push(server as McpServerConfig)

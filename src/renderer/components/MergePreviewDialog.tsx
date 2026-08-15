@@ -10,6 +10,7 @@
 
 import { AlertTriangle, ArrowUpCircle, FileCode, GitMerge, Loader2, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import type { MergePreviewInfo } from '@/lib/worktree-api'
 import { AiPromptDialog } from './AiPromptDialog'
@@ -27,6 +28,27 @@ interface MergePreviewDialogProps {
   sourceBranch: string
 }
 
+const DETECTION_MODE_KEYS = {
+  accurate: 'mergePreview.detectionMode.accurate',
+  estimated: 'mergePreview.detectionMode.estimated'
+} as const
+
+const CONFLICT_SEVERITY_KEYS = {
+  low: 'mergePreview.severity.low',
+  medium: 'mergePreview.severity.medium',
+  high: 'mergePreview.severity.high'
+} as const
+
+function detectionModeKey(mode: string) {
+  return mode === 'accurate' ? DETECTION_MODE_KEYS.accurate : DETECTION_MODE_KEYS.estimated
+}
+
+function conflictSeverityKey(severity: string) {
+  if (severity === 'high') return CONFLICT_SEVERITY_KEYS.high
+  if (severity === 'medium') return CONFLICT_SEVERITY_KEYS.medium
+  return CONFLICT_SEVERITY_KEYS.low
+}
+
 export function MergePreviewDialog({
   isOpen,
   onClose,
@@ -37,6 +59,7 @@ export function MergePreviewDialog({
   worktreePath,
   projectName
 }: MergePreviewDialogProps) {
+  const { t } = useTranslation('workspace')
   const [showAiPrompts, setShowAiPrompts] = useState(false)
   const [showConflictPanel, setShowConflictPanel] = useState(false)
 
@@ -58,7 +81,7 @@ export function MergePreviewDialog({
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="flex items-center gap-2">
               <GitMerge size={14} className="text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">Merge Preview</h2>
+              <h2 className="text-sm font-semibold text-foreground">{t('mergePreview.title')}</h2>
             </div>
             <button
               onClick={onClose}
@@ -72,7 +95,9 @@ export function MergePreviewDialog({
           {loading && (
             <div className="flex items-center justify-center py-12">
               <Loader2 size={20} className="animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">Detecting conflicts...</span>
+              <span className="ml-2 text-sm text-muted-foreground">
+                {t('mergePreview.detecting')}
+              </span>
             </div>
           )}
 
@@ -103,18 +128,18 @@ export function MergePreviewDialog({
                       : 'bg-yellow-500/10 text-yellow-500'
                   )}
                 >
-                  {preview.detectionMode}
+                  {t(detectionModeKey(preview.detectionMode))}
                 </span>
               </div>
 
               {/* Summary */}
               <div className="flex gap-4 text-xs">
                 <div>
-                  <span className="text-muted-foreground">Changed files: </span>
+                  <span className="text-muted-foreground">{t('mergePreview.changedFiles')} </span>
                   <span className="font-medium text-foreground">{preview.totalChanges}</span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Conflicts: </span>
+                  <span className="text-muted-foreground">{t('mergePreview.conflicts')} </span>
                   <span
                     className={cn(
                       'font-medium',
@@ -129,7 +154,9 @@ export function MergePreviewDialog({
               {/* Conflict files list */}
               {preview.conflictFiles.length > 0 && (
                 <div className="space-y-1 max-h-[180px] overflow-auto">
-                  <p className="label-group text-muted-foreground">Conflicted Files</p>
+                  <p className="label-group text-muted-foreground">
+                    {t('mergePreview.conflictedFiles')}
+                  </p>
                   {preview.conflictFiles.map((file) => (
                     <div
                       key={file.path}
@@ -147,7 +174,7 @@ export function MergePreviewDialog({
                               : 'bg-green-500/10 text-green-500'
                         )}
                       >
-                        {file.severity}
+                        {t(conflictSeverityKey(file.severity))}
                       </span>
                     </div>
                   ))}
@@ -157,7 +184,9 @@ export function MergePreviewDialog({
               {/* Changed files list (no conflict) */}
               {preview.changedFiles.length > 0 && (
                 <div className="space-y-1 max-h-[100px] overflow-auto">
-                  <p className="label-group text-muted-foreground">Files that will change</p>
+                  <p className="label-group text-muted-foreground">
+                    {t('mergePreview.filesWillChange')}
+                  </p>
                   {preview.changedFiles.map((file) => (
                     <div
                       key={file}
@@ -173,7 +202,7 @@ export function MergePreviewDialog({
               {/* No conflicts */}
               {preview.conflictFiles.length === 0 && preview.changedFiles.length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">
-                  No conflicts detected. Ready to merge.
+                  {t('mergePreview.noConflicts')}
                 </p>
               )}
 
@@ -185,13 +214,13 @@ export function MergePreviewDialog({
                       onClick={handleResolveConflicts}
                       className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                     >
-                      Resolve Conflicts
+                      {t('mergePreview.resolve')}
                     </button>
                     <button
                       onClick={handleAiHelp}
                       className="px-3 py-1.5 rounded-md text-xs font-medium bg-secondary text-muted-foreground hover:text-foreground transition-colors"
                     >
-                      AI Help
+                      {t('mergePreview.aiHelp')}
                     </button>
                   </>
                 ) : (
@@ -199,14 +228,14 @@ export function MergePreviewDialog({
                     onClick={onExecuteMerge}
                     className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                   >
-                    Execute Merge
+                    {t('mergePreview.execute')}
                   </button>
                 )}
                 <button
                   onClick={onClose}
                   className="px-3 py-1.5 rounded-md text-xs font-medium bg-secondary text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  Cancel
+                  {t('mergePreview.cancel')}
                 </button>
               </div>
 
@@ -227,9 +256,7 @@ export function MergePreviewDialog({
           {!preview && !loading && !error && (
             <div className="text-center py-12">
               <GitMerge size={24} className="mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                Select a merge direction to preview conflicts.
-              </p>
+              <p className="text-sm text-muted-foreground">{t('mergePreview.empty')}</p>
             </div>
           )}
         </div>

@@ -23,6 +23,7 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -96,6 +97,7 @@ interface GlobalContextMenuProps {
 }
 
 export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.JSX.Element {
+  const { t } = useTranslation('common')
   const snapshotRef = useRef<GlobalContextMenuState>(CLOSED_STATE)
   const [state, setState] = useState<GlobalContextMenuState>(CLOSED_STATE)
 
@@ -142,7 +144,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void copySelection()
           }}
         >
-          Copy <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
+          {t('actions.copy')} <ContextMenuShortcut>{SHORTCUT_MOD}+C</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasSelection || !isMutableEditableFocused}
@@ -151,7 +153,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void cutSelection()
           }}
         >
-          Cut <ContextMenuShortcut>{SHORTCUT_MOD}+X</ContextMenuShortcut>
+          {t('actions.cut')} <ContextMenuShortcut>{SHORTCUT_MOD}+X</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -161,7 +163,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             void pasteIntoFocused()
           }}
         >
-          Paste <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
+          {t('actions.paste')} <ContextMenuShortcut>{SHORTCUT_MOD}+V</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!isMutableEditableFocused}
@@ -170,7 +172,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
             selectAllFocused()
           }}
         >
-          Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
+          {t('actions.selectAll')} <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

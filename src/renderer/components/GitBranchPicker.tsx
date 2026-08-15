@@ -1,6 +1,7 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { AlertCircle, ChevronDown, GitBranch, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { gitApi } from '@/lib/git-api'
@@ -19,14 +20,16 @@ function sanitizeBranchName(name: string): string {
     .replace(/^-|-$/g, '')
 }
 
-function formatBranchLoadError(error: string, code?: string): string {
+function branchLoadErrorKey(
+  code?: string
+): 'branchPicker.errors.notRepository' | 'branchPicker.errors.gitNotFound' | null {
   switch (code) {
     case 'NOT_A_GIT_REPO':
-      return 'This folder is not a git repository.'
+      return 'branchPicker.errors.notRepository'
     case 'GIT_NOT_FOUND':
-      return 'Git is not installed or not available on PATH.'
+      return 'branchPicker.errors.gitNotFound'
     default:
-      return error
+      return null
   }
 }
 
@@ -45,6 +48,7 @@ export function GitBranchPicker({
   ahead = 0,
   behind = 0
 }: GitBranchPickerProps): React.JSX.Element {
+  const { t } = useTranslation('git')
   const [open, setOpen] = useState(false)
   const [branches, setBranches] = useState<BranchInfo[]>([])
   const [branchesLoading, setBranchesLoading] = useState(false)
@@ -83,22 +87,23 @@ export function GitBranchPicker({
         setLoadError(null)
       } else if (result.success === false) {
         setBranches([])
-        setLoadError(formatBranchLoadError(result.error, result.code))
+        const errorKey = branchLoadErrorKey(result.code)
+        setLoadError(errorKey ? t(errorKey) : result.error)
       } else {
         setBranches([])
-        setLoadError('Failed to load branches.')
+        setLoadError(t('branchPicker.errors.loadFailed'))
       }
     } catch (error) {
       if (!isCurrentRequest()) return
 
       setBranches([])
-      setLoadError(error instanceof Error ? error.message : 'Failed to load branches.')
+      setLoadError(error instanceof Error ? error.message : t('branchPicker.errors.loadFailed'))
     } finally {
       if (isCurrentRequest()) {
         setBranchesLoading(false)
       }
     }
-  }, [repoPath])
+  }, [repoPath, t])
 
   useEffect(() => {
     if (!open) {
@@ -153,11 +158,11 @@ export function GitBranchPicker({
 
   const emptyListMessage = useMemo((): string | null => {
     if (loadError || branchesLoading) return null
-    if (visibleBranches.length === 0) return 'No branches yet.'
+    if (visibleBranches.length === 0) return t('branchPicker.empty.noBranches')
     if (branchSearch.trim() && filteredBranches.length === 0)
-      return 'No branches match your search.'
+      return t('branchPicker.empty.noMatches')
     return null
-  }, [branchSearch, branchesLoading, loadError, visibleBranches.length, filteredBranches.length])
+  }, [branchSearch, branchesLoading, loadError, visibleBranches.length, filteredBranches.length, t])
 
   const canCreateBranch = !branchesLoading && !loadError
 
@@ -182,10 +187,10 @@ export function GitBranchPicker({
       await gitApi.checkoutBranch(repoPath, branch.name, branch.isRemote)
       const checkedOut = resolveCheckedOutBranch(branch)
       handleBranchChanged(checkedOut)
-      toast.success(`Switched to ${checkedOut}`)
+      toast.success(t('branchPicker.toasts.switched', { branch: checkedOut }))
       setOpen(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to switch branch')
+      toast.error(error instanceof Error ? error.message : t('branchPicker.errors.switchFailed'))
     } finally {
       setIsSwitching(false)
     }
@@ -193,17 +198,17 @@ export function GitBranchPicker({
 
   const handleCreateBranch = async (): Promise<void> => {
     if (branchesLoading) {
-      toast.error('Wait for branches to finish loading')
+      toast.error(t('branchPicker.errors.waitForLoad'))
       return
     }
     if (loadError) {
-      toast.error('Branches must load successfully before creating a new branch')
+      toast.error(t('branchPicker.errors.loadBeforeCreate'))
       return
     }
 
     const sanitized = sanitizeBranchName(newBranchName.trim())
     if (!sanitized) {
-      toast.error('Enter a valid branch name')
+      toast.error(t('branchPicker.errors.invalidName'))
       return
     }
 
@@ -211,16 +216,16 @@ export function GitBranchPicker({
     try {
       await gitApi.createBranch(repoPath, sanitized)
       handleBranchChanged(sanitized)
-      toast.success(`Created and checked out ${sanitized}`)
+      toast.success(t('branchPicker.toasts.created', { branch: sanitized }))
       setOpen(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create branch')
+      toast.error(error instanceof Error ? error.message : t('branchPicker.errors.createFailed'))
     } finally {
       setIsSwitching(false)
     }
   }
 
-  const displayLabel = currentBranch ?? 'detached'
+  const displayLabel = currentBranch ?? t('branchPicker.detached')
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -228,7 +233,7 @@ export function GitBranchPicker({
         <button
           type="button"
           className={statusBarTriggerClass}
-          aria-label="Switch git branch"
+          aria-label={t('branchPicker.switchLabel')}
           disabled={isSwitching}
         >
           <GitBranch size={14} className="mr-1.5" />
@@ -253,7 +258,8 @@ export function GitBranchPicker({
               type="text"
               value={branchSearch}
               onChange={(e) => setBranchSearch(e.target.value)}
-              placeholder="Search branches..."
+              placeholder={t('branchPicker.searchPlaceholder')}
+              aria-label={t('branchPicker.searchLabel')}
               className="w-full bg-secondary border border-border rounded pl-7 pr-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none placeholder:text-muted-foreground"
               autoFocus
             />
@@ -264,7 +270,7 @@ export function GitBranchPicker({
           {branchesLoading ? (
             <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
               <Loader2 size={14} className="animate-spin" />
-              Loading branches...
+              {t('branchPicker.loading')}
             </div>
           ) : loadError ? (
             <div className="px-3 py-4 text-center space-y-2">
@@ -278,7 +284,7 @@ export function GitBranchPicker({
                 className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 <RefreshCw size={12} />
-                Retry
+                {t('branchPicker.retry')}
               </button>
             </div>
           ) : emptyListMessage ? (
@@ -299,22 +305,24 @@ export function GitBranchPicker({
                     : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                   branch.hasOtherWorktree && 'opacity-50 cursor-not-allowed'
                 )}
-                title={
-                  branch.hasOtherWorktree
-                    ? 'This branch is checked out in another worktree'
-                    : undefined
-                }
+                title={branch.hasOtherWorktree ? t('branchPicker.checkedOutElsewhere') : undefined}
               >
                 <GitBranch size={10} className="flex-shrink-0" />
                 <span className="truncate flex-1">{branch.name}</span>
                 {branch.isCurrent && (
-                  <span className="text-[10px] text-muted-foreground">current</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {t('branchPicker.badges.current')}
+                  </span>
                 )}
                 {branch.isRemote && (
-                  <span className="text-[10px] text-muted-foreground">remote</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {t('branchPicker.badges.remote')}
+                  </span>
                 )}
                 {branch.hasOtherWorktree && (
-                  <span className="text-[10px] text-muted-foreground">worktree</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {t('branchPicker.badges.worktree')}
+                  </span>
                 )}
               </button>
             ))
@@ -332,7 +340,8 @@ export function GitBranchPicker({
                   if (e.key === 'Enter') void handleCreateBranch()
                   if (e.key === 'Escape') setIsCreatingMode(false)
                 }}
-                placeholder="new-branch-name"
+                placeholder={t('branchPicker.newBranchPlaceholder')}
+                aria-label={t('branchPicker.newBranchLabel')}
                 className="flex-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none placeholder:text-muted-foreground"
                 autoFocus
                 disabled={isSwitching}
@@ -343,7 +352,7 @@ export function GitBranchPicker({
                 disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
                 className="text-xs px-2 py-1.5 rounded bg-primary text-primary-foreground disabled:opacity-50"
               >
-                Create
+                {t('branchPicker.create')}
               </button>
             </div>
           ) : (
@@ -354,7 +363,7 @@ export function GitBranchPicker({
               className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
             >
               <Plus size={12} />
-              Create and checkout new branch...
+              {t('branchPicker.createAndCheckout')}
             </button>
           )}
         </div>

@@ -1,11 +1,13 @@
 import { Copy, Minus, Square, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { getCurrentWindow } from '@/lib/tauri-window'
 
 const focusableButtonClass =
   'h-full px-3 hover:bg-secondary inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
 
 export function TauriTitleBar(): React.JSX.Element {
+  const { t } = useTranslation('common')
   const [isMaximized, setIsMaximized] = useState(false)
   const appWindow = getCurrentWindow()
 
@@ -52,8 +54,8 @@ export function TauriTitleBar(): React.JSX.Element {
         <button
           onClick={() => appWindow.minimize()}
           className={focusableButtonClass}
-          title="Minimize"
-          aria-label="Minimize window"
+          title={t('window.minimize')}
+          aria-label={t('window.minimizeAria')}
           data-press-feedback="off"
         >
           <Minus size={16} />
@@ -62,8 +64,8 @@ export function TauriTitleBar(): React.JSX.Element {
         <button
           onClick={() => appWindow.toggleMaximize()}
           className={focusableButtonClass}
-          title={isMaximized ? 'Restore' : 'Maximize'}
-          aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+          title={isMaximized ? t('window.restore') : t('window.maximize')}
+          aria-label={isMaximized ? t('window.restoreAria') : t('window.maximizeAria')}
           data-press-feedback="off"
         >
           {isMaximized ? <Copy size={14} /> : <Square size={14} />}
@@ -72,8 +74,8 @@ export function TauriTitleBar(): React.JSX.Element {
         <button
           onClick={() => appWindow.close()}
           className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-          title="Close"
-          aria-label="Close window"
+          title={t('actions.close')}
+          aria-label={t('window.closeAria')}
           data-press-feedback="off"
         >
           <X size={16} />
