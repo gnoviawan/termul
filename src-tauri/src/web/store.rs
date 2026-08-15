@@ -91,17 +91,16 @@ impl WebStore {
     }
 
     /// Read a value, or `None` when the key is absent.
-    #[must_use]
     pub fn read(&self, key: &str) -> Result<Option<Value>, io::Error> {
         let lock = self.inner.lock();
-        let map = lock.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        let map = lock.as_ref().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
         Ok(map.get(key).cloned())
     }
 
     /// Write a value, persisting atomically. Returns the IO error on failure.
     pub fn write(&self, key: &str, value: Value, expected: Option<Value>) -> io::Result<bool> {
         let mut lock = self.inner.lock();
-        let map = lock.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        let map = lock.as_mut().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
         
         if expected.is_some() && map.get(key) != expected.as_ref() {
             return Ok(false); // CAS failed
@@ -123,7 +122,7 @@ impl WebStore {
     /// Delete a key, persisting atomically. Returns whether the key existed.
     pub fn delete(&self, key: &str) -> io::Result<bool> {
         let mut lock = self.inner.lock();
-        let map = lock.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "STORE_UNAVAILABLE"))?;
+        let map = lock.as_mut().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
         
         let mut next = map.clone();
         let removed = next.remove(key).is_some();
