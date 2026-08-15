@@ -151,11 +151,40 @@ export const WS_REQUEST_TYPES = [
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
   // `{ agentId }` only; the host resolves everything from the trusted catalog.
-  'install_acp_agent'
+  'install_acp_agent',
+  // Issue #613: server-side generic key-value store — the web client routes
+  // its `persistenceApi` through these (replacing the per-browser localStorage
+  // stub) so settings / layout / command history / SSH profiles survive
+  // browser switches + server restarts. Errors carry SCREAMING_SNAKE_CASE
+  // codes via `err_with_code`: `STORE_UNAVAILABLE` (no store attached),
+  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`.
+  'store_read',
+  'store_write',
+  'store_delete'
 ] as const
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+// ============================================================================
+// Server-side key-value store (issue #613) — request payloads + replies
+// ============================================================================
+
+/** `store_read` request payload. Reply: `{ value: unknown | null }`. */
+export interface StoreReadPayload {
+  key: string
+}
+
+/** `store_write` request payload. `value` is any JSON value. Reply: `{}`. */
+export interface StoreWritePayload {
+  key: string
+  value: unknown
+}
+
+/** `store_delete` request payload. Reply: `{ existed: boolean }`. */
+export interface StoreDeletePayload {
+  key: string
+}
 
 // ============================================================================
 // Error codes (9) — stable machine strings (AC2)

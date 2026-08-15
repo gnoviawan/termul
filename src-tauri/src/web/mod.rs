@@ -26,6 +26,7 @@ pub mod mcp_servers_api;
 pub mod search_api;
 pub mod skills_api;
 pub mod permissions;
+pub mod store;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;
@@ -59,6 +60,7 @@ use tracing::{error, info, warn};
 use crate::acp::AcpManager;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::store::WebStore;
 
 #[cfg(test)]
 pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
@@ -238,6 +240,16 @@ pub async fn serve_router(
     } else {
         HistoryMode::LiveOnly
     };
+    // Issue #613: resolve the server-side store path — explicit
+    // `--store-file` wins, otherwise default under the service-account state
+    // dir (same resolution posture as workspace-manifests / acp-catalog). The
+    // desktop shared-live host passes `store_file: None`, so it lands on the
+    // same default and gets a durable store too.
+    let store = Some(Arc::new(WebStore::open(
+        cfg.store_file
+            .clone()
+            .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
+    )));
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -254,6 +266,7 @@ pub async fn serve_router(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        store,
     );
 
     let handle = tokio::spawn(async move {

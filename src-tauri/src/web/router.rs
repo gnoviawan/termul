@@ -31,6 +31,7 @@ use crate::web::skills_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::sink::WsRelaySink;
+use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
 use crate::web::workspace_api;
 use crate::web::worktree_api;
@@ -75,6 +76,7 @@ pub fn router(
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
+    store: Option<Arc<WebStore>>,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -213,6 +215,7 @@ pub fn router(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        store,
         project_root: project_root_handle,
     })
 }
@@ -318,6 +321,7 @@ pub fn router_with_static(
                 workspace_manifest: None,
                 acp_catalog: None,
                 acp_install: None,
+                store: None,
                 project_root: project_root_handle,
             }
         })

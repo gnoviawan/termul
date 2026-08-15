@@ -229,6 +229,7 @@ mod tests {
             workspace_manifest: None,
             acp_catalog: Some(store),
             acp_install: None,
+            store: None,
         }
     }
 
@@ -250,6 +251,7 @@ mod tests {
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
+            store: None,
         }
     }
 
