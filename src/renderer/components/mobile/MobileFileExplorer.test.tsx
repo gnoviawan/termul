@@ -370,6 +370,49 @@ describe('MobileFileExplorer', () => {
     expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
   })
 
+  it('returns the immediate parent (not root) when navigating back from a depth-2 path under a Windows drive root', async () => {
+    // `parentOf("C:/Users/Alice/project")` must yield `C:/Users/Alice` and
+    // never clamp to the `C:/` drive root. The drive-root identity
+    // (`comparePath("C:/")` = `c:`, trailing slash stripped by
+    // `pathIdentity`) makes `rootPrefix` `c:/` — not `c://` — so the slice +
+    // identity re-check walks one level at a time down to the root.
+    mockExplorerState.rootPath = 'C:/'
+    mockExplorerState.directoryContents = new Map([
+      ['C:/', [entry('Users', 'directory', 'C:/Users')]],
+      ['C:/Users', [entry('Alice', 'directory', 'C:/Users/Alice')]],
+      ['C:/Users/Alice', [entry('project', 'directory', 'C:/Users/Alice/project')]],
+      ['C:/Users/Alice/project', []]
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    // Drill two levels below the drive root using canonical entry paths.
+    fireEvent.click(await screen.findByText('Users'))
+    fireEvent.click(await screen.findByText('Alice'))
+    fireEvent.click(await screen.findByText('project'))
+    expect(await screen.findByRole('heading', { name: 'project' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Back returns the immediate parent `Alice`, not the drive root.
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'Alice' })).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Back again returns `Users` (still not clamped to the drive root).
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Final back lands on the drive root and disables the button.
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'C:' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
   it('sorts visible entries exactly like desktop: directories, ignored state, then A-Z', async () => {
     setRoot([
       entry('z-file.txt', 'file'),
