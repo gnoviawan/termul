@@ -1,0 +1,58 @@
+---
+title: Install Termul
+description: Install Termul on Windows, macOS, or Linux, then create your first project workspace.
+---
+
+Termul keeps the terminals, files, and workspace state for each project together. Start by installing the desktop app for your platform.
+
+## Install
+
+### macOS
+
+Use Homebrew:
+
+```bash
+brew tap gnoviawan/termul
+brew install --cask termul
+```
+
+Or use the installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/main/scripts/install.sh | bash
+```
+
+### Windows
+
+Download the `.exe` or `.msi` installer from the [latest GitHub release](https://github.com/gnoviawan/termul/releases/latest), then run the installer.
+
+### Linux
+
+Use the installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/main/scripts/install.sh | bash
+```
+
+The script installs the AppImage under `~/.local/bin` by default. Ensure that directory is on your `PATH` to launch Termul from a shell.
+
+## Create your first workspace
+
+1. Open Termul.
+2. Select the **+** button in the sidebar.
+3. Choose the directory for your project workspace.
+4. Optionally select the default shell for new terminals.
+5. Create the project, then open a terminal tab.
+
+Termul stores the project workspace separately, so you can return to its terminal sessions and layout later.
+
+## Next steps
+
+<Cards>
+  <Card title="GitHub releases" href="https://github.com/gnoviawan/termul/releases/latest">
+    Download a platform installer or review release notes.
+  </Card>
+  <Card title="Report an issue" href="https://github.com/gnoviawan/termul/issues">
+    Get help or report a problem.
+  </Card>
+</Cards>
