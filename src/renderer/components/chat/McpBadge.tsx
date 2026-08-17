@@ -1,4 +1,4 @@
-import { Plug, PlugZap } from 'lucide-react'
+import { Icon } from '@iconify/react'
 import { useState } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -93,7 +93,7 @@ export function McpBadge({
         )}
         title={compact ? `${count} MCP servers attached` : undefined}
       >
-        <Plug className="size-3" aria-hidden="true" />
+        <Icon icon="octicon:mcp-24" className="size-3" aria-hidden="true" />
         <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
         <span className="sr-only">MCP servers attached</span>
       </span>
@@ -152,7 +152,7 @@ function McpPopover({
           )}
           aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
         >
-          <PlugZap className="size-3" aria-hidden="true" />
+          <Icon icon="octicon:mcp-24" className="size-3" aria-hidden="true" />
           <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
         </button>
       </PopoverTrigger>
@@ -161,7 +161,7 @@ function McpPopover({
         <p className="mt-0.5 text-muted-foreground">
           {count > 0 ? `${count} attached to this session.` : 'No servers attached yet.'}
         </p>
-        <ul className="mt-2 space-y-2">
+        <ul className="mt-2 max-h-[300px] space-y-1.5 overflow-y-auto pr-2">
           {servers.map((server) => (
             <McpServerRow
               key={server.id}
@@ -201,15 +201,15 @@ function McpServerRow({
 }: ServerRowProps): React.JSX.Element {
   const enabled = server.enabled !== false
   return (
-    <li className="space-y-1.5 rounded-md border border-border/50 p-2">
+    <li className="space-y-1 rounded-md border border-border/50 p-1.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             aria-hidden
-            className={cn('size-2 shrink-0 rounded-full', statusColor(probeStatus))}
+            className={cn('size-1.5 shrink-0 rounded-full', statusColor(probeStatus))}
           />
           <span className="min-w-0 truncate">
-            <span className="block truncate text-sm font-medium">{server.name}</span>
+            <span className="block truncate text-xs font-medium">{server.name}</span>
             <span className="block text-3xs text-muted-foreground" title={statusLabel(probeStatus)}>
               {statusShortLabel(probeStatus)}
             </span>
@@ -218,7 +218,7 @@ function McpServerRow({
         {onToggle && (
           <Switch
             checked={enabled}
-            className="h-4 w-7 border [&>span]:h-3 [&>span]:w-3 [&>span[data-state=checked]]:translate-x-3"
+            className="h-3.5 w-6 border [&>span]:h-2.5 [&>span]:w-2.5 [&>span[data-state=checked]]:translate-x-2.5"
             aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
             onCheckedChange={(checked) => {
               if (checked === enabled) return
