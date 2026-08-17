@@ -155,20 +155,10 @@ export function ChatInputBar({
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
   const { templateId: agentTemplateId } = useAgentIdentity(session.agentId)
-  // Prefer project/session-scoped MCP context. Older/local sessions without a
+  // Prefer project/session-scoped MCP count. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
   const mcpCount = session.mcpServerCount ?? globalMcpCount
-  // Chatbox popover (per-server enable/disable + status dot + collapsible tool
-  // list). The badge degrades to the read-only count pill when the registry is
-  // empty. Reuses `setMcpServerEnabled` (optimistic + rollback) — no new
-  // persistence path. The probe reflects Termul's own client connection.
-  const mcpServers = useAcpStore((s) => s.mcpServers)
-  const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
-  const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus)
-  const mcpProbeError = useAcpStore((s) => s.mcpProbeError)
-  const mcpTools = useAcpStore((s) => s.mcpTools)
-  const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
   const [value, setValue] = useState('')
   // Persist the in-progress composer draft per session (project + session id)
   // so an unsent message survives a web reload. useState stays the source of
@@ -559,24 +549,7 @@ export function ChatInputBar({
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
   )
 
-  const mcpBadge = (
-    <McpBadge
-      count={mcpCount}
-      servers={mcpServers}
-      onToggle={(id, enabled) => {
-        void setMcpServerEnabled(id, enabled).catch(() => {
-          toast.error('Could not update the MCP server. Your previous setting was restored.')
-        })
-      }}
-      probeStatus={mcpProbeStatus}
-      probeError={mcpProbeError}
-      tools={mcpTools}
-      onLoadTools={(id) => {
-        void loadMcpTools(id)
-      }}
-      compact
-    />
-  )
+  const mcpBadge = <McpBadge count={mcpCount} />
 
   return (
     <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>

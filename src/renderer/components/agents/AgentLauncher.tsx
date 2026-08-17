@@ -59,15 +59,8 @@ import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import {
-  type AuthMethod,
-  acpApi,
-  type ContentBlock,
-  type McpToolInfo,
-  type ProbeStatus
-} from '@/lib/acp-api'
+import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
 import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
@@ -108,10 +101,6 @@ interface AgentLauncherProps {
 
 const EMPTY_COMMANDS: [] = []
 const EMPTY_AUTH_METHODS: AuthMethod[] = []
-const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
-const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
-const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
-const EMPTY_PROBE_ERROR: Record<string, string | undefined> = {}
 
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
@@ -140,13 +129,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
-  const mcpServers = useAcpStore((s) => s.mcpServers) ?? EMPTY_MCP_SERVERS
-  const mcpCount = mcpServers.length
-  const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
-  const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus) ?? EMPTY_PROBE_STATUS
-  const mcpProbeError = useAcpStore((s) => s.mcpProbeError) ?? EMPTY_PROBE_ERROR
-  const mcpTools = useAcpStore((s) => s.mcpTools) ?? EMPTY_MCP_TOOLS
-  const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
+  const mcpCount = useAcpStore((s) => s.mcpServers.length)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const activeProject = useActiveProject()
   const projectLabel = activeProject?.name ?? 'this folder'
@@ -1392,37 +1375,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <div className="flex min-w-0 items-center gap-2">
                 <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
-                <McpBadge
-                  count={mcpCount}
-                  servers={mcpServers}
-                  onToggle={(id, enabled) => {
-                    void setMcpServerEnabled(id, enabled)
-                      .then(() => {
-                        // The launcher pre-warms a `session/new` keyed without
-                        // MCP servers; createSession resolved the MCP set from
-                        // the registry AT pre-warm time. A toggle changes that
-                        // registry, so the warm session now holds a stale MCP
-                        // selection. Cancel + re-prepare so the next launch
-                        // resolves MCP from the updated registry.
-                        if (!preparedKey || !activeConfigId || !projectRoot) return
-                        const store = useAcpStore.getState()
-                        store.cancelPreparedChat(preparedKey)
-                        store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
-                      })
-                      .catch(() => {
-                        toast.error(
-                          'Could not update the MCP server. Your previous setting was restored.'
-                        )
-                      })
-                  }}
-                  probeStatus={mcpProbeStatus}
-                  probeError={mcpProbeError}
-                  tools={mcpTools}
-                  onLoadTools={(id) => {
-                    void loadMcpTools(id)
-                  }}
-                  compact
-                />
+                <McpBadge count={mcpCount} />
               </div>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
                 <AcpAgentPicker
