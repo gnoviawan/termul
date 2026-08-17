@@ -106,7 +106,6 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@hookform/resolvers": "^3.10.0",
-    "@iconify/react": "^6.0.2",
     "@lezer/highlight": "^1.2.3",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
