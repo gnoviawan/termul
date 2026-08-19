@@ -10,6 +10,7 @@ import {
   useState,
   type WheelEvent
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
@@ -40,6 +41,7 @@ export function TerminalTabBar({
   onReorderTerminals,
   defaultShell
 }: TerminalTabBarProps) {
+  const { t } = useTranslation('shell')
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [loading, setLoading] = useState(true)
@@ -161,7 +163,7 @@ export function TerminalTabBar({
         <button
           onClick={onNewTerminal}
           className="h-7 w-7 flex items-center justify-center rounded-l hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-r border-border/50"
-          title="New terminal (default shell)"
+          title={t('terminalTabs.newTerminalDefault')}
         >
           <Plus size={12} />
         </button>
@@ -170,7 +172,7 @@ export function TerminalTabBar({
             <button
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
               className="h-7 w-5 flex items-center justify-center rounded-r hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              title="Select shell"
+              title={t('terminalTabs.selectShell')}
             >
               <ChevronDown size={12} />
             </button>
@@ -197,13 +199,17 @@ export function TerminalTabBar({
                         <TerminalIcon size={12} />
                         <span>{shell.displayName}</span>
                         {shell.name === defaultShell && (
-                          <span className="ml-auto text-xs text-muted-foreground">(default)</span>
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {t('terminalTabs.default')}
+                          </span>
                         )}
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <div className="px-3 py-2 text-sm text-muted-foreground">No shells detected</div>
+                  <div className="px-3 py-2 text-sm text-muted-foreground">
+                    {t('terminalTabs.noShells')}
+                  </div>
                 )}
               </div>
             )}
@@ -226,6 +232,7 @@ interface TerminalTabProps {
 }
 
 function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: TerminalTabProps) {
+  const { t } = useTranslation('shell')
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(terminal.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -335,6 +342,7 @@ function TerminalTab({ terminal, isActive, onSelect, onClose, onRename }: Termin
             onClose()
           }}
           className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+          aria-label={t('terminalTabs.closeTerminal', { name: terminal.name })}
         >
           <X size={11} />
         </button>

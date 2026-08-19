@@ -3,6 +3,7 @@ import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
@@ -25,7 +26,31 @@ interface NewProjectModalProps {
   ) => void
 }
 
+const TEMPLATE_TRANSLATION_KEYS = {
+  empty: { name: 'templates.empty.name', description: 'templates.empty.description' },
+  node: { name: 'templates.node.name', description: 'templates.node.description' },
+  rust: { name: 'templates.rust.name', description: 'templates.rust.description' },
+  react: { name: 'templates.react.name', description: 'templates.react.description' },
+  python: { name: 'templates.python.name', description: 'templates.python.description' }
+} as const
+
+function getTemplateTranslationKeys(id: string) {
+  switch (id) {
+    case 'node':
+      return TEMPLATE_TRANSLATION_KEYS.node
+    case 'rust':
+      return TEMPLATE_TRANSLATION_KEYS.rust
+    case 'react':
+      return TEMPLATE_TRANSLATION_KEYS.react
+    case 'python':
+      return TEMPLATE_TRANSLATION_KEYS.python
+    default:
+      return TEMPLATE_TRANSLATION_KEYS.empty
+  }
+}
+
 export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProjectModalProps) {
+  const { t } = useTranslation('projects')
   const defaultColor = useDefaultProjectColor() as ProjectColor
   const [name, setName] = useState('')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(defaultColor || 'blue')
@@ -147,7 +172,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         // Ensure root directory exists
         const dirResult = await filesystemApi.createDirectory(trimmedPath)
         if (!dirResult.success) {
-          throw new Error(dirResult.error || 'Failed to create root directory')
+          throw new Error(dirResult.error || t('operationFailed'))
         }
 
         let gitInitSucceeded = false
@@ -166,7 +191,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         if (selectedTemplate.id !== 'empty') {
           const res = await scaffoldProject(trimmedPath, trimmedName, selectedTemplate)
           if (!res.success) {
-            throw new Error(res.error || 'Failed to scaffold template files')
+            throw new Error(res.error || t('operationFailed'))
           }
         }
 
@@ -178,17 +203,20 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       const operationPromise = runScaffoldAndGit()
       toast.promise(operationPromise, {
         loading: initGit
-          ? `Initializing git and scaffolding ${selectedTemplate.name}...`
-          : `Scaffolding ${selectedTemplate.name}...`,
+          ? t('initializingAndScaffolding', {
+              name: t(getTemplateTranslationKeys(selectedTemplate.id).name)
+            })
+          : t('scaffolding', { name: t(getTemplateTranslationKeys(selectedTemplate.id).name) }),
         success: (res) => {
+          const templateName = t(getTemplateTranslationKeys(selectedTemplate.id).name)
           if (initGit) {
             return res.gitInitSucceeded
-              ? `Git repository initialized and ${selectedTemplate.name} template scaffolded successfully!`
-              : `${selectedTemplate.name} template scaffolded successfully! (Git initialization failed)`
+              ? t('scaffoldedGitSuccessfully', { name: templateName })
+              : t('scaffoldedGitFailed', { name: templateName })
           }
-          return `${selectedTemplate.name} template scaffolded successfully!`
+          return t('scaffoldedSuccessfully', { name: templateName })
         },
-        error: (err: Error) => `Setup failed: ${err.message}`
+        error: (err: Error) => t('setupFailed', { message: err.message })
       })
 
       onClose()
@@ -201,6 +229,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     fallbackShell,
     selectedTemplate,
     initGit,
+    t,
     onCreateProject,
     onClose
   ])
@@ -246,7 +275,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50 flex-shrink-0">
-              <h3 className="text-sm font-semibold text-foreground">Create New Project</h3>
+              <h3 className="text-sm font-semibold text-foreground">{t('createNewProject')}</h3>
               <button
                 onClick={onClose}
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -258,7 +287,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             <div className="p-4 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Project Template
+                  {t('projectTemplate')}
                 </label>
                 <div className="relative">
                   <select
@@ -271,7 +300,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   >
                     {BUILT_IN_TEMPLATES.map((tpl) => (
                       <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}
+                        {t(getTemplateTranslationKeys(tpl.id).name)}
                       </option>
                     ))}
                   </select>
@@ -280,14 +309,14 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   </div>
                 </div>
                 <p className="text-3xs text-muted-foreground mt-1 leading-snug">
-                  {selectedTemplate.description}
+                  {t(getTemplateTranslationKeys(selectedTemplate.id).description)}
                 </p>
               </div>
 
               {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
                 <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
                   <span className="text-3xs font-semibold text-muted-foreground block mb-1.5">
-                    Included Environment Variables:
+                    {t('includedEnvironmentVariables')}
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {selectedTemplate.envVars.map((ev) => (
@@ -304,34 +333,34 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Project Name
+                  {t('projectName')}
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="My Project"
+                  placeholder={t('namePlaceholder')}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Root Directory
+                  {t('rootDirectory')}
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={path}
                     onChange={(e) => setPath(e.target.value)}
-                    placeholder="No directory selected"
+                    placeholder={t('noDirectorySelected')}
                     className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                   />
                   <button
                     onClick={handleBrowse}
                     className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors"
                   >
-                    Browse
+                    {t('browse')}
                   </button>
                 </div>
 
@@ -348,7 +377,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                       htmlFor="init-git"
                       className="text-xs text-muted-foreground select-none cursor-pointer"
                     >
-                      Initialize Git repository in this directory
+                      {t('initializeGit')}
                     </label>
                   </div>
                 )}
@@ -356,7 +385,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-2">
-                  Color
+                  {t('color')}
                 </label>
                 <div className="flex gap-2 flex-wrap">
                   {availableColors.map((color) => {
@@ -380,7 +409,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Default Terminal
+                  {t('defaultTerminal')}
                 </label>
                 {shellsLoading ? (
                   <Skeleton className="w-full h-9 rounded" />
@@ -398,7 +427,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                           </option>
                         ))
                       ) : (
-                        <option value="">No shells detected</option>
+                        <option value="">{t('noShellsDetected')}</option>
                       )}
                     </select>
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
@@ -410,8 +439,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               {!isTauriContext() && (
                 <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 leading-relaxed">
-                  On the web client, this project is saved for this session only. Host-side
-                  persistence requires a future update.
+                  {t('webSessionNote')}
                 </p>
               )}
             </div>
@@ -422,14 +450,14 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                 onClick={onClose}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 onClick={handleCreate}
                 disabled={!name.trim() || !path.trim()}
                 className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create
+                {t('create')}
               </button>
             </div>
           </motion.div>

@@ -2,6 +2,7 @@ import type { BranchInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
 import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
@@ -17,6 +18,7 @@ interface NewWorktreeModalProps {
 }
 
 export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModalProps) {
+  const { t } = useTranslation('agents')
   const project = useProjectStore((state) => state.projects.find((p) => p.id === projectId))
   const isWorktreeOperationLocked = useProjectStore((state) => state.isWorktreeOperationLocked)
   const { addWorktree, setWorktreeOperationLock } = useProjectActions()
@@ -133,8 +135,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
   // Validate form
   const validate = useCallback((): string | null => {
-    if (!isGitRepo) return 'Project is not a git repository'
-    if (isWorktreeOperationLocked) return 'Another worktree operation is in progress'
+    if (!isGitRepo) return t('newWorktree.notGitRepo')
+    if (isWorktreeOperationLocked) return t('newWorktree.operationInProgress')
 
     // Simple path: when creating a new branch and the Advanced branch field is empty,
     // derive the branch from the worktree name.
@@ -147,23 +149,22 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
       (w: Worktree) => w.branch === branch || w.name === worktreeName
     )
     if (existingWorktree) {
-      return `A worktree for branch "${branch}" already exists`
+      return t('newWorktree.worktreeExists', { branch })
     }
 
     if (branchType === 'new') {
-      if (!effectiveNewBranch) return 'Name is required'
+      if (!effectiveNewBranch) return t('newWorktree.nameRequired')
       // A name was entered but sanitized to nothing (e.g. "---") — it's invalid, not missing.
-      if (!sanitizeBranchName(effectiveNewBranch).trim())
-        return 'Name contains no usable characters'
+      if (!sanitizeBranchName(effectiveNewBranch).trim()) return t('newWorktree.nameUnusable')
     } else {
-      if (!selectedBranch) return 'Select a branch'
+      if (!selectedBranch) return t('newWorktree.selectBranch')
     }
 
-    if (!worktreeName.trim()) return 'Name is required'
+    if (!worktreeName.trim()) return t('newWorktree.nameRequired')
 
     // Check for path length (Windows MAX_PATH = 260)
     const targetPath = `${projectPath}/.termul/worktrees/${worktreeName}/`
-    if (targetPath.length > 240) return 'Path too long'
+    if (targetPath.length > 240) return t('newWorktree.pathTooLong')
 
     return null
   }, [
@@ -175,7 +176,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
     worktreeName,
     project,
     sanitizeBranchName,
-    projectPath
+    projectPath,
+    t
   ])
 
   // Pre-check before modal can proceed
@@ -246,33 +248,46 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               const failed = symlinkResult.data.filter((r) => r.status === 'failed').length
               if (failed > 0) {
                 toast({
-                  title: 'Worktree created with symlink warnings',
-                  description: `${created} symlink(s) created, ${skipped} skipped, ${failed} failed.`
+                  title: t('newWorktree.symlinkWarnings'),
+                  description: t('newWorktree.symlinkWarningsDesc', { created, skipped, failed })
                 })
               } else {
                 toast({
-                  title: 'Worktree created',
-                  description: `"${result.data.name}" created on branch "${result.data.branch}" with ${created} symlink(s).`
+                  title: t('newWorktree.created'),
+                  description: t('newWorktree.createdWithSymlinks', {
+                    name: result.data.name,
+                    branch: result.data.branch,
+                    created
+                  })
                 })
               }
             } else {
               // Symlink creation failed but worktree was created successfully
               toast({
-                title: 'Worktree created',
-                description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup had issues.`
+                title: t('newWorktree.created'),
+                description: t('newWorktree.createdSymlinkIssues', {
+                  name: result.data.name,
+                  branch: result.data.branch
+                })
               })
             }
           } catch {
             // Symlink failure is non-blocking
             toast({
-              title: 'Worktree created',
-              description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup skipped.`
+              title: t('newWorktree.created'),
+              description: t('newWorktree.createdSymlinkSkipped', {
+                name: result.data.name,
+                branch: result.data.branch
+              })
             })
           }
         } else {
           toast({
-            title: 'Worktree created',
-            description: `"${result.data.name}" created successfully on branch "${result.data.branch}".`
+            title: t('newWorktree.created'),
+            description: t('newWorktree.createdDesc', {
+              name: result.data.name,
+              branch: result.data.branch
+            })
           })
         }
 
@@ -281,22 +296,22 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
         const outcome = await activateAndOpenTerminal(projectId, newWorktree.id, result.data.path)
         if (outcome.status === 'no-pane') {
           toast({
-            title: 'Worktree ready — terminal not opened',
-            description: 'No active pane to open a terminal in. Switch to a workspace pane first.'
+            title: t('newWorktree.readyNoTerminal'),
+            description: t('newWorktree.noPaneDesc')
           })
         } else if (outcome.status === 'spawn-failed') {
           toast({
-            title: 'Worktree ready — terminal not opened',
-            description: outcome.error || 'Could not open a terminal in the new worktree.'
+            title: t('newWorktree.readyNoTerminal'),
+            description: outcome.error || t('newWorktree.openTerminalFailed')
           })
         }
 
         onClose()
       } else {
-        setValidationError(!result.success ? result.error : 'Failed to create worktree')
+        setValidationError(!result.success ? result.error : t('newWorktree.failedToCreate'))
         toast({
-          title: 'Failed to create worktree',
-          description: !result.success ? result.error : 'Unknown error',
+          title: t('newWorktree.failedToCreate'),
+          description: !result.success ? result.error : t('newWorktree.unknownError'),
           variant: 'destructive'
         })
       }
@@ -304,7 +319,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
       const msg = String(err)
       setValidationError(msg)
       toast({
-        title: 'Error creating worktree',
+        title: t('newWorktree.errorCreating'),
         description: msg,
         variant: 'destructive'
       })
@@ -325,7 +340,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
     setWorktreeOperationLock,
     onClose,
     enabledSymlinkDirs,
-    sanitizeBranchName
+    sanitizeBranchName,
+    t
   ])
 
   const handleKeyDown = useCallback(
@@ -343,8 +359,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
   // Path preview
   const pathPreview = projectPath
-    ? `${projectPath}/.termul/worktrees/${worktreeName || '<name>'}/`
-    : '<select a project>'
+    ? `${projectPath}/.termul/worktrees/${worktreeName || t('newWorktree.pathNamePlaceholder')}/`
+    : t('newWorktree.pathSelectProject')
 
   if (!project) return null
 
@@ -371,7 +387,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
               <div className="flex items-center gap-2">
                 <GitBranch size={14} className="text-primary" />
-                <h3 className="text-sm font-semibold text-foreground">New Worktree</h3>
+                <h3 className="text-sm font-semibold text-foreground">{t('newWorktree.title')}</h3>
               </div>
               <button
                 onClick={onClose}
@@ -386,7 +402,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               {/* Project name (read-only) */}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Project
+                  {t('newWorktree.project')}
                 </label>
                 <input
                   type="text"
@@ -398,17 +414,17 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
               {/* Worktree name — primary, only required field for the simple path */}
               <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Name</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  {t('newWorktree.name')}
+                </label>
                 <input
                   type="text"
                   value={worktreeName}
                   onChange={(e) => setWorktreeName(e.target.value)}
-                  placeholder="e.g. try-new-hero"
+                  placeholder={t('newWorktree.namePlaceholder')}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                 />
-                <p className="text-3xs text-muted-foreground mt-0.5">
-                  A separate place to work. Your main project stays untouched.
-                </p>
+                <p className="text-3xs text-muted-foreground mt-0.5">{t('newWorktree.nameHint')}</p>
               </div>
 
               {/* Advanced (git plumbing) — collapsed by default for non-technical users */}
@@ -419,7 +435,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                 aria-expanded={showAdvanced}
               >
                 <GitBranch size={12} aria-hidden="true" />
-                <span>Advanced (branch options)</span>
+                <span>{t('newWorktree.advanced')}</span>
                 <span className="text-3xs" aria-hidden="true">
                   {showAdvanced ? '▼' : '▶'}
                 </span>
@@ -430,7 +446,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                   {/* Branch type toggle */}
                   <div>
                     <label className="block text-xs font-medium text-muted-foreground mb-1">
-                      Branch Type
+                      {t('newWorktree.branchType')}
                     </label>
                     <div className="flex gap-2">
                       <button
@@ -442,7 +458,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
-                        New Branch
+                        {t('newWorktree.newBranch')}
                       </button>
                       <button
                         onClick={() => setBranchType('existing')}
@@ -453,7 +469,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
-                        Existing Branch
+                        {t('newWorktree.existingBranch')}
                       </button>
                     </div>
                   </div>
@@ -462,12 +478,12 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                   {branchType === 'existing' && (
                     <div>
                       <label className="block text-xs font-medium text-muted-foreground mb-1">
-                        Select Branch
+                        {t('newWorktree.selectBranchLabel')}
                       </label>
                       {branchesLoading ? (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
                           <Loader2 size={14} className="animate-spin" />
-                          Loading branches...
+                          {t('newWorktree.loadingBranches')}
                         </div>
                       ) : (
                         <>
@@ -481,7 +497,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                               type="text"
                               value={branchSearch}
                               onChange={(e) => setBranchSearch(e.target.value)}
-                              placeholder="Search branches..."
+                              placeholder={t('newWorktree.searchBranches')}
                               className="w-full bg-secondary border border-border rounded pl-7 pr-3 py-1 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                             />
                           </div>
@@ -493,13 +509,13 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                               onChange={(e) => setShowRemoteBranches(e.target.checked)}
                               className="rounded border-border"
                             />
-                            Show remote branches
+                            {t('newWorktree.showRemote')}
                           </label>
                           {/* Branch list */}
                           <div className="max-h-32 overflow-y-auto border border-border rounded bg-secondary/50">
                             {sortedBranches.length === 0 ? (
                               <div className="p-2 text-xs text-muted-foreground text-center">
-                                No branches found
+                                {t('newWorktree.noBranches')}
                               </div>
                             ) : (
                               sortedBranches.map((branch) => (
@@ -516,11 +532,13 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                                   <GitBranch size={10} className="mr-1.5 flex-shrink-0" />
                                   <span className="truncate flex-1">{branch.name}</span>
                                   {branch.isCurrent && (
-                                    <span className="text-3xs text-primary ml-1">current</span>
+                                    <span className="text-3xs text-primary ml-1">
+                                      {t('newWorktree.current')}
+                                    </span>
                                   )}
                                   {branch.isRemote && (
                                     <span className="text-3xs text-muted-foreground ml-1">
-                                      remote
+                                      {t('newWorktree.remote')}
                                     </span>
                                   )}
                                 </button>
@@ -537,37 +555,46 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                     <>
                       <div>
                         <label className="block text-xs font-medium text-muted-foreground mb-1">
-                          Branch Name <span className="text-muted-foreground/60">(optional)</span>
+                          {t('newWorktree.branchName')}{' '}
+                          <span className="text-muted-foreground/60">
+                            {t('newWorktree.optional')}
+                          </span>
                         </label>
                         <input
                           type="text"
                           value={newBranchName}
                           onChange={(e) => setNewBranchName(e.target.value)}
                           placeholder={
-                            worktreeName ? sanitizeBranchName(worktreeName) : 'feature/my-feature'
+                            worktreeName
+                              ? sanitizeBranchName(worktreeName)
+                              : t('newWorktree.branchNamePlaceholder')
                           }
                           className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                         />
                         <p className="text-3xs text-muted-foreground mt-0.5">
                           {newBranchName && sanitizeBranchName(newBranchName) !== newBranchName
-                            ? `Will be sanitized to: ${sanitizeBranchName(newBranchName)}`
-                            : 'Defaults to the name above.'}
+                            ? t('newWorktree.willSanitize', {
+                                name: sanitizeBranchName(newBranchName)
+                              })
+                            : t('newWorktree.defaultsToName')}
                         </p>
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-muted-foreground mb-1">
-                          Start Reference{' '}
-                          <span className="text-muted-foreground/60">(optional)</span>
+                          {t('newWorktree.startReference')}{' '}
+                          <span className="text-muted-foreground/60">
+                            {t('newWorktree.optional')}
+                          </span>
                         </label>
                         <input
                           type="text"
                           value={startRef}
                           onChange={(e) => setStartRef(e.target.value)}
-                          placeholder="HEAD, main, or a commit hash"
+                          placeholder={t('newWorktree.startRefPlaceholder')}
                           className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                         />
                         <p className="text-3xs text-muted-foreground mt-0.5">
-                          Defaults to HEAD if not specified
+                          {t('newWorktree.defaultsToHead')}
                         </p>
                       </div>
                     </>
@@ -578,7 +605,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               {/* Path preview */}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Path Preview
+                  {t('newWorktree.pathPreview')}
                 </label>
                 <code className="block text-3xs text-muted-foreground bg-secondary/50 border border-border rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
                   {pathPreview}
@@ -593,7 +620,9 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                     className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <Link2 size={12} />
-                    <span>Symlink Directories ({project.symlinkDirs.length})</span>
+                    <span>
+                      {t('newWorktree.symlinkDirectories', { count: project.symlinkDirs.length })}
+                    </span>
                     <span className="text-3xs">{showSymlinkSection ? '▼' : '▶'}</span>
                   </button>
                   {showSymlinkSection && (
@@ -621,8 +650,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                         </label>
                       ))}
                       <p className="text-3xs text-muted-foreground mt-1">
-                        Checked directories will be symlinked from the project root into the
-                        worktree.
+                        {t('newWorktree.symlinkHint')}
                       </p>
                     </div>
                   )}
@@ -641,7 +669,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               {!isGitRepo && (
                 <div className="flex items-start gap-2 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2">
                   <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
-                  This project is not a git repository. Worktrees require a git repo.
+                  {t('newWorktree.notGitWarning')}
                 </div>
               )}
             </div>
@@ -652,7 +680,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                 onClick={onClose}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('newWorktree.cancel')}
               </button>
               <button
                 onClick={() => void handleCreate()}
@@ -661,7 +689,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               >
                 {isCreating && <Loader2 size={12} className="animate-spin" />}
                 {!isCreating && <Terminal size={12} />}
-                {isCreating ? 'Creating...' : 'Create & open'}
+                {isCreating ? t('newWorktree.creating') : t('newWorktree.createAndOpen')}
               </button>
             </div>
           </motion.div>

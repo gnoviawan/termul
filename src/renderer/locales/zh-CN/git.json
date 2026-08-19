@@ -1,0 +1,236 @@
+{
+  "common": {
+    "cancel": "取消"
+  },
+  "conflicts": {
+    "resolved": "所有冲突均已解决！",
+    "readyToMerge": "可以完成合并。",
+    "progress": "已解决 {{resolved}}/{{total}}"
+  },
+  "errors": {
+    "stageFailed": "暂存失败：{{details}}",
+    "unstageFailed": "取消暂存失败：{{details}}",
+    "stageHunkFailed": "暂存代码块失败：{{details}}",
+    "unstageHunkFailed": "取消暂存代码块失败：{{details}}",
+    "discardFailed": "放弃更改失败：{{details}}"
+  },
+  "changes": {
+    "title": "更改",
+    "staged": "已暂存的更改",
+    "filterLabel": "筛选更改",
+    "filterPlaceholder": "筛选更改...",
+    "none": "未检测到更改",
+    "stage": "暂存更改",
+    "stageAll": "暂存所有更改",
+    "unstage": "取消暂存",
+    "unstageAll": "取消暂存所有更改",
+    "discard": "放弃更改",
+    "discardAll": "放弃所有更改",
+    "selectedCount_one": "已选择 {{formattedCount}} 项",
+    "selectedCount_other": "已选择 {{formattedCount}} 项"
+  },
+  "status": {
+    "added": "已添加",
+    "modified": "已修改",
+    "deleted": "已删除",
+    "renamed": "已重命名",
+    "untracked": "未跟踪",
+    "staged": "已暂存"
+  },
+  "diff": {
+    "viewMode": "差异视图模式",
+    "inline": "行内差异",
+    "sideBySide": "并排差异",
+    "staged": "已暂存",
+    "workingTree": "工作树",
+    "loading": "正在加载差异...",
+    "noAvailable": "没有可用的差异",
+    "unavailableDescription": "此文件可能被 Git 忽略、与所选基准相比没有变化，或无法用于差异预览。",
+    "selectFile": "选择文件以查看更改",
+    "selectFileDescription": "点击侧边栏中的任意已修改文件以查看差异并管理更改。",
+    "backToFiles": "返回文件列表",
+    "stageHunk": "暂存代码块",
+    "unstageHunk": "取消暂存代码块",
+    "errors": {
+      "loadFailed": "加载差异失败：{{details}}"
+    }
+  },
+  "discard": {
+    "title": "放弃更改",
+    "confirm": "放弃",
+    "multiple_one": "放弃 {{formattedCount}} 个文件的更改吗？此操作无法撤销。",
+    "multiple_other": "放弃 {{formattedCount}} 个文件的更改吗？此操作无法撤销。",
+    "single": "放弃“{{path}}”的更改吗？此操作无法撤销。"
+  },
+  "commit": {
+    "summaryLabel": "提交摘要",
+    "summaryRequired": "摘要（必填）",
+    "updateMessage": "更新提交信息",
+    "descriptionLabel": "提交描述",
+    "descriptionOptional": "描述（可选）",
+    "generate": "生成提交信息",
+    "generating": "正在生成...",
+    "generateNeedsStage": "请先暂存文件再生成提交信息",
+    "generateNeedsAgent": "请配置并选择 ACP Agent",
+    "generateTitle": "根据已暂存的更改生成提交信息",
+    "amendLast": "修订上一次提交",
+    "amendDescription": "修订上一次提交，而不是创建新提交",
+    "noCommitToAmend": "尚无可修订的提交",
+    "amendTitle": "修订上一次提交",
+    "stageToCommit": "请暂存文件后再提交",
+    "commitStaged": "提交已暂存的更改",
+    "committing": "正在提交...",
+    "amend": "修订提交",
+    "toBranch": "提交到 {{branch}}",
+    "action": "提交",
+    "amendPushedTitle": "修订已推送的提交",
+    "amendPushedMessage": "上一次提交似乎已经推送。修订会重写已发布的历史，并需要强制推送才能更新远程仓库。是否继续？",
+    "amendAnyway": "仍然修订",
+    "errors": {
+      "agentRequired": "生成提交信息前，请先配置并选择 ACP Agent",
+      "stageRequired": "生成提交信息前，请先暂存文件",
+      "stagedFilesChanged": "已暂存文件发生变化。请刷新 Git 状态后重试",
+      "generationChanged": "生成过程中已暂存文件或仓库发生变化，请重试",
+      "emptyDiff": "已暂存的差异为空。请刷新 Git 状态后重试",
+      "diffTooLarge_one": "已暂存的差异过大，无法安全生成（{{formattedCount}} 个字符；上限 {{formattedLimit}}）",
+      "diffTooLarge_other": "已暂存的差异过大，无法安全生成（{{formattedCount}} 个字符；上限 {{formattedLimit}}）",
+      "repositoryChanged": "生成过程中仓库发生变化，已丢弃生成的提交信息",
+      "commitFailed": "提交失败：{{details}}"
+    },
+    "toasts": {
+      "generated": "提交信息已生成",
+      "amended": "提交已修订",
+      "committed": "更改已提交"
+    }
+  },
+  "push": {
+    "publish": "发布分支",
+    "count_one": "推送 {{formattedCount}} 个提交",
+    "count_other": "推送 {{formattedCount}} 个提交",
+    "upToDate": "已是最新",
+    "pushing": "正在推送...",
+    "detached": "当前不在分支上（分离 HEAD）",
+    "publishTitle": "将此分支发布到 origin",
+    "pushTitle": "将提交推送到远程仓库",
+    "nothingToPush": "没有需要推送的内容 — 已与远程仓库同步",
+    "errors": {
+      "failed": "推送失败：{{details}}"
+    },
+    "toasts": {
+      "success": "已推送到远程仓库"
+    }
+  },
+  "branch": {
+    "detachedHead": "分离 HEAD",
+    "createNew": "创建新分支...",
+    "noneFound": "未找到分支",
+    "createTitle": "创建新分支",
+    "nameLabel": "分支名称",
+    "namePlaceholder": "例如 feature/new-login",
+    "createAndSwitch": "创建并切换",
+    "uncommittedTitle": "未提交的更改",
+    "uncommittedMessage": "当前分支存在未提交的更改。切换到 {{branch}} 前希望如何处理？",
+    "bringDescription": "携带更改：保留当前更改并将其带到新分支。",
+    "stashDescription": "暂存并切换：将更改存入 stash，切换分支后尝试在新分支重新应用。",
+    "bringChanges": "携带更改",
+    "stashAndSwitch": "暂存并切换",
+    "errors": {
+      "switchFailed": "切换分支失败：{{details}}",
+      "createFailed": "创建分支失败：{{details}}"
+    },
+    "toasts": {
+      "switched": "已切换到分支 {{branch}}",
+      "switchedReapplied": "已切换到分支 {{branch}} 并重新应用更改",
+      "stashConflict": "已切换到分支 {{branch}}，但由于冲突，更改仍保留在 stash@{0}",
+      "switchedCarried": "已切换到分支 {{branch}}（已携带更改）",
+      "created": "已创建并切换到分支 {{branch}}"
+    }
+  },
+  "stash": {
+    "title": "Stash",
+    "action": "暂存更改",
+    "dialogTitle": "暂存更改",
+    "messageOptional": "信息（可选）",
+    "placeholder": "当前分支上的进行中工作...",
+    "includeUntracked": "包含未跟踪文件",
+    "noMessage": "无信息",
+    "apply": "应用 Stash（保留 Stash 条目）",
+    "pop": "弹出 Stash（应用并删除）",
+    "drop": "删除 Stash",
+    "errors": {
+      "saveFailed": "暂存更改失败：{{details}}",
+      "applyFailed": "应用 Stash 失败：{{details}}",
+      "popFailed": "弹出 Stash 失败：{{details}}",
+      "dropFailed": "删除 Stash 失败：{{details}}"
+    },
+    "toasts": {
+      "saved": "更改已成功暂存",
+      "applied": "已应用 stash@{ {{index}} }",
+      "popped": "已弹出 stash@{ {{index}} }",
+      "dropped": "已删除 stash@{ {{index}} }"
+    }
+  },
+  "history": {
+    "title": "Git 历史",
+    "filterLabel": "筛选提交",
+    "filterPlaceholder": "筛选提交...",
+    "refresh": "刷新历史",
+    "loading": "正在加载历史...",
+    "noMatches": "没有与“{{query}}”匹配的提交",
+    "errors": {
+      "loadFailed": "加载 Git 历史失败：{{details}}"
+    },
+    "empty": {
+      "title": "没有提交历史",
+      "repositoryUnavailable": "此文件夹可能不是 Git 仓库，或 Git 不可用。",
+      "noCommits": "目前没有可显示的提交。完成第一次提交后即可在此查看。"
+    }
+  },
+  "branchPicker": {
+    "switchLabel": "切换 Git 分支",
+    "detached": "分离",
+    "searchLabel": "搜索分支",
+    "searchPlaceholder": "搜索分支...",
+    "loading": "正在加载分支...",
+    "retry": "重试",
+    "checkedOutElsewhere": "此分支已在其他工作树中检出",
+    "newBranchLabel": "新分支名称",
+    "newBranchPlaceholder": "new-branch-name",
+    "create": "创建",
+    "createAndCheckout": "创建并检出新分支...",
+    "badges": {
+      "current": "当前",
+      "remote": "远程",
+      "worktree": "工作树"
+    },
+    "empty": {
+      "noBranches": "暂无分支。",
+      "noMatches": "没有与搜索条件匹配的分支。"
+    },
+    "errors": {
+      "notRepository": "此文件夹不是 Git 仓库。",
+      "gitNotFound": "未安装 Git，或 PATH 中无法找到 Git。",
+      "loadFailed": "加载分支失败。",
+      "switchFailed": "切换分支失败",
+      "waitForLoad": "请等待分支加载完成",
+      "loadBeforeCreate": "成功加载分支后才能创建新分支",
+      "invalidName": "请输入有效的分支名称",
+      "createFailed": "创建分支失败"
+    },
+    "toasts": {
+      "switched": "已切换到 {{branch}}",
+      "created": "已创建并检出 {{branch}}"
+    }
+  },
+  "time": {
+    "now": "刚刚",
+    "minutes_one": "{{formattedCount}} 分钟",
+    "minutes_other": "{{formattedCount}} 分钟",
+    "hours_one": "{{formattedCount}} 小时",
+    "hours_other": "{{formattedCount}} 小时",
+    "days_one": "{{formattedCount}} 天",
+    "days_other": "{{formattedCount}} 天",
+    "weeks_one": "{{formattedCount}} 周",
+    "weeks_other": "{{formattedCount}} 周"
+  }
+}

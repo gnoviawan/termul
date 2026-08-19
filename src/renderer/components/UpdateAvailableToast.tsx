@@ -1,6 +1,7 @@
 import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
+import { i18n } from '@/i18n'
 import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
@@ -45,29 +46,40 @@ function setReminderForTomorrow(): void {
 export function showUpdateToast(version: string, releaseNotes?: string): void {
   const isAur = isAurUpdateMode()
   const channel = updaterStore.getState().updateChannel
-  const channelPrefix = channel === 'insider' ? 'Insider ' : channel === 'nightly' ? 'Nightly ' : ''
+  const channelPrefix =
+    channel === 'stable' ? '' : `${i18n.t(`updates.channels.${channel}`, { ns: 'shell' })} `
 
-  toast.success(`${channelPrefix}Update available: version ${version}`, {
+  toast.success(i18n.t('updates.available', { ns: 'shell', channel: channelPrefix, version }), {
     duration: 30000,
     description: releaseNotes
-      ? `What's new:\n${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
+      ? i18n.t('updates.whatsNew', {
+          ns: 'shell',
+          notes: `${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`
+        })
       : isAur
-        ? 'A new version is available. Update with yay.'
+        ? i18n.t('updates.aurAvailable', { ns: 'shell' })
         : channel !== 'stable'
-          ? `A new ${channel} build is available. Open the download page to install it manually.`
-          : 'A new version is available for download.',
+          ? i18n.t('updates.manualChannel', {
+              ns: 'shell',
+              channel
+            })
+          : i18n.t('updates.downloadAvailable', { ns: 'shell' }),
     action: {
       label: (
         <div className="flex items-center gap-2">
           {isAur ? <Terminal size={14} /> : <Download size={14} />}
           <span>
-            {isAur ? 'Use yay' : channel !== 'stable' ? 'Open Download Page' : 'Download'}
+            {isAur
+              ? i18n.t('updates.useYay', { ns: 'shell' })
+              : channel !== 'stable'
+                ? i18n.t('updates.downloadPage', { ns: 'shell' })
+                : i18n.t('updates.download', { ns: 'shell' })}
           </span>
         </div>
       ),
       onClick: async () => {
         if (isAur) {
-          toast.info('Run in terminal', {
+          toast.info(i18n.t('updates.runInTerminal', { ns: 'shell' }), {
             description: 'yay -S termul-manager'
           })
           return
@@ -78,13 +90,16 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
           await downloadUpdate()
           const downloadError = updaterStore.getState().error
           if (downloadError) {
-            toast.error('Update download failed', {
+            toast.error(i18n.t('updates.downloadFailed', { ns: 'shell' }), {
               description: downloadError
             })
           }
         } catch (error) {
-          toast.error('Update download failed', {
-            description: error instanceof Error ? error.message : 'Unexpected error during download'
+          toast.error(i18n.t('updates.downloadFailed', { ns: 'shell' }), {
+            description:
+              error instanceof Error
+                ? error.message
+                : i18n.t('updates.unexpectedDownload', { ns: 'shell' })
           })
         }
       }
@@ -93,7 +108,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
       label: (
         <div className="flex items-center gap-2">
           <Clock size={14} />
-          <span>Remind Me</span>
+          <span>{i18n.t('updates.remind', { ns: 'shell' })}</span>
         </div>
       ),
       onClick: () => {
@@ -107,14 +122,14 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  * Show a toast notification when update is downloaded
  */
 export function showUpdateDownloadedToast(version: string): void {
-  toast.success(`Update ready to install`, {
+  toast.success(i18n.t('updates.ready', { ns: 'shell' }), {
     duration: 30000,
-    description: `Version ${version} has been downloaded. Install now to apply it — the app will restart and any running terminal sessions will close.`,
+    description: i18n.t('updates.downloaded', { ns: 'shell', version }),
     action: {
       label: (
         <div className="flex items-center gap-2">
           <Download size={14} />
-          <span>Install &amp; Restart</span>
+          <span>{i18n.t('updates.installRestart', { ns: 'shell' })}</span>
         </div>
       ),
       onClick: async () => {
@@ -122,13 +137,13 @@ export function showUpdateDownloadedToast(version: string): void {
           const hasActiveTerminals = hasActiveTerminalSessions()
           const confirmed = await confirm(
             hasActiveTerminals
-              ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
-              : `Termul will install version ${version} and restart now. Continue?`,
+              ? i18n.t('updates.installWithTerminals', { ns: 'shell', version })
+              : i18n.t('updates.installWithoutTerminals', { ns: 'shell', version }),
             {
-              title: 'Install update',
+              title: i18n.t('updates.installTitle', { ns: 'shell' }),
               kind: 'warning',
-              okLabel: 'Install & Restart',
-              cancelLabel: 'Not now'
+              okLabel: i18n.t('updates.installRestart', { ns: 'shell' }),
+              cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
             }
           )
           if (!confirmed) return
@@ -137,13 +152,16 @@ export function showUpdateDownloadedToast(version: string): void {
           await installAndRestart()
           const installError = updaterStore.getState().error
           if (installError) {
-            toast.error('Update install failed', {
+            toast.error(i18n.t('updates.installFailed', { ns: 'shell' }), {
               description: installError
             })
           }
         } catch (error) {
-          toast.error('Update install failed', {
-            description: error instanceof Error ? error.message : 'Unexpected error during install'
+          toast.error(i18n.t('updates.installFailed', { ns: 'shell' }), {
+            description:
+              error instanceof Error
+                ? error.message
+                : i18n.t('updates.unexpectedInstall', { ns: 'shell' })
           })
         }
       }
@@ -157,9 +175,12 @@ export function showUpdateDownloadedToast(version: string): void {
 function showDownloadProgressToast(version: string, progress: number): void {
   const progressId = `download-progress-${version}`
 
-  toast.loading(`Downloading update ${version}...`, {
+  toast.loading(i18n.t('updates.downloading', { ns: 'shell', version }), {
     id: progressId,
-    description: `${progress.toFixed(0)}% complete`,
+    description: i18n.t('updates.complete', {
+      ns: 'shell',
+      progress: progress.toFixed(0)
+    }),
     duration: Infinity
   })
 }
@@ -254,16 +275,16 @@ export function useManualUpdateToast() {
   const skip = () => {
     if (version) {
       skipVersion(version)
-      toast.info(`Skipped version ${version}`, {
-        description: 'You will not be notified about this version again.'
+      toast.info(i18n.t('updates.skipped', { ns: 'shell', version }), {
+        description: i18n.t('updates.skippedDescription', { ns: 'shell' })
       })
     }
   }
 
   const remindTomorrow = () => {
     setReminderForTomorrow()
-    toast.info('Reminder set', {
-      description: 'We will remind you about the update tomorrow.'
+    toast.info(i18n.t('updates.reminderSet', { ns: 'shell' }), {
+      description: i18n.t('updates.reminderDescription', { ns: 'shell' })
     })
   }
 

@@ -1,5 +1,6 @@
 import { RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,
@@ -23,6 +24,7 @@ export function ShortcutRecorder({
   onReset,
   variant = 'default'
 }: ShortcutRecorderProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const [isRecording, setIsRecording] = useState(false)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
   const [conflict, setConflict] = useState<KeyboardShortcut | null>(null)
@@ -31,6 +33,12 @@ export function ShortcutRecorder({
   const activeKey = shortcut.customKey ?? shortcut.defaultKey
   const isCustomized = shortcut.customKey !== undefined
   const displayKey = pendingKey ?? activeKey
+  const shortcutLabel = t(`shortcuts.items.${shortcut.id}.label`, {
+    defaultValue: shortcut.label
+  })
+  const shortcutDescription = t(`shortcuts.items.${shortcut.id}.description`, {
+    defaultValue: shortcut.description
+  })
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -140,9 +148,9 @@ export function ShortcutRecorder({
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-medium text-secondary-foreground">
-              {shortcut.label}
+              {shortcutLabel}
             </div>
-            <div className="truncate text-2xs text-muted-foreground">{shortcut.description}</div>
+            <div className="truncate text-2xs text-muted-foreground">{shortcutDescription}</div>
           </div>
 
           {isCustomized && (
@@ -150,8 +158,8 @@ export function ShortcutRecorder({
               type="button"
               onClick={handleReset}
               className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-              title="Reset to default"
-              aria-label={`Reset ${shortcut.label} shortcut to default`}
+              title={t('shortcuts.reset')}
+              aria-label={t('shortcuts.resetAria', { label: shortcutLabel })}
             >
               <RotateCcw size={13} />
             </button>
@@ -162,7 +170,7 @@ export function ShortcutRecorder({
             tabIndex={0}
             role="button"
             data-shortcut-recorder="true"
-            aria-label={`Record ${shortcut.label} shortcut`}
+            aria-label={t('shortcuts.recordAria', { label: shortcutLabel })}
             onClick={handleClick}
             onBlur={handleBlur}
             onKeyDown={handleKeyboardActivate}
@@ -178,7 +186,7 @@ export function ShortcutRecorder({
             `}
           >
             {isRecording && !pendingKey ? (
-              <span className="text-muted-foreground">Press keys...</span>
+              <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
             ) : (
               formatKeyForDisplay(displayKey)
             )}
@@ -187,14 +195,16 @@ export function ShortcutRecorder({
 
         {conflict && (
           <div className="mt-1 text-2xs text-red-500">
-            Conflicts with "{conflict.label}".{' '}
+            {t('shortcuts.conflict', {
+              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
+            })}{' '}
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleConfirmWithConflict}
               className="underline hover:no-underline"
             >
-              Use anyway
+              {t('shortcuts.useAnyway')}
             </button>
           </div>
         )}
@@ -206,27 +216,27 @@ export function ShortcutRecorder({
     <div className="flex items-center gap-2">
       <div className="flex-1">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-medium text-secondary-foreground">{shortcut.label}</span>
+          <span className="text-sm font-medium text-secondary-foreground">{shortcutLabel}</span>
           {isCustomized && (
             <button
               type="button"
               onClick={handleReset}
               className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-foreground transition-colors"
-              title="Reset to default"
-              aria-label={`Reset ${shortcut.label} shortcut to default`}
+              title={t('shortcuts.reset')}
+              aria-label={t('shortcuts.resetAria', { label: shortcutLabel })}
             >
               <RotateCcw size={14} />
             </button>
           )}
         </div>
-        <p className="text-xs text-muted-foreground mb-2">{shortcut.description}</p>
+        <p className="text-xs text-muted-foreground mb-2">{shortcutDescription}</p>
 
         <div
           ref={inputRef}
           tabIndex={0}
           role="button"
           data-shortcut-recorder="true"
-          aria-label={`Record ${shortcut.label} shortcut`}
+          aria-label={t('shortcuts.recordAria', { label: shortcutLabel })}
           onClick={handleClick}
           onBlur={handleBlur}
           onKeyDown={handleKeyboardActivate}
@@ -242,7 +252,7 @@ export function ShortcutRecorder({
           `}
         >
           {isRecording && !pendingKey ? (
-            <span className="text-muted-foreground">Press keys...</span>
+            <span className="text-muted-foreground">{t('shortcuts.pressKeys')}</span>
           ) : (
             formatKeyForDisplay(displayKey)
           )}
@@ -250,14 +260,16 @@ export function ShortcutRecorder({
 
         {conflict && (
           <div className="mt-2 text-xs text-red-500">
-            Conflicts with "{conflict.label}".{' '}
+            {t('shortcuts.conflict', {
+              label: t(`shortcuts.items.${conflict.id}.label`, { defaultValue: conflict.label })
+            })}{' '}
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleConfirmWithConflict}
               className="underline hover:no-underline"
             >
-              Use anyway
+              {t('shortcuts.useAnyway')}
             </button>
           </div>
         )}

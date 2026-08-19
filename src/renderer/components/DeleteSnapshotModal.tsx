@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { Trash2, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Snapshot } from '@/types/project'
 
 interface DeleteSnapshotModalProps {
@@ -18,6 +19,7 @@ export function DeleteSnapshotModal({
   onDelete,
   isDeleting
 }: DeleteSnapshotModalProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   // Handle Escape key to close modal
   useEffect(() => {
     if (!isOpen) return
@@ -75,7 +77,7 @@ export function DeleteSnapshotModal({
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
               <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <Trash2 size={14} className="text-destructive" />
-                Delete Snapshot
+                {t('snapshots.deleteTitle')}
               </h3>
               <button
                 onClick={onClose}
@@ -89,11 +91,10 @@ export function DeleteSnapshotModal({
             {/* Content */}
             <div className="p-4 space-y-4">
               <p className="text-sm text-foreground">
-                Are you sure you want to delete the snapshot{' '}
-                <span className="font-semibold">&quot;{snapshot.name}&quot;</span>?
+                {t('snapshots.deleteConfirm', { name: snapshot.name })}
               </p>
 
-              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+              <p className="text-sm text-muted-foreground">{t('snapshots.cannotUndo')}</p>
             </div>
 
             {/* Footer */}
@@ -103,7 +104,7 @@ export function DeleteSnapshotModal({
                 disabled={isDeleting}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
               >
-                Cancel
+                {t('snapshots.cancel')}
               </button>
               <button
                 onClick={handleDelete}
@@ -111,7 +112,7 @@ export function DeleteSnapshotModal({
                 className="px-3 py-1.5 text-xs font-medium bg-destructive text-destructive-foreground rounded hover:bg-destructive/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 <Trash2 size={12} />
-                {isDeleting ? 'Deleting...' : 'Delete'}
+                {isDeleting ? t('snapshots.deleting') : t('snapshots.delete')}
               </button>
             </div>
           </motion.div>

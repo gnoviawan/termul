@@ -10,6 +10,7 @@
 
 import { Bot, Check, Copy, MessageSquare, Terminal } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   type AiPromptTemplate,
   BUILT_IN_TEMPLATES,
@@ -38,6 +39,8 @@ const TOOL_ICONS: Record<string, typeof Bot> = {
 }
 
 export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps) {
+  const { t } = useTranslation('chat')
+  const { t: tProjects } = useTranslation('projects')
   const [selectedTemplate, setSelectedTemplate] = useState<AiPromptTemplate>(BUILT_IN_TEMPLATES[0])
   const [copied, setCopied] = useState(false)
 
@@ -90,13 +93,13 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id="ai-prompt-dialog-title" className="text-sm font-semibold text-foreground">
-            AI Conflict Resolution Prompts
+            {t('aiPrompt.title')}
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground"
-            aria-label="Close"
+            aria-label={t('aiPrompt.close')}
           >
             ✕
           </button>
@@ -104,15 +107,21 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
         {/* Template selector */}
         <div className="px-4 py-2 border-b border-border">
-          <label className="label-group text-muted-foreground">Tool</label>
+          <span className="label-group text-muted-foreground">{t('aiPrompt.tool')}</span>
           <div className="flex gap-2 mt-1">
             {BUILT_IN_TEMPLATES.map((tpl) => {
               const TplIcon = TOOL_ICONS[tpl.toolName] ?? MessageSquare
+              const templateName = tProjects(tpl.nameKey, { defaultValue: tpl.name })
+              const templateDescription = tProjects(tpl.descriptionKey, {
+                defaultValue: tpl.description
+              })
               return (
                 <button
                   type="button"
                   key={tpl.id}
                   onClick={() => setSelectedTemplate(tpl)}
+                  aria-label={templateName}
+                  title={templateDescription}
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors',
                     selectedTemplate.id === tpl.id
@@ -132,18 +141,23 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
         <div className="flex-1 overflow-auto px-4 py-3">
           <div className="flex items-center justify-between mb-2">
             <span className="label-group text-muted-foreground">
-              {selectedTemplate.name} — Paste this into {selectedTemplate.toolName}
+              {t('aiPrompt.pasteInto', {
+                template: tProjects(selectedTemplate.nameKey, {
+                  defaultValue: selectedTemplate.name
+                }),
+                tool: selectedTemplate.toolName
+              })}
             </span>
           </div>
           <pre className="whitespace-pre-wrap text-xs text-foreground bg-muted rounded-md p-3 font-mono leading-relaxed max-h-[300px] overflow-auto">
-            {generatedPrompt || 'Select a worktree context to generate a prompt.'}
+            {generatedPrompt || t('aiPrompt.missingContext')}
           </pre>
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-border">
           <span className="text-3xs text-muted-foreground">
-            Variables: {selectedTemplate.variables.join(', ')}
+            {t('aiPrompt.variables', { variables: selectedTemplate.variables.join(', ') })}
           </span>
           <button
             type="button"
@@ -159,11 +173,11 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
           >
             {copied ? (
               <>
-                <Check size={12} /> Copied!
+                <Check size={12} /> {t('aiPrompt.copied')}
               </>
             ) : (
               <>
-                <Copy size={12} /> Copy Prompt
+                <Copy size={12} /> {t('aiPrompt.copy')}
               </>
             )}
           </button>

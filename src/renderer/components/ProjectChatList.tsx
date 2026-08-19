@@ -1,5 +1,6 @@
 import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
@@ -37,6 +38,7 @@ interface ProjectChatListProps {
  * opens/resumes the chat.
  */
 export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
@@ -119,22 +121,22 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
         const opening = openHistorySession(entry.id)
         addAgentChatTab(entry.id)
         void opening.catch(() => {
-          toast.error('Could not open that chat. Try again.')
+          toast.error(t('couldNotOpenChat'))
         })
       } catch {
-        toast.error('Could not open that chat. Try again.')
+        toast.error(t('couldNotOpenChat'))
       }
     },
-    [addAgentChatTab, openHistorySession]
+    [addAgentChatTab, openHistorySession, t]
   )
 
   const handleDelete = useCallback(
     (id: string) => {
       void deleteHistorySession(id).catch(() => {
-        toast.error('Could not delete that chat. Try again.')
+        toast.error(t('couldNotDeleteChat'))
       })
     },
-    [deleteHistorySession]
+    [deleteHistorySession, t]
   )
 
   const handleOpenTerminal = useCallback(
@@ -142,32 +144,35 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       if (!entry.cwd) return
       const outcome = await openTerminalAtCwd(projectId, entry.cwd)
       if (outcome.status === 'opened') {
-        toast.success('Terminal opened', { description: `Opened at ${entry.cwd}` })
+        toast.success(t('terminalOpened'), { description: t('openedAt', { path: entry.cwd }) })
       } else if (outcome.status === 'no-pane') {
-        toast.error('No active pane', {
-          description: 'Cannot open terminal without an active workspace pane.'
+        toast.error(t('noActivePane'), {
+          description: t('cannotOpenWithoutPane')
         })
       } else {
-        toast.error('Failed to open terminal', {
-          description: outcome.error || 'Could not create a terminal.'
+        toast.error(t('failedToOpenTerminal'), {
+          description: outcome.error || t('couldNotCreateTerminal')
         })
       }
     },
-    [projectId]
+    [projectId, t]
   )
 
-  const handleCopyPath = useCallback(async (cwd: string) => {
-    try {
-      const result = await clipboardApi.writeText(cwd)
-      if (result.success) {
-        toast.success('Path copied', { description: cwd })
-      } else {
-        toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
+  const handleCopyPath = useCallback(
+    async (cwd: string) => {
+      try {
+        const result = await clipboardApi.writeText(cwd)
+        if (result.success) {
+          toast.success(t('pathCopied'), { description: cwd })
+        } else {
+          toast.error(t('failedToCopyPath'), { description: t('couldNotCopyClipboard') })
+        }
+      } catch {
+        toast.error(t('failedToCopyPath'), { description: t('couldNotCopyClipboard') })
       }
-    } catch {
-      toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
-    }
-  }, [])
+    },
+    [t]
+  )
 
   const handleOpenInFileExplorer = useCallback(
     async (cwd: string) => {
@@ -192,7 +197,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
           />
           <input
             type="search"
-            placeholder="Search chats…"
+            placeholder={t('chatSearch')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -203,15 +208,15 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
               }
             }}
             className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
-            aria-label="Search chats"
+            aria-label={t('chatSearchAria')}
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery('')}
               className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-              title="Clear search"
-              aria-label="Clear chat search"
+              title={t('clearSearch')}
+              aria-label={t('clearChatSearch')}
             >
               <X size={11} />
             </button>
@@ -228,10 +233,12 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       <div ref={scrollRef} className="overflow-y-auto max-h-80">
         {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New Chat button.
+            {t('noChats')}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
+          <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+            {t('noMatches')}
+          </div>
         ) : (
           visible.map((entry) => (
             <ProjectChatRow
@@ -252,7 +259,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
               onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
               className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
             >
-              Load more ({filtered.length - visible.length} more)
+              {t('loadMore', { count: filtered.length - visible.length })}
             </button>
           </div>
         )}
@@ -260,12 +267,10 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
 
       <ConfirmDialog
         isOpen={deleteConfirm !== null}
-        title="Delete chat"
-        message={
-          deleteConfirm ? `Delete “${deleteConfirm.title}”? This action cannot be undone.` : ''
-        }
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title={t('deleteChatConfirmTitle')}
+        message={deleteConfirm ? t('deleteChatConfirm', { title: deleteConfirm.title }) : ''}
+        confirmLabel={t('delete')}
+        cancelLabel={t('cancel')}
         variant="danger"
         onConfirm={() => {
           if (deleteConfirm) {
@@ -297,6 +302,7 @@ function ProjectChatRow({
   onCopyPath,
   onDelete
 }: ProjectChatRowProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const hasCwd = Boolean(entry.cwd)
   return (
     <ContextMenu>
@@ -319,8 +325,8 @@ function ProjectChatRow({
           </button>
           <button
             type="button"
-            aria-label={`Open terminal for chat ${entry.title}`}
-            title={hasCwd ? `Open terminal at ${entry.cwd}` : 'No working directory for this chat'}
+            aria-label={t('openTerminalForChat', { title: entry.title })}
+            title={hasCwd ? t('openTerminalAt', { path: entry.cwd }) : t('noWorkingDirectory')}
             disabled={!hasCwd}
             onClick={(e) => {
               e.stopPropagation()
@@ -341,7 +347,7 @@ function ProjectChatRow({
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         <ContextMenuItem disabled={!hasCwd} onSelect={() => void onOpenTerminal(entry)}>
-          <Terminal className="mr-2 h-4 w-4" /> Open Terminal Here
+          <Terminal className="mr-2 h-4 w-4" /> {t('openTerminalHere')}
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasCwd}
@@ -349,7 +355,7 @@ function ProjectChatRow({
             if (entry.cwd) void onOpenInFileExplorer(entry.cwd)
           }}
         >
-          <FolderOpen className="mr-2 h-4 w-4" /> Open in File Explorer
+          <FolderOpen className="mr-2 h-4 w-4" /> {t('openInFileExplorer')}
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!hasCwd}
@@ -357,11 +363,11 @@ function ProjectChatRow({
             if (entry.cwd) void onCopyPath(entry.cwd)
           }}
         >
-          <Copy className="mr-2 h-4 w-4" /> Copy Path
+          <Copy className="mr-2 h-4 w-4" /> {t('copyPath')}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
-          <Trash2 className="mr-2 h-4 w-4" /> Delete Chat
+          <Trash2 className="mr-2 h-4 w-4" /> {t('deleteChat')}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

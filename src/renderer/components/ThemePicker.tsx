@@ -1,5 +1,6 @@
 import { Check, Palette, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useUpdateAppSettings } from '@/hooks/use-app-settings'
 import { useEffectiveColorThemeId } from '@/hooks/use-color-theme'
 import {
@@ -30,6 +31,7 @@ function ThemeSwatches({ themeId }: { themeId: string }): React.JSX.Element {
 }
 
 export function ThemePicker(): React.JSX.Element | null {
+  const { t } = useTranslation('shell')
   const isOpen = useThemePickerStore((state) => state.isOpen)
   const highlightedThemeId = useThemePickerStore((state) => state.highlightedThemeId)
   const preview = useThemePickerStore((state) => state.preview)
@@ -45,16 +47,24 @@ export function ThemePicker(): React.JSX.Element | null {
   const inputRef = useRef<HTMLInputElement>(null)
   const previousQueryRef = useRef(query)
 
+  const getRowLabel = useCallback(
+    (row: ThemePickerRow): string =>
+      row.variant === 'light'
+        ? t('themes.lightVariant', { name: row.label.replace(/ Light$/, '') })
+        : row.label,
+    [t]
+  )
+
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return THEME_PICKER_ROWS
     return THEME_PICKER_ROWS.filter(
       (row) =>
-        row.label.toLowerCase().includes(normalized) ||
+        getRowLabel(row).toLowerCase().includes(normalized) ||
         row.familyId.toLowerCase().includes(normalized) ||
         row.themeId.toLowerCase().includes(normalized)
     )
-  }, [query])
+  }, [getRowLabel, query])
 
   const filteredFamilies = useMemo(() => {
     const familyIds = new Set(filteredRows.map((row) => row.familyId))
@@ -201,23 +211,23 @@ export function ThemePicker(): React.JSX.Element | null {
       <section
         role="dialog"
         aria-modal="true"
-        aria-label="Color theme picker"
+        aria-label={t('themes.dialogLabel')}
         className="pointer-events-auto absolute left-14 top-4 bottom-4 w-[min(20rem,calc(100vw-2rem))] flex flex-col rounded-xl border border-border bg-popover/95 shadow-2xl backdrop-blur-sm"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="flex items-center gap-2 border-b border-border px-3 py-2.5">
           <Palette size={16} className="text-primary shrink-0" aria-hidden="true" />
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-medium text-foreground leading-none">Color Themes</h2>
-            <p className="text-2xs text-muted-foreground mt-0.5">
-              Hover to preview · Enter to apply
-            </p>
+            <h2 className="text-sm font-medium text-foreground leading-none">
+              {t('themes.title')}
+            </h2>
+            <p className="text-2xs text-muted-foreground mt-0.5">{t('themes.hint')}</p>
           </div>
           <button
             type="button"
             onClick={handleCancel}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors duration-150 ease-[var(--ease-out)] active:scale-[0.97]"
-            aria-label="Close theme picker"
+            aria-label={t('themes.close')}
           >
             <X size={14} />
           </button>
@@ -238,9 +248,9 @@ export function ThemePicker(): React.JSX.Element | null {
                 setQuery(event.target.value)
                 setFocusIndex(0)
               }}
-              placeholder="Search themes…"
+              placeholder={t('themes.searchPlaceholder')}
               className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
-              aria-label="Search themes"
+              aria-label={t('themes.searchAria')}
             />
           </div>
         </div>
@@ -249,10 +259,12 @@ export function ThemePicker(): React.JSX.Element | null {
           ref={listRef}
           className="flex-1 overflow-y-auto p-2"
           role="listbox"
-          aria-label="Themes"
+          aria-label={t('themes.listAria')}
         >
           {filteredFamilies.length === 0 ? (
-            <p className="px-2 py-6 text-center text-sm text-muted-foreground">No themes match.</p>
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+              {t('themes.empty')}
+            </p>
           ) : (
             filteredFamilies.map((family) => {
               const rows = filteredRows.filter((row) => row.familyId === family.familyId)
@@ -294,12 +306,12 @@ export function ThemePicker(): React.JSX.Element | null {
                         }}
                       >
                         <ThemeSwatches themeId={row.themeId} />
-                        <span className="flex-1 truncate font-medium">{row.label}</span>
+                        <span className="flex-1 truncate font-medium">{getRowLabel(row)}</span>
                         {isApplied ? (
                           <Check
                             size={14}
                             className="text-primary shrink-0"
-                            aria-label="Currently applied"
+                            aria-label={t('themes.applied')}
                           />
                         ) : null}
                       </button>
@@ -312,7 +324,7 @@ export function ThemePicker(): React.JSX.Element | null {
         </div>
 
         <footer className="border-t border-border px-3 py-2 text-2xs text-muted-foreground">
-          Esc cancel · Enter apply
+          {t('themes.cancel')} · {t('themes.apply')}
         </footer>
       </section>
     </div>

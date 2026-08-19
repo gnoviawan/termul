@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { Clock, History, Terminal, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
@@ -10,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { formatDate } from '@/i18n/format'
 import type { CommandHistoryEntry } from '@/stores/command-history-store'
 
 type FilterMode = 'this-project' | 'all-projects'
@@ -31,6 +33,8 @@ export function CommandHistoryModal({
   onSelectCommand,
   onClearHistory
 }: CommandHistoryModalProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
+  const { t: tCommon } = useTranslation('common')
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [filterMode, setFilterMode] = useState<FilterMode>('this-project')
@@ -123,11 +127,11 @@ export function CommandHistoryModal({
     const diffHours = Math.floor(diffMs / 3600000)
     const diffDays = Math.floor(diffMs / 86400000)
 
-    if (diffMins < 1) return 'Just now'
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    if (diffDays < 7) return `${diffDays}d ago`
-    return date.toLocaleDateString()
+    if (diffMins < 1) return tCommon('time.justNow')
+    if (diffMins < 60) return tCommon('time.minutesAgo', { count: diffMins })
+    if (diffHours < 24) return tCommon('time.hoursAgo', { count: diffHours })
+    if (diffDays < 7) return tCommon('time.daysAgo', { count: diffDays })
+    return formatDate(date)
   }
 
   return (
@@ -152,7 +156,7 @@ export function CommandHistoryModal({
             <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border">
               <div className="flex items-center gap-2">
                 <History size={18} className="text-muted-foreground" />
-                <span className="text-sm font-medium">Command History</span>
+                <span className="text-sm font-medium">{t('commandHistory.title')}</span>
               </div>
               <Select
                 value={filterMode}
@@ -162,8 +166,8 @@ export function CommandHistoryModal({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="this-project">This Project</SelectItem>
-                  <SelectItem value="all-projects">All Projects</SelectItem>
+                  <SelectItem value="this-project">{t('commandHistory.thisProject')}</SelectItem>
+                  <SelectItem value="all-projects">{t('commandHistory.allProjects')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -176,7 +180,7 @@ export function CommandHistoryModal({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Search commands..."
+                placeholder={t('commandHistory.searchPlaceholder')}
                 className="w-full px-3 py-2 text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -186,7 +190,9 @@ export function CommandHistoryModal({
               <div className="p-8 text-center text-muted-foreground">
                 <History size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm">
-                  {baseEntries.length === 0 ? 'No command history yet' : 'No matching commands'}
+                  {baseEntries.length === 0
+                    ? t('commandHistory.noHistory')
+                    : t('commandHistory.noMatches')}
                 </p>
               </div>
             ) : (
@@ -231,14 +237,16 @@ export function CommandHistoryModal({
             <div className="label-group bg-background px-4 py-2 border-t border-border flex items-center justify-between text-muted-foreground">
               <div className="flex items-center space-x-4">
                 <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd> to
-                  navigate
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↑↓</kbd>{' '}
+                  {t('commandHistory.navigate')}
                 </span>
                 <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd> to insert
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">↵</kbd>{' '}
+                  {t('commandHistory.insert')}
                 </span>
                 <span className="flex items-center">
-                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">Esc</kbd> to close
+                  <kbd className="bg-secondary text-foreground px-1 rounded mr-1">Esc</kbd>{' '}
+                  {t('commandHistory.close')}
                 </span>
               </div>
               <button
@@ -248,12 +256,12 @@ export function CommandHistoryModal({
                 disabled={entries.length === 0 || filterMode !== 'this-project' || isClearing}
                 title={
                   filterMode === 'all-projects'
-                    ? 'Switch to "This Project" to clear history'
+                    ? t('commandHistory.clearOtherProjectHint')
                     : undefined
                 }
               >
                 <Trash2 size={12} />
-                <span>{isClearing ? 'Clearing...' : 'Clear History'}</span>
+                <span>{isClearing ? t('commandHistory.clearing') : t('commandHistory.clear')}</span>
               </button>
             </div>
           </motion.div>
@@ -263,10 +271,10 @@ export function CommandHistoryModal({
       {/* Clear History Confirmation Dialog */}
       <ConfirmDialog
         isOpen={showClearConfirm}
-        title="Clear Command History"
-        message="Are you sure you want to clear the command history for this project? This action cannot be undone."
-        confirmLabel="Clear"
-        cancelLabel="Cancel"
+        title={t('commandHistory.clearTitle')}
+        message={t('commandHistory.clearMessage')}
+        confirmLabel={tCommon('actions.clear')}
+        cancelLabel={tCommon('actions.cancel')}
         variant="danger"
         isLoading={isClearing}
         onConfirm={handleClearConfirm}
