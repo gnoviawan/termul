@@ -35,7 +35,7 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -69,6 +69,225 @@ const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
 const MAX_ZOOM_FACTOR: f64 = 3.0;
 const ZOOM_STEP: f64 = 0.1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeUiLanguage {
+    En,
+    ZhCn,
+}
+
+static NATIVE_UI_LANGUAGE: OnceLock<RwLock<NativeUiLanguage>> = OnceLock::new();
+
+#[cfg(test)]
+const NATIVE_APP_MENU_LABEL_KEYS: &[&str] = &[
+    "menu.file",
+    "menu.edit",
+    "menu.view",
+    "menu.window",
+    "menu.help",
+    "menu.undo",
+    "menu.redo",
+    "menu.cut",
+    "menu.copy",
+    "menu.paste",
+    "menu.selectAll",
+    "menu.reload",
+    "menu.actualSize",
+    "menu.zoomIn",
+    "menu.zoomOut",
+    "menu.toggleFullscreen",
+    "menu.toggleDevtools",
+    "menu.closeTab",
+    "menu.minimize",
+    "menu.maximize",
+    "menu.closeWindow",
+    "menu.checkUpdates",
+    "menu.learnMore",
+    "menu.revealLogs",
+    "menu.exportLog",
+    "menu.copyLogs",
+    "menu.exportLogDefault",
+    "menu.about",
+    "menu.services",
+    "menu.hide",
+    "menu.hideOthers",
+    "menu.showAll",
+    "menu.quit",
+    "tray.show",
+    "tray.quit",
+    "dialog.error",
+    "dialog.success",
+    "dialog.copied",
+    "log.files",
+    "log.resolvePath",
+    "log.notFound",
+    "log.exportSuccess",
+    "log.exportFailed",
+    "log.copyFailed",
+    "log.copySuccess",
+    "log.readFailed",
+    "log.defaultDirFailed",
+];
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AppMenuSuspensionState {
+    suspended: bool,
+}
+
+impl AppMenuSuspensionState {
+    fn is_suspended(&self) -> bool {
+        self.suspended
+    }
+
+    fn suspend(&mut self) {
+        self.suspended = true;
+    }
+
+    fn restore(&mut self) {
+        self.suspended = false;
+    }
+}
+
+static APP_MENU_SUSPENSION_STATE: OnceLock<Mutex<AppMenuSuspensionState>> = OnceLock::new();
+
+fn app_menu_suspension_state() -> &'static Mutex<AppMenuSuspensionState> {
+    APP_MENU_SUSPENSION_STATE.get_or_init(|| Mutex::new(AppMenuSuspensionState::default()))
+}
+
+/// Serializes native UI language updates (language state + app-menu rebuild +
+/// tray replacement) so concurrent `set_native_ui_language` calls cannot
+/// reorder and leave stale labels installed. Distinct from the app-menu
+/// suspension state, which only tracks menu rebuild suspension.
+static NATIVE_UI_LANGUAGE_STATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn native_ui_language_state() -> &'static Mutex<()> {
+    NATIVE_UI_LANGUAGE_STATE.get_or_init(|| Mutex::new(()))
+}
+
+fn native_ui_language() -> NativeUiLanguage {
+    *NATIVE_UI_LANGUAGE
+        .get_or_init(|| RwLock::new(NativeUiLanguage::En))
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn update_native_ui_language(language: &str) {
+    let language = if language.eq_ignore_ascii_case("zh-CN") {
+        NativeUiLanguage::ZhCn
+    } else {
+        NativeUiLanguage::En
+    };
+    *NATIVE_UI_LANGUAGE
+        .get_or_init(|| RwLock::new(NativeUiLanguage::En))
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = language;
+}
+
+fn native_label_for(language: NativeUiLanguage, key: &str) -> &str {
+    match (language, key) {
+        (NativeUiLanguage::ZhCn, "menu.file") => "文件",
+        (NativeUiLanguage::ZhCn, "menu.edit") => "编辑",
+        (NativeUiLanguage::ZhCn, "menu.view") => "视图",
+        (NativeUiLanguage::ZhCn, "menu.window") => "窗口",
+        (NativeUiLanguage::ZhCn, "menu.help") => "帮助",
+        (NativeUiLanguage::ZhCn, "menu.undo") => "撤销",
+        (NativeUiLanguage::ZhCn, "menu.redo") => "重做",
+        (NativeUiLanguage::ZhCn, "menu.cut") => "剪切",
+        (NativeUiLanguage::ZhCn, "menu.copy") => "复制",
+        (NativeUiLanguage::ZhCn, "menu.paste") => "粘贴",
+        (NativeUiLanguage::ZhCn, "menu.selectAll") => "全选",
+        (NativeUiLanguage::ZhCn, "menu.reload") => "重新加载",
+        (NativeUiLanguage::ZhCn, "menu.actualSize") => "实际大小",
+        (NativeUiLanguage::ZhCn, "menu.zoomIn") => "放大",
+        (NativeUiLanguage::ZhCn, "menu.zoomOut") => "缩小",
+        (NativeUiLanguage::ZhCn, "menu.toggleFullscreen") => "切换全屏",
+        (NativeUiLanguage::ZhCn, "menu.toggleDevtools") => "切换开发者工具",
+        (NativeUiLanguage::ZhCn, "menu.closeTab") => "关闭标签页",
+        (NativeUiLanguage::ZhCn, "menu.minimize") => "最小化",
+        (NativeUiLanguage::ZhCn, "menu.maximize") => "最大化",
+        (NativeUiLanguage::ZhCn, "menu.closeWindow") => "关闭窗口",
+        (NativeUiLanguage::ZhCn, "menu.checkUpdates") => "检查更新...",
+        (NativeUiLanguage::ZhCn, "menu.learnMore") => "了解更多",
+        (NativeUiLanguage::ZhCn, "menu.revealLogs") => "显示日志文件",
+        (NativeUiLanguage::ZhCn, "menu.exportLog") => "导出日志文件...",
+        (NativeUiLanguage::ZhCn, "menu.copyLogs") => "复制日志内容",
+        (NativeUiLanguage::ZhCn, "menu.exportLogDefault") => "将日志导出到默认目录",
+        (NativeUiLanguage::ZhCn, "menu.about") => "关于 Termul Manager",
+        (NativeUiLanguage::ZhCn, "menu.services") => "服务",
+        (NativeUiLanguage::ZhCn, "menu.hide") => "隐藏 Termul",
+        (NativeUiLanguage::ZhCn, "menu.hideOthers") => "隐藏其他应用",
+        (NativeUiLanguage::ZhCn, "menu.showAll") => "全部显示",
+        (NativeUiLanguage::ZhCn, "menu.quit") => "退出 Termul",
+        (NativeUiLanguage::ZhCn, "tray.show") => "显示 Termul",
+        (NativeUiLanguage::ZhCn, "tray.quit") => "退出 Termul",
+        (NativeUiLanguage::ZhCn, "dialog.error") => "错误",
+        (NativeUiLanguage::ZhCn, "dialog.success") => "成功",
+        (NativeUiLanguage::ZhCn, "dialog.copied") => "已复制",
+        (NativeUiLanguage::ZhCn, "log.files") => "日志文件",
+        (NativeUiLanguage::ZhCn, "log.resolvePath") => "无法确定日志文件路径",
+        (NativeUiLanguage::ZhCn, "log.notFound") => "日志文件尚不存在",
+        (NativeUiLanguage::ZhCn, "log.exportSuccess") => "日志文件已成功导出到",
+        (NativeUiLanguage::ZhCn, "log.exportFailed") => "导出日志文件失败",
+        (NativeUiLanguage::ZhCn, "log.copyFailed") => "复制到剪贴板失败",
+        (NativeUiLanguage::ZhCn, "log.copySuccess") => "日志内容已复制到剪贴板。",
+        (NativeUiLanguage::ZhCn, "log.readFailed") => "读取日志文件失败",
+        (NativeUiLanguage::ZhCn, "log.defaultDirFailed") => "无法确定默认目录（下载或桌面）",
+        (_, "menu.file") => "File",
+        (_, "menu.edit") => "Edit",
+        (_, "menu.view") => "View",
+        (_, "menu.window") => "Window",
+        (_, "menu.help") => "Help",
+        (_, "menu.undo") => "Undo",
+        (_, "menu.redo") => "Redo",
+        (_, "menu.cut") => "Cut",
+        (_, "menu.copy") => "Copy",
+        (_, "menu.paste") => "Paste",
+        (_, "menu.selectAll") => "Select All",
+        (_, "menu.reload") => "Reload",
+        (_, "menu.actualSize") => "Actual Size",
+        (_, "menu.zoomIn") => "Zoom In",
+        (_, "menu.zoomOut") => "Zoom Out",
+        (_, "menu.toggleFullscreen") => "Toggle Full Screen",
+        (_, "menu.toggleDevtools") => "Toggle DevTools",
+        (_, "menu.closeTab") => "Close Tab",
+        (_, "menu.minimize") => "Minimize",
+        (_, "menu.maximize") => "Maximize",
+        (_, "menu.closeWindow") => "Close Window",
+        (_, "menu.checkUpdates") => "Check for Updates...",
+        (_, "menu.learnMore") => "Learn More",
+        (_, "menu.revealLogs") => "Reveal Log File",
+        (_, "menu.exportLog") => "Export Log File...",
+        (_, "menu.copyLogs") => "Copy Log Contents",
+        (_, "menu.exportLogDefault") => "Export Log to Default Directory",
+        (_, "menu.about") => "About Termul Manager",
+        (_, "menu.services") => "Services",
+        (_, "menu.hide") => "Hide Termul",
+        (_, "menu.hideOthers") => "Hide Others",
+        (_, "menu.showAll") => "Show All",
+        (_, "menu.quit") => "Quit Termul",
+        (_, "tray.show") => "Show Termul",
+        (_, "tray.quit") => "Quit Termul",
+        (_, "dialog.error") => "Error",
+        (_, "dialog.success") => "Success",
+        (_, "dialog.copied") => "Copied",
+        (_, "log.files") => "Log Files",
+        (_, "log.resolvePath") => "Could not resolve log file path",
+        (_, "log.notFound") => "Log file does not exist yet",
+        (_, "log.exportSuccess") => "Log file successfully exported to",
+        (_, "log.exportFailed") => "Failed to export log file",
+        (_, "log.copyFailed") => "Failed to copy to clipboard",
+        (_, "log.copySuccess") => "Log contents successfully copied to clipboard.",
+        (_, "log.readFailed") => "Failed to read log file",
+        (_, "log.defaultDirFailed") => {
+            "Could not resolve a default directory (Downloads or Desktop)"
+        }
+        _ => key,
+    }
+}
+
+fn native_label(key: &'static str) -> &'static str {
+    native_label_for(native_ui_language(), key)
+}
 
 struct ViewMenuState {
     zoom_factor: Mutex<f64>,
@@ -222,7 +441,14 @@ fn get_home_directory() -> Result<String, String> {
 fn suspend_app_menu(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     {
-        app.remove_menu().map_err(|e| e.to_string())?;
+        let mut state = app_menu_suspension_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !state.is_suspended() {
+            app.remove_menu().map_err(|e| e.to_string())?;
+            state.suspend();
+            log::debug!("[native-ui] app menu suspended");
+        }
     }
     #[cfg(target_os = "linux")]
     let _ = &app;
@@ -235,11 +461,75 @@ fn suspend_app_menu(app: tauri::AppHandle) -> Result<(), String> {
 fn restore_app_menu(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let menu = build_app_menu(&app).map_err(|e| e.to_string())?;
-        app.set_menu(menu).map_err(|e| e.to_string())?;
+        let mut state = app_menu_suspension_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.is_suspended() {
+            let menu = build_app_menu(&app).map_err(|e| e.to_string())?;
+            app.set_menu(menu).map_err(|e| e.to_string())?;
+            state.restore();
+            log::debug!("[native-ui] app menu restored");
+        }
     }
     #[cfg(target_os = "linux")]
     let _ = &app;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_native_ui_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    // Serialize the complete native UI update: language state + app-menu rebuild
+    // + tray replacement, so a stale concurrent call cannot install older labels.
+    let _guard = native_ui_language_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update_native_ui_language(&language);
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let state = app_menu_suspension_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.is_suspended() {
+            log::debug!("[native-ui] deferred app menu language rebuild while suspended");
+        } else {
+            let menu = build_app_menu(&app).map_err(|error| {
+                log::error!(
+                    "[native-ui] build_app_menu failed for language={}: {error}",
+                    language
+                );
+                error.to_string()
+            })?;
+            app.set_menu(menu).map_err(|error| {
+                log::error!(
+                    "[native-ui] app.set_menu failed for language={}: {error}",
+                    language
+                );
+                error.to_string()
+            })?;
+        }
+    }
+
+    #[cfg(desktop)]
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let menu = build_tray_menu(&app).map_err(|error| {
+            log::error!(
+                "[native-ui] build_tray_menu failed for language={}: {error}",
+                language
+            );
+            error.to_string()
+        })?;
+        tray.set_menu(Some(menu)).map_err(|error| {
+            log::error!(
+                "[native-ui] tray.set_menu failed for language={}: {error}",
+                language
+            );
+            error.to_string()
+        })?;
+        let _ = tray.set_tooltip(Some("Termul Manager"));
+    }
+
+    log::info!("[native-ui] applied language={}", language);
     Ok(())
 }
 
@@ -546,41 +836,70 @@ fn open_external_url(url: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(desktop)]
+fn build_tray_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+
+    let show_item =
+        MenuItemBuilder::with_id(TRAY_MENU_SHOW, native_label("tray.show")).build(app)?;
+    let quit_item =
+        MenuItemBuilder::with_id(TRAY_MENU_QUIT, native_label("tray.quit")).build(app)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+
+    MenuBuilder::new(app)
+        .item(&show_item)
+        .item(&separator)
+        .item(&quit_item)
+        .build()
+}
+
 #[cfg(not(target_os = "linux"))]
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     #[cfg(not(target_os = "macos"))]
-    let file_menu = SubmenuBuilder::new(app, "File").quit().build()?;
-
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
-        .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+    let file_menu = SubmenuBuilder::new(app, native_label("menu.file"))
+        .quit_with_text(native_label("menu.quit"))
         .build()?;
 
-    let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, "Reload")
+    let edit_menu = SubmenuBuilder::new(app, native_label("menu.edit"))
+        .undo_with_text(native_label("menu.undo"))
+        .redo_with_text(native_label("menu.redo"))
+        .separator()
+        .cut_with_text(native_label("menu.cut"))
+        .copy_with_text(native_label("menu.copy"))
+        .paste_with_text(native_label("menu.paste"))
+        .select_all_with_text(native_label("menu.selectAll"))
+        .build()?;
+
+    let reload = MenuItemBuilder::with_id(MENU_ID_RELOAD, native_label("menu.reload"))
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, "Actual Size").build(app)?;
-    let zoom_in = MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, "Zoom In").build(app)?;
-    let zoom_out = MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, "Zoom Out").build(app)?;
-    let toggle_fullscreen =
-        MenuItemBuilder::with_id(MENU_ID_TOGGLE_FULLSCREEN, "Toggle Full Screen").build(app)?;
+    let zoom_reset =
+        MenuItemBuilder::with_id(MENU_ID_ZOOM_RESET, native_label("menu.actualSize")).build(app)?;
+    let zoom_in =
+        MenuItemBuilder::with_id(MENU_ID_ZOOM_IN, native_label("menu.zoomIn")).build(app)?;
+    let zoom_out =
+        MenuItemBuilder::with_id(MENU_ID_ZOOM_OUT, native_label("menu.zoomOut")).build(app)?;
+    let toggle_fullscreen = MenuItemBuilder::with_id(
+        MENU_ID_TOGGLE_FULLSCREEN,
+        native_label("menu.toggleFullscreen"),
+    )
+    .build(app)?;
 
     let view_menu = {
-        let builder = SubmenuBuilder::new(app, "View").item(&reload);
+        let builder = SubmenuBuilder::new(app, native_label("menu.view")).item(&reload);
 
         #[cfg(debug_assertions)]
         let builder = {
-            let toggle_devtools =
-                MenuItemBuilder::with_id(MENU_ID_TOGGLE_DEVTOOLS, "Toggle DevTools")
-                    .accelerator("CmdOrCtrl+Shift+I")
-                    .build(app)?;
+            let toggle_devtools = MenuItemBuilder::with_id(
+                MENU_ID_TOGGLE_DEVTOOLS,
+                native_label("menu.toggleDevtools"),
+            )
+            .accelerator("CmdOrCtrl+Shift+I")
+            .build(app)?;
             builder.item(&toggle_devtools)
         };
 
@@ -596,43 +915,47 @@ fn build_app_menu<R: tauri::Runtime>(
 
     #[cfg(target_os = "macos")]
     let window_menu = {
-        let close_tab = MenuItemBuilder::with_id(MENU_ID_CLOSE_TAB, "Close Tab")
+        let close_tab = MenuItemBuilder::with_id(MENU_ID_CLOSE_TAB, native_label("menu.closeTab"))
             .accelerator("Cmd+W")
             .build(app)?;
-        SubmenuBuilder::new(app, "Window")
-            .minimize()
-            .maximize()
+        SubmenuBuilder::new(app, native_label("menu.window"))
+            .minimize_with_text(native_label("menu.minimize"))
+            .maximize_with_text(native_label("menu.maximize"))
             .separator()
             .item(&close_tab)
             .build()?
     };
 
     #[cfg(not(target_os = "macos"))]
-    let window_menu = SubmenuBuilder::new(app, "Window")
-        .minimize()
-        .maximize()
+    let window_menu = SubmenuBuilder::new(app, native_label("menu.window"))
+        .minimize_with_text(native_label("menu.minimize"))
+        .maximize_with_text(native_label("menu.maximize"))
         .separator()
-        .close_window()
+        .close_window_with_text(native_label("menu.closeWindow"))
         .build()?;
 
     let check_for_updates =
-        MenuItemBuilder::with_id(MENU_ID_CHECK_FOR_UPDATES, "Check for Updates...")
+        MenuItemBuilder::with_id(MENU_ID_CHECK_FOR_UPDATES, native_label("menu.checkUpdates"))
             .accelerator("CmdOrCtrl+Shift+U")
             .build(app)?;
-    let learn_more = MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, "Learn More").build(app)?;
+    let learn_more =
+        MenuItemBuilder::with_id(MENU_ID_LEARN_MORE, native_label("menu.learnMore")).build(app)?;
     let reveal_logs =
-        MenuItemBuilder::with_id(MENU_ID_REVEAL_LOGS, "Reveal Log File").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_REVEAL_LOGS, native_label("menu.revealLogs"))
+            .build(app)?;
     let export_log_file =
-        MenuItemBuilder::with_id(MENU_ID_EXPORT_LOG_FILE, "Export Log File...").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_EXPORT_LOG_FILE, native_label("menu.exportLog"))
+            .build(app)?;
     let copy_log_contents =
-        MenuItemBuilder::with_id(MENU_ID_COPY_LOG_CONTENTS, "Copy Log Contents").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_COPY_LOG_CONTENTS, native_label("menu.copyLogs"))
+            .build(app)?;
     let export_log_default = MenuItemBuilder::with_id(
         MENU_ID_EXPORT_LOG_DEFAULT,
-        "Export Log to Default Directory",
+        native_label("menu.exportLogDefault"),
     )
     .build(app)?;
 
-    let help_menu = SubmenuBuilder::new(app, "Help")
+    let help_menu = SubmenuBuilder::new(app, native_label("menu.help"))
         .item(&check_for_updates)
         .separator()
         .item(&reveal_logs)
@@ -645,24 +968,24 @@ fn build_app_menu<R: tauri::Runtime>(
     #[cfg(target_os = "macos")]
     {
         let app_menu = SubmenuBuilder::new(app, app.package_info().name.clone())
-            .about(None)
+            .about_with_text(native_label("menu.about"), None)
             .separator()
-            .services()
+            .services_with_text(native_label("menu.services"))
             .separator()
-            .hide()
-            .hide_others()
-            .show_all()
+            .hide_with_text(native_label("menu.hide"))
+            .hide_others_with_text(native_label("menu.hideOthers"))
+            .show_all_with_text(native_label("menu.showAll"))
             .separator()
-            .quit()
+            .quit_with_text(native_label("menu.quit"))
             .build()?;
 
-        return MenuBuilder::new(app)
+        MenuBuilder::new(app)
             .item(&app_menu)
             .item(&edit_menu)
             .item(&view_menu)
             .item(&window_menu)
             .item(&help_menu)
-            .build();
+            .build()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -755,7 +1078,7 @@ fn reveal_log_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), St
 fn show_log_action_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: &str) {
     app.dialog()
         .message(message)
-        .title("Error")
+        .title(native_label("dialog.error"))
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }
@@ -764,14 +1087,14 @@ fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), S
     let log_path = match logging::log_file_path(app) {
         Some(path) => path,
         None => {
-            let msg = "Could not resolve log file path";
+            let msg = native_label("log.resolvePath");
             show_log_action_error(app, msg);
             return Err(msg.to_string());
         }
     };
 
     if !log_path.exists() {
-        let msg = "Log file does not exist yet";
+        let msg = native_label("log.notFound");
         show_log_action_error(app, msg);
         return Err(msg.to_string());
     }
@@ -779,7 +1102,7 @@ fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), S
     let app_handle = app.clone();
     app.dialog()
         .file()
-        .add_filter("Log Files", &["log"])
+        .add_filter(native_label("log.files"), &["log"])
         .set_file_name("termul.log")
         .save_file(move |file_path| {
             if let Some(tauri_plugin_dialog::FilePath::Path(dest_path)) = file_path {
@@ -788,18 +1111,19 @@ fn export_log_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), S
                         app_handle
                             .dialog()
                             .message(format!(
-                                "Log file successfully exported to {}",
+                                "{} {}",
+                                native_label("log.exportSuccess"),
                                 dest_path.display()
                             ))
-                            .title("Success")
+                            .title(native_label("dialog.success"))
                             .kind(MessageDialogKind::Info)
                             .show(|_| {});
                     }
                     Err(e) => {
                         app_handle
                             .dialog()
-                            .message(format!("Failed to export log file: {}", e))
-                            .title("Error")
+                            .message(format!("{}: {}", native_label("log.exportFailed"), e))
+                            .title(native_label("dialog.error"))
                             .kind(MessageDialogKind::Error)
                             .show(|_| {});
                     }
@@ -814,14 +1138,14 @@ fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(),
     let log_path = match logging::log_file_path(app) {
         Some(path) => path,
         None => {
-            let msg = "Could not resolve log file path";
+            let msg = native_label("log.resolvePath");
             show_log_action_error(app, msg);
             return Err(msg.to_string());
         }
     };
 
     if !log_path.exists() {
-        let msg = "Log file does not exist yet";
+        let msg = native_label("log.notFound");
         show_log_action_error(app, msg);
         return Err(msg.to_string());
     }
@@ -833,15 +1157,15 @@ fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(),
                 if let Err(e) = app_handle.clipboard().write_text(contents) {
                     app_handle
                         .dialog()
-                        .message(format!("Failed to copy to clipboard: {}", e))
-                        .title("Error")
+                        .message(format!("{}: {}", native_label("log.copyFailed"), e))
+                        .title(native_label("dialog.error"))
                         .kind(MessageDialogKind::Error)
                         .show(|_| {});
                 } else {
                     app_handle
                         .dialog()
-                        .message("Log contents successfully copied to clipboard.")
-                        .title("Copied")
+                        .message(native_label("log.copySuccess"))
+                        .title(native_label("dialog.copied"))
                         .kind(MessageDialogKind::Info)
                         .show(|_| {});
                 }
@@ -849,8 +1173,8 @@ fn copy_log_contents<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(),
             Err(e) => {
                 app_handle
                     .dialog()
-                    .message(format!("Failed to read log file: {}", e))
-                    .title("Error")
+                    .message(format!("{}: {}", native_label("log.readFailed"), e))
+                    .title(native_label("dialog.error"))
                     .kind(MessageDialogKind::Error)
                     .show(|_| {});
             }
@@ -864,14 +1188,14 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     let log_path = match logging::log_file_path(app) {
         Some(path) => path,
         None => {
-            let msg = "Could not resolve log file path";
+            let msg = native_label("log.resolvePath");
             show_log_action_error(app, msg);
             return Err(msg.to_string());
         }
     };
 
     if !log_path.exists() {
-        let msg = "Log file does not exist yet";
+        let msg = native_label("log.notFound");
         show_log_action_error(app, msg);
         return Err(msg.to_string());
     }
@@ -883,10 +1207,7 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     {
         Ok(dir) => dir,
         Err(e) => {
-            let msg = format!(
-                "Could not resolve a default directory (Downloads or Desktop): {}",
-                e
-            );
+            let msg = format!("{}: {}", native_label("log.defaultDirFailed"), e);
             show_log_action_error(app, &msg);
             return Err(msg);
         }
@@ -901,18 +1222,19 @@ fn export_log_to_default<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
                 app_handle
                     .dialog()
                     .message(format!(
-                        "Log file successfully exported to {}",
+                        "{} {}",
+                        native_label("log.exportSuccess"),
                         dest_path.display()
                     ))
-                    .title("Success")
+                    .title(native_label("dialog.success"))
                     .kind(MessageDialogKind::Info)
                     .show(|_| {});
             }
             Err(e) => {
                 app_handle
                     .dialog()
-                    .message(format!("Failed to export log file: {}", e))
-                    .title("Error")
+                    .message(format!("{}: {}", native_label("log.exportFailed"), e))
+                    .title(native_label("dialog.error"))
                     .kind(MessageDialogKind::Error)
                     .show(|_| {});
             }
@@ -1392,20 +1714,9 @@ pub fn run() {
             // Close button (X) → minimize ke tray, bukan quit.
             #[cfg(desktop)]
             {
-                use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Termul")
-                    .build(app)?;
-                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Termul")
-                    .build(app)?;
-                let separator = PredefinedMenuItem::separator(app)?;
-
-                let tray_menu = MenuBuilder::new(app)
-                    .item(&show_item)
-                    .item(&separator)
-                    .item(&quit_item)
-                    .build()?;
+                let tray_menu = build_tray_menu(&handle)?;
 
                 let _tray = TrayIconBuilder::with_id(TRAY_ID)
                     .tooltip("Termul Manager")
@@ -1466,6 +1777,7 @@ pub fn run() {
             get_home_directory,
             suspend_app_menu,
             restore_app_menu,
+            set_native_ui_language,
             reveal_log_dir_command,
             export_log_file_command,
             copy_log_contents_command,
@@ -1770,6 +2082,57 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_ui_labels_cover_supported_languages() {
+        for key in NATIVE_APP_MENU_LABEL_KEYS {
+            let english = native_label_for(NativeUiLanguage::En, key);
+            let simplified_chinese = native_label_for(NativeUiLanguage::ZhCn, key);
+            assert_ne!(english, *key, "missing English native menu label for {key}");
+            assert_ne!(
+                simplified_chinese, *key,
+                "missing Simplified Chinese native menu label for {key}"
+            );
+            assert!(
+                !english.is_empty(),
+                "empty English native menu label for {key}"
+            );
+            assert!(
+                !simplified_chinese.is_empty(),
+                "empty Simplified Chinese native menu label for {key}"
+            );
+        }
+
+        assert_eq!(native_label_for(NativeUiLanguage::En, "menu.copy"), "Copy");
+        assert_eq!(
+            native_label_for(NativeUiLanguage::ZhCn, "menu.copy"),
+            "复制"
+        );
+        assert_eq!(
+            native_label_for(NativeUiLanguage::ZhCn, "log.copySuccess"),
+            "日志内容已复制到剪贴板。"
+        );
+    }
+
+    #[test]
+    fn app_menu_suspension_defers_language_rebuilds_until_restore() {
+        let mut state = AppMenuSuspensionState::default();
+        assert!(!state.is_suspended());
+
+        state.suspend();
+        assert!(state.is_suspended());
+
+        state.restore();
+        assert!(!state.is_suspended());
+    }
+
+    #[test]
+    fn native_ui_labels_preserve_unknown_keys() {
+        assert_eq!(
+            native_label_for(NativeUiLanguage::ZhCn, "unknown.key"),
+            "unknown.key"
+        );
+    }
 
     #[cfg(target_os = "windows")]
     fn with_test_comspec<T>(f: impl FnOnce() -> T) -> T {

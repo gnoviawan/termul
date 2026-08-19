@@ -53,6 +53,7 @@ import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
+import { useAppliedLanguageSync } from './hooks/use-language'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { usePreventNativeContextMenu } from './hooks/use-prevent-native-context-menu'
@@ -120,6 +121,7 @@ function AppEffects(): null {
   useExitCode()
   useContextBarSettings()
   useAppSettingsLoader()
+  useAppliedLanguageSync()
   useAppliedColorThemeSync()
   useAppliedUiZoomSync()
   useKeyboardShortcutsLoader()
@@ -219,7 +221,7 @@ const App = () => {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={80} skipDelayDuration={300}>
         <GlobalContextMenu>
-          <ErrorBoundary context="App Root">
+          <ErrorBoundary context="appRoot">
             <AppEffects />
             <Toaster />
             <Sonner />

@@ -1,0 +1,306 @@
+{
+  "title": "代理对话",
+  "common": {
+    "cancel": "取消",
+    "open": "打开",
+    "retry": "重试",
+    "reconnect": "重新连接",
+    "copy": "复制",
+    "copied": "已复制",
+    "edit": "编辑",
+    "download": "下载",
+    "send": "发送",
+    "local": "本地",
+    "newWorktree": "新工作树",
+    "agent": "代理",
+    "on": "开启",
+    "off": "关闭"
+  },
+  "composer": {
+    "placeholder": "向代理询问任何问题…",
+    "askAnything": "询问任何问题…（/ 使用命令，@ 引用文件）",
+    "optionalMessage": "添加消息（可选）…",
+    "unavailable": "输入框不可用",
+    "sessionClosed": "会话已关闭",
+    "searchingFiles": "正在搜索文件…",
+    "noMatchingFiles": "没有匹配的文件。",
+    "dropFiles": "拖放文件以添加附件",
+    "attachFiles": "添加文件",
+    "cancelTurn": "取消本轮",
+    "queueMessage": "将消息加入队列",
+    "sendMessage": "发送消息",
+    "sendFailed": "无法发送消息，请重试。",
+    "updateMcpFailed": "无法更新 MCP 服务器，已恢复之前的设置。"
+  },
+  "connection": {
+    "connected": "已连接",
+    "disconnected": "已断开",
+    "reconnecting": "正在重新连接"
+  },
+  "messages": {
+    "playAudio": "播放 {{name}}",
+    "openExternal": "打开外部链接？",
+    "openInEditor": "在编辑器中打开",
+    "openFileFailed": "无法从对话中打开文件。",
+    "copyFailed": "复制失败"
+  },
+  "permission": {
+    "title": "需要权限",
+    "description": "代理希望运行 {{action}}。",
+    "actionFallback": "此操作",
+    "noOptions": "未提供任何选项。",
+    "declineHint": "关闭此对话框将拒绝该请求。",
+    "responseFailed": "无法发送权限响应，请重试。"
+  },
+  "errorNotice": {
+    "dismiss": "关闭错误"
+  },
+  "empty": {
+    "chatWith": "与 {{name}} 对话",
+    "start": "开始对话",
+    "hint": "询问任何问题，或尝试以下操作：",
+    "type": "输入",
+    "commandsHint": "使用命令和技能",
+    "suggestions": {
+      "explain": {
+        "label": "解释此项目",
+        "prompt": "请从整体上介绍此代码库及其结构。"
+      },
+      "bug": {
+        "label": "查找错误",
+        "prompt": "请检查我当前打开的代码中可能存在的错误或边界情况。"
+      },
+      "tests": {
+        "label": "编写测试",
+        "prompt": "请为我当前处理的文件编写单元测试。"
+      },
+      "changes": {
+        "label": "总结更改",
+        "prompt": "请总结我最近尚未提交的 git 更改。"
+      }
+    }
+  },
+  "turn": {
+    "working": "处理中…",
+    "worked": "已处理",
+    "workedFor": "处理了 {{duration}}",
+    "needsAttention": "· 需要注意"
+  },
+  "queue": {
+    "sendNow": "立即发送",
+    "remove": "从队列移除",
+    "label": "已排队",
+    "fallback": "（排队的消息）"
+  },
+  "code": {
+    "downloadFailed": "下载失败",
+    "viewFullscreen": "全屏查看",
+    "exitFullscreen": "退出全屏",
+    "markdownTable": "Markdown 表格"
+  },
+  "diff": {
+    "newFile": "新文件"
+  },
+  "history": {
+    "unsupported": "代理不支持加载或恢复会话",
+    "resumeTitle": "{{title}} — {{agent}}（从 CLI 历史记录恢复）",
+    "delete": "删除对话",
+    "openFailed": "无法打开该对话，请重试。",
+    "reconnectFailed": "无法重新连接，请重试。",
+    "deleteFailed": "无法删除该对话，请重试。",
+    "search": "搜索对话…",
+    "empty": "暂无对话。请使用“新建对话”按钮开始。",
+    "noMatches": "没有匹配项。",
+    "loadMore": "加载更多（还有 {{count}} 项）",
+    "today": "今天",
+    "yesterday": "昨天",
+    "earlier": "更早"
+  },
+  "question": {
+    "sendFailed": "无法发送回答，请重试。",
+    "noOptions": "代理未提供任何选项。",
+    "confirm": "确认",
+    "choose": "选择"
+  },
+  "thinking": {
+    "thinking": "思考中…",
+    "thought": "思考",
+    "lines_one": "{{count}} 行",
+    "lines_other": "{{count}} 行",
+    "jump": "跳到最新思考内容",
+    "jumpShort": "跳到最新内容",
+    "collapse": "折叠思考内容",
+    "expand": "展开全部思考内容",
+    "less": "收起",
+    "more": "更多"
+  },
+  "context": {
+    "aria": "上下文已使用 {{percent}}%",
+    "title": "上下文窗口",
+    "conversationUsed": "对话已使用 {{percent}}%",
+    "tokens": "{{used}} / {{size}} 个 token",
+    "remaining": "剩余 {{count}}",
+    "total": "上下文总量：{{used}} / {{size}}",
+    "cost": "报告成本",
+    "reportedBy": "由代理报告"
+  },
+  "mention": {
+    "recent": "最近",
+    "files": "文件"
+  },
+  "selectors": {
+    "searchModels": "搜索模型...",
+    "noModels": "没有匹配的模型。",
+    "mode": "模式",
+    "model": "模型",
+    "thinkingLevel": "思考级别",
+    "skills": "技能",
+    "commands": "命令",
+    "noItems": "没有可用项目。",
+    "noCommands": "没有可用命令。"
+  },
+  "panel": {
+    "restoring": "正在恢复对话",
+    "loadingConversation": "正在加载你的对话…",
+    "queuedSendFailed": "无法发送排队消息，请重试。",
+    "cancelFailed": "无法取消本轮，请重试。",
+    "settingFailed": "无法更新该设置，请重试。",
+    "modeFailed": "无法切换模式，请重试。",
+    "modelFailed": "无法切换模型，请重试。",
+    "retryFailed": "无法重试，请再试一次。",
+    "missingSkillPath": "技能“{{name}}”缺少路径",
+    "restoreFailed": "恢复对话失败。",
+    "noActive": "此窗格没有活动对话。",
+    "startingAgent": "正在启动代理…",
+    "reconnectingAgent": "正在重新连接代理…",
+    "restoreAgentFailed": "恢复代理对话失败。",
+    "disconnectedReadonly": "对话已断开（只读）。",
+    "reconnecting": "正在重新连接…"
+  },
+  "commandChip": {
+    "remove": "移除 /{{name}} 命令",
+    "removeTitle": "移除命令"
+  },
+  "attachments": {
+    "screenshot": "截图",
+    "image": "图片",
+    "source": "来源",
+    "attachment": "附件",
+    "removeAction": "移除",
+    "remove": "移除 {{name}}",
+    "empty": "暂无附件",
+    "errors": {
+      "readFailed": "读取附件失败",
+      "tooLarge": "文件过大",
+      "embedUnsupported": "此代理无法嵌入文件 — 请使用附件按钮按路径链接",
+      "imagesUnsupported": "此代理无法在浏览器中接收图片",
+      "unsupportedType": "不支持的文件类型（仅限文本或图片）",
+      "pickerFailed": "打开文件选择器失败",
+      "inlineReadFailed": "无法内联读取图片 — 已改为按路径链接",
+      "imageTooLarge": "图片过大（最大 10 MB）",
+      "pasteFailed": "附加粘贴的图片失败",
+      "tempWriteDesktopOnly": "临时文件写入仅支持桌面端；Web 端请使用内联文件字节"
+    }
+  },
+  "scroll": {
+    "latest": "滚动到最新消息",
+    "latestWithNew": "滚动到最新消息（{{count}} 条新消息）"
+  },
+  "tool": {
+    "verbs": {
+      "read": "读取了",
+      "edit": "编辑了",
+      "delete": "删除了",
+      "move": "移动了",
+      "search": "搜索了",
+      "execute": "运行了",
+      "think": "思考中",
+      "fetch": "获取了",
+      "switchMode": "切换了模式"
+    },
+    "subagentTask": "子代理任务",
+    "file": "文件",
+    "command": "命令",
+    "thinking": "思考中",
+    "call": "工具调用",
+    "terminal": "终端",
+    "terminalWithId": "终端 {{id}}",
+    "openFile": "打开文件"
+  },
+  "plan": {
+    "priority": {
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "execution": "执行计划",
+    "title": "计划",
+    "task_one": "项任务",
+    "task_other": "项任务",
+    "inProgress_one": "{{count}} 项任务进行中",
+    "inProgress_other": "{{count}} 项任务进行中",
+    "aria": "计划，已完成 {{completed}} / {{total}} {{taskLabel}}{{progress}}",
+    "snapshotIncomplete": "计划快照不完整",
+    "snapshotUnavailable": "计划快照不可用"
+  },
+  "aiPrompt": {
+    "title": "AI 冲突解决提示词",
+    "close": "关闭",
+    "tool": "工具",
+    "pasteInto": "{{template}} — 粘贴到 {{tool}}",
+    "missingContext": "请选择工作树上下文以生成提示词。",
+    "variables": "变量：{{variables}}",
+    "copied": "已复制！",
+    "copy": "复制提示词"
+  },
+  "transport": {
+    "registryInstallDesktopOnly": "Registry 二进制安装仅支持桌面端",
+    "websocketError": "WebSocket 错误",
+    "websocketSupersededBeforeAuth": "被取代的 WebSocket 在认证前已关闭",
+    "websocketClosed": "WebSocket 已关闭",
+    "websocketClosedBeforeAuth": "WebSocket 在认证前已关闭",
+    "websocketAuthTimeout": "WebSocket 认证握手超时",
+    "socketNotAuthenticated": "连接尚未认证或未打开",
+    "resumeHealthTimeout": "恢复连接健康检查超时",
+    "subscriptionRecoveryFailed": "必要的 ACP 订阅未能恢复",
+    "requestTimedOut": "请求 {{type}} 超时",
+    "websocketNotOpen": "WebSocket 未打开",
+    "disposed": "传输已释放",
+    "authenticateFailed": "认证失败"
+  },
+  "store": {
+    "untitled": "未命名对话 {{count}}",
+    "untitledFallback": "未命名对话",
+    "resumeFailed": "恢复失败：{{error}}",
+    "stopRefusal": "代理拒绝继续。",
+    "stopTokens": "响应已停止：达到 token 上限。",
+    "stopRounds": "响应已停止：工具调用轮次过多。",
+    "stopOther": "响应已停止：{{reason}}",
+    "modelUnavailable": "所选模型在此会话中不可用",
+    "modelUnavailableDescription": "代理未提供模型“{{model}}”，且不存在模型配置选项。将回退到代理的默认模型。",
+    "sendQueuedFailed": "发送排队消息失败：{{error}}",
+    "recoveryDegraded": "连接仅恢复为实时状态；断开期间发出的事件可能缺失。",
+    "projectSwitchFailed": "项目切换失败",
+    "agentCrashed": "代理已崩溃",
+    "agentError": "代理错误",
+    "reportedError": "ACP 代理报告了错误",
+    "crashed": "ACP 代理已崩溃",
+    "disconnected": "ACP 代理已断开",
+    "commitInvalidResponse": "ACP 代理返回了无效的提交消息响应",
+    "commitBlankSummary": "ACP 代理返回了空的提交摘要",
+    "commitSummaryInvalid": "ACP 代理返回的提交摘要超过 72 个字符或包含换行符",
+    "commitDescriptionInvalid": "ACP 代理返回了无效的提交描述",
+    "stagedDiffEmpty": "暂存区差异为空",
+    "stagedDiffTooLarge": "暂存区差异过大，无法安全生成提交消息",
+    "selectAgentForCommit": "请先配置并选择 ACP 代理，再生成提交消息",
+    "selectedAgentUnavailable": "所选 ACP 代理不可用，请检查其配置后重试",
+    "agentDidNotComplete": "ACP 代理未正常完成（{{reason}}）",
+    "responseTooLarge": "ACP 代理响应过大",
+    "attemptedTool": "ACP 代理尝试使用工具",
+    "requestedPermission": "ACP 代理请求了权限",
+    "askedQuestion": "ACP 代理提出了交互式问题",
+    "temporarySessionClosed": "临时 ACP 会话意外关闭",
+    "worktreeCreationFailed": "创建工作树失败：{{error}}",
+    "unknownError": "未知错误"
+  }
+}

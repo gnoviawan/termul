@@ -1,0 +1,99 @@
+{
+  "controls": {
+    "back": "后退",
+    "forward": "前进",
+    "reload": "重新加载",
+    "enterUrl": "输入网址...",
+    "openDebugConsole": "打开调试控制台",
+    "debugConsole": "调试控制台",
+    "disableAnnotationMode": "关闭标注模式",
+    "enableAnnotationMode": "开启标注模式"
+  },
+  "panel": {
+    "loading": "加载中...",
+    "annotationUnavailable": "由于页面安全策略，当前页面无法使用标注模式"
+  },
+  "annotation": {
+    "title": "标注",
+    "delete": "删除标注",
+    "descriptionPlaceholder": "添加描述...",
+    "descriptionEmpty": "点击添加描述...",
+    "cancel": "取消",
+    "save": "保存",
+    "exit": "退出标注模式",
+    "tools": "标注工具",
+    "mode": "标注模式",
+    "drawRectangle": "绘制矩形标注",
+    "drawRectangleTooltip": "绘制矩形",
+    "selectUnavailable": "当前页面无法选择元素",
+    "selectElements": "选择元素",
+    "selectUnavailableTooltip": "当前页面无法使用标注",
+    "addNote": "添加页面备注",
+    "export": "导出标注",
+    "noExport": "没有可导出的标注",
+    "sessionScoped": "仅当前会话：应用关闭后标注将被清除",
+    "empty": "当前页面没有标注。",
+    "noText": "（无文本）",
+    "intent": {
+      "fix": "修复",
+      "change": "更改",
+      "question": "问题",
+      "approve": "通过"
+    },
+    "severity": {
+      "blocking": "阻断",
+      "important": "重要",
+      "suggestion": "建议"
+    },
+    "selectorConfidence": {
+      "unique-id": "唯一 ID",
+      "unique-class": "唯一类名",
+      "fallback": "后备选择器"
+    }
+  },
+  "export": {
+    "title": "导出标注",
+    "markdown": "Markdown",
+    "json": "JSON",
+    "afs": "AFS（Agentation 格式）",
+    "compact": "精简",
+    "standard": "标准",
+    "detailed": "详细",
+    "copy": "复制",
+    "copied": "已复制",
+    "failed": "失败",
+    "copyFailed": "复制失败",
+    "markdownLabels": {
+      "noAnnotations": "没有标注。",
+      "titleFallback": "标注",
+      "noText": "（无文本）",
+      "noComment": "（无备注）",
+      "noDescription": "（无描述）",
+      "none": "（无）",
+      "annotation": "标注",
+      "note": "备注",
+      "region": "区域",
+      "element": "元素",
+      "text": "文本",
+      "type": "类型",
+      "intent": "意图",
+      "severity": "严重程度",
+      "description": "描述",
+      "geometry": "几何信息",
+      "tag": "标签",
+      "selector": "选择器",
+      "selectorConfidence": "选择器置信度",
+      "textPreview": "文本预览",
+      "boundingBox": "边界框",
+      "attribute": "属性",
+      "value": "值",
+      "viewport": "视口",
+      "created": "创建时间"
+    },
+    "annotationType": {
+      "element": "元素",
+      "region": "区域",
+      "note": "备注"
+    }
+  }
+}

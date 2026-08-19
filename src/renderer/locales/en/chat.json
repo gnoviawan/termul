@@ -1,0 +1,306 @@
+{
+  "title": "Agent Chat",
+  "common": {
+    "cancel": "Cancel",
+    "open": "Open",
+    "retry": "Retry",
+    "reconnect": "Reconnect",
+    "copy": "Copy",
+    "copied": "Copied",
+    "edit": "Edit",
+    "download": "Download",
+    "send": "Send",
+    "local": "Local",
+    "newWorktree": "New worktree",
+    "agent": "Agent",
+    "on": "On",
+    "off": "Off"
+  },
+  "composer": {
+    "placeholder": "Ask the agent anything…",
+    "askAnything": "Ask anything… (/ for commands, @ for files)",
+    "optionalMessage": "Add a message (optional)…",
+    "unavailable": "Composer unavailable",
+    "sessionClosed": "Session closed",
+    "searchingFiles": "Searching files…",
+    "noMatchingFiles": "No matching files.",
+    "dropFiles": "Drop files to attach",
+    "attachFiles": "Attach files",
+    "cancelTurn": "Cancel turn",
+    "queueMessage": "Queue message",
+    "sendMessage": "Send message",
+    "sendFailed": "Could not send your message. Try again.",
+    "updateMcpFailed": "Could not update the MCP server. Your previous setting was restored."
+  },
+  "connection": {
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "reconnecting": "Reconnecting"
+  },
+  "messages": {
+    "playAudio": "Play {{name}}",
+    "openExternal": "Open external link?",
+    "openInEditor": "Open in editor",
+    "openFileFailed": "Failed to open file from chat.",
+    "copyFailed": "Failed to copy"
+  },
+  "permission": {
+    "title": "Permission required",
+    "description": "The agent wants to run {{action}}.",
+    "actionFallback": "this action",
+    "noOptions": "No options were provided.",
+    "declineHint": "Closing this dialog declines the request.",
+    "responseFailed": "Could not send the permission response. Try again."
+  },
+  "errorNotice": {
+    "dismiss": "Dismiss error"
+  },
+  "empty": {
+    "chatWith": "Chat with {{name}}",
+    "start": "Start a conversation",
+    "hint": "Ask anything, or try one of these:",
+    "type": "Type",
+    "commandsHint": "for commands & skills",
+    "suggestions": {
+      "explain": {
+        "label": "Explain this project",
+        "prompt": "Give me a high-level overview of this codebase and how it is structured."
+      },
+      "bug": {
+        "label": "Find a bug",
+        "prompt": "Look for potential bugs or edge cases in the code I currently have open."
+      },
+      "tests": {
+        "label": "Write tests",
+        "prompt": "Write unit tests for the file I am currently working on."
+      },
+      "changes": {
+        "label": "Summarize changes",
+        "prompt": "Summarize my recent uncommitted git changes."
+      }
+    }
+  },
+  "turn": {
+    "working": "Working…",
+    "worked": "Worked",
+    "workedFor": "Worked for {{duration}}",
+    "needsAttention": "· needs attention"
+  },
+  "queue": {
+    "sendNow": "Send now",
+    "remove": "Remove from queue",
+    "label": "Queued",
+    "fallback": "(queued message)"
+  },
+  "code": {
+    "downloadFailed": "Failed to download",
+    "viewFullscreen": "View fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "markdownTable": "Markdown table"
+  },
+  "diff": {
+    "newFile": "new"
+  },
+  "history": {
+    "unsupported": "Agent does not support loading or resuming sessions",
+    "resumeTitle": "{{title}} — {{agent}} (resume from CLI history)",
+    "delete": "Delete chat",
+    "openFailed": "Could not open that chat. Try again.",
+    "reconnectFailed": "Could not reconnect. Try again.",
+    "deleteFailed": "Could not delete that chat. Try again.",
+    "search": "Search chats…",
+    "empty": "No chats yet. Start one with the New Chat button.",
+    "noMatches": "No matches.",
+    "loadMore": "Load more ({{count}} more)",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "earlier": "Earlier"
+  },
+  "question": {
+    "sendFailed": "Could not send your answer. Try again.",
+    "noOptions": "The agent provided no options.",
+    "confirm": "Confirm",
+    "choose": "Choose"
+  },
+  "thinking": {
+    "thinking": "Thinking…",
+    "thought": "Thought",
+    "lines_one": "{{count}} line",
+    "lines_other": "{{count}} lines",
+    "jump": "Jump to latest thinking",
+    "jumpShort": "Jump to latest",
+    "collapse": "Collapse thinking",
+    "expand": "Expand all thinking",
+    "less": "Less",
+    "more": "More"
+  },
+  "context": {
+    "aria": "Context {{percent}} percent used",
+    "title": "Context window",
+    "conversationUsed": "{{percent}}% conversation used",
+    "tokens": "{{used}} / {{size}} tokens",
+    "remaining": "{{count}} remaining",
+    "total": "Total in context: {{used}} / {{size}}",
+    "cost": "Reported cost",
+    "reportedBy": "Reported by agent"
+  },
+  "mention": {
+    "recent": "Recent",
+    "files": "Files"
+  },
+  "selectors": {
+    "searchModels": "Search models...",
+    "noModels": "No matching models.",
+    "mode": "Mode",
+    "model": "Model",
+    "thinkingLevel": "Thinking Level",
+    "skills": "Skills",
+    "commands": "Commands",
+    "noItems": "No items available.",
+    "noCommands": "No commands available."
+  },
+  "panel": {
+    "restoring": "Restoring chat",
+    "loadingConversation": "Loading your conversation…",
+    "queuedSendFailed": "Could not send the queued message. Try again.",
+    "cancelFailed": "Could not cancel the turn. Try again.",
+    "settingFailed": "Could not update that setting. Try again.",
+    "modeFailed": "Could not switch mode. Try again.",
+    "modelFailed": "Could not switch model. Try again.",
+    "retryFailed": "Could not retry. Try again.",
+    "missingSkillPath": "Skill '{{name}}' is missing a path",
+    "restoreFailed": "Failed to restore chat.",
+    "noActive": "No active chat for this pane.",
+    "startingAgent": "Starting agent…",
+    "reconnectingAgent": "Reconnecting to agent…",
+    "restoreAgentFailed": "Failed to restore agent chat.",
+    "disconnectedReadonly": "Chat disconnected (read-only).",
+    "reconnecting": "Reconnecting…"
+  },
+  "commandChip": {
+    "remove": "Remove /{{name}} command",
+    "removeTitle": "Remove command"
+  },
+  "attachments": {
+    "screenshot": "Screenshot",
+    "image": "Image",
+    "source": "Source",
+    "attachment": "Attachment",
+    "removeAction": "Remove",
+    "remove": "Remove {{name}}",
+    "empty": "No attachments",
+    "errors": {
+      "readFailed": "Failed to read attachment",
+      "tooLarge": "File too large",
+      "embedUnsupported": "This agent can't embed files — use the attach button to link by path",
+      "imagesUnsupported": "This agent can't accept images in the browser",
+      "unsupportedType": "Unsupported file type (text or image only)",
+      "pickerFailed": "Failed to open file picker",
+      "inlineReadFailed": "Could not read image inline — linked by path instead",
+      "imageTooLarge": "Image too large (max 10 MB)",
+      "pasteFailed": "Failed to attach pasted image",
+      "tempWriteDesktopOnly": "Temp file write is desktop-only; use inline File bytes on web"
+    }
+  },
+  "scroll": {
+    "latest": "Scroll to latest",
+    "latestWithNew": "Scroll to latest ({{count}} new)"
+  },
+  "tool": {
+    "verbs": {
+      "read": "Read",
+      "edit": "Edited",
+      "delete": "Deleted",
+      "move": "Moved",
+      "search": "Searched",
+      "execute": "Ran",
+      "think": "Thinking",
+      "fetch": "Fetched",
+      "switchMode": "Switched mode"
+    },
+    "subagentTask": "Subagent task",
+    "file": "file",
+    "command": "command",
+    "thinking": "Thinking",
+    "call": "Tool call",
+    "terminal": "Terminal",
+    "terminalWithId": "Terminal {{id}}",
+    "openFile": "Open file"
+  },
+  "plan": {
+    "priority": {
+      "high": "High",
+      "medium": "Med",
+      "low": "Low"
+    },
+    "execution": "Execution plan",
+    "title": "Plan",
+    "task_one": "task",
+    "task_other": "tasks",
+    "inProgress_one": "task in progress",
+    "inProgress_other": "{{count}} tasks in progress",
+    "aria": "Plan, {{completed}} of {{total}} {{taskLabel}}{{progress}}",
+    "snapshotIncomplete": "Plan snapshot incomplete",
+    "snapshotUnavailable": "Plan snapshot unavailable"
+  },
+  "aiPrompt": {
+    "title": "AI Conflict Resolution Prompts",
+    "close": "Close",
+    "tool": "Tool",
+    "pasteInto": "{{template}} — Paste this into {{tool}}",
+    "missingContext": "Select a worktree context to generate a prompt.",
+    "variables": "Variables: {{variables}}",
+    "copied": "Copied!",
+    "copy": "Copy Prompt"
+  },
+  "transport": {
+    "registryInstallDesktopOnly": "Registry binary install is desktop-only",
+    "websocketError": "WebSocket error",
+    "websocketSupersededBeforeAuth": "superseded WebSocket closed before auth",
+    "websocketClosed": "WebSocket closed",
+    "websocketClosedBeforeAuth": "WebSocket closed before auth",
+    "websocketAuthTimeout": "WebSocket auth handshake timeout",
+    "socketNotAuthenticated": "socket is not authenticated and open",
+    "resumeHealthTimeout": "resume health check timed out",
+    "subscriptionRecoveryFailed": "required ACP subscriptions did not recover",
+    "requestTimedOut": "Request {{type}} timed out",
+    "websocketNotOpen": "WebSocket not open",
+    "disposed": "transport disposed",
+    "authenticateFailed": "authenticate failed"
+  },
+  "store": {
+    "untitled": "Untitled Chat {{count}}",
+    "untitledFallback": "Untitled Chat",
+    "resumeFailed": "Resume failed: {{error}}",
+    "stopRefusal": "The agent refused to continue.",
+    "stopTokens": "Response stopped: token limit reached.",
+    "stopRounds": "Response stopped: too many tool-call rounds.",
+    "stopOther": "Response stopped: {{reason}}",
+    "modelUnavailable": "Selected model is not available in this session",
+    "modelUnavailableDescription": "The model \"{{model}}\" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.",
+    "sendQueuedFailed": "Failed to send queued message: {{error}}",
+    "recoveryDegraded": "Connection recovered live-only; events emitted while disconnected may be missing.",
+    "projectSwitchFailed": "Project switch failed",
+    "agentCrashed": "Agent crashed",
+    "agentError": "Agent error",
+    "reportedError": "The ACP agent reported an error",
+    "crashed": "The ACP agent crashed",
+    "disconnected": "The ACP agent disconnected",
+    "commitInvalidResponse": "The ACP agent returned an invalid commit message response",
+    "commitBlankSummary": "The ACP agent returned a blank commit summary",
+    "commitSummaryInvalid": "The ACP agent returned a commit summary that is longer than 72 characters or contains a newline",
+    "commitDescriptionInvalid": "The ACP agent returned an invalid commit description",
+    "stagedDiffEmpty": "The staged diff is empty",
+    "stagedDiffTooLarge": "The staged diff is too large to generate safely",
+    "selectAgentForCommit": "Configure and select an ACP agent before generating a commit message",
+    "selectedAgentUnavailable": "The selected ACP agent is unavailable. Check its configuration and retry",
+    "agentDidNotComplete": "The ACP agent did not complete normally ({{reason}})",
+    "responseTooLarge": "The ACP agent response was too large",
+    "attemptedTool": "The ACP agent attempted to use a tool",
+    "requestedPermission": "The ACP agent requested permission",
+    "askedQuestion": "The ACP agent asked an interactive question",
+    "temporarySessionClosed": "The temporary ACP session closed unexpectedly",
+    "worktreeCreationFailed": "Worktree creation failed: {{error}}",
+    "unknownError": "unknown"
+  }
+}

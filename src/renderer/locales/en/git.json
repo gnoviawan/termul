@@ -1,0 +1,236 @@
+{
+  "common": {
+    "cancel": "Cancel"
+  },
+  "conflicts": {
+    "resolved": "All conflicts resolved!",
+    "readyToMerge": "Ready to complete the merge.",
+    "progress": "{{resolved}}/{{total}} resolved"
+  },
+  "errors": {
+    "stageFailed": "Failed to stage: {{details}}",
+    "unstageFailed": "Failed to unstage: {{details}}",
+    "stageHunkFailed": "Failed to stage hunk: {{details}}",
+    "unstageHunkFailed": "Failed to unstage hunk: {{details}}",
+    "discardFailed": "Failed to discard changes: {{details}}"
+  },
+  "changes": {
+    "title": "Changes",
+    "staged": "Staged Changes",
+    "filterLabel": "Filter changes",
+    "filterPlaceholder": "Filter changes...",
+    "none": "No changes detected",
+    "stage": "Stage changes",
+    "stageAll": "Stage all changes",
+    "unstage": "Unstage changes",
+    "unstageAll": "Unstage all changes",
+    "discard": "Discard changes",
+    "discardAll": "Discard all changes",
+    "selectedCount_one": "{{formattedCount}} selected",
+    "selectedCount_other": "{{formattedCount}} selected"
+  },
+  "status": {
+    "added": "Added",
+    "modified": "Modified",
+    "deleted": "Deleted",
+    "renamed": "Renamed",
+    "untracked": "Untracked",
+    "staged": "Staged"
+  },
+  "diff": {
+    "viewMode": "Diff view mode",
+    "inline": "Inline diff",
+    "sideBySide": "Side-by-side diff",
+    "staged": "Staged",
+    "workingTree": "Working tree",
+    "loading": "Loading diff...",
+    "noAvailable": "No diff available",
+    "unavailableDescription": "This file may be ignored by Git, unchanged relative to the selected base, or unavailable for diff preview.",
+    "selectFile": "Select a file to see changes",
+    "selectFileDescription": "Click any modified file in the sidebar to view the diff and manage your changes.",
+    "backToFiles": "Back to file list",
+    "stageHunk": "Stage hunk",
+    "unstageHunk": "Unstage hunk",
+    "errors": {
+      "loadFailed": "Failed to load diff: {{details}}"
+    }
+  },
+  "discard": {
+    "title": "Discard changes",
+    "confirm": "Discard",
+    "multiple_one": "Discard changes to {{formattedCount}} file? This cannot be undone.",
+    "multiple_other": "Discard changes to {{formattedCount}} files? This cannot be undone.",
+    "single": "Discard changes to \"{{path}}\"? This cannot be undone."
+  },
+  "commit": {
+    "summaryLabel": "Commit summary",
+    "summaryRequired": "Summary (required)",
+    "updateMessage": "Update commit message",
+    "descriptionLabel": "Commit description",
+    "descriptionOptional": "Description (optional)",
+    "generate": "Generate message",
+    "generating": "Generating...",
+    "generateNeedsStage": "Stage files to generate a commit message",
+    "generateNeedsAgent": "Configure and select an ACP agent",
+    "generateTitle": "Generate a commit message from staged changes",
+    "amendLast": "Amend last commit",
+    "amendDescription": "Amend the last commit instead of creating a new one",
+    "noCommitToAmend": "No commit to amend yet",
+    "amendTitle": "Amend the last commit",
+    "stageToCommit": "Stage files to commit",
+    "commitStaged": "Commit staged changes",
+    "committing": "Committing...",
+    "amend": "Amend commit",
+    "toBranch": "Commit to {{branch}}",
+    "action": "Commit",
+    "amendPushedTitle": "Amend pushed commit",
+    "amendPushedMessage": "The last commit appears to already be pushed. Amending rewrites published history and will require a force-push to update the remote. Continue?",
+    "amendAnyway": "Amend anyway",
+    "errors": {
+      "agentRequired": "Configure and select an ACP agent before generating a commit message",
+      "stageRequired": "Stage files before generating a commit message",
+      "stagedFilesChanged": "Staged files changed. Refresh Git status and retry",
+      "generationChanged": "Staged files or repository changed during generation. Retry",
+      "emptyDiff": "The staged diff is empty. Refresh Git status and retry",
+      "diffTooLarge_one": "The staged diff is too large to generate safely ({{formattedCount}} character; limit {{formattedLimit}})",
+      "diffTooLarge_other": "The staged diff is too large to generate safely ({{formattedCount}} characters; limit {{formattedLimit}})",
+      "repositoryChanged": "Repository changed during generation. Generated message was discarded",
+      "commitFailed": "Failed to commit: {{details}}"
+    },
+    "toasts": {
+      "generated": "Commit message generated",
+      "amended": "Commit amended",
+      "committed": "Changes committed"
+    }
+  },
+  "push": {
+    "publish": "Publish branch",
+    "count_one": "Push {{formattedCount}}",
+    "count_other": "Push {{formattedCount}}",
+    "upToDate": "Up to date",
+    "pushing": "Pushing...",
+    "detached": "Not on a branch (detached HEAD)",
+    "publishTitle": "Publish this branch to origin",
+    "pushTitle": "Push commits to the remote",
+    "nothingToPush": "Nothing to push — up to date with the remote",
+    "errors": {
+      "failed": "Failed to push: {{details}}"
+    },
+    "toasts": {
+      "success": "Pushed to remote"
+    }
+  },
+  "branch": {
+    "detachedHead": "Detached HEAD",
+    "createNew": "Create new branch...",
+    "noneFound": "No branches found",
+    "createTitle": "Create New Branch",
+    "nameLabel": "Branch name",
+    "namePlaceholder": "e.g. feature/new-login",
+    "createAndSwitch": "Create & Switch",
+    "uncommittedTitle": "Uncommitted Changes",
+    "uncommittedMessage": "You have uncommitted changes on your current branch. How would you like to handle them before switching to {{branch}}?",
+    "bringDescription": "Bring Changes: Keep your changes and carry them over to the new branch.",
+    "stashDescription": "Stash & Switch: Stash your changes on this branch, switch, and try to re-apply them on the new branch.",
+    "bringChanges": "Bring Changes",
+    "stashAndSwitch": "Stash & Switch",
+    "errors": {
+      "switchFailed": "Failed to switch branch: {{details}}",
+      "createFailed": "Failed to create branch: {{details}}"
+    },
+    "toasts": {
+      "switched": "Switched to branch {{branch}}",
+      "switchedReapplied": "Switched to branch {{branch}} and reapplied changes",
+      "stashConflict": "Switched to branch {{branch}}, but changes were left in stash@{0} due to conflicts",
+      "switchedCarried": "Switched to branch {{branch}} (changes carried over)",
+      "created": "Created and switched to branch {{branch}}"
+    }
+  },
+  "stash": {
+    "title": "Stashes",
+    "action": "Stash changes",
+    "dialogTitle": "Stash Changes",
+    "messageOptional": "Message (optional)",
+    "placeholder": "WIP on current branch...",
+    "includeUntracked": "Include untracked files",
+    "noMessage": "No message",
+    "apply": "Apply stash (keeps stash entry)",
+    "pop": "Pop stash (applies and drops)",
+    "drop": "Drop stash",
+    "errors": {
+      "saveFailed": "Failed to stash changes: {{details}}",
+      "applyFailed": "Failed to apply stash: {{details}}",
+      "popFailed": "Failed to pop stash: {{details}}",
+      "dropFailed": "Failed to drop stash: {{details}}"
+    },
+    "toasts": {
+      "saved": "Changes stashed successfully",
+      "applied": "Stash@{{{index}}} applied",
+      "popped": "Stash@{{{index}}} popped",
+      "dropped": "Stash@{{{index}}} dropped"
+    }
+  },
+  "history": {
+    "title": "Git History",
+    "filterLabel": "Filter commits",
+    "filterPlaceholder": "Filter commits...",
+    "refresh": "Refresh history",
+    "loading": "Loading history...",
+    "noMatches": "No commits match \"{{query}}\"",
+    "errors": {
+      "loadFailed": "Failed to load git history: {{details}}"
+    },
+    "empty": {
+      "title": "No commit history",
+      "repositoryUnavailable": "This folder may not be a Git repository, or git is unavailable.",
+      "noCommits": "There are no commits to show yet. Make your first commit to see it here."
+    }
+  },
+  "branchPicker": {
+    "switchLabel": "Switch git branch",
+    "detached": "detached",
+    "searchLabel": "Search branches",
+    "searchPlaceholder": "Search branches...",
+    "loading": "Loading branches...",
+    "retry": "Retry",
+    "checkedOutElsewhere": "This branch is checked out in another worktree",
+    "newBranchLabel": "New branch name",
+    "newBranchPlaceholder": "new-branch-name",
+    "create": "Create",
+    "createAndCheckout": "Create and checkout new branch...",
+    "badges": {
+      "current": "current",
+      "remote": "remote",
+      "worktree": "worktree"
+    },
+    "empty": {
+      "noBranches": "No branches yet.",
+      "noMatches": "No branches match your search."
+    },
+    "errors": {
+      "notRepository": "This folder is not a git repository.",
+      "gitNotFound": "Git is not installed or not available on PATH.",
+      "loadFailed": "Failed to load branches.",
+      "switchFailed": "Failed to switch branch",
+      "waitForLoad": "Wait for branches to finish loading",
+      "loadBeforeCreate": "Branches must load successfully before creating a new branch",
+      "invalidName": "Enter a valid branch name",
+      "createFailed": "Failed to create branch"
+    },
+    "toasts": {
+      "switched": "Switched to {{branch}}",
+      "created": "Created and checked out {{branch}}"
+    }
+  },
+  "time": {
+    "now": "now",
+    "minutes_one": "{{formattedCount}}m",
+    "minutes_other": "{{formattedCount}}m",
+    "hours_one": "{{formattedCount}}h",
+    "hours_other": "{{formattedCount}}h",
+    "days_one": "{{formattedCount}}d",
+    "days_other": "{{formattedCount}}d",
+    "weeks_one": "{{formattedCount}}w",
+    "weeks_other": "{{formattedCount}}w"
+  }
+}

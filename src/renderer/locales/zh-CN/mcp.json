@@ -1,0 +1,103 @@
+{
+  "common": {
+    "servers": "MCP 服务器",
+    "save": "保存",
+    "saving": "正在保存…",
+    "cancel": "取消",
+    "enable": "启用 {{name}}",
+    "disable": "禁用 {{name}}",
+    "showTools": "显示工具",
+    "tools_one": "{{count}} 个工具",
+    "tools_other": "{{count}} 个工具",
+    "probing": "正在探测…",
+    "probeFailed": "探测失败。"
+  },
+  "badge": {
+    "attachedTitle": "已连接 {{count}} 个 MCP 服务器",
+    "attachedTitle_one": "已连接 {{count}} 个 MCP 服务器",
+    "attachedTitle_other": "已连接 {{count}} 个 MCP 服务器",
+    "attachedSr": "已连接 MCP 服务器",
+    "manageAria": "MCP 服务器 — 已连接 {{count}} 个。点击管理各服务器的启用状态。",
+    "attached_one": "此会话已连接 {{count}} 个。",
+    "attached_other": "此会话已连接 {{count}} 个。",
+    "noneAttached": "尚未连接服务器。",
+    "nextChat": "将在下一次对话生效；即将支持按工具切换。",
+    "status": {
+      "connected": "已连接",
+      "disconnected": "已断开",
+      "notProbed": "未探测",
+      "connectedDetail": "已连接（Termul 可以访问此服务器）",
+      "disconnectedDetail": "已断开（Termul 无法访问此服务器）",
+      "notProbedDetail": "尚未探测 — 点击进行测试"
+    },
+    "probeConfig": "探测失败 — 请检查服务器配置。",
+    "noTools": "没有可用工具。"
+  },
+  "settings": {
+    "title": "全局 MCP 注册表",
+    "description": "新代理会话启动时会自动提供已启用的服务器。",
+    "addServer": "添加服务器",
+    "storageWarning": "环境变量和请求头存储在现有应用数据存储中。请优先使用 $VARIABLE 引用，而不是明文凭据。",
+    "emptyTitle": "尚未配置 MCP 服务器",
+    "emptyDescription": "添加 stdio、HTTP 或 SSE 服务器。",
+    "reachable": "{{name}} 可访问",
+    "unreachable": "{{name}} 不可访问",
+    "notProbed": "{{name}} 尚未探测",
+    "connectedTitle": "已连接（Termul 可以访问此服务器）",
+    "disconnectedTitle": "已断开（Termul 无法访问此服务器）",
+    "notProbedTitle": "尚未探测 — 点击“测试”进行检查",
+    "probeRetry": "探测失败 — 重试",
+    "testConnection": "测试 {{name}} 连接",
+    "edit": "编辑 {{name}}",
+    "delete": "删除 {{name}}",
+    "probeNetwork": "探测失败 — 请检查服务器配置或网络。",
+    "probeNoTools": "探测完成 — 未发现工具。",
+    "expandProbe": "展开以探测（只读 — 即将支持按工具切换）。",
+    "experimentalTitle": "实验性 MCP-over-ACP",
+    "experimentalDescription": "代理可能会声明实验性的 mcpCapabilities.acp 能力。Termul 会保留该能力用于诊断，但在 Termul 提供进程内 MCP 服务器处理程序之前，无法配置原生 ACP 传输。",
+    "dialog": {
+      "editTitle": "编辑 MCP 服务器",
+      "addTitle": "添加 MCP 服务器",
+      "editDescription": "以 JSON 编辑此服务器。保存时会丢弃未知字段。",
+      "addDescription": "粘贴 Claude Desktop 的“mcpServers”配置或单个服务器对象。",
+      "jsonLabel": "MCP JSON",
+      "jsonPlaceholder": "粘贴 mcpServers 配置或单个服务器 JSON 对象"
+    },
+    "added_one": "已添加 {{count}} 个 MCP 服务器",
+    "added_other": "已添加 {{count}} 个 MCP 服务器",
+    "updated": "MCP 服务器已更新",
+    "errors": {
+      "noneFound": "JSON 中未找到 MCP 服务器。",
+      "saveMany": "无法保存 MCP 服务器，已恢复之前的设置。",
+      "editWrapper": "编辑时需要单个服务器对象 — 请移除“mcpServers”包装层。",
+      "editCount": "编辑时必须正好提供一个服务器对象。",
+      "saveOne": "无法保存 MCP 服务器，已恢复之前的设置。",
+      "update": "无法更新 MCP 服务器，已恢复之前的设置。",
+      "delete": "无法删除 MCP 服务器，已恢复之前的设置。"
+    }
+  },
+  "validation": {
+    "nameRequired": "名称为必填项。",
+    "commandRequiredForStdio": "stdio 传输必须填写命令。",
+    "urlRequired": "URL 为必填项。",
+    "urlInvalid": "URL 无效。"
+  },
+  "persistence": {
+    "loadFailed": "加载 MCP 服务器失败",
+    "saveFailed": "保存 MCP 服务器失败"
+  },
+  "skippedTitle": "已跳过部分 MCP 服务器",
+  "skippedDescription": "{{names}} 需要此代理支持 HTTP 或 SSE。",
+  "loadFailed": "无法加载 MCP 服务器。请重新打开设置重试。",
+  "import": {
+    "invalidJson": "JSON 无效：{{message}}",
+    "topLevelObject": "JSON 无效：应为顶层对象",
+    "serversObject": "JSON 无效：“mcpServers”必须是对象",
+    "unknown": "<未知>",
+    "unnamed": "<未命名>",
+    "serverObject": "{{name}}：应为服务器对象",
+    "envShape": "{{name}}：env 必须是对象映射或名称/值对",
+    "invalidServer": "{{name}}：服务器配置无效",
+    "validation": "{{name}}：{{errors}}"
+  }
+}
