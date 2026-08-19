@@ -2,6 +2,7 @@ import type { SSHAuthMethod, SSHProfile } from '@shared/types/ssh.types'
 import { FolderOpen, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { dialogApi } from '@/lib/api'
 import { useSSHActions } from '@/stores/ssh-store'
 
@@ -16,6 +17,7 @@ export function SSHProfileForm({
   onClose,
   onSaved
 }: SSHProfileFormProps): React.JSX.Element {
+  const t = useSshTranslation()
   const { saveProfile } = useSSHActions()
 
   const [name, setName] = useState(profile?.name ?? '')
@@ -32,16 +34,20 @@ export function SSHProfileForm({
   const handleSelectKeyFile = async () => {
     try {
       const result = await dialogApi.selectFile({
-        title: 'Select Private Key',
-        filters: [{ name: 'All Files', extensions: ['*'] }]
+        title: t('profile.selectPrivateKey'),
+        filters: [{ name: t('profile.allFiles'), extensions: ['*'] }]
       })
       if (result.success) {
         setPrivateKeyPath(result.data)
       } else if (result.code !== 'CANCELLED') {
-        toast.error(`Failed to select file: ${result.error}`)
+        toast.error(t('profile.selectFileFailed', { error: result.error }))
       }
     } catch (error) {
-      toast.error(`File dialog failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        t('profile.fileDialogFailed', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
     }
   }
 
@@ -49,12 +55,12 @@ export function SSHProfileForm({
     e.preventDefault()
 
     if (!name.trim() || !host.trim() || !username.trim()) {
-      toast.error('Name, host, and username are required')
+      toast.error(t('profile.requiredFields'))
       return
     }
 
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      toast.error('Port must be an integer between 1 and 65535')
+      toast.error(t('profile.invalidPort'))
       return
     }
 
@@ -81,10 +87,10 @@ export function SSHProfileForm({
 
       const success = await saveProfile(profileData)
       if (success) {
-        toast.success(profile ? 'Profile updated' : 'Profile created')
+        toast.success(profile ? t('profile.updated') : t('profile.created'))
         onSaved()
       } else {
-        toast.error('Failed to save profile')
+        toast.error(t('profile.saveFailed'))
       }
     } finally {
       setSaving(false)
@@ -97,7 +103,7 @@ export function SSHProfileForm({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h3 className="text-sm font-semibold">
-            {profile ? 'Edit SSH Profile' : 'New SSH Profile'}
+            {profile ? t('profile.editTitle') : t('profile.newTitle')}
           </h3>
           <button onClick={onClose} className="p-1 rounded hover:bg-accent">
             <X className="h-4 w-4" />
@@ -108,12 +114,12 @@ export function SSHProfileForm({
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
+            <label className="text-xs font-medium text-muted-foreground">{t('profile.name')}</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="My Server"
+              placeholder={t('profile.namePlaceholder')}
               className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
@@ -121,17 +127,21 @@ export function SSHProfileForm({
           {/* Host + Port */}
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="text-xs font-medium text-muted-foreground">Host</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('profile.host')}
+              </label>
               <input
                 type="text"
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
-                placeholder="192.168.1.100 or example.com"
+                placeholder={t('profile.hostPlaceholder')}
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
             <div className="w-20">
-              <label className="text-xs font-medium text-muted-foreground">Port</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('profile.port')}
+              </label>
               <input
                 type="number"
                 value={port}
@@ -145,34 +155,40 @@ export function SSHProfileForm({
 
           {/* Username */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Username</label>
+            <label className="text-xs font-medium text-muted-foreground">
+              {t('profile.username')}
+            </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="root"
+              placeholder={t('profile.usernamePlaceholder')}
               className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
 
           {/* Auth Method */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Authentication</label>
+            <label className="text-xs font-medium text-muted-foreground">
+              {t('profile.authentication')}
+            </label>
             <select
               value={authMethod}
               onChange={(e) => setAuthMethod(e.target.value as SSHAuthMethod)}
               className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              <option value="key">Private Key</option>
-              <option value="password">Password</option>
-              <option value="agent">SSH Agent</option>
+              <option value="key">{t('profile.auth.privateKey')}</option>
+              <option value="password">{t('profile.auth.password')}</option>
+              <option value="agent">{t('profile.auth.agent')}</option>
             </select>
           </div>
 
           {/* Private Key Path (conditional) */}
           {authMethod === 'key' && (
             <div>
-              <label className="text-xs font-medium text-muted-foreground">Private Key Path</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('profile.privateKeyPath')}
+              </label>
               <div className="flex gap-2 mt-1">
                 <input
                   type="text"
@@ -185,7 +201,7 @@ export function SSHProfileForm({
                   type="button"
                   onClick={handleSelectKeyFile}
                   className="px-2 py-1.5 text-xs rounded border border-border bg-muted hover:bg-accent text-muted-foreground flex items-center"
-                  title="Browse for private key file"
+                  title={t('profile.browsePrivateKey')}
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
@@ -196,19 +212,21 @@ export function SSHProfileForm({
           {/* Passphrase for key (conditional) */}
           {authMethod === 'key' && (
             <div>
-              <label className="text-xs font-medium text-muted-foreground">Key Passphrase</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('profile.passphrase')}
+              </label>
               <input
                 type="password"
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
                 placeholder={
-                  profile?.hasStoredPassphrase ? '••••••••' : 'Leave empty if no passphrase'
+                  profile?.hasStoredPassphrase ? '••••••••' : t('profile.passphrasePlaceholder')
                 }
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
               {profile?.hasStoredPassphrase && (
                 <p className="mt-1 text-3xs text-muted-foreground">
-                  🔒 Passphrase stored securely in OS keychain. Leave blank to keep existing.
+                  {t('profile.passphraseStored')}
                 </p>
               )}
             </div>
@@ -217,18 +235,22 @@ export function SSHProfileForm({
           {/* Password (conditional) */}
           {authMethod === 'password' && (
             <div>
-              <label className="text-xs font-medium text-muted-foreground">Password</label>
+              <label className="text-xs font-medium text-muted-foreground">
+                {t('profile.password')}
+              </label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={profile?.hasStoredPassword ? '••••••••' : 'Enter password'}
+                placeholder={
+                  profile?.hasStoredPassword ? '••••••••' : t('profile.passwordPlaceholder')
+                }
                 className="mt-1 w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
               />
               <p className="mt-1 text-3xs text-muted-foreground">
                 {profile?.hasStoredPassword
-                  ? '🔒 Password stored securely in OS keychain. Leave blank to keep existing.'
-                  : '🔒 Password will be stored in your OS keychain (Windows Credential Manager / macOS Keychain)'}
+                  ? t('profile.passwordStored')
+                  : t('profile.passwordStorageHint')}
               </p>
             </div>
           )}
@@ -240,14 +262,14 @@ export function SSHProfileForm({
               onClick={onClose}
               className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
             >
-              Cancel
+              {t('actions.cancel')}
             </button>
             <button
               type="submit"
               disabled={saving}
               className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {saving ? 'Saving...' : profile ? 'Update' : 'Create'}
+              {saving ? t('actions.saving') : profile ? t('actions.update') : t('actions.create')}
             </button>
           </div>
         </form>

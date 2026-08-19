@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { sshApi } from '@/lib/api'
 import { dialogApi } from '@/lib/dialog-api'
 import { cn } from '@/lib/utils'
@@ -26,6 +27,7 @@ export function RemoteFileExplorer({
   connectionId,
   initialPath = '/'
 }: RemoteFileExplorerProps): React.JSX.Element {
+  const t = useSshTranslation()
   const [currentPath, setCurrentPath] = useState(initialPath)
   const [entries, setEntries] = useState<SFTPEntry[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
@@ -44,18 +46,18 @@ export function RemoteFileExplorer({
           setEntries(result.data)
           setCurrentPath(path)
         } else {
-          setError(result.error ?? 'Failed to load directory')
-          toast.error(`Failed to load: ${result.error}`)
+          setError(result.error ?? t('files.loadDirectoryFailed'))
+          toast.error(t('files.loadFailed', { error: result.error }))
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         setError(errorMsg)
-        toast.error(`Failed to load: ${errorMsg}`)
+        toast.error(t('files.loadFailed', { error: errorMsg }))
       } finally {
         setIsLoading(false)
       }
     },
-    [connectionId]
+    [connectionId, t]
   )
 
   const toggleDirectory = useCallback(
@@ -76,11 +78,14 @@ export function RemoteFileExplorer({
           setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
           setExpandedDirs((prev) => new Set(prev).add(dirPath))
         } else {
-          toast.error(`Permission denied: ${dirPath}`)
+          toast.error(t('files.permissionDenied', { path: dirPath }))
         }
       } catch (error) {
         toast.error(
-          `Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`
+          t('files.loadPathFailed', {
+            path: dirPath,
+            error: error instanceof Error ? error.message : String(error)
+          })
         )
       } finally {
         setLoadingDirs((prev) => {
@@ -90,49 +95,50 @@ export function RemoteFileExplorer({
         })
       }
     },
-    [connectionId, expandedDirs]
+    [connectionId, expandedDirs, t]
   )
 
   const handleDownload = async (entry: SFTPEntry) => {
     const saveResult = await dialogApi.selectFile({
-      title: `Save ${entry.name}`,
-      filters: [{ name: 'All Files', extensions: ['*'] }]
+      title: t('files.saveAs', { name: entry.name }),
+      filters: [{ name: t('profile.allFiles'), extensions: ['*'] }]
     })
     if (!saveResult.success) {
-      if (saveResult.code !== 'CANCELLED') toast.error(`Save dialog failed: ${saveResult.error}`)
+      if (saveResult.code !== 'CANCELLED')
+        toast.error(t('files.saveDialogFailed', { error: saveResult.error }))
       return
     }
     const localPath = saveResult.data
     const result = await sshApi.sftpDownload(connectionId, entry.path, localPath)
     if (result.success) {
-      toast.success(`Downloaded: ${entry.name}`)
+      toast.success(t('files.downloaded', { name: entry.name }))
     } else {
-      toast.error(`Download failed: ${result.error}`)
+      toast.error(t('files.downloadFailed', { error: result.error }))
     }
   }
 
   const handleDelete = async (entry: SFTPEntry) => {
     const result = await sshApi.sftpDelete(connectionId, entry.path)
     if (result.success) {
-      toast.success(`Deleted: ${entry.name}`)
+      toast.success(t('files.deleted', { name: entry.name }))
       loadDirectory(currentPath)
     } else {
-      toast.error(`Delete failed: ${result.error}`)
+      toast.error(t('files.deleteFailed', { error: result.error }))
     }
   }
 
   const handleMkdir = async () => {
-    const name = prompt('Directory name:')
+    const name = prompt(t('files.directoryNamePrompt'))
     if (!name) return
 
     const newPath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
 
     const result = await sshApi.sftpMkdir(connectionId, newPath)
     if (result.success) {
-      toast.success(`Created: ${name}`)
+      toast.success(t('files.created', { name }))
       loadDirectory(currentPath)
     } else {
-      toast.error(`Failed to create directory: ${result.error}`)
+      toast.error(t('files.createDirectoryFailed', { error: result.error }))
     }
   }
 
@@ -218,7 +224,7 @@ export function RemoteFileExplorer({
                   handleDownload(entry)
                 }}
                 className="p-0.5 rounded hover:bg-accent"
-                title="Download"
+                title={t('files.download')}
               >
                 <Download className="h-3 w-3 text-muted-foreground" />
               </button>
@@ -229,7 +235,7 @@ export function RemoteFileExplorer({
                 handleDelete(entry)
               }}
               className="p-0.5 rounded hover:bg-destructive/20"
-              title="Delete"
+              title={t('files.delete')}
             >
               <Trash2 className="h-3 w-3 text-muted-foreground" />
             </button>
@@ -252,14 +258,14 @@ export function RemoteFileExplorer({
         <button
           onClick={handleMkdir}
           className="p-1 rounded hover:bg-accent text-muted-foreground"
-          title="New folder"
+          title={t('files.newFolder')}
         >
           <FolderPlus className="h-3.5 w-3.5" />
         </button>
         <button
           onClick={() => loadDirectory(currentPath)}
           className="p-1 rounded hover:bg-accent text-muted-foreground"
-          title="Refresh"
+          title={t('files.refresh')}
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </button>
@@ -277,7 +283,7 @@ export function RemoteFileExplorer({
           </div>
         ) : entries.length === 0 ? (
           <div className="p-4 text-center">
-            <p className="text-xs text-muted-foreground">Empty directory</p>
+            <p className="text-xs text-muted-foreground">{t('files.empty')}</p>
           </div>
         ) : (
           <div className="py-1">{entries.map((entry) => renderEntry(entry))}</div>

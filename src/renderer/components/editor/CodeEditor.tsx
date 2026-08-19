@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ImperativePanelGroupHandle, PanelOnResize } from 'react-resizable-panels'
 import { useShallow } from 'zustand/shallow'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
@@ -47,6 +48,7 @@ export function CodeEditor({
   onCursorChange,
   onScrollChange
 }: CodeEditorProps): React.JSX.Element {
+  const { t } = useTranslation('settings')
   const containerRef = useRef<HTMLDivElement>(null)
   const lastAppliedLineRef = useRef<number | null>(null)
   const pendingRevealLineRef = useRef<number | null>(null)
@@ -277,7 +279,7 @@ export function CodeEditor({
                   className="pointer-events-none absolute inset-0 flex items-center justify-center"
                 >
                   <span className="text-sm text-muted-foreground animate-pulse motion-reduce:animate-none">
-                    Loading...
+                    {t('editor.loading')}
                   </span>
                 </div>
               )}

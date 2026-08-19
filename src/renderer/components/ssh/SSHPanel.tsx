@@ -2,6 +2,7 @@ import type { SSHProfile } from '@shared/types/ssh.types'
 import { Download, Eye, EyeOff, Loader2, Pencil, Plus, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
@@ -18,6 +19,7 @@ export function SSHPanel({
   onSelectProfile,
   activeProfileId
 }: SSHPanelProps): React.JSX.Element {
+  const t = useSshTranslation()
   const profiles = useSSHProfiles()
   const connections = useSSHConnections()
   const { loadProfiles, disconnect, importConfig } = useSSHActions()
@@ -37,7 +39,11 @@ export function SSHPanel({
         await onConnect(profile.id)
       }
     } catch (error) {
-      toast.error(`Connect failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        t('connection.connectFailed', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
     } finally {
       setConnectingId(null)
     }
@@ -46,16 +52,16 @@ export function SSHPanel({
   const handleDisconnect = async (connectionId: string, profileName: string) => {
     const success = await disconnect(connectionId)
     if (success) {
-      toast.success(`Disconnected from ${profileName}`)
+      toast.success(t('connection.disconnectedFrom', { name: profileName }))
     }
   }
 
   const handleImport = async () => {
     const imported = await importConfig()
     if (imported.length > 0) {
-      toast.success(`Imported ${imported.length} SSH profile(s) from ~/.ssh/config`)
+      toast.success(t('profiles.imported', { count: imported.length }))
     } else {
-      toast.info('No new profiles found in ~/.ssh/config')
+      toast.info(t('profiles.noneImported'))
     }
   }
 
@@ -67,11 +73,11 @@ export function SSHPanel({
       {/* Header */}
       <div className="h-9 flex items-center justify-between px-3">
         <div className="flex items-center gap-1.5">
-          <span className="label-section text-sidebar-foreground">SSH</span>
+          <span className="label-section text-sidebar-foreground">{t('title')}</span>
           <button
             onClick={() => setShowCredentials(!showCredentials)}
             className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors"
-            title={showCredentials ? 'Hide credentials' : 'Show credentials'}
+            title={showCredentials ? t('credentials.hide') : t('credentials.show')}
           >
             {showCredentials ? (
               <Eye className="h-3 w-3 text-muted-foreground group-hover:text-foreground" />
@@ -84,7 +90,7 @@ export function SSHPanel({
           <button
             onClick={handleImport}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors"
-            title="Import from ~/.ssh/config"
+            title={t('profiles.importFromConfig')}
           >
             <Download className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground" />
           </button>
@@ -94,7 +100,7 @@ export function SSHPanel({
               setShowForm(true)
             }}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors"
-            title="New SSH Profile"
+            title={t('profiles.new')}
           >
             <Plus className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground" />
           </button>
@@ -105,7 +111,7 @@ export function SSHPanel({
       <div className="flex-1 overflow-y-auto">
         {profiles.length === 0 ? (
           <div className="px-3 pb-2">
-            <p className="text-xs text-muted-foreground">No profiles yet</p>
+            <p className="text-xs text-muted-foreground">{t('profiles.empty')}</p>
           </div>
         ) : (
           <div className="pb-0.5">
@@ -175,7 +181,7 @@ export function SSHPanel({
                         setShowForm(true)
                       }}
                       className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground"
-                      title="Edit profile"
+                      title={t('profiles.edit')}
                     >
                       <Pencil className="h-3 w-3" />
                     </button>
@@ -188,7 +194,7 @@ export function SSHPanel({
                           }
                         }}
                         className="p-1 rounded hover:bg-destructive/20 text-destructive"
-                        title="Disconnect"
+                        title={t('connection.disconnect')}
                       >
                         <WifiOff className="h-3 w-3" />
                       </button>
@@ -199,7 +205,7 @@ export function SSHPanel({
                           handleConnect(profile)
                         }}
                         className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground"
-                        title={isTauriContext() ? 'Connect' : 'SSH is desktop-only'}
+                        title={isTauriContext() ? t('connection.connect') : t('desktopOnly')}
                         disabled={isConnecting || !isTauriContext()}
                       >
                         <Wifi className="h-3 w-3" />

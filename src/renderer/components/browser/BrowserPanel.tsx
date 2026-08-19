@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { useAnnotationCapture } from '@/hooks/use-annotation-capture'
@@ -26,10 +27,9 @@ interface BrowserPanelProps {
 }
 
 const DEFAULT_URL = 'https://www.google.com'
-const ANNOTATION_UNAVAILABLE_MESSAGE =
-  'Annotation mode is not available on this page due to security policies'
 
 export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): React.JSX.Element {
+  const { t } = useTranslation('browser')
   const url = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url || DEFAULT_URL)
   const tabTitle = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.title ?? '')
   const loading = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.loading ?? false)
@@ -178,7 +178,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
         } else {
           injectedModeRef.current = null
           setAnnotationOverlayAvailable(false)
-          toast.error(ANNOTATION_UNAVAILABLE_MESSAGE)
+          toast.error(t('panel.annotationUnavailable'))
           // Desired injection is impossible on this page; stop retrying.
           desiredModeRef.current = null
           // If this failure was a mode switch, roll the submode back to the last
@@ -195,7 +195,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
     const next = reconcileChainRef.current.then(run, run)
     reconcileChainRef.current = next
     return next
-  }, [browserTabId])
+  }, [browserTabId, t])
 
   useEffect(() => {
     if (!annotationMode || !isVisible || loading) {
@@ -247,7 +247,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
           {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10 motion-safe:animate-fade-in">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <span className="mt-2 text-sm text-muted-foreground">Loading...</span>
+              <span className="mt-2 text-sm text-muted-foreground">{t('panel.loading')}</span>
             </div>
           )}
         </div>

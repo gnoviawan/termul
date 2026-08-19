@@ -1,6 +1,7 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import { X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -65,6 +66,7 @@ export function PaneContent({
   closingTerminalIds = [],
   defaultShell
 }: PaneContentProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   // CRITICAL FIX: Get terminal IDs from this pane's tabs
   const terminalIdsInPane = useMemo(
     () => new Set(pane.tabs.filter((t) => t.type === 'terminal').map((t) => t.terminalId)),
@@ -288,11 +290,13 @@ export function PaneContent({
                             <AgentIcon agentId={terminal.agentId!} className="h-16 w-16" />
                           </span>
                           <span className="text-sm text-muted-foreground">
-                            Starting {terminal.agentName ?? terminal.name}…
+                            {t('pane.starting', { name: terminal.agentName ?? terminal.name })}
                           </span>
                         </>
                       ) : (
-                        <span className="text-sm text-muted-foreground">Connecting…</span>
+                        <span className="text-sm text-muted-foreground">
+                          {t('pane.connecting')}
+                        </span>
                       )}
                     </div>
                   )
@@ -351,7 +355,7 @@ export function PaneContent({
                           />
                         </span>
                         <span className="text-sm text-muted-foreground">
-                          Starting {terminal.agentName ?? terminal.name}…
+                          {t('pane.starting', { name: terminal.agentName ?? terminal.name })}
                         </span>
                       </div>
                     )}
@@ -457,7 +461,7 @@ export function PaneContent({
           className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          aria-label="Agent launcher"
+          aria-label={t('pane.agentLauncher')}
           onKeyDown={(e) => {
             if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
           }}
@@ -465,8 +469,8 @@ export function PaneContent({
           <button
             type="button"
             className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-            title="Close agent launcher (Esc)"
-            aria-label="Close agent launcher"
+            title={t('pane.closeAgentLauncherEsc')}
+            aria-label={t('pane.closeAgentLauncher')}
             onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
           >
             <X className="h-4 w-4" />

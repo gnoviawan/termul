@@ -14,20 +14,15 @@
  */
 
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { resolveManifestConflict } from '@/hooks/use-workspace-manifest-sync'
+import { formatDateTime } from '@/i18n/format'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 
-function formatTimestamp(ms: number): string {
-  try {
-    return new Date(ms).toLocaleString()
-  } catch {
-    return String(ms)
-  }
-}
-
 export function WorkspaceConflictBanner(): null | React.ReactElement {
+  const { t } = useTranslation('workspace')
   const conflict = useWorkspaceManifestSyncStore((state) => state.pendingConflict)
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
 
@@ -51,7 +46,10 @@ export function WorkspaceConflictBanner(): null | React.ReactElement {
   if (!conflict || conflict.projectId !== activeProjectId) return null
 
   const identitySuffix = conflict.currentUpdateIdentity
-    ? ` by ${conflict.currentUpdateIdentity}`
+    ? t('conflict.identity', { identity: conflict.currentUpdateIdentity })
+    : ''
+  const timestampSuffix = conflict.currentUpdatedAt
+    ? t('conflict.timestamp', { value: formatDateTime(conflict.currentUpdatedAt) })
     : ''
 
   return (
@@ -62,23 +60,25 @@ export function WorkspaceConflictBanner(): null | React.ReactElement {
     >
       <div className="flex flex-col gap-0.5">
         <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
-          Workspace changed elsewhere
+          {t('conflict.title')}
         </span>
         <span className="text-xs text-muted-foreground">
-          Another client saved this workspace at revision {conflict.currentRevision}
-          {conflict.currentUpdatedAt ? ` (${formatTimestamp(conflict.currentUpdatedAt)})` : ''}
-          {identitySuffix}. Choose how to proceed.
+          {t('conflict.description', {
+            revision: conflict.currentRevision,
+            timestamp: timestampSuffix,
+            identity: identitySuffix
+          })}
         </span>
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
         <Button type="button" variant="default" size="xs" onClick={handleReload}>
-          Reload from host
+          {t('conflict.reload')}
         </Button>
         <Button type="button" variant="secondary" size="xs" onClick={handleOverwrite}>
-          Overwrite with local
+          {t('conflict.overwrite')}
         </Button>
         <Button type="button" variant="ghost" size="xs" onClick={handleDismiss}>
-          Dismiss
+          {t('conflict.dismiss')}
         </Button>
       </div>
     </div>

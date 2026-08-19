@@ -10,6 +10,7 @@ import {
   X as XIcon
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentBadge } from '@/components/chat/AgentBadge'
@@ -302,19 +303,20 @@ function BrowserTabInline({
   onDragLeave,
   onDrop
 }: BrowserTabInlineProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const browserTab = useBrowserSessionStore((state) => state.getTab(tab.browserTabId))
   const label = (() => {
-    if (!browserTab) return 'Browser'
+    if (!browserTab) return t('tabs.browser')
     if (browserTab.title.trim()) return browserTab.title.trim()
     if (browserTab.url) {
       try {
         const parsed = new URL(browserTab.url)
         return parsed.host || parsed.hostname || browserTab.url
       } catch {
-        return browserTab.url.replace(/^https?:\/\//, '').split('/')[0] || 'Browser'
+        return browserTab.url.replace(/^https?:\/\//, '').split('/')[0] || t('tabs.browser')
       }
     }
-    return 'Browser'
+    return t('tabs.browser')
   })()
 
   return (
@@ -391,6 +393,7 @@ function GitTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
+  const { t } = useTranslation('workspace')
   const totalChanges = useGitStatusStore(
     (state: GitStatusState) => (state.statuses[tab.cwd] || []).length
   )
@@ -415,7 +418,7 @@ function GitTabInline({
         )}
       >
         <GitBranch size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-2xs font-medium flex-1">Git Changes</span>
+        <span className="truncate text-2xs font-medium flex-1">{t('tabs.gitChanges')}</span>
         {totalChanges > 0 && (
           <span
             className={cn(
@@ -467,6 +470,7 @@ function GitHistoryTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
+  const { t } = useTranslation('workspace')
   return (
     <TabContextMenu kind="git-history" onClose={onClose}>
       <div
@@ -487,7 +491,7 @@ function GitHistoryTabInline({
         )}
       >
         <History size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-2xs font-medium flex-1">Git History</span>
+        <span className="truncate text-2xs font-medium flex-1">{t('tabs.gitHistory')}</span>
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -527,6 +531,7 @@ function AgentChatTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
+  const { t } = useTranslation('workspace')
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
@@ -541,7 +546,7 @@ function AgentChatTabInline({
   // disconnected lamp on the optimistic placeholder chat.
   const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
   const isClosed = session?.status === 'closed'
-  const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
+  const tabLabel = session?.title ?? indexTitle ?? agentName ?? t('tabs.agentChat')
 
   return (
     <TabContextMenu kind="agent-chat" onClose={onClose}>
@@ -552,7 +557,7 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
+        aria-label={`${tabLabel}, ${connected ? t('tabs.connected') : t('tabs.disconnected')}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
@@ -583,7 +588,7 @@ function AgentChatTabInline({
             <AgentConnectionLamp connected={connected} />
           </>
         ) : (
-          <span className="truncate text-2xs font-medium flex-1">Agent Chat</span>
+          <span className="truncate text-2xs font-medium flex-1">{t('tabs.agentChat')}</span>
         )}
         <button
           onClick={(e) => {
@@ -624,6 +629,7 @@ export function WorkspaceTabBar({
   onCloseEditorTab,
   defaultShell
 }: WorkspaceTabBarProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const { setActiveTab, setActivePane, fullscreenPaneId, togglePaneFullscreen } = useWorkspaceStore(
     useShallow((state) => ({
       setActiveTab: state.setActiveTab,
@@ -1031,8 +1037,8 @@ export function WorkspaceTabBar({
           <button
             onClick={() => togglePaneFullscreen(paneId)}
             className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-            title={isFullscreenPane ? 'Restore pane layout' : 'Focus pane'}
-            aria-label={isFullscreenPane ? 'Restore pane layout' : 'Focus pane'}
+            title={isFullscreenPane ? t('tabs.restorePane') : t('tabs.focusPane')}
+            aria-label={isFullscreenPane ? t('tabs.restorePane') : t('tabs.focusPane')}
           >
             {isFullscreenPane ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
           </button>
@@ -1042,7 +1048,7 @@ export function WorkspaceTabBar({
             <button
               onClick={() => setIsTerminalMenuOpen((open) => !open)}
               className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              title="Open terminal menu"
+              title={t('tabs.terminalMenu')}
             >
               <TerminalIcon size={12} />
             </button>
@@ -1050,7 +1056,7 @@ export function WorkspaceTabBar({
             {isTerminalMenuOpen && (
               <div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50 overflow-hidden">
                 <div className="px-2.5 py-1 text-2xs font-medium text-muted-foreground bg-secondary/30">
-                  Terminal
+                  {t('tabs.terminal')}
                 </div>
                 {loading ? (
                   <div className="py-1 px-2.5 space-y-1.5">
@@ -1071,14 +1077,16 @@ export function WorkspaceTabBar({
                         <TerminalIcon size={11} />
                         <span className="truncate">{shell.displayName}</span>
                         {shell.name === defaultShell && (
-                          <span className="ml-auto text-3xs text-muted-foreground">(default)</span>
+                          <span className="ml-auto text-3xs text-muted-foreground">
+                            {t('tabs.default')}
+                          </span>
                         )}
                       </button>
                     ))}
                   </div>
                 ) : (
                   <div className="px-2.5 py-1.5 text-2xs text-muted-foreground">
-                    No shells detected
+                    {t('tabs.noShells')}
                   </div>
                 )}
               </div>
@@ -1090,7 +1098,7 @@ export function WorkspaceTabBar({
           <button
             onClick={onAddBrowserTab}
             className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-            title="New Browser Tab"
+            title={t('tabs.newBrowser')}
           >
             <Globe size={12} />
           </button>

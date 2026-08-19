@@ -14,6 +14,7 @@ import {
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,6 +50,8 @@ export function FrontmatterProperties({
   data,
   onChange
 }: FrontmatterPropertiesProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const { t: settingsT } = useTranslation('settings')
   const baseId = useId()
   const dataRef = useRef(data)
   dataRef.current = data
@@ -102,18 +105,18 @@ export function FrontmatterProperties({
   const commitAdd = useCallback(() => {
     const key = draftKey.trim()
     if (!key) {
-      setDraftError('Key cannot be empty')
+      setDraftError(settingsT('editor.frontmatterKeyEmpty'))
       return
     }
     if (Object.hasOwn(dataRef.current, key)) {
-      setDraftError('Key already exists')
+      setDraftError(settingsT('editor.frontmatterKeyExists'))
       return
     }
     onChange({ ...dataRef.current, [key]: '' })
     setDraftKey('')
     setDraftError(null)
     setAdding(false)
-  }, [draftKey, onChange])
+  }, [draftKey, onChange, settingsT])
 
   const cancelAdd = useCallback(() => {
     setAdding(false)
@@ -136,9 +139,14 @@ export function FrontmatterProperties({
   )
 
   return (
-    <section className="frontmatter-properties border-b border-border/70" aria-label="Properties">
+    <section
+      className="frontmatter-properties border-b border-border/70"
+      aria-label={t('frontmatter.properties')}
+    >
       <div className="frontmatter-properties-inner py-5">
-        <div className="label-section mb-2.5 text-muted-foreground">Properties</div>
+        <div className="label-section mb-2.5 text-muted-foreground">
+          {t('frontmatter.properties')}
+        </div>
 
         <div className="frontmatter-properties-grid flex flex-col gap-1">
           {entries.map(([key, value]) => {
@@ -163,7 +171,7 @@ export function FrontmatterProperties({
                       role="group"
                       aria-labelledby={labelId}
                       className="min-w-0 max-w-full break-words rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]"
-                      title="Nested value (read-only)"
+                      title={t('frontmatter.nestedValue')}
                     >
                       {value.display}
                     </div>
@@ -187,7 +195,7 @@ export function FrontmatterProperties({
                           <button
                             type="button"
                             className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                            aria-label={`Remove ${item} from ${key}`}
+                            aria-label={t('frontmatter.removeItem', { item, key })}
                             onClick={() => removeArrayItem(key, index)}
                           >
                             <X className="size-3" />
@@ -236,7 +244,7 @@ export function FrontmatterProperties({
                     'opacity-50 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
                     'focus-visible:opacity-100'
                   )}
-                  aria-label={`Remove ${key}`}
+                  aria-label={t('frontmatter.remove', { key })}
                   onClick={() => removeKey(key)}
                 >
                   <Trash2 className="size-3.5" />
@@ -251,8 +259,8 @@ export function FrontmatterProperties({
             <div className="flex items-center gap-2">
               <Input
                 className="h-8"
-                placeholder="Property key"
-                aria-label="Property key"
+                placeholder={t('frontmatter.propertyKey')}
+                aria-label={t('frontmatter.propertyKey')}
                 value={draftKey}
                 autoFocus
                 aria-invalid={draftError !== null}
@@ -272,10 +280,10 @@ export function FrontmatterProperties({
                 }}
               />
               <Button type="button" size="xs" onClick={commitAdd}>
-                Add
+                {t('frontmatter.add')}
               </Button>
               <Button type="button" size="xs" variant="ghost" onClick={cancelAdd}>
-                Cancel
+                {t('cancel')}
               </Button>
             </div>
             {draftError && <p className="text-xs text-destructive">{draftError}</p>}
@@ -289,7 +297,7 @@ export function FrontmatterProperties({
             onClick={() => setAdding(true)}
           >
             <Plus className="size-3.5" />
-            Add property
+            {t('frontmatter.addProperty')}
           </Button>
         )}
       </div>

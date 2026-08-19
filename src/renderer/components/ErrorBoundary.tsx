@@ -2,12 +2,14 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { ErrorFallback } from './ErrorFallback'
 
+export type ErrorBoundaryContext = 'appRoot' | 'terminalPane' | 'editorPane'
+
 interface ErrorBoundaryProps {
   children: ReactNode
   /** Optional fallback UI. Receives the error and a retry callback. */
   fallback?: (error: Error, retry: () => void) => ReactNode
-  /** Optional context label for error logging (e.g. "Terminal Pane") */
-  context?: string
+  /** Stable context key used for logging and localized fallback UI. */
+  context?: ErrorBoundaryContext
 }
 
 interface ErrorBoundaryState {
@@ -20,7 +22,7 @@ interface ErrorBoundaryState {
  *
  * Usage:
  * ```tsx
- * <ErrorBoundary context="Terminal Pane">
+ * <ErrorBoundary context="terminalPane">
  *   <PaneContent ... />
  * </ErrorBoundary>
  * ```

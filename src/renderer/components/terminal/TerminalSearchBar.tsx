@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface TerminalSearchBarProps {
   isOpen: boolean
@@ -17,6 +18,7 @@ export function TerminalSearchBar({
   onFindPrevious,
   onClearDecorations
 }: TerminalSearchBarProps): React.JSX.Element {
+  const { t } = useTranslation('terminal')
   const [query, setQuery] = useState('')
   const [matchInfo, setMatchInfo] = useState<string>('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -40,14 +42,14 @@ export function TerminalSearchBar({
   const handleFindNext = useCallback(() => {
     if (!query) return
     const found = onFindNext(query)
-    setMatchInfo(found ? 'Match found' : 'No matches')
-  }, [query, onFindNext])
+    setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
+  }, [query, onFindNext, t])
 
   const handleFindPrevious = useCallback(() => {
     if (!query) return
     const found = onFindPrevious(query)
-    setMatchInfo(found ? 'Match found' : 'No matches')
-  }, [query, onFindPrevious])
+    setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
+  }, [query, onFindPrevious, t])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -73,12 +75,12 @@ export function TerminalSearchBar({
       // Auto-search as you type
       if (newQuery) {
         const found = onFindNext(newQuery)
-        setMatchInfo(found ? 'Match found' : 'No matches')
+        setMatchInfo(found ? t('search.matchFound') : t('search.noMatches'))
       } else {
         setMatchInfo('')
       }
     },
-    [onFindNext]
+    [onFindNext, t]
   )
 
   return (
@@ -97,7 +99,8 @@ export function TerminalSearchBar({
             value={query}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Search..."
+            placeholder={t('search.placeholder')}
+            aria-label={t('search.label')}
             className="w-48 px-2 py-1 text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
           />
 
@@ -109,7 +112,8 @@ export function TerminalSearchBar({
             onClick={handleFindPrevious}
             disabled={!query}
             className="p-1 hover:bg-secondary rounded disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Previous match (Shift+Enter)"
+            title={t('search.previous')}
+            aria-label={t('search.previous')}
           >
             <ChevronUp size={16} />
           </button>
@@ -118,7 +122,8 @@ export function TerminalSearchBar({
             onClick={handleFindNext}
             disabled={!query}
             className="p-1 hover:bg-secondary rounded disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Next match (Enter)"
+            title={t('search.next')}
+            aria-label={t('search.next')}
           >
             <ChevronDown size={16} />
           </button>
@@ -126,7 +131,8 @@ export function TerminalSearchBar({
           <button
             onClick={onClose}
             className="p-1 hover:bg-secondary rounded"
-            title="Close (Escape)"
+            title={t('search.close')}
+            aria-label={t('search.close')}
           >
             <X size={16} />
           </button>

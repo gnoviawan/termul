@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useTocSettings } from '@/hooks/use-toc-settings'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -12,6 +13,7 @@ interface EditorPanelProps {
 }
 
 export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JSX.Element {
+  const { t } = useTranslation('settings')
   // Intentionally invoked for side effects: loads and persists shared TOC settings.
   useTocSettings()
 
@@ -52,7 +54,7 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
   if (!fileState) {
     return (
       <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-        Loading...
+        {t('editor.loading')}
       </div>
     )
   }

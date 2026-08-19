@@ -2,6 +2,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { spawn } from 'tauri-pty'
 import { getTerminalOptions, RESIZE_DEBOUNCE_MS } from '@/components/terminal/terminal-config'
 import { invoke } from '@/lib/tauri-core'
@@ -15,6 +16,9 @@ const MAX_WEBGL_RETRIES = 3
 type TerminalStatus = 'loading' | 'ready' | 'exited' | 'error'
 
 export function TauriTerminal(): React.JSX.Element {
+  const { t } = useTranslation('terminal')
+  const tRef = useRef(t)
+  tRef.current = t
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -88,10 +92,10 @@ export function TauriTerminal(): React.JSX.Element {
         shellInfo = await invoke<ShellInfo>('get_default_shell')
       } catch (err) {
         if (disposedRef.current) return
-        const msg = `Shell detection gagal: ${err}`
+        const msg = tRef.current('tauri.shellDetectionFailed', { details: String(err) })
         setErrorMsg(msg)
         setStatus('error')
-        term.writeln(`\r\n\x1b[31m[Error] ${msg}\x1b[0m`)
+        term.writeln(`\r\n\x1b[31m[${tRef.current('errors.label')}] ${msg}\x1b[0m`)
         return
       }
 
@@ -152,7 +156,7 @@ export function TauriTerminal(): React.JSX.Element {
       const unlistenExit = pty.onExit(({ exitCode }: { exitCode: number }) => {
         if (disposedRef.current) return
         console.log(`[TauriTerminal] PTY exited with code ${exitCode}`)
-        term.writeln(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m`)
+        term.writeln(`\r\n\x1b[90m[${tRef.current('tauri.processExited', { exitCode })}]\x1b[0m`)
         term.options.disableStdin = true
         if (!disposedRef.current) setStatus('exited')
       })
@@ -191,7 +195,7 @@ export function TauriTerminal(): React.JSX.Element {
       container._resizeObserver = resizeObserver
     } catch (err) {
       if (!disposedRef.current) {
-        const msg = `Terminal initialization gagal: ${err}`
+        const msg = tRef.current('tauri.initializationFailed', { details: String(err) })
         setErrorMsg(msg)
         setStatus('error')
         console.error('[TauriTerminal]', msg)
@@ -252,7 +256,7 @@ export function TauriTerminal(): React.JSX.Element {
     return (
       <div className="flex-1 flex items-center justify-center bg-terminal-bg text-red-400 p-4">
         <div className="text-center">
-          <p className="text-lg font-semibold mb-2">Terminal Error</p>
+          <p className="text-lg font-semibold mb-2">{t('tauri.errorTitle')}</p>
           <p className="text-sm text-red-300">{errorMsg}</p>
         </div>
       </div>
@@ -263,7 +267,7 @@ export function TauriTerminal(): React.JSX.Element {
     <div className="flex-1 relative bg-terminal-bg">
       {status === 'loading' && (
         <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm z-10">
-          Loading terminal...
+          {t('tauri.loading')}
         </div>
       )}
       <div ref={containerRef} className="absolute inset-0 px-4 py-0.5 pb-1 bg-terminal-bg" />

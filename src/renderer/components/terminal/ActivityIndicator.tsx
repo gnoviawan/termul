@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
 
@@ -8,6 +9,7 @@ export interface ActivityIndicatorProps {
 }
 
 export function ActivityIndicator({ className }: ActivityIndicatorProps): React.JSX.Element {
+  const { t } = useTranslation('terminal')
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export function ActivityIndicator({ className }: ActivityIndicatorProps): React.
       transition={transition}
       className={cn('h-2 w-2 rounded-full bg-primary', className)}
       role="status"
-      aria-label="Terminal has activity"
+      aria-label={t('activity')}
     />
   )
 }

@@ -2,6 +2,7 @@ import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
@@ -42,6 +43,7 @@ export function FileTreeNode({
   onClick,
   renderContextMenu
 }: FileTreeNodeProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const isDir = entry.type === 'directory'
   const isIgnored = entry.ignored === true
   const suppressTreeAnimations = useFileExplorerStore((state) => state.suppressTreeAnimations)
@@ -109,7 +111,7 @@ export function FileTreeNode({
               isIgnored && 'opacity-50',
               isSelected && 'bg-accent text-accent-foreground'
             )}
-            title={isIgnored ? `${entry.name} (git-ignored)` : undefined}
+            title={isIgnored ? t('fileContext.gitIgnored', { name: entry.name }) : undefined}
             style={{ paddingLeft: depth * 16 + 4 }}
             onClick={handleClick}
             onContextMenu={(e) => onContextMenu(e, entry)}

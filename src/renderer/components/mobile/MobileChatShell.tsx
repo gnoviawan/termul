@@ -15,6 +15,7 @@ import {
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
@@ -70,6 +71,7 @@ export function MobileChatShell({
   onRenameTerminal,
   onRestartTerminal
 }: MobileChatShellProps): React.JSX.Element {
+  const { t } = useTranslation('mobile')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
@@ -162,7 +164,7 @@ export function MobileChatShell({
           variant="ghost"
           size="icon"
           className="size-10 shrink-0"
-          aria-label="Open menu"
+          aria-label={t('chatShell.openMenu')}
           aria-expanded={drawerOpen}
           aria-controls={drawerOpen ? 'mobile-chat-drawer' : undefined}
           onClick={() => setDrawerOpen(true)}
@@ -180,7 +182,7 @@ export function MobileChatShell({
             variant="ghost"
             size="icon"
             className="size-10 shrink-0"
-            aria-label="Switch project"
+            aria-label={t('chatShell.switchProject')}
             onClick={() => setProjectsOpen(true)}
           >
             <FolderGit2 size={20} />
@@ -193,7 +195,7 @@ export function MobileChatShell({
             variant="ghost"
             size="icon"
             className="size-10 shrink-0"
-            aria-label="Browse files"
+            aria-label={t('chatShell.browseFiles')}
             aria-expanded={filesOpen}
             onClick={() => setFilesOpen(true)}
           >
@@ -207,7 +209,7 @@ export function MobileChatShell({
             variant="ghost"
             size="icon"
             className="size-10 shrink-0"
-            aria-label="Command palette"
+            aria-label={t('chatShell.commandPalette')}
             onClick={onOpenCommandPalette}
           >
             <Search size={20} />
@@ -220,7 +222,7 @@ export function MobileChatShell({
             variant="ghost"
             size="icon"
             className="size-10 shrink-0"
-            aria-label="Git changes"
+            aria-label={t('chatShell.gitChanges')}
             disabled={!activeProject?.path}
             onClick={onOpenGitChanges}
           >
@@ -236,7 +238,7 @@ export function MobileChatShell({
                 variant="ghost"
                 size="icon"
                 className="size-10 shrink-0"
-                aria-label="Restart terminal"
+                aria-label={t('chatShell.restartTerminal')}
                 onClick={() => onRestartTerminal(activeTab.terminalId)}
               >
                 <RotateCcw size={18} />
@@ -247,7 +249,7 @@ export function MobileChatShell({
               variant="ghost"
               size="icon"
               className="size-10 shrink-0"
-              aria-label="Close terminal"
+              aria-label={t('chatShell.closeTerminal')}
               onClick={() => onCloseTerminal?.(activeTab.terminalId, activeTab.id)}
             >
               <X size={20} />
@@ -259,7 +261,7 @@ export function MobileChatShell({
             variant="ghost"
             size="icon"
             className="size-10 shrink-0"
-            aria-label="New chat"
+            aria-label={t('chatShell.newChat')}
             disabled={!canNewChat}
             onClick={onNewChat}
           >
@@ -282,10 +284,10 @@ export function MobileChatShell({
           <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
             <div className="flex items-center gap-2 pr-8">
               <TermulMark size={20} />
-              <SheetTitle className="text-base">Chats</SheetTitle>
+              <SheetTitle className="text-base">{t('chatShell.chats')}</SheetTitle>
             </div>
             <SheetDescription className="sr-only">
-              Browse and open agent chat sessions
+              {t('chatShell.chatDescription')}
             </SheetDescription>
           </SheetHeader>
 
@@ -301,14 +303,14 @@ export function MobileChatShell({
               }}
             >
               <MessageSquarePlus size={16} />
-              New chat
+              {t('chatShell.newChat')}
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className="size-9 shrink-0"
-              aria-label="Settings"
+              aria-label={t('chatShell.settings')}
               onClick={() => {
                 closeDrawer()
                 navigate('/preferences')
@@ -321,7 +323,7 @@ export function MobileChatShell({
               variant="ghost"
               size="icon"
               className="size-9 shrink-0"
-              aria-label="Snapshots"
+              aria-label={t('chatShell.snapshots')}
               onClick={() => {
                 closeDrawer()
                 navigate('/snapshots')
@@ -335,7 +337,7 @@ export function MobileChatShell({
                 variant="ghost"
                 size="icon"
                 className="size-9 shrink-0"
-                aria-label="Git history"
+                aria-label={t('chatShell.gitHistory')}
                 disabled={!activeProject?.path}
                 onClick={() => {
                   closeDrawer()
@@ -349,13 +351,13 @@ export function MobileChatShell({
 
           <div className="border-b border-border/60 p-2">
             <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
-              <span>Terminals</span>
+              <span>{t('chatShell.terminals')}</span>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="size-8"
-                aria-label="New terminal"
+                aria-label={t('chatShell.newTerminal')}
                 onClick={() => {
                   closeDrawer()
                   onNewTerminal?.()
@@ -365,7 +367,9 @@ export function MobileChatShell({
               </Button>
             </div>
             {terminalTabs.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-muted-foreground">No open terminals</p>
+              <p className="px-2 py-2 text-xs text-muted-foreground">
+                {t('chatShell.noOpenTerminals')}
+              </p>
             ) : (
               terminalTabs.map(({ tab, paneId }) => {
                 const terminal = useTerminalStore
@@ -382,7 +386,7 @@ export function MobileChatShell({
                       onClick={() => selectTerminal(paneId, tab.id)}
                     >
                       <TerminalSquare size={16} />
-                      <span className="truncate">{terminal?.name ?? 'Terminal'}</span>
+                      <span className="truncate">{terminal?.name ?? t('chatShell.terminal')}</span>
                     </Button>
                     {isRenaming ? (
                       <input
@@ -404,8 +408,10 @@ export function MobileChatShell({
                           variant="ghost"
                           size="icon"
                           className="size-8 shrink-0"
-                          aria-label="Rename terminal"
-                          onClick={() => startRename(tab.terminalId, terminal?.name ?? 'Terminal')}
+                          aria-label={t('chatShell.renameTerminal')}
+                          onClick={() =>
+                            startRename(tab.terminalId, terminal?.name ?? t('chatShell.terminal'))
+                          }
                         >
                           <Pencil size={14} />
                         </Button>
@@ -417,7 +423,7 @@ export function MobileChatShell({
                         variant="ghost"
                         size="icon"
                         className="size-8 shrink-0"
-                        aria-label="Close terminal"
+                        aria-label={t('chatShell.closeTerminal')}
                         onClick={() => {
                           onCloseTerminal(tab.terminalId, tab.id)
                         }}
