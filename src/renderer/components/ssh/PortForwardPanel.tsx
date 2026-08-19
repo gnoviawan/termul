@@ -2,6 +2,7 @@ import type { ActivePortForward, PortForwardConfig, SSHConnection } from '@share
 import { ArrowRightLeft, Circle, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { useSshTranslation } from '@/hooks/use-ssh-translation'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
 
@@ -10,6 +11,7 @@ interface PortForwardPanelProps {
 }
 
 export function PortForwardPanel({ connection }: PortForwardPanelProps): React.JSX.Element {
+  const t = useSshTranslation()
   const { startPortForward, stopPortForward } = useSSHActions()
   const [showAdd, setShowAdd] = useState(false)
   const [localPort, setLocalPort] = useState('')
@@ -28,7 +30,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
       rp < 1 ||
       rp > 65535
     ) {
-      toast.error('Invalid port numbers')
+      toast.error(t('portForward.invalidPorts'))
       return
     }
 
@@ -43,19 +45,19 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
 
     const success = await startPortForward(connection.id, config)
     if (success) {
-      toast.success(`Port forward started: ${lp} → ${remoteHost}:${rp}`)
+      toast.success(t('portForward.started', { localPort: lp, host: remoteHost, remotePort: rp }))
       setShowAdd(false)
       setLocalPort('')
       setRemotePort('')
     } else {
-      toast.error('Failed to start port forward')
+      toast.error(t('portForward.startFailed'))
     }
   }
 
   const handleStop = async (forward: ActivePortForward) => {
     const success = await stopPortForward(connection.id, forward.id)
     if (success) {
-      toast.success(`Port forward stopped: ${forward.localPort}`)
+      toast.success(t('portForward.stopped', { port: forward.localPort }))
     }
   }
 
@@ -64,12 +66,12 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs font-medium">Port Forwards</span>
+          <span className="text-xs font-medium">{t('portForward.title')}</span>
         </div>
         <button
           onClick={() => setShowAdd(!showAdd)}
           className="p-0.5 rounded hover:bg-accent text-muted-foreground"
-          title="Add port forward"
+          title={t('portForward.add')}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -104,7 +106,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
           ))}
         </div>
       ) : (
-        <p className="text-3xs text-muted-foreground">No active port forwards</p>
+        <p className="text-3xs text-muted-foreground">{t('portForward.empty')}</p>
       )}
 
       {/* Add form */}
@@ -115,7 +117,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
               type="number"
               value={localPort}
               onChange={(e) => setLocalPort(e.target.value)}
-              placeholder="Local"
+              placeholder={t('portForward.localPlaceholder')}
               className="w-16 px-2 py-1 text-xs bg-background border border-border rounded"
               min={1}
               max={65535}
@@ -125,7 +127,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
               type="text"
               value={remoteHost}
               onChange={(e) => setRemoteHost(e.target.value)}
-              placeholder="host"
+              placeholder={t('portForward.hostPlaceholder')}
               className="flex-1 px-2 py-1 text-xs bg-background border border-border rounded"
             />
             <span className="text-xs text-muted-foreground">:</span>
@@ -133,7 +135,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
               type="number"
               value={remotePort}
               onChange={(e) => setRemotePort(e.target.value)}
-              placeholder="Port"
+              placeholder={t('portForward.portPlaceholder')}
               className="w-16 px-2 py-1 text-xs bg-background border border-border rounded"
               min={1}
               max={65535}
@@ -144,13 +146,13 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
               onClick={() => setShowAdd(false)}
               className="px-2 py-0.5 text-3xs rounded border border-border hover:bg-accent"
             >
-              Cancel
+              {t('actions.cancel')}
             </button>
             <button
               onClick={handleAdd}
               className="px-2 py-0.5 text-3xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              Start
+              {t('actions.start')}
             </button>
           </div>
         </div>

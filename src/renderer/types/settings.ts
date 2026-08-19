@@ -36,6 +36,12 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
 export const TOC_SETTINGS_KEY = 'settings/toc'
 
 export type TerminalUrlOpenMode = 'system' | 'termul'
+export type UiLanguage = 'en' | 'zh-CN'
+export type UiLanguagePreference = 'system' | UiLanguage
+
+export function isUiLanguagePreference(value: unknown): value is UiLanguagePreference {
+  return value === 'system' || value === 'en' || value === 'zh-CN'
+}
 
 /** Which interface the remote terminal HTTP server binds to when started. */
 export type RemoteBindMode = 'localhost' | 'all'
@@ -64,6 +70,8 @@ export interface AppSettings {
   appearanceMode: 'light' | 'dark'
   /** Whole-UI zoom factor (1.0 = 100%). Scales the entire window like VS Code's window zoom. */
   uiZoomLevel: number
+  /** User-selected interface language, or follow the operating system. */
+  uiLanguage: UiLanguagePreference
   /** ACP turn hard-cap timeout in seconds, or null = use the env var / Rust
    * default (unlimited by default). Set via App Preferences; pushed to the
    * Rust core. */
@@ -153,7 +161,7 @@ export const TERMINAL_RENDERER_OPTIONS = [
   { value: 'auto', label: 'Auto (Prefer WebGL, DOM fallback)' },
   { value: 'webgl', label: 'WebGL' },
   { value: 'dom', label: 'DOM' }
-]
+] as const
 
 // Terminal URL opening mode options
 export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
@@ -270,6 +278,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   colorTheme: 'termul',
   appearanceMode: 'dark',
   uiZoomLevel: UI_ZOOM_DEFAULT,
+  uiLanguage: 'system',
   acpTurnTimeoutSecs: null,
   editorAutoSave: false,
   editorAutoSaveDelayMs: 1000,

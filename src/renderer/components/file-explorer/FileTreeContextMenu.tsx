@@ -12,6 +12,7 @@ import {
   Terminal,
   Trash2
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -64,8 +65,10 @@ export function FileTreeContextMenuContent({
   selectedCount = 1,
   hasClipboardContent = false
 }: FileTreeContextMenuContentProps): React.JSX.Element {
+  const { t } = useTranslation('projects')
   const isDir = entry.type === 'directory'
-  const selectionLabel = selectedCount > 1 ? ` (${selectedCount})` : ''
+  const selectionLabel =
+    selectedCount > 1 ? t('fileContext.selectedSuffix', { count: selectedCount }) : ''
 
   return (
     <ContextMenuContent className="w-56">
@@ -73,10 +76,10 @@ export function FileTreeContextMenuContent({
       {isDir && (
         <>
           <ContextMenuItem onSelect={() => onNewFile(entry.path)}>
-            <FilePlus className="mr-2 h-4 w-4" /> New File
+            <FilePlus className="mr-2 h-4 w-4" /> {t('fileContext.newFile')}
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => onNewFolder(entry.path)}>
-            <FolderPlus className="mr-2 h-4 w-4" /> New Folder
+            <FolderPlus className="mr-2 h-4 w-4" /> {t('fileContext.newFolder')}
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>
@@ -84,32 +87,37 @@ export function FileTreeContextMenuContent({
 
       {/* Clipboard operations */}
       <ContextMenuItem onSelect={onCopy}>
-        <Copy className="mr-2 h-4 w-4" /> Copy{selectionLabel}
+        <Copy className="mr-2 h-4 w-4" /> {t('fileContext.copy')}
+        {selectionLabel}
       </ContextMenuItem>
       <ContextMenuItem onSelect={onCut}>
-        <Scissors className="mr-2 h-4 w-4" /> Cut{selectionLabel}
+        <Scissors className="mr-2 h-4 w-4" /> {t('fileContext.cut')}
+        {selectionLabel}
       </ContextMenuItem>
 
       {/* Paste (only when clipboard has content and we're on a directory) */}
       {hasClipboardContent && isDir && (
         <ContextMenuItem onSelect={() => onPaste(entry.path)}>
-          <ClipboardPaste className="mr-2 h-4 w-4" /> Paste
+          <ClipboardPaste className="mr-2 h-4 w-4" /> {t('fileContext.paste')}
         </ContextMenuItem>
       )}
 
       <ContextMenuItem onSelect={onDuplicate}>
-        <Files className="mr-2 h-4 w-4" /> Duplicate{selectionLabel}
+        <Files className="mr-2 h-4 w-4" /> {t('fileContext.duplicate')}
+        {selectionLabel}
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onRename(entry)} disabled={selectedCount > 1}>
-        <Edit2 className="mr-2 h-4 w-4" /> Rename{selectedCount > 1 ? ' (1 item)' : ''}
+        <Edit2 className="mr-2 h-4 w-4" />
+        {selectedCount > 1 ? t('fileContext.renameSingleItem') : t('fileContext.rename')}
       </ContextMenuItem>
       <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
-        <Trash2 className="mr-2 h-4 w-4" /> Delete{selectionLabel}
+        <Trash2 className="mr-2 h-4 w-4" /> {t('fileContext.delete')}
+        {selectionLabel}
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onCopyPath(entry.path)}>
-        <Copy className="mr-2 h-4 w-4" /> Copy Path
+        <Copy className="mr-2 h-4 w-4" /> {t('fileContext.copyPath')}
       </ContextMenuItem>
 
       {/* External operations — separator only when at least one following
@@ -120,21 +128,21 @@ export function FileTreeContextMenuContent({
       {/* Open in Terminal (directories only — works on web too, server PTY) */}
       {isDir && (
         <ContextMenuItem onSelect={() => onOpenInTerminal(entry.path)}>
-          <Terminal className="mr-2 h-4 w-4" /> Open in Terminal
+          <Terminal className="mr-2 h-4 w-4" /> {t('fileContext.openInTerminal')}
         </ContextMenuItem>
       )}
 
       {/* Open with External App (files only, desktop-only — no browser equivalent) */}
       {isTauriContext() && !isDir && (
         <ContextMenuItem onSelect={() => onOpenWithExternal(entry.path)}>
-          <ExternalLink className="mr-2 h-4 w-4" /> Open with External App
+          <ExternalLink className="mr-2 h-4 w-4" /> {t('fileContext.openWithExternal')}
         </ContextMenuItem>
       )}
 
       {/* Show in File Manager (desktop-only — no browser equivalent) */}
       {isTauriContext() && (
         <ContextMenuItem onSelect={() => onShowInFileManager(entry.path)}>
-          <FolderOpen className="mr-2 h-4 w-4" /> Show in File Manager
+          <FolderOpen className="mr-2 h-4 w-4" /> {t('fileContext.showInFileManager')}
         </ContextMenuItem>
       )}
     </ContextMenuContent>

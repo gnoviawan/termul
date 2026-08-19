@@ -1,5 +1,6 @@
 import { Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { type SettingsSearchEntry, searchSettings } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
 
@@ -69,6 +70,7 @@ export function SettingsLayout({
   children,
   sidebarFooter
 }: SettingsLayoutProps): React.JSX.Element {
+  const { t } = useTranslation('settings')
   const contentRef = useRef<HTMLDivElement | null>(null)
   const [activeId, setActiveId] = useState<string | undefined>(categories[0]?.id)
   const [query, setQuery] = useState('')
@@ -189,15 +191,15 @@ export function SettingsLayout({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search settings..."
-              aria-label="Search settings"
+              placeholder={t('layout.searchPlaceholder')}
+              aria-label={t('layout.searchAria')}
               className="w-full bg-secondary/50 border border-border rounded-md pl-8 pr-8 py-1.5 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
-                aria-label="Clear search"
+                aria-label={t('layout.clearSearch')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
               >
                 <X size={14} />
@@ -206,11 +208,14 @@ export function SettingsLayout({
           </div>
         </div>
 
-        <nav aria-label="Settings categories" className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <nav
+          aria-label={t('layout.categoriesAria')}
+          className="flex-1 overflow-y-auto p-2 space-y-0.5"
+        >
           {isSearching ? (
             results.length === 0 ? (
               <p className="px-3 py-4 text-xs text-muted-foreground">
-                No settings match “{query.trim()}”.
+                {t('layout.noResults', { query: query.trim() })}
               </p>
             ) : (
               results.map((result) => (

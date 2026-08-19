@@ -1,6 +1,7 @@
 import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import mermaid from 'mermaid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
@@ -98,6 +99,8 @@ interface MermaidBlockProps {
 }
 
 export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const { t: settingsT } = useTranslation('settings')
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
 
@@ -242,7 +245,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
     return (
       <div className="p-4 border rounded border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800">
         <p className="mb-2 text-sm font-medium text-red-600 dark:text-red-400">
-          Mermaid syntax error
+          {settingsT('editor.mermaidSyntaxError')}
         </p>
         <pre className="overflow-auto text-xs text-red-700 dark:text-red-300">
           <code>{source}</code>
@@ -254,7 +257,7 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
   if (!svg) {
     return (
       <div className="p-4 text-sm rounded border border-dashed border-muted-foreground/30 text-muted-foreground">
-        Empty Mermaid diagram
+        {settingsT('editor.emptyMermaidDiagram')}
       </div>
     )
   }
@@ -292,8 +295,8 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
           type="button"
           className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
           onClick={handleZoomIn}
-          title="Zoom In"
-          aria-label="Zoom in"
+          title={t('mermaid.zoomIn')}
+          aria-label={t('mermaid.zoomInAria')}
         >
           <ZoomIn className="h-3.5 w-3.5" />
         </button>
@@ -301,8 +304,8 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
           type="button"
           className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
           onClick={handleZoomOut}
-          title="Zoom Out"
-          aria-label="Zoom out"
+          title={t('mermaid.zoomOut')}
+          aria-label={t('mermaid.zoomOutAria')}
         >
           <ZoomOut className="h-3.5 w-3.5" />
         </button>
@@ -310,8 +313,8 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
           type="button"
           className="inline-flex h-7 w-7 items-center justify-center rounded text-xs font-medium hover:bg-accent"
           onClick={handleReset}
-          title="Reset View"
-          aria-label="Reset view"
+          title={t('mermaid.resetView')}
+          aria-label={t('mermaid.resetViewAria')}
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>

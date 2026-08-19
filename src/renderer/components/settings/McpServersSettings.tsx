@@ -1,5 +1,6 @@
 import { AlertTriangle, ChevronDown, Pencil, Plus, RefreshCw, Server, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -66,6 +67,7 @@ function serverToJson(server: StoredMcpServer): string {
 }
 
 export function McpServersSettings(): React.JSX.Element {
+  const { t } = useTranslation('mcp')
   const servers = useAcpStore((state) => state.mcpServers)
   const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
   const importMcpServers = useAcpStore((state) => state.importMcpServers)
@@ -133,7 +135,7 @@ export function McpServersSettings(): React.JSX.Element {
       return
     }
     if (parsedServers.length === 0) {
-      setJsonErrors(['No MCP servers found in the JSON.'])
+      setJsonErrors([t('settings.errors.noneFound')])
       return
     }
     const batch = parsedServers.map((parsed) => ({
@@ -143,12 +145,12 @@ export function McpServersSettings(): React.JSX.Element {
     }))
     try {
       await importMcpServers(batch)
-      toast.success(`Added ${batch.length} MCP server${batch.length === 1 ? '' : 's'}`)
+      toast.success(t('settings.added', { count: batch.length }))
       closeDialog()
     } catch {
       // importMcpServers rolls back the whole batch on failure — nothing was
       // persisted, so the dialog stays open for a safe retry.
-      toast.error('Could not save the MCP servers. Your previous settings were restored.')
+      toast.error(t('settings.errors.saveMany'))
     }
   }
 
@@ -163,7 +165,7 @@ export function McpServersSettings(): React.JSX.Element {
       const raw: unknown = JSON.parse(jsonText)
       if (isRecord(raw)) {
         if (raw.mcpServers !== undefined) {
-          setJsonErrors(['Edit expects a single server object — remove the "mcpServers" wrapper.'])
+          setJsonErrors([t('settings.errors.editWrapper')])
           return
         }
         if (typeof raw.enabled === 'boolean') explicitEnabled = raw.enabled
@@ -178,7 +180,7 @@ export function McpServersSettings(): React.JSX.Element {
     }
     const parsed = parsedServers[0]
     if (!parsed || parsedServers.length !== 1) {
-      setJsonErrors(['Edit expects exactly one server object.'])
+      setJsonErrors([t('settings.errors.editCount')])
       return
     }
     try {
@@ -187,12 +189,12 @@ export function McpServersSettings(): React.JSX.Element {
         id: target.id,
         enabled: explicitEnabled ?? target.enabled ?? true
       })
-      toast.success('MCP server updated')
+      toast.success(t('settings.updated'))
       closeDialog()
     } catch {
       // The store already rolled back the in-memory list; keep the dialog
       // open so the edit is not lost.
-      toast.error('Could not save the MCP server. Your previous settings were restored.')
+      toast.error(t('settings.errors.saveOne'))
     }
   }
 
@@ -212,31 +214,26 @@ export function McpServersSettings(): React.JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/20 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-foreground">Global MCP registry</p>
-          <p className="text-xs text-muted-foreground">
-            Enabled servers are offered automatically when a new agent session starts.
-          </p>
+          <p className="text-sm font-medium text-foreground">{t('settings.title')}</p>
+          <p className="text-xs text-muted-foreground">{t('settings.description')}</p>
         </div>
         <Button type="button" size="sm" onClick={openAdd}>
-          <Plus size={14} className="mr-1.5" /> Add server
+          <Plus size={14} className="mr-1.5" /> {t('settings.addServer')}
         </Button>
       </div>
 
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
         <div className="flex items-start gap-2">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <p>
-            Environment variables and headers are stored in the existing application data store.
-            Prefer <code>$VARIABLE</code> references instead of literal credentials.
-          </p>
+          <p>{t('settings.storageWarning')}</p>
         </div>
       </div>
 
       {servers.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-8 text-center">
           <Server size={24} className="mx-auto mb-2 text-muted-foreground" />
-          <p className="text-sm font-medium">No MCP servers configured</p>
-          <p className="mt-1 text-xs text-muted-foreground">Add a stdio, HTTP, or SSE server.</p>
+          <p className="text-sm font-medium">{t('settings.emptyTitle')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('settings.emptyDescription')}</p>
         </div>
       ) : (
         <div className="divide-y divide-border rounded-lg border border-border">
@@ -273,17 +270,17 @@ export function McpServersSettings(): React.JSX.Element {
                     }
                     aria-label={
                       probeStatus === 'connected'
-                        ? `${server.name} reachable`
+                        ? t('settings.reachable', { name: server.name })
                         : probeStatus === 'disconnected'
-                          ? `${server.name} unreachable`
-                          : `${server.name} not probed yet`
+                          ? t('settings.unreachable', { name: server.name })
+                          : t('settings.notProbed', { name: server.name })
                     }
                     title={
                       probeStatus === 'connected'
-                        ? 'Connected (Termul can reach this server)'
+                        ? t('settings.connectedTitle')
                         : probeStatus === 'disconnected'
-                          ? 'Disconnected (Termul could not reach this server)'
-                          : 'Not probed yet — click "Test" to check'
+                          ? t('settings.disconnectedTitle')
+                          : t('settings.notProbedTitle')
                     }
                   />
                   <span className="min-w-0 shrink truncate text-sm font-medium">{server.name}</span>
@@ -296,10 +293,10 @@ export function McpServersSettings(): React.JSX.Element {
                   <CollapsibleTrigger className="inline-flex shrink-0 items-center gap-1 text-3xs text-muted-foreground underline-offset-2 hover:underline">
                     <ChevronDown size={12} className={isOpen ? 'rotate-180' : ''} />
                     {tools && tools.length > 0
-                      ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
+                      ? t('common.tools', { count: tools.length })
                       : probeStatus === 'disconnected'
-                        ? 'Probe failed — retry'
-                        : 'Show tools'}
+                        ? t('settings.probeRetry')
+                        : t('common.showTools')}
                   </CollapsibleTrigger>
                   <Button
                     type="button"
@@ -307,18 +304,18 @@ export function McpServersSettings(): React.JSX.Element {
                     variant="ghost"
                     disabled={probing}
                     onClick={() => void probeMcpServer(server.id)}
-                    aria-label={`Test ${server.name} connection`}
+                    aria-label={t('settings.testConnection', { name: server.name })}
                   >
                     <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
                   </Button>
                   <Switch
                     checked={server.enabled !== false}
-                    aria-label={`${server.enabled !== false ? 'Disable' : 'Enable'} ${server.name}`}
+                    aria-label={t(server.enabled !== false ? 'common.disable' : 'common.enable', {
+                      name: server.name
+                    })}
                     onCheckedChange={(enabled) => {
                       void setMcpServerEnabled(server.id, enabled).catch(() => {
-                        toast.error(
-                          'Could not update the MCP server. Your previous setting was restored.'
-                        )
+                        toast.error(t('settings.errors.update'))
                       })
                     }}
                   />
@@ -329,7 +326,7 @@ export function McpServersSettings(): React.JSX.Element {
                     onClick={() => openEdit(server)}
                   >
                     <Pencil size={15} />
-                    <span className="sr-only">Edit {server.name}</span>
+                    <span className="sr-only">{t('settings.edit', { name: server.name })}</span>
                   </Button>
                   <Button
                     type="button"
@@ -337,14 +334,12 @@ export function McpServersSettings(): React.JSX.Element {
                     variant="ghost"
                     onClick={() => {
                       void deleteMcpServer(server.id).catch(() => {
-                        toast.error(
-                          'Could not delete the MCP server. Your previous settings were restored.'
-                        )
+                        toast.error(t('settings.errors.delete'))
                       })
                     }}
                   >
                     <Trash2 size={15} />
-                    <span className="sr-only">Delete {server.name}</span>
+                    <span className="sr-only">{t('settings.delete', { name: server.name })}</span>
                   </Button>
                 </div>
                 <CollapsibleContent className="px-3 pb-2">
@@ -363,9 +358,7 @@ export function McpServersSettings(): React.JSX.Element {
                     </ul>
                   ) : probeStatus === 'disconnected' ? (
                     <div className="space-y-1">
-                      <p className="text-3xs text-destructive">
-                        Probe failed — check the server config or network.
-                      </p>
+                      <p className="text-3xs text-destructive">{t('settings.probeNetwork')}</p>
                       {mcpProbeError[server.id] ? (
                         <span className="block font-mono text-3xs text-destructive/80">
                           {mcpProbeError[server.id]}
@@ -373,15 +366,11 @@ export function McpServersSettings(): React.JSX.Element {
                       ) : null}
                     </div>
                   ) : probeStatus === 'connected' ? (
-                    <p className="text-3xs text-muted-foreground">
-                      Probe completed — no tools found.
-                    </p>
+                    <p className="text-3xs text-muted-foreground">{t('settings.probeNoTools')}</p>
                   ) : probing ? (
-                    <p className="text-3xs text-muted-foreground">Probing…</p>
+                    <p className="text-3xs text-muted-foreground">{t('common.probing')}</p>
                   ) : (
-                    <p className="text-3xs text-muted-foreground">
-                      Expand to probe (read-only — per-tool toggle coming soon).
-                    </p>
+                    <p className="text-3xs text-muted-foreground">{t('settings.expandProbe')}</p>
                   )}
                 </CollapsibleContent>
               </Collapsible>
@@ -391,12 +380,8 @@ export function McpServersSettings(): React.JSX.Element {
       )}
 
       <div className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">Experimental MCP-over-ACP</p>
-        <p className="mt-1">
-          Agents may advertise an experimental <code>mcpCapabilities.acp</code> capability. Termul
-          retains that capability for diagnostics, but no native ACP transport can be configured
-          until Termul has an in-process MCP server handler.
-        </p>
+        <p className="font-medium text-foreground">{t('settings.experimentalTitle')}</p>
+        <p className="mt-1">{t('settings.experimentalDescription')}</p>
       </div>
 
       <Dialog
@@ -411,23 +396,25 @@ export function McpServersSettings(): React.JSX.Element {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {dialog?.mode === 'edit' ? 'Edit MCP server' : 'Add MCP servers'}
+              {dialog?.mode === 'edit'
+                ? t('settings.dialog.editTitle')
+                : t('settings.dialog.addTitle')}
             </DialogTitle>
             <DialogDescription>
               {dialog?.mode === 'edit'
-                ? 'Edit this server as JSON. Unknown fields are dropped on save.'
-                : 'Paste a Claude Desktop "mcpServers" config or a single server object.'}
+                ? t('settings.dialog.editDescription')
+                : t('settings.dialog.addDescription')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <label htmlFor="mcp-json" className="block space-y-1 text-sm">
-              <span>MCP JSON</span>
+              <span>{t('settings.dialog.jsonLabel')}</span>
               <Textarea
                 id="mcp-json"
                 rows={12}
                 value={jsonText}
                 onChange={(event) => setJsonText(event.target.value)}
-                placeholder='{"mcpServers": {"dokploy": {"command": "npx", "args": ["-y", "@dokploy/mcp"], "env": {"DOKPLOY_URL": "..."}}}}'
+                placeholder={t('settings.dialog.jsonPlaceholder')}
                 className="font-mono"
               />
             </label>
@@ -443,14 +430,14 @@ export function McpServersSettings(): React.JSX.Element {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={closeDialog}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               type="button"
               disabled={jsonText.trim().length === 0 || saving}
               onClick={() => void saveJson()}
             >
-              {saving ? 'Saving…' : 'Save'}
+              {saving ? t('common.saving') : t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,0 +1,101 @@
+{
+  "common": {
+    "servers": "MCP servers",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "enable": "Enable {{name}}",
+    "disable": "Disable {{name}}",
+    "showTools": "Show tools",
+    "tools_one": "{{count}} tool",
+    "tools_other": "{{count}} tools",
+    "probing": "Probing…",
+    "probeFailed": "Probe failed."
+  },
+  "badge": {
+    "attachedTitle": "{{count}} MCP servers attached",
+    "attachedSr": "MCP servers attached",
+    "manageAria": "MCP servers — {{count}} attached. Click to manage per-server enable/disable.",
+    "attached_one": "{{count}} attached to this session.",
+    "attached_other": "{{count}} attached to this session.",
+    "noneAttached": "No servers attached yet.",
+    "nextChat": "Takes effect on the next chat; per-tool toggle coming soon.",
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "notProbed": "Not probed",
+      "connectedDetail": "Connected (Termul can reach this server)",
+      "disconnectedDetail": "Disconnected (Termul could not reach this server)",
+      "notProbedDetail": "Not probed yet — click to test"
+    },
+    "probeConfig": "Probe failed — check the server config.",
+    "noTools": "No tools available."
+  },
+  "settings": {
+    "title": "Global MCP registry",
+    "description": "Enabled servers are offered automatically when a new agent session starts.",
+    "addServer": "Add server",
+    "storageWarning": "Environment variables and headers are stored in the existing application data store. Prefer $VARIABLE references instead of literal credentials.",
+    "emptyTitle": "No MCP servers configured",
+    "emptyDescription": "Add a stdio, HTTP, or SSE server.",
+    "reachable": "{{name}} reachable",
+    "unreachable": "{{name}} unreachable",
+    "notProbed": "{{name}} not probed yet",
+    "connectedTitle": "Connected (Termul can reach this server)",
+    "disconnectedTitle": "Disconnected (Termul could not reach this server)",
+    "notProbedTitle": "Not probed yet — click \"Test\" to check",
+    "probeRetry": "Probe failed — retry",
+    "testConnection": "Test {{name}} connection",
+    "edit": "Edit {{name}}",
+    "delete": "Delete {{name}}",
+    "probeNetwork": "Probe failed — check the server config or network.",
+    "probeNoTools": "Probe completed — no tools found.",
+    "expandProbe": "Expand to probe (read-only — per-tool toggle coming soon).",
+    "experimentalTitle": "Experimental MCP-over-ACP",
+    "experimentalDescription": "Agents may advertise an experimental mcpCapabilities.acp capability. Termul retains that capability for diagnostics, but no native ACP transport can be configured until Termul has an in-process MCP server handler.",
+    "dialog": {
+      "editTitle": "Edit MCP server",
+      "addTitle": "Add MCP servers",
+      "editDescription": "Edit this server as JSON. Unknown fields are dropped on save.",
+      "addDescription": "Paste a Claude Desktop \"mcpServers\" config or a single server object.",
+      "jsonLabel": "MCP JSON",
+      "jsonPlaceholder": "Paste an mcpServers configuration or a single server JSON object"
+    },
+    "added_one": "Added {{count}} MCP server",
+    "added_other": "Added {{count}} MCP servers",
+    "updated": "MCP server updated",
+    "errors": {
+      "noneFound": "No MCP servers found in the JSON.",
+      "saveMany": "Could not save the MCP servers. Your previous settings were restored.",
+      "editWrapper": "Edit expects a single server object — remove the \"mcpServers\" wrapper.",
+      "editCount": "Edit expects exactly one server object.",
+      "saveOne": "Could not save the MCP server. Your previous settings were restored.",
+      "update": "Could not update the MCP server. Your previous setting was restored.",
+      "delete": "Could not delete the MCP server. Your previous settings were restored."
+    }
+  },
+  "validation": {
+    "nameRequired": "Name is required.",
+    "commandRequiredForStdio": "Command is required for stdio.",
+    "urlRequired": "URL is required.",
+    "urlInvalid": "URL is invalid."
+  },
+  "persistence": {
+    "loadFailed": "Failed to load MCP servers",
+    "saveFailed": "Failed to persist MCP servers"
+  },
+  "skippedTitle": "Some MCP servers were skipped",
+  "skippedDescription": "{{names}} require HTTP or SSE support from this agent.",
+  "loadFailed": "Could not load MCP servers. Try reopening Settings.",
+  "import": {
+    "invalidJson": "Invalid JSON: {{message}}",
+    "topLevelObject": "Invalid JSON: expected a top-level object",
+    "serversObject": "Invalid JSON: \"mcpServers\" must be an object",
+    "unknown": "<unknown>",
+    "unnamed": "<unnamed>",
+    "serverObject": "{{name}}: expected a server object",
+    "envShape": "{{name}}: env must be an object map or name/value pairs",
+    "invalidServer": "{{name}}: invalid server configuration",
+    "validation": "{{name}}: {{errors}}"
+  }
+}

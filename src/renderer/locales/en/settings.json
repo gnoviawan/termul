@@ -1,0 +1,209 @@
+{
+  "page": {
+    "title": "Application Preferences",
+    "subtitle": "Configure global application settings"
+  },
+  "layout": {
+    "searchPlaceholder": "Search settings...",
+    "searchAria": "Search settings",
+    "clearSearch": "Clear search",
+    "categoriesAria": "Settings categories",
+    "noResults": "No settings match “{{query}}”."
+  },
+  "categories": {
+    "appearance": "Terminal Appearance",
+    "shell": "Default Shell",
+    "behavior": "Behavior",
+    "projectDefaults": "New Project Defaults",
+    "aiAgents": "AI Agents",
+    "mcpServers": "MCP Servers",
+    "shortcuts": "Keyboard Shortcuts",
+    "updates": "Updates",
+    "diagnostics": "Diagnostics & Logs",
+    "reset": "Reset Settings"
+  },
+  "language": {
+    "title": "Display Language",
+    "description": "Choose the language used by the Termul interface.",
+    "system": "System Default",
+    "english": "English",
+    "simplifiedChinese": "Simplified Chinese",
+    "systemHint": "Follows your operating system language when supported."
+  },
+  "appearance": {
+    "description": "Customize the look and feel of your terminal.",
+    "uiZoom": "UI Zoom Level",
+    "resetZoom": "Reset to 100%",
+    "zoomHint": "Zoom the entire interface (50–300%). Also adjustable with Ctrl+=, Ctrl+-, Ctrl+0.",
+    "fontFamily": "Font Family",
+    "fontFamilyHint": "Choose a monospace font for terminal text.",
+    "fontSize": "Font Size: {{size}}px",
+    "fontSizeLabel": "Font Size",
+    "fontSizeHint": "Adjust terminal text size (10–24px).",
+    "bufferSize": "Scrollback Buffer Size",
+    "bufferHint": "Number of lines to keep in terminal history. Higher values use more memory. Changes apply to new terminals.",
+    "maxTerminals": "Max Terminals Per Project",
+    "maxTerminalsHint": "Maximum number of terminal tabs allowed per project.",
+    "renderer": "Terminal Renderer",
+    "rendererHint": "GPU-accelerated rendering for terminal output. WebGL provides best performance. Changes apply to new terminals.",
+    "preview": "Preview"
+  },
+  "editor": {
+    "source": "Source",
+    "switchToSource": "Switch to source mode",
+    "switchToWysiwyg": "Switch to WYSIWYG mode",
+    "mermaidSyntaxError": "Mermaid syntax error",
+    "emptyMermaidDiagram": "Empty Mermaid diagram",
+    "loading": "Loading...",
+    "frontmatterKeyEmpty": "Key cannot be empty",
+    "frontmatterKeyExists": "Key already exists"
+  },
+  "customAgents": {
+    "nameRequired": "Agent name is required",
+    "commandRequired": "Agent command is required",
+    "invalidPromptMode": "Invalid prompt mode: {{mode}}",
+    "promptFlagRequired": "Prompt flag is required when prompt mode is '{{mode}}'",
+    "saveFailed": "Failed to save custom agents"
+  },
+  "registry": {
+    "snapshotRequired": "No remote registry snapshot has been fetched. Check for updates before applying.",
+    "applyFailed": "Could not apply the remote registry.",
+    "bundledFailed": "Could not switch to the bundled registry."
+  },
+  "shell": {
+    "description": "Set the default shell for new terminals.",
+    "label": "Shell",
+    "systemDefault": "System Default",
+    "overrideHint": "This can be overridden per-project in project settings."
+  },
+  "behavior": {
+    "description": "Configure terminal cleanup and editor auto-save behavior.",
+    "openLinks": "Open Terminal Links In",
+    "openLinksHint": "Choose whether Ctrl/Cmd+Click URLs from terminal output open in your system browser or a new Termul browser tab.",
+    "orphanDetection": "Orphan Detection",
+    "enableOrphanDetection": "Enable orphan detection",
+    "orphanDetectionHint": "Automatically clean up terminals that have been inactive",
+    "cleanupTimeout": "Timeout Before Cleanup",
+    "cleanupTimeoutHint": "Terminals inactive for this duration will be cleaned up (only if not displayed).",
+    "autoSave": "Editor Auto Save",
+    "enableAutoSave": "Enable auto save",
+    "autoSaveHint": "Automatically save editor files after you stop typing",
+    "autoSaveDelay": "Auto Save Delay",
+    "autoSaveDelayAria": "Auto save delay",
+    "autoSaveDelayHint": "Time to wait after your last edit before saving automatically."
+  },
+  "projectDefaults": {
+    "description": "Set default options for new projects.",
+    "color": "Default Color",
+    "colorHint": "New projects will use this color by default.",
+    "colors": {
+      "blue": "Blue",
+      "green": "Green",
+      "purple": "Purple",
+      "orange": "Orange",
+      "red": "Red",
+      "pink": "Pink",
+      "cyan": "Cyan",
+      "yellow": "Yellow"
+    }
+  },
+  "aiAgents": {
+    "description": "View ACP agent availability and warm/auth status. Agent Chat supports these agents automatically.",
+    "turnTimeout": "Turn Timeout (hard cap)",
+    "turnTimeoutHint": "Maximum wall-clock duration for a single agent turn. Active turns that stream continuously run until this cap; a silent (wedged) turn errors per the Turn Idle Timeout below. The TERMUL_ACP_TURN_TIMEOUT_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
+    "turnIdleTimeout": "Turn Idle Timeout",
+    "turnIdleTimeoutHint": "Window with no agent activity after which a turn is treated as wedged and cancelled. The TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
+    "sessionNewTimeout": "Session/New Timeout",
+    "sessionNewTimeoutHint": "How long to wait for an agent to answer session/new before the spawn fails (cold-start model fetches may need more). The TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
+    "sessionReopenTimeout": "Session Reopen Timeout",
+    "sessionReopenTimeoutHint": "How long to wait for session/load / session/resume (large histories replay before responding; they may need more). The TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var.",
+    "firstPromptWarmup": "First-Prompt Warmup Timeout",
+    "firstPromptWarmupHint": "Warmup prompt budget after session/new to absorb agent cold-start stalls; choose Disabled to skip the warmup entirely. The TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS env var still overrides this (operator/diagnostic). Desktop only — the standalone server uses the env var."
+  },
+  "mcpServers": {
+    "description": "Configure global MCP servers for capability-aware injection into new chats."
+  },
+  "shortcuts": {
+    "description": "Customize keyboard shortcuts to match your workflow.",
+    "resetAll": "Reset all shortcuts",
+    "resetTitle": "Reset Keyboard Shortcuts",
+    "resetMessage": "Are you sure you want to reset all keyboard shortcuts to their default values?"
+  },
+  "updates": {
+    "description": "Manage application updates and version information.",
+    "currentVersion": "Current Version",
+    "releaseChannel": "Release Channel",
+    "releaseChannelHint": "Choose the Stable, Insider, or Nightly update track.",
+    "channels": {
+      "stable": "Stable",
+      "stableDescription": "Production releases. Most reliable.",
+      "insider": "Insider",
+      "insiderDescription": "Release candidates (rc) before stable.",
+      "nightly": "Nightly",
+      "nightlyDescription": "Automated main-branch builds."
+    },
+    "nightlyWarning": "Nightly builds are automated from the latest commit and may be unstable. Updates are offered as a manual download from the nightly release page.",
+    "insiderWarning": "Insider release candidates may be unfinished. Updates are offered as a manual download from the insider release page.",
+    "available": "Update Available",
+    "versionAvailable": "Version {{version}} is available!",
+    "aurHint": "Update through AUR with: yay -S termul-manager",
+    "manualHint": "Automatic update is unavailable. Please download and install the latest version manually.",
+    "downloadHint": "A new version is ready to download.",
+    "error": "Update Error",
+    "check": "Check for Updates",
+    "checking": "Checking for updates...",
+    "openDownloadPage": "Open Download Page",
+    "lastChecked": "Last checked: {{date}}",
+    "autoUpdate": "Auto-update",
+    "autoUpdateLabel": "Automatically check for updates",
+    "autoUpdateHint": "When enabled, the app will periodically check for new versions",
+    "skippedVersion": "Skipped Version",
+    "skipping": "You are currently skipping version {{version}}",
+    "skippingHint": "This version will not be offered again until a newer version is available."
+  },
+  "diagnostics": {
+    "description": "Export or copy application logs to troubleshoot issues.",
+    "revealFolder": "Reveal Log Folder",
+    "revealFolderHint": "Open in file explorer",
+    "exportFile": "Export Log File...",
+    "exportFileHint": "Save to a custom location",
+    "copyContents": "Copy Log Contents",
+    "copyContentsHint": "Copy logs to clipboard",
+    "exportDefault": "Export to Default Directory",
+    "exportDefaultHint": "Save directly to Downloads"
+  },
+  "reset": {
+    "description": "Restore all settings to their default values.",
+    "button": "Reset to Defaults",
+    "title": "Reset Settings",
+    "message": "Are you sure you want to reset all application settings to their default values? This cannot be undone."
+  },
+  "options": {
+    "lineCount_one": "{{formattedCount}} line",
+    "lineCount_other": "{{formattedCount}} lines",
+    "terminalCount_one": "{{count}} terminal",
+    "terminalCount_other": "{{count}} terminals",
+    "halfSecond": "0.5 seconds",
+    "seconds_one": "{{count}} second",
+    "seconds_other": "{{count}} seconds",
+    "minutes_one": "{{count}} minute",
+    "minutes_other": "{{count}} minutes",
+    "hours_one": "{{count}} hour",
+    "hours_other": "{{count}} hours",
+    "years_one": "{{count}} year",
+    "years_other": "{{count}} years",
+    "environmentUnlimited": "Environment/default (unlimited)",
+    "environment60Seconds": "Environment/default (60 seconds)",
+    "environment45Seconds": "Environment/default (45 seconds)",
+    "disabled": "Disabled",
+    "renderer": {
+      "auto": "Auto (Prefer WebGL, DOM fallback)",
+      "webgl": "WebGL",
+      "dom": "DOM"
+    },
+    "urlMode": {
+      "system": "System Default Browser",
+      "termul": "Termul Browser"
+    }
+  }
+}

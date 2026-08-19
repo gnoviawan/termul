@@ -1,4 +1,5 @@
 import { Check, Loader2, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { cn } from '@/lib/utils'
 import { TabContextMenu } from './tab-context-menu'
@@ -38,6 +39,7 @@ export function EditorTab({
   onCloseAll,
   onCopyPath
 }: EditorTabProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const fileName = getBasename(filePath)
   const ext = getExtname(filePath).slice(1) || null
 
@@ -85,12 +87,12 @@ export function EditorTab({
           disabled={showStatusIndicator}
           title={
             operationStatus === 'saving'
-              ? 'Saving file'
+              ? t('tabs.savingFile')
               : operationStatus === 'reloading'
-                ? 'Reloading file'
+                ? t('tabs.reloadingFile')
                 : operationStatus === 'saved'
-                  ? `${fileName} saved`
-                  : 'Close tab'
+                  ? t('tabs.saved', { name: fileName })
+                  : t('tabs.closeTab')
           }
           className={cn(
             'ml-auto p-0.5 rounded-md transition-opacity flex-shrink-0',

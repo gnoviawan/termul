@@ -1,5 +1,6 @@
 import { ClipboardPaste, Keyboard } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { clipboardApi } from '@/lib/clipboard-api'
@@ -25,25 +26,26 @@ const KEYS = [
 export function MobileTerminalControls({
   terminalId
 }: MobileTerminalControlsProps): React.JSX.Element {
+  const { t } = useTranslation('mobile')
   const [expanded, setExpanded] = useState(true)
 
   const write = async (data: string): Promise<void> => {
     const result = await terminalApi.write(terminalId, data)
     if (!result.success) {
-      toast.error(`Terminal write failed: ${result.error}`)
+      toast.error(t('terminalControls.writeFailed', { message: result.error }))
     }
   }
 
   const paste = async (): Promise<void> => {
     const result = await clipboardApi.readText()
     if (!result.success) {
-      toast.error(`Clipboard read failed: ${result.error}`)
+      toast.error(t('terminalControls.clipboardReadFailed', { message: result.error }))
       return
     }
     if (result.data) {
       const writeResult = await terminalApi.write(terminalId, result.data)
       if (!writeResult.success) {
-        toast.error(`Paste failed: ${writeResult.error}`)
+        toast.error(t('terminalControls.pasteFailed', { message: writeResult.error }))
       }
     }
   }
@@ -56,7 +58,7 @@ export function MobileTerminalControls({
           variant="ghost"
           size="sm"
           className="h-10 shrink-0 px-3"
-          aria-label={expanded ? 'Hide terminal keys' : 'Show terminal keys'}
+          aria-label={expanded ? t('terminalControls.hideKeys') : t('terminalControls.showKeys')}
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
@@ -70,7 +72,7 @@ export function MobileTerminalControls({
           onClick={() => void paste()}
         >
           <ClipboardPaste size={15} />
-          Paste
+          {t('terminalControls.paste')}
         </Button>
         {KEYS.map(([label, data]) => (
           <Button

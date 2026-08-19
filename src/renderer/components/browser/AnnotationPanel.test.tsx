@@ -205,7 +205,7 @@ describe('AnnotationPanel', () => {
       addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Fix alignment')
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
       // Use getAllByText since tooltip may duplicate the text
-      const intentElements = screen.getAllByText('fix')
+      const intentElements = screen.getAllByText('Fix')
       // At least one should be the badge (not the tooltip portal content)
       expect(intentElements.length).toBeGreaterThanOrEqual(1)
       // Filter to ensure we find the badge element specifically
@@ -216,19 +216,16 @@ describe('AnnotationPanel', () => {
     it('renders severity label for each card', () => {
       addRegionAnnotation(DEFAULT_PROPS.url, 'tab-1', 'Fix alignment')
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
-      const severityElements = screen.getAllByText('blocking')
+      const severityElements = screen.getAllByText('Blocking')
       expect(severityElements.length).toBeGreaterThanOrEqual(1)
-      // The severity label is a <span> with capitalize class
-      const labelElement = severityElements.find(
-        (el) => el.tagName === 'SPAN' && el.classList.contains('capitalize')
-      )
+      const labelElement = severityElements.find((el) => el.tagName === 'SPAN')
       expect(labelElement).toBeTruthy()
     })
 
     it('shows element selector confidence badge', () => {
       addElementAnnotation(DEFAULT_PROPS.url, 'tab-1')
       renderWithProvider(<AnnotationPanel {...DEFAULT_PROPS} />)
-      expect(screen.getByText('unique-id')).toBeInTheDocument()
+      expect(screen.getByText('Unique ID')).toBeInTheDocument()
     })
   })
 

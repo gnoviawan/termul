@@ -1,4 +1,5 @@
 import { Code2, Eye, List } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useTocIsVisible, useTocSettingsStore } from '@/stores/toc-settings-store'
@@ -14,6 +15,8 @@ export function EditorToolbar({
   onToggleViewMode,
   filePath
 }: EditorToolbarProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
+  const { t: settingsT } = useTranslation('settings')
   const fileName = filePath.split(/[\\/]/).pop() || filePath
   const isTocVisible = useTocIsVisible()
   const toggleTocVisibility = useTocSettingsStore((state) => state.toggleVisibility)
@@ -30,11 +33,11 @@ export function EditorToolbar({
             isTocVisible && 'bg-accent text-accent-foreground'
           )}
           onClick={toggleTocVisibility}
-          title="Toggle Table of Contents"
+          title={t('toc.toggle')}
           aria-pressed={isTocVisible}
         >
           <List size={12} />
-          <span>TOC</span>
+          <span>{t('toc.contents')}</span>
         </Button>
 
         <Button
@@ -44,17 +47,21 @@ export function EditorToolbar({
           className={cn(
             'h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary'
           )}
-          title={viewMode === 'markdown' ? 'Switch to source mode' : 'Switch to WYSIWYG mode'}
+          title={
+            viewMode === 'markdown'
+              ? settingsT('editor.switchToSource')
+              : settingsT('editor.switchToWysiwyg')
+          }
         >
           {viewMode === 'markdown' ? (
             <>
               <Code2 size={12} />
-              <span>Source</span>
+              <span>{settingsT('editor.source')}</span>
             </>
           ) : (
             <>
               <Eye size={12} />
-              <span>Preview</span>
+              <span>{settingsT('appearance.preview')}</span>
             </>
           )}
         </Button>

@@ -1,5 +1,6 @@
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { buildHunkPatches, type HunkPatch } from '@/lib/build-hunk-patch'
 import {
   getLanguageForFile,
@@ -219,8 +220,9 @@ function HunkActionBar({
   action: HunkAction
   onAction?: () => void
 }): React.JSX.Element | null {
+  const { t } = useTranslation('git')
   if (!onAction) return null
-  const label = action === 'stage' ? 'Stage hunk' : 'Unstage hunk'
+  const label = action === 'stage' ? t('diff.stageHunk') : t('diff.unstageHunk')
   return (
     <button
       type="button"

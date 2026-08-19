@@ -24,6 +24,7 @@ import {
   Trash2
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { GitDiffView } from '@/components/git/GitDiffView'
@@ -44,6 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { formatNumber } from '@/i18n/format'
 import { gitApi } from '@/lib/git-api'
 import {
   type GitDiffViewMode,
@@ -64,6 +66,7 @@ interface GitPanelProps {
 type Section = 'staged' | 'unstaged'
 
 export function GitPanel({ cwd, isVisible }: GitPanelProps) {
+  const { t } = useTranslation('git')
   const statuses = useGitStatusStore((state) => state.statuses)
   const diffs = useGitStatusStore((state) => state.diffs)
   const selectedFile = useGitStatusStore((state) => state.selectedFile)
@@ -286,12 +289,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           setSelectedStaged(true)
         }
       } catch (error) {
-        toast.error(`Failed to stage: ${String(error)}`)
+        toast.error(t('errors.stageFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, stageFiles, clearSelection, selectedFile]
+    [cwd, stageFiles, clearSelection, selectedFile, t]
   )
 
   const runUnstage = useCallback(
@@ -305,12 +308,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           setSelectedStaged(false)
         }
       } catch (error) {
-        toast.error(`Failed to unstage: ${String(error)}`)
+        toast.error(t('errors.unstageFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, unstageFiles, clearSelection, selectedFile]
+    [cwd, unstageFiles, clearSelection, selectedFile, t]
   )
 
   // Per-hunk stage/unstage (#257). The patch is built by GitDiffView from
@@ -326,13 +329,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         await stageHunk(cwd, selectedFile, patch)
         await fetchDiff(cwd, selectedFile, false)
       } catch (error) {
-        toast.error(`Failed to stage hunk: ${String(error)}`)
+        toast.error(t('errors.stageHunkFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
         hunkInFlight.current = false
       }
     },
-    [cwd, selectedFile, stageHunk, fetchDiff]
+    [cwd, selectedFile, stageHunk, fetchDiff, t]
   )
 
   const runUnstageHunk = useCallback(
@@ -344,13 +347,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         await unstageHunk(cwd, selectedFile, patch)
         await fetchDiff(cwd, selectedFile, true)
       } catch (error) {
-        toast.error(`Failed to unstage hunk: ${String(error)}`)
+        toast.error(t('errors.unstageHunkFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
         hunkInFlight.current = false
       }
     },
-    [cwd, selectedFile, unstageHunk, fetchDiff]
+    [cwd, selectedFile, unstageHunk, fetchDiff, t]
   )
 
   // Discard only reverts unstaged (working-tree) changes, so it is only ever
@@ -372,13 +375,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       }
       clearSelection()
     } catch (error) {
-      toast.error(`Failed to discard changes: ${String(error)}`)
+      toast.error(t('errors.discardFailed', { details: String(error) }))
     } finally {
       setIsMutating(false)
       setConfirmDiscardOpen(false)
       setDiscardTargets([])
     }
-  }, [cwd, discardTargets, discardFiles, selectedFile, setSelectedFile, clearSelection])
+  }, [cwd, discardTargets, discardFiles, selectedFile, setSelectedFile, clearSelection, t])
 
   // Toggling amend on prefills the message from the last commit so the user can
   // reword it — but only when the inputs are empty, so we never clobber text the
@@ -428,11 +431,11 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       return
     }
     if (!hasUsableAgent) {
-      toast.error('Configure and select an ACP agent before generating a commit message')
+      toast.error(t('commit.errors.agentRequired'))
       return
     }
     if (stagedCount === 0) {
-      toast.error('Stage files before generating a commit message')
+      toast.error(t('commit.errors.stageRequired'))
       return
     }
 
@@ -447,7 +450,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         )
       ]
       if (paths.length !== stagedCount) {
-        throw new Error('Staged files changed. Refresh Git status and retry')
+        throw new Error(t('commit.errors.stagedFilesChanged'))
       }
       const sections = await Promise.all(
         paths.map(async (path) => ({ path, diff: await gitApi.getDiff(requestedCwd, path, true) }))
@@ -467,7 +470,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         sortedLatestPaths.length !== sortedPaths.length ||
         sortedLatestPaths.some((path, index) => path !== sortedPaths[index])
       ) {
-        throw new Error('Staged files or repository changed during generation. Retry')
+        throw new Error(t('commit.errors.generationChanged'))
       }
       const stagedDiff = sections
         .filter(({ diff }) => diff.trim().length > 0)
@@ -478,20 +481,24 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         .join('\n\n')
         .trim()
       if (stagedDiff.length === 0) {
-        throw new Error('The staged diff is empty. Refresh Git status and retry')
+        throw new Error(t('commit.errors.emptyDiff'))
       }
       if (stagedDiff.length > MAX_COMMIT_MESSAGE_DIFF_CHARS) {
         throw new Error(
-          `The staged diff is too large to generate safely (${stagedDiff.length.toLocaleString()} characters; limit ${MAX_COMMIT_MESSAGE_DIFF_CHARS.toLocaleString()})`
+          t('commit.errors.diffTooLarge', {
+            count: stagedDiff.length,
+            formattedCount: formatNumber(stagedDiff.length),
+            formattedLimit: formatNumber(MAX_COMMIT_MESSAGE_DIFF_CHARS)
+          })
         )
       }
       const generated = await generateCommitMessage(requestedCwd, stagedDiff)
       if (currentCwd.current !== requestedCwd || generationToken.current !== requestedToken) {
-        throw new Error('Repository changed during generation. Generated message was discarded')
+        throw new Error(t('commit.errors.repositoryChanged'))
       }
       setSummary(generated.summary)
       setDescription(generated.description)
-      toast.success('Commit message generated')
+      toast.success(t('commit.toasts.generated'))
     } catch (error) {
       toast.error(String(error instanceof Error ? error.message : error))
     } finally {
@@ -509,9 +516,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       setSummary('')
       setDescription('')
       setAmend(false)
-      toast.success(amend ? 'Commit amended' : 'Changes committed')
+      toast.success(amend ? t('commit.toasts.amended') : t('commit.toasts.committed'))
     } catch (error) {
-      toast.error(`Failed to commit: ${String(error)}`)
+      toast.error(t('commit.errors.commitFailed', { details: String(error) }))
     } finally {
       setIsCommitting(false)
       setConfirmAmendOpen(false)
@@ -535,9 +542,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     setIsPushing(true)
     try {
       await push(cwd)
-      toast.success('Pushed to remote')
+      toast.success(t('push.toasts.success'))
     } catch (error) {
-      toast.error(`Failed to push: ${String(error)}`)
+      toast.error(t('push.errors.failed', { details: String(error) }))
     } finally {
       setIsPushing(false)
     }
@@ -556,14 +563,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       setIsMutating(true)
       try {
         await branchSwitch(cwd, name)
-        toast.success(`Switched to branch ${name}`)
+        toast.success(t('branch.toasts.switched', { branch: name }))
       } catch (error) {
-        toast.error(`Failed to switch branch: ${String(error)}`)
+        toast.error(t('branch.errors.switchFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, branchSwitch, hasUncommittedChanges]
+    [cwd, branchSwitch, hasUncommittedChanges, t]
   )
 
   const handleExecuteSwitchBranch = useCallback(
@@ -580,25 +587,23 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           await branchSwitch(cwd, name)
           try {
             await stashPop(cwd, 0)
-            toast.success(`Switched to branch ${name} and reapplied changes`)
+            toast.success(t('branch.toasts.switchedReapplied', { branch: name }))
           } catch (popErr) {
             console.error('Auto-stash pop failed:', popErr)
-            toast.warning(
-              `Switched to branch ${name}, but changes were left in stash@{0} due to conflicts`
-            )
+            toast.warning(t('branch.toasts.stashConflict', { branch: name }))
           }
         } else {
           await branchSwitch(cwd, name)
-          toast.success(`Switched to branch ${name} (changes carried over)`)
+          toast.success(t('branch.toasts.switchedCarried', { branch: name }))
         }
       } catch (error) {
-        toast.error(`Failed to switch branch: ${String(error)}`)
+        toast.error(t('branch.errors.switchFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
         setPendingBranchName('')
       }
     },
-    [cwd, pendingBranchName, branchSwitch, stashSave, stashPop]
+    [cwd, pendingBranchName, branchSwitch, stashSave, stashPop, t]
   )
 
   const handleCreateBranch = useCallback(async () => {
@@ -608,15 +613,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     setIsMutating(true)
     try {
       await branchCreate(cwd, name)
-      toast.success(`Created and switched to branch ${name}`)
+      toast.success(t('branch.toasts.created', { branch: name }))
       setIsCreateBranchOpen(false)
       setBranchNameInput('')
     } catch (error) {
-      toast.error(`Failed to create branch: ${String(error)}`)
+      toast.error(t('branch.errors.createFailed', { details: String(error) }))
     } finally {
       setIsMutating(false)
     }
-  }, [cwd, branchNameInput, branchCreate])
+  }, [cwd, branchNameInput, branchCreate, t])
 
   const handleStashSave = useCallback(async () => {
     if (generationInFlight.current) return
@@ -624,16 +629,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
     setIsMutating(true)
     try {
       await stashSave(cwd, msg, stashIncludeUntracked)
-      toast.success('Changes stashed successfully')
+      toast.success(t('stash.toasts.saved'))
       setIsStashOpen(false)
       setStashMessage('')
       setStashIncludeUntracked(false)
     } catch (error) {
-      toast.error(`Failed to stash changes: ${String(error)}`)
+      toast.error(t('stash.errors.saveFailed', { details: String(error) }))
     } finally {
       setIsMutating(false)
     }
-  }, [cwd, stashMessage, stashIncludeUntracked, stashSave])
+  }, [cwd, stashMessage, stashIncludeUntracked, stashSave, t])
 
   const handleApplyStash = useCallback(
     async (index: number) => {
@@ -641,14 +646,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       setIsMutating(true)
       try {
         await stashApply(cwd, index)
-        toast.success(`Stash@{${index}} applied`)
+        toast.success(t('stash.toasts.applied', { index }))
       } catch (error) {
-        toast.error(`Failed to apply stash: ${String(error)}`)
+        toast.error(t('stash.errors.applyFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, stashApply]
+    [cwd, stashApply, t]
   )
 
   const handlePopStash = useCallback(
@@ -657,14 +662,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       setIsMutating(true)
       try {
         await stashPop(cwd, index)
-        toast.success(`Stash@{${index}} popped`)
+        toast.success(t('stash.toasts.popped', { index }))
       } catch (error) {
-        toast.error(`Failed to pop stash: ${String(error)}`)
+        toast.error(t('stash.errors.popFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, stashPop]
+    [cwd, stashPop, t]
   )
 
   const handleDropStash = useCallback(
@@ -673,14 +678,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       setIsMutating(true)
       try {
         await stashDrop(cwd, index)
-        toast.success(`Stash@{${index}} dropped`)
+        toast.success(t('stash.toasts.dropped', { index }))
       } catch (error) {
-        toast.error(`Failed to drop stash: ${String(error)}`)
+        toast.error(t('stash.errors.dropFailed', { details: String(error) }))
       } finally {
         setIsMutating(false)
       }
     },
-    [cwd, stashDrop]
+    [cwd, stashDrop, t]
   )
 
   const onBranch = !!commitContext?.branch
@@ -691,10 +696,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   const hasSomethingToPush = !commitContext?.hasUpstream || ahead > 0
   const canPush = onBranch && hasSomethingToPush && !isPushing && !isCommitting && !isGenerating
   const pushLabel = !commitContext?.hasUpstream
-    ? 'Publish branch'
+    ? t('push.publish')
     : ahead > 0
-      ? `Push ${ahead}`
-      : 'Up to date'
+      ? t('push.count', { count: ahead, formattedCount: formatNumber(ahead) })
+      : t('push.upToDate')
 
   const stagedSelectionCount = selectionSection === 'staged' ? selectedPaths.size : 0
   const unstagedSelectionCount = selectionSection === 'unstaged' ? selectedPaths.size : 0
@@ -718,7 +723,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 variant="ghost"
                 size="icon"
                 className="size-8 shrink-0"
-                aria-label="Back to file list"
+                aria-label={t('diff.backToFiles')}
                 onClick={() => setSelectedFile(null)}
               >
                 <ChevronLeft size={16} />
@@ -731,14 +736,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <div
                   className="flex items-center rounded-md border border-border p-0.5"
                   role="group"
-                  aria-label="Diff view mode"
+                  aria-label={t('diff.viewMode')}
                 >
                   <Button
                     type="button"
                     variant={diffViewMode === 'inline' ? 'secondary' : 'ghost'}
                     size="icon"
                     className="h-7 w-7"
-                    title="Inline diff"
+                    title={t('diff.inline')}
+                    aria-label={t('diff.inline')}
                     aria-pressed={diffViewMode === 'inline'}
                     onClick={() => {
                       setDiffViewMode('inline')
@@ -752,7 +758,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                     variant={diffViewMode === 'split' ? 'secondary' : 'ghost'}
                     size="icon"
                     className="h-7 w-7"
-                    title="Side-by-side diff"
+                    title={t('diff.sideBySide')}
+                    aria-label={t('diff.sideBySide')}
                     aria-pressed={diffViewMode === 'split'}
                     onClick={() => {
                       setDiffViewMode('split')
@@ -763,7 +770,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   </Button>
                 </div>
                 <span className="label-group text-muted-foreground">
-                  {selectedStaged ? 'Staged' : 'Working tree'}
+                  {selectedStaged ? t('diff.staged') : t('diff.workingTree')}
                 </span>
               </div>
             </div>
@@ -771,7 +778,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               {currentDiff === undefined || currentDiff === null ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   <RefreshCw className="animate-spin mr-2" size={16} />
-                  Loading diff...
+                  {t('diff.loading')}
                 </div>
               ) : currentDiff.trim().length > 0 ? (
                 <GitDiffView
@@ -784,11 +791,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
                     <FileText size={18} />
                   </div>
-                  <h3 className="text-sm font-medium text-foreground mb-1">No diff available</h3>
-                  <p className="text-xs max-w-[260px]">
-                    This file may be ignored by Git, unchanged relative to the selected base, or
-                    unavailable for diff preview.
-                  </p>
+                  <h3 className="text-sm font-medium text-foreground mb-1">
+                    {t('diff.noAvailable')}
+                  </h3>
+                  <p className="text-xs max-w-[260px]">{t('diff.unavailableDescription')}</p>
                 </div>
               )}
             </ScrollArea>
@@ -805,7 +811,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       className="h-8 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
                     >
                       <GitBranch size={13} className="text-muted-foreground shrink-0" />
-                      <span className="truncate">{commitContext?.branch ?? 'Detached HEAD'}</span>
+                      <span className="truncate">
+                        {commitContext?.branch ?? t('branch.detachedHead')}
+                      </span>
                       <ChevronDown
                         size={12}
                         className="text-muted-foreground opacity-50 shrink-0"
@@ -821,12 +829,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       className="flex items-center gap-2 text-xs cursor-pointer"
                     >
                       <Plus size={12} />
-                      Create new branch...
+                      {t('branch.createNew')}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     {branches.length === 0 ? (
                       <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                        No branches found
+                        {t('branch.noneFound')}
                       </div>
                     ) : (
                       branches.map((b) => (
@@ -852,7 +860,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
-                  title="Stash changes"
+                  title={t('stash.action')}
+                  aria-label={t('stash.action')}
                   onClick={() => setIsStashOpen(true)}
                   disabled={!hasUncommittedChanges || isGenerating}
                 >
@@ -867,7 +876,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 />
                 <input
                   type="text"
-                  placeholder="Filter changes..."
+                  placeholder={t('changes.filterPlaceholder')}
+                  aria-label={t('changes.filterLabel')}
                   className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -880,13 +890,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 {stagedFiles.length > 0 && (
                   <div className="space-y-1">
                     <SectionHeader
-                      label="Staged Changes"
+                      label={t('changes.staged')}
                       count={stagedFiles.length}
                       selectionCount={stagedSelectionCount}
                     >
                       <SectionAction
                         icon={<Minus size={13} />}
-                        label="Unstage all changes"
+                        label={t('changes.unstageAll')}
                         disabled={isMutating || isGenerating}
                         onClick={() => runUnstage(stagedFiles.map((f) => f.path))}
                       />
@@ -904,7 +914,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         >
                           <RowAction
                             icon={<Minus size={13} />}
-                            label="Unstage changes"
+                            label={t('changes.unstage')}
                             disabled={isMutating || isGenerating}
                             onClick={() => runUnstage(targetsFor(file.path, 'staged'))}
                           />
@@ -916,7 +926,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
                 <div className="space-y-1">
                   <SectionHeader
-                    label="Changes"
+                    label={t('changes.title')}
                     count={unstagedFiles.length}
                     selectionCount={unstagedSelectionCount}
                   >
@@ -924,14 +934,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       <>
                         <SectionAction
                           icon={<RotateCcw size={13} />}
-                          label="Discard all changes"
+                          label={t('changes.discardAll')}
                           variant="danger"
                           disabled={isMutating || isGenerating}
                           onClick={() => requestDiscard(unstagedFiles.map((f) => f.path))}
                         />
                         <SectionAction
                           icon={<Plus size={13} />}
-                          label="Stage all changes"
+                          label={t('changes.stageAll')}
                           disabled={isMutating || isGenerating}
                           onClick={() => runStage(unstagedFiles.map((f) => f.path))}
                         />
@@ -940,7 +950,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   </SectionHeader>
                   {unstagedFiles.length === 0 ? (
                     <div className="px-4 py-8 text-center">
-                      <p className="text-xs text-muted-foreground">No changes detected</p>
+                      <p className="text-xs text-muted-foreground">{t('changes.none')}</p>
                     </div>
                   ) : (
                     unstagedFiles.map((file: GitStatusDetail) => {
@@ -956,14 +966,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         >
                           <RowAction
                             icon={<RotateCcw size={13} />}
-                            label="Discard changes"
+                            label={t('changes.discard')}
                             variant="danger"
                             disabled={isMutating || isGenerating}
                             onClick={() => requestDiscard(targetsFor(file.path, 'unstaged'))}
                           />
                           <RowAction
                             icon={<Plus size={13} />}
-                            label="Stage changes"
+                            label={t('changes.stage')}
                             disabled={isMutating || isGenerating}
                             onClick={() => runStage(targetsFor(file.path, 'unstaged'))}
                           />
@@ -975,7 +985,11 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
                 {stashes.length > 0 && (
                   <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
-                    <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
+                    <SectionHeader
+                      label={t('stash.title')}
+                      count={stashes.length}
+                      selectionCount={0}
+                    />
                     <div className="space-y-0.5 w-full min-w-0">
                       {stashes.map((s) => (
                         <div
@@ -988,13 +1002,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                               className="truncate text-muted-foreground text-2xs leading-tight"
                               title={s.message}
                             >
-                              {s.message || 'No message'}
+                              {s.message || t('stash.noMessage')}
                             </span>
                           </div>
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                             <button
                               type="button"
-                              title="Apply stash (keeps stash entry)"
+                              title={t('stash.apply')}
+                              aria-label={t('stash.apply')}
                               onClick={() => handleApplyStash(s.index)}
                               className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                             >
@@ -1002,7 +1017,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                             </button>
                             <button
                               type="button"
-                              title="Pop stash (applies and drops)"
+                              title={t('stash.pop')}
+                              aria-label={t('stash.pop')}
                               onClick={() => handlePopStash(s.index)}
                               className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                             >
@@ -1010,7 +1026,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                             </button>
                             <button
                               type="button"
-                              title="Drop stash"
+                              title={t('stash.drop')}
+                              aria-label={t('stash.drop')}
                               onClick={() => handleDropStash(s.index)}
                               className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
                             >
@@ -1029,16 +1046,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             <div className="border-t border-border p-3 space-y-2 bg-background/60">
               <input
                 type="text"
-                aria-label="Commit summary"
-                placeholder={amend ? 'Update commit message' : 'Summary (required)'}
+                aria-label={t('commit.summaryLabel')}
+                placeholder={amend ? t('commit.updateMessage') : t('commit.summaryRequired')}
                 className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
                 value={summary}
                 onChange={(e) => setSummary(e.target.value)}
                 disabled={isCommitting || isGenerating}
               />
               <textarea
-                aria-label="Commit description"
-                placeholder="Description (optional)"
+                aria-label={t('commit.descriptionLabel')}
+                placeholder={t('commit.descriptionOptional')}
                 rows={3}
                 className="w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
                 value={description}
@@ -1054,14 +1071,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 disabled={!canGenerate}
                 title={
                   stagedCount === 0
-                    ? 'Stage files to generate a commit message'
+                    ? t('commit.generateNeedsStage')
                     : !hasUsableAgent
-                      ? 'Configure and select an ACP agent'
-                      : 'Generate a commit message from staged changes'
+                      ? t('commit.generateNeedsAgent')
+                      : t('commit.generateTitle')
                 }
               >
                 <Sparkles size={14} className={cn(isGenerating && 'animate-pulse')} />
-                {isGenerating ? 'Generating...' : 'Generate message'}
+                {isGenerating ? t('commit.generating') : t('commit.generate')}
               </Button>
               <label
                 className={cn(
@@ -1072,8 +1089,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 )}
                 title={
                   commitContext?.hasHead
-                    ? 'Amend the last commit instead of creating a new one'
-                    : 'No commit to amend yet'
+                    ? t('commit.amendDescription')
+                    : t('commit.noCommitToAmend')
                 }
               >
                 <input
@@ -1083,7 +1100,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   onChange={handleToggleAmend}
                   disabled={!commitContext?.hasHead || isCommitting || isGenerating}
                 />
-                Amend last commit
+                {t('commit.amendLast')}
               </label>
               <Button
                 variant="default"
@@ -1093,20 +1110,20 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 disabled={!canCommit}
                 title={
                   amend
-                    ? 'Amend the last commit'
+                    ? t('commit.amendTitle')
                     : stagedCount === 0
-                      ? 'Stage files to commit'
-                      : 'Commit staged changes'
+                      ? t('commit.stageToCommit')
+                      : t('commit.commitStaged')
                 }
               >
                 <GitCommit size={14} />
                 {isCommitting
-                  ? 'Committing...'
+                  ? t('commit.committing')
                   : amend
-                    ? 'Amend commit'
+                    ? t('commit.amend')
                     : commitContext?.branch
-                      ? `Commit to ${commitContext.branch}`
-                      : 'Commit'}
+                      ? t('commit.toBranch', { branch: commitContext.branch })
+                      : t('commit.action')}
               </Button>
               <Button
                 variant="outline"
@@ -1116,16 +1133,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 disabled={!canPush}
                 title={
                   !onBranch
-                    ? 'Not on a branch (detached HEAD)'
+                    ? t('push.detached')
                     : !commitContext?.hasUpstream
-                      ? 'Publish this branch to origin'
+                      ? t('push.publishTitle')
                       : ahead > 0
-                        ? 'Push commits to the remote'
-                        : 'Nothing to push — up to date with the remote'
+                        ? t('push.pushTitle')
+                        : t('push.nothingToPush')
                 }
               >
                 <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
-                {isPushing ? 'Pushing...' : pushLabel}
+                {isPushing ? t('push.pushing') : pushLabel}
                 {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
               </Button>
             </div>
@@ -1135,15 +1152,18 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <ConfirmDialog
           isOpen={confirmDiscardOpen}
           variant="danger"
-          title="Discard changes"
+          title={t('discard.title')}
           message={
             discardTargets.length > 1
-              ? `Discard changes to ${discardTargets.length} files? This cannot be undone.`
+              ? t('discard.multiple', {
+                  count: discardTargets.length,
+                  formattedCount: formatNumber(discardTargets.length)
+                })
               : discardTargets[0]
-                ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
+                ? t('discard.single', { path: discardTargets[0] })
                 : ''
           }
-          confirmLabel="Discard"
+          confirmLabel={t('discard.confirm')}
           isLoading={isMutating}
           onConfirm={confirmDiscard}
           onCancel={() => {
@@ -1155,9 +1175,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <ConfirmDialog
           isOpen={confirmAmendOpen}
           variant="danger"
-          title="Amend pushed commit"
-          message="The last commit appears to already be pushed. Amending rewrites published history and will require a force-push to update the remote. Continue?"
-          confirmLabel="Amend anyway"
+          title={t('commit.amendPushedTitle')}
+          message={t('commit.amendPushedMessage')}
+          confirmLabel={t('commit.amendAnyway')}
           isLoading={isCommitting}
           onConfirm={runCommit}
           onCancel={() => setConfirmAmendOpen(false)}
@@ -1166,15 +1186,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <Dialog open={isCreateBranchOpen} onOpenChange={setIsCreateBranchOpen}>
           <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
-              <DialogTitle>Create New Branch</DialogTitle>
+              <DialogTitle>{t('branch.createTitle')}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2 text-xs">
               <div className="space-y-1">
-                <label className="text-muted-foreground">Branch name</label>
+                <label className="text-muted-foreground">{t('branch.nameLabel')}</label>
                 <input
                   type="text"
                   className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
-                  placeholder="e.g. feature/new-login"
+                  placeholder={t('branch.namePlaceholder')}
                   value={branchNameInput}
                   onChange={(e) => setBranchNameInput(e.target.value)}
                 />
@@ -1182,7 +1202,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             </div>
             <DialogFooter>
               <Button variant="ghost" size="sm" onClick={() => setIsCreateBranchOpen(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button
                 variant="default"
@@ -1190,7 +1210,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onClick={handleCreateBranch}
                 disabled={!branchNameInput.trim() || isMutating || isGenerating}
               >
-                Create &amp; Switch
+                {t('branch.createAndSwitch')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1199,15 +1219,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <Dialog open={isStashOpen} onOpenChange={setIsStashOpen}>
           <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
-              <DialogTitle>Stash Changes</DialogTitle>
+              <DialogTitle>{t('stash.dialogTitle')}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2 text-xs">
               <div className="space-y-1">
-                <label className="text-muted-foreground">Message (optional)</label>
+                <label className="text-muted-foreground">{t('stash.messageOptional')}</label>
                 <input
                   type="text"
                   className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
-                  placeholder="WIP on current branch..."
+                  placeholder={t('stash.placeholder')}
                   value={stashMessage}
                   onChange={(e) => setStashMessage(e.target.value)}
                 />
@@ -1219,12 +1239,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   checked={stashIncludeUntracked}
                   onChange={(e) => setStashIncludeUntracked(e.target.checked)}
                 />
-                Include untracked files
+                {t('stash.includeUntracked')}
               </label>
             </div>
             <DialogFooter>
               <Button variant="ghost" size="sm" onClick={() => setIsStashOpen(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button
                 variant="default"
@@ -1232,7 +1252,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onClick={handleStashSave}
                 disabled={isMutating || isGenerating}
               >
-                Stash
+                {t('stash.action')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1241,27 +1261,18 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <Dialog open={confirmBranchSwitchOpen} onOpenChange={setConfirmBranchSwitchOpen}>
           <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
-              <DialogTitle>Uncommitted Changes</DialogTitle>
+              <DialogTitle>{t('branch.uncommittedTitle')}</DialogTitle>
             </DialogHeader>
             <div className="py-2 text-xs text-muted-foreground space-y-2">
-              <p>
-                You have uncommitted changes on your current branch. How would you like to handle
-                them before switching to <strong>{pendingBranchName}</strong>?
-              </p>
+              <p>{t('branch.uncommittedMessage', { branch: pendingBranchName })}</p>
               <ul className="list-disc pl-4 space-y-1">
-                <li>
-                  <strong>Bring Changes:</strong> Keep your changes and carry them over to the new
-                  branch.
-                </li>
-                <li>
-                  <strong>Stash &amp; Switch:</strong> Stash your changes on this branch, switch,
-                  and try to re-apply them on the new branch.
-                </li>
+                <li>{t('branch.bringDescription')}</li>
+                <li>{t('branch.stashDescription')}</li>
               </ul>
             </div>
             <DialogFooter className="gap-2 sm:gap-0">
               <Button variant="ghost" size="sm" onClick={() => setConfirmBranchSwitchOpen(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button
                 variant="outline"
@@ -1269,7 +1280,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onClick={() => handleExecuteSwitchBranch('bring')}
                 disabled={isMutating || isGenerating}
               >
-                Bring Changes
+                {t('branch.bringChanges')}
               </Button>
               <Button
                 variant="default"
@@ -1277,7 +1288,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onClick={() => handleExecuteSwitchBranch('stash')}
                 disabled={isMutating || isGenerating}
               >
-                Stash &amp; Switch
+                {t('branch.stashAndSwitch')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1300,7 +1311,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   className="h-8 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
                 >
                   <GitBranch size={13} className="text-muted-foreground shrink-0" />
-                  <span className="truncate">{commitContext?.branch ?? 'Detached HEAD'}</span>
+                  <span className="truncate">
+                    {commitContext?.branch ?? t('branch.detachedHead')}
+                  </span>
                   <ChevronDown size={12} className="text-muted-foreground opacity-50 shrink-0" />
                 </Button>
               </DropdownMenuTrigger>
@@ -1313,11 +1326,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   className="flex items-center gap-2 text-xs cursor-pointer"
                 >
                   <Plus size={12} />
-                  Create new branch...
+                  {t('branch.createNew')}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {branches.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">No branches found</div>
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    {t('branch.noneFound')}
+                  </div>
                 ) : (
                   branches.map((b) => (
                     <DropdownMenuItem
@@ -1340,7 +1355,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
-              title="Stash changes"
+              title={t('stash.action')}
+              aria-label={t('stash.action')}
               onClick={() => setIsStashOpen(true)}
               disabled={!hasUncommittedChanges || isGenerating}
             >
@@ -1355,7 +1371,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             />
             <input
               type="text"
-              placeholder="Filter changes..."
+              placeholder={t('changes.filterPlaceholder')}
+              aria-label={t('changes.filterLabel')}
               className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -1368,13 +1385,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             {stagedFiles.length > 0 && (
               <div className="space-y-1">
                 <SectionHeader
-                  label="Staged Changes"
+                  label={t('changes.staged')}
                   count={stagedFiles.length}
                   selectionCount={stagedSelectionCount}
                 >
                   <SectionAction
                     icon={<Minus size={13} />}
-                    label="Unstage all changes"
+                    label={t('changes.unstageAll')}
                     disabled={isMutating || isGenerating}
                     onClick={() => runUnstage(stagedFiles.map((f) => f.path))}
                   />
@@ -1391,7 +1408,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                     >
                       <RowAction
                         icon={<Minus size={13} />}
-                        label="Unstage changes"
+                        label={t('changes.unstage')}
                         disabled={isMutating || isGenerating}
                         onClick={() => runUnstage(targetsFor(file.path, 'staged'))}
                       />
@@ -1403,7 +1420,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
             <div className="space-y-1">
               <SectionHeader
-                label="Changes"
+                label={t('changes.title')}
                 count={unstagedFiles.length}
                 selectionCount={unstagedSelectionCount}
               >
@@ -1411,14 +1428,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <>
                     <SectionAction
                       icon={<RotateCcw size={13} />}
-                      label="Discard all changes"
+                      label={t('changes.discardAll')}
                       variant="danger"
                       disabled={isMutating || isGenerating}
                       onClick={() => requestDiscard(unstagedFiles.map((f) => f.path))}
                     />
                     <SectionAction
                       icon={<Plus size={13} />}
-                      label="Stage all changes"
+                      label={t('changes.stageAll')}
                       disabled={isMutating || isGenerating}
                       onClick={() => runStage(unstagedFiles.map((f) => f.path))}
                     />
@@ -1427,7 +1444,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               </SectionHeader>
               {unstagedFiles.length === 0 ? (
                 <div className="px-4 py-8 text-center">
-                  <p className="text-xs text-muted-foreground">No changes detected</p>
+                  <p className="text-xs text-muted-foreground">{t('changes.none')}</p>
                 </div>
               ) : (
                 unstagedFiles.map((file: GitStatusDetail) => {
@@ -1443,14 +1460,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                     >
                       <RowAction
                         icon={<RotateCcw size={13} />}
-                        label="Discard changes"
+                        label={t('changes.discard')}
                         variant="danger"
                         disabled={isMutating || isGenerating}
                         onClick={() => requestDiscard(targetsFor(file.path, 'unstaged'))}
                       />
                       <RowAction
                         icon={<Plus size={13} />}
-                        label="Stage changes"
+                        label={t('changes.stage')}
                         disabled={isMutating || isGenerating}
                         onClick={() => runStage(targetsFor(file.path, 'unstaged'))}
                       />
@@ -1462,7 +1479,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
             {stashes.length > 0 && (
               <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
-                <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
+                <SectionHeader label={t('stash.title')} count={stashes.length} selectionCount={0} />
                 <div className="space-y-0.5 w-full min-w-0">
                   {stashes.map((s) => (
                     <div
@@ -1475,13 +1492,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                           className="truncate text-muted-foreground text-2xs leading-tight"
                           title={s.message}
                         >
-                          {s.message || 'No message'}
+                          {s.message || t('stash.noMessage')}
                         </span>
                       </div>
                       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         <button
                           type="button"
-                          title="Apply stash (keeps stash entry)"
+                          title={t('stash.apply')}
+                          aria-label={t('stash.apply')}
                           onClick={() => handleApplyStash(s.index)}
                           className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                         >
@@ -1489,7 +1507,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         </button>
                         <button
                           type="button"
-                          title="Pop stash (applies and drops)"
+                          title={t('stash.pop')}
+                          aria-label={t('stash.pop')}
                           onClick={() => handlePopStash(s.index)}
                           className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                         >
@@ -1497,7 +1516,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         </button>
                         <button
                           type="button"
-                          title="Drop stash"
+                          title={t('stash.drop')}
+                          aria-label={t('stash.drop')}
                           onClick={() => handleDropStash(s.index)}
                           className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
                         >
@@ -1516,16 +1536,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         <div className="border-t border-border p-3 space-y-2 bg-background/60">
           <input
             type="text"
-            aria-label="Commit summary"
-            placeholder={amend ? 'Update commit message' : 'Summary (required)'}
+            aria-label={t('commit.summaryLabel')}
+            placeholder={amend ? t('commit.updateMessage') : t('commit.summaryRequired')}
             className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
             value={summary}
             onChange={(e) => setSummary(e.target.value)}
             disabled={isCommitting || isGenerating}
           />
           <textarea
-            aria-label="Commit description"
-            placeholder="Description (optional)"
+            aria-label={t('commit.descriptionLabel')}
+            placeholder={t('commit.descriptionOptional')}
             rows={3}
             className="w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
             value={description}
@@ -1541,14 +1561,14 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             disabled={!canGenerate}
             title={
               stagedCount === 0
-                ? 'Stage files to generate a commit message'
+                ? t('commit.generateNeedsStage')
                 : !hasUsableAgent
-                  ? 'Configure and select an ACP agent'
-                  : 'Generate a commit message from staged changes'
+                  ? t('commit.generateNeedsAgent')
+                  : t('commit.generateTitle')
             }
           >
             <Sparkles size={14} className={cn(isGenerating && 'animate-pulse')} />
-            {isGenerating ? 'Generating...' : 'Generate message'}
+            {isGenerating ? t('commit.generating') : t('commit.generate')}
           </Button>
           <label
             className={cn(
@@ -1558,9 +1578,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 : 'text-muted-foreground/40 cursor-not-allowed'
             )}
             title={
-              commitContext?.hasHead
-                ? 'Amend the last commit instead of creating a new one'
-                : 'No commit to amend yet'
+              commitContext?.hasHead ? t('commit.amendDescription') : t('commit.noCommitToAmend')
             }
           >
             <input
@@ -1570,7 +1588,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onChange={handleToggleAmend}
               disabled={!commitContext?.hasHead || isCommitting || isGenerating}
             />
-            Amend last commit
+            {t('commit.amendLast')}
           </label>
           <Button
             variant="default"
@@ -1580,20 +1598,20 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             disabled={!canCommit}
             title={
               amend
-                ? 'Amend the last commit'
+                ? t('commit.amendTitle')
                 : stagedCount === 0
-                  ? 'Stage files to commit'
-                  : 'Commit staged changes'
+                  ? t('commit.stageToCommit')
+                  : t('commit.commitStaged')
             }
           >
             <GitCommit size={14} />
             {isCommitting
-              ? 'Committing...'
+              ? t('commit.committing')
               : amend
-                ? 'Amend commit'
+                ? t('commit.amend')
                 : commitContext?.branch
-                  ? `Commit to ${commitContext.branch}`
-                  : 'Commit'}
+                  ? t('commit.toBranch', { branch: commitContext.branch })
+                  : t('commit.action')}
           </Button>
           <Button
             variant="outline"
@@ -1603,16 +1621,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             disabled={!canPush}
             title={
               !onBranch
-                ? 'Not on a branch (detached HEAD)'
+                ? t('push.detached')
                 : !commitContext?.hasUpstream
-                  ? 'Publish this branch to origin'
+                  ? t('push.publishTitle')
                   : ahead > 0
-                    ? 'Push commits to the remote'
-                    : 'Nothing to push — up to date with the remote'
+                    ? t('push.pushTitle')
+                    : t('push.nothingToPush')
             }
           >
             <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
-            {isPushing ? 'Pushing...' : pushLabel}
+            {isPushing ? t('push.pushing') : pushLabel}
             {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
           </Button>
         </div>
@@ -1631,14 +1649,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <div
                   className="flex items-center rounded-md border border-border p-0.5"
                   role="group"
-                  aria-label="Diff view mode"
+                  aria-label={t('diff.viewMode')}
                 >
                   <Button
                     type="button"
                     variant={diffViewMode === 'inline' ? 'secondary' : 'ghost'}
                     size="icon"
                     className="h-7 w-7"
-                    title="Inline diff"
+                    title={t('diff.inline')}
+                    aria-label={t('diff.inline')}
                     aria-pressed={diffViewMode === 'inline'}
                     onClick={() => {
                       setDiffViewMode('inline')
@@ -1652,7 +1671,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                     variant={diffViewMode === 'split' ? 'secondary' : 'ghost'}
                     size="icon"
                     className="h-7 w-7"
-                    title="Side-by-side diff"
+                    title={t('diff.sideBySide')}
+                    aria-label={t('diff.sideBySide')}
                     aria-pressed={diffViewMode === 'split'}
                     onClick={() => {
                       setDiffViewMode('split')
@@ -1663,7 +1683,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   </Button>
                 </div>
                 <span className="label-group text-muted-foreground">
-                  {selectedStaged ? 'Staged' : 'Working tree'}
+                  {selectedStaged ? t('diff.staged') : t('diff.workingTree')}
                 </span>
               </div>
             </div>
@@ -1671,7 +1691,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               {currentDiff === undefined || currentDiff === null ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   <RefreshCw className="animate-spin mr-2" size={16} />
-                  Loading diff...
+                  {t('diff.loading')}
                 </div>
               ) : currentDiff.trim().length > 0 ? (
                 <GitDiffView
@@ -1687,11 +1707,10 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3 text-muted-foreground/60">
                     <FileText size={18} />
                   </div>
-                  <h3 className="text-sm font-medium text-foreground mb-1">No diff available</h3>
-                  <p className="text-xs max-w-[260px]">
-                    This file may be ignored by Git, unchanged relative to the selected base, or
-                    unavailable for diff preview.
-                  </p>
+                  <h3 className="text-sm font-medium text-foreground mb-1">
+                    {t('diff.noAvailable')}
+                  </h3>
+                  <p className="text-xs max-w-[260px]">{t('diff.unavailableDescription')}</p>
                 </div>
               )}
             </ScrollArea>
@@ -1701,12 +1720,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-4 text-muted-foreground/50">
               <GitBranch size={24} />
             </div>
-            <h3 className="text-sm font-medium text-foreground mb-1">
-              Select a file to see changes
-            </h3>
-            <p className="text-xs max-w-[240px]">
-              Click on any modified file in the sidebar to view the diff and manage your changes.
-            </p>
+            <h3 className="text-sm font-medium text-foreground mb-1">{t('diff.selectFile')}</h3>
+            <p className="text-xs max-w-[240px]">{t('diff.selectFileDescription')}</p>
           </div>
         )}
       </div>
@@ -1714,15 +1729,18 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <ConfirmDialog
         isOpen={confirmDiscardOpen}
         variant="danger"
-        title="Discard changes"
+        title={t('discard.title')}
         message={
           discardTargets.length > 1
-            ? `Discard changes to ${discardTargets.length} files? This cannot be undone.`
+            ? t('discard.multiple', {
+                count: discardTargets.length,
+                formattedCount: formatNumber(discardTargets.length)
+              })
             : discardTargets[0]
-              ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
+              ? t('discard.single', { path: discardTargets[0] })
               : ''
         }
-        confirmLabel="Discard"
+        confirmLabel={t('discard.confirm')}
         isLoading={isMutating}
         onConfirm={confirmDiscard}
         onCancel={() => {
@@ -1734,9 +1752,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <ConfirmDialog
         isOpen={confirmAmendOpen}
         variant="danger"
-        title="Amend pushed commit"
-        message="The last commit appears to already be pushed. Amending rewrites published history and will require a force-push to update the remote. Continue?"
-        confirmLabel="Amend anyway"
+        title={t('commit.amendPushedTitle')}
+        message={t('commit.amendPushedMessage')}
+        confirmLabel={t('commit.amendAnyway')}
         isLoading={isCommitting}
         onConfirm={runCommit}
         onCancel={() => setConfirmAmendOpen(false)}
@@ -1745,15 +1763,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <Dialog open={isCreateBranchOpen} onOpenChange={setIsCreateBranchOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Create New Branch</DialogTitle>
+            <DialogTitle>{t('branch.createTitle')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2 text-xs">
             <div className="space-y-1">
-              <label className="text-muted-foreground">Branch name</label>
+              <label className="text-muted-foreground">{t('branch.nameLabel')}</label>
               <input
                 type="text"
                 className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
-                placeholder="e.g. feature/new-login"
+                placeholder={t('branch.namePlaceholder')}
                 value={branchNameInput}
                 onChange={(e) => setBranchNameInput(e.target.value)}
               />
@@ -1761,7 +1779,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setIsCreateBranchOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               variant="default"
@@ -1769,7 +1787,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onClick={handleCreateBranch}
               disabled={!branchNameInput.trim() || isMutating || isGenerating}
             >
-              Create & Switch
+              {t('branch.createAndSwitch')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1778,15 +1796,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <Dialog open={isStashOpen} onOpenChange={setIsStashOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Stash Changes</DialogTitle>
+            <DialogTitle>{t('stash.dialogTitle')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2 text-xs">
             <div className="space-y-1">
-              <label className="text-muted-foreground">Message (optional)</label>
+              <label className="text-muted-foreground">{t('stash.messageOptional')}</label>
               <input
                 type="text"
                 className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
-                placeholder="WIP on current branch..."
+                placeholder={t('stash.placeholder')}
                 value={stashMessage}
                 onChange={(e) => setStashMessage(e.target.value)}
               />
@@ -1798,12 +1816,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 checked={stashIncludeUntracked}
                 onChange={(e) => setStashIncludeUntracked(e.target.checked)}
               />
-              Include untracked files
+              {t('stash.includeUntracked')}
             </label>
           </div>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setIsStashOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               variant="default"
@@ -1811,7 +1829,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onClick={handleStashSave}
               disabled={isMutating || isGenerating}
             >
-              Stash
+              {t('stash.action')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1820,27 +1838,18 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <Dialog open={confirmBranchSwitchOpen} onOpenChange={setConfirmBranchSwitchOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Uncommitted Changes</DialogTitle>
+            <DialogTitle>{t('branch.uncommittedTitle')}</DialogTitle>
           </DialogHeader>
           <div className="py-2 text-xs text-muted-foreground space-y-2">
-            <p>
-              You have uncommitted changes on your current branch. How would you like to handle them
-              before switching to <strong>{pendingBranchName}</strong>?
-            </p>
+            <p>{t('branch.uncommittedMessage', { branch: pendingBranchName })}</p>
             <ul className="list-disc pl-4 space-y-1">
-              <li>
-                <strong>Bring Changes:</strong> Keep your changes and carry them over to the new
-                branch.
-              </li>
-              <li>
-                <strong>Stash &amp; Switch:</strong> Stash your changes on this branch, switch, and
-                try to re-apply them on the new branch.
-              </li>
+              <li>{t('branch.bringDescription')}</li>
+              <li>{t('branch.stashDescription')}</li>
             </ul>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" size="sm" onClick={() => setConfirmBranchSwitchOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               variant="outline"
@@ -1848,7 +1857,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onClick={() => handleExecuteSwitchBranch('bring')}
               disabled={isMutating || isGenerating}
             >
-              Bring Changes
+              {t('branch.bringChanges')}
             </Button>
             <Button
               variant="default"
@@ -1856,7 +1865,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               onClick={() => handleExecuteSwitchBranch('stash')}
               disabled={isMutating || isGenerating}
             >
-              Stash &amp; Switch
+              {t('branch.stashAndSwitch')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1876,13 +1885,21 @@ function SectionHeader({
   selectionCount: number
   children?: React.ReactNode
 }) {
+  const { t } = useTranslation('git')
+
   return (
     <div className="group/section flex items-center justify-between px-2 py-1">
       <div className="label-group text-muted-foreground flex items-center gap-2">
         <ChevronDown size={12} />
-        {label} ({count})
+        {label} ({formatNumber(count)})
         {selectionCount > 1 && (
-          <span className="text-primary normal-case font-medium">· {selectionCount} selected</span>
+          <span className="text-primary normal-case font-medium">
+            ·{' '}
+            {t('changes.selectedCount', {
+              count: selectionCount,
+              formattedCount: formatNumber(selectionCount)
+            })}
+          </span>
         )}
       </div>
       <div className="flex items-center gap-0.5 opacity-60 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -1962,17 +1979,18 @@ function RowAction({
   )
 }
 
-const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {
-  added: 'Added',
-  modified: 'Modified',
-  deleted: 'Deleted',
-  renamed: 'Renamed',
-  untracked: 'Untracked',
-  staged: 'Staged'
-}
+const GIT_STATUS_LABEL_KEYS = {
+  added: 'status.added',
+  modified: 'status.modified',
+  deleted: 'status.deleted',
+  renamed: 'status.renamed',
+  untracked: 'status.untracked',
+  staged: 'status.staged'
+} as const satisfies Record<GitFileStatus, string>
 
 function GitStatusBadge({ status }: { status: GitFileStatus }) {
-  const label = GIT_STATUS_LABELS[status]
+  const { t } = useTranslation('git')
+  const label = t(GIT_STATUS_LABEL_KEYS[status])
   let icon: React.ReactNode
   switch (status) {
     case 'added':

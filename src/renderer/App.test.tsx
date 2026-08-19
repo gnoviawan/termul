@@ -258,12 +258,12 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     vi.clearAllMocks()
   })
 
-  it('wraps the tree in <ErrorBoundary context="App Root">', () => {
+  it('wraps the tree in <ErrorBoundary context="appRoot">', () => {
     render(<App />)
 
     const boundary = document.body.querySelector('[data-testid="error-boundary"]')
     expect(boundary).not.toBeNull()
-    expect(boundary?.getAttribute('data-context')).toBe('App Root')
+    expect(boundary?.getAttribute('data-context')).toBe('appRoot')
   })
 
   it('mounts <WhatsNewModal> as a sibling of <RouterProvider>', () => {

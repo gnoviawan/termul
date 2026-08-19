@@ -30,6 +30,7 @@
  */
 
 import { createRoot } from 'react-dom/client'
+import { initializeI18nFromSettings } from '@/i18n/bootstrap'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import App from './App'
 import { installGlobalErrorForwarding } from './lib/log-api'
@@ -38,41 +39,11 @@ import './index.css'
 // used by AgentProse's `animated` word-by-word reveal.
 import 'streamdown/styles.css'
 
-/**
- * Bootstrap the appropriate app component based on runtime context
- *
- * - Tauri context: dynamic-import TauriApp (desktop shell + window APIs)
- * - Browser/web context: render App without ever loading TauriApp
- */
-const root = createRoot(document.getElementById('root')!)
-
 // Forward uncaught renderer errors + unhandled rejections to the backend log
-// file so production crashes are diagnosable (issue #244). Runs in BOTH modes:
-// - Tauri: invokes the `log_frontend_error` command (desktop log file).
-// - Web: POSTs to `/log/frontend-error` (the web branch in `logFrontendError`
-//   was added in Phase 2.3; the server reuses the same sanitization + tracing).
-// `installGlobalErrorForwarding` is idempotent and a no-op outside a browser.
+// file so production crashes are diagnosable (issue #244). Runs in BOTH modes.
 installGlobalErrorForwarding()
 
-if (isTauriContext()) {
-  void import('./TauriApp')
-    .then(({ default: TauriApp }) => {
-      root.render(<TauriApp />)
-    })
-    .catch((err) => {
-      console.error('Failed to load TauriApp; falling back to App', err)
-      root.render(<App />)
-    })
-} else {
-  root.render(<App />)
-}
-
-// Prime CodeMirror language caches (js/ts/json) so the first open of these
-// common file types doesn't pay the dynamic-import latency. Fire-and-forget;
-// deferred until after first paint + browser idle (requestIdleCallback, with a
-// setTimeout fallback for browsers without it) so it never competes with first
-// contentful paint (issue #378). Dynamic import keeps CodeMirror core out of the
-// entry chunk's critical path.
+// Prime CodeMirror language caches after first paint so the entry path stays fast.
 const runIdle = (fn: () => void): void => {
   const fallback = window.setTimeout
   if ('requestIdleCallback' in window) {
@@ -81,6 +52,30 @@ const runIdle = (fn: () => void): void => {
     fallback(fn, 1_000)
   }
 }
-runIdle(() => {
-  void import('./hooks/use-codemirror').then((m) => m.preloadCommonLanguages())
-})
+
+/**
+ * Initialize the selected language before rendering either runtime root, then
+ * preserve the existing Tauri-safe dynamic import boundary.
+ */
+async function bootstrap(): Promise<void> {
+  await initializeI18nFromSettings()
+  const root = createRoot(document.getElementById('root')!)
+
+  if (isTauriContext()) {
+    try {
+      const { default: TauriApp } = await import('./TauriApp')
+      root.render(<TauriApp />)
+    } catch (err) {
+      console.error('Failed to load TauriApp; falling back to App', err)
+      root.render(<App />)
+    }
+  } else {
+    root.render(<App />)
+  }
+
+  runIdle(() => {
+    void import('./hooks/use-codemirror').then((m) => m.preloadCommonLanguages())
+  })
+}
+
+void bootstrap()
