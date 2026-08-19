@@ -14,6 +14,7 @@ import type {
 } from '@shared/types/ssh.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { runtimeT } from '@/i18n/runtime'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
@@ -79,7 +80,7 @@ async function invokeIpc<T>(
   if (!isTauriContext()) {
     return {
       success: false,
-      error: 'SSH is not available in the web client',
+      error: runtimeT('ssh', 'errors.webUnsupported', 'SSH is not available in the web client'),
       code: 'WEB_UNSUPPORTED'
     }
   }

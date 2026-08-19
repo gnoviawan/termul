@@ -1,0 +1,209 @@
+{
+  "page": {
+    "title": "应用偏好设置",
+    "subtitle": "配置全局应用设置"
+  },
+  "layout": {
+    "searchPlaceholder": "搜索设置...",
+    "searchAria": "搜索设置",
+    "clearSearch": "清除搜索",
+    "categoriesAria": "设置类别",
+    "noResults": "没有与“{{query}}”匹配的设置。"
+  },
+  "categories": {
+    "appearance": "终端外观",
+    "shell": "默认 Shell",
+    "behavior": "行为",
+    "projectDefaults": "新项目默认值",
+    "aiAgents": "AI 代理",
+    "mcpServers": "MCP 服务器",
+    "shortcuts": "键盘快捷键",
+    "updates": "更新",
+    "diagnostics": "诊断与日志",
+    "reset": "重置设置"
+  },
+  "language": {
+    "title": "显示语言",
+    "description": "选择 Termul 界面使用的语言。",
+    "system": "跟随系统",
+    "english": "英语",
+    "simplifiedChinese": "简体中文",
+    "systemHint": "系统语言受支持时自动跟随操作系统。"
+  },
+  "appearance": {
+    "description": "自定义终端的外观和体验。",
+    "uiZoom": "界面缩放级别",
+    "resetZoom": "重置为 100%",
+    "zoomHint": "缩放整个界面（50–300%）。也可使用 Ctrl+=、Ctrl+-、Ctrl+0 调整。",
+    "fontFamily": "字体系列",
+    "fontFamilyHint": "为终端文本选择等宽字体。",
+    "fontSize": "字体大小：{{size}}px",
+    "fontSizeLabel": "字体大小",
+    "fontSizeHint": "调整终端文本大小（10–24px）。",
+    "bufferSize": "回滚缓冲区大小",
+    "bufferHint": "终端历史记录保留的行数。数值越大占用的内存越多。更改应用于新终端。",
+    "maxTerminals": "每个项目的最大终端数",
+    "maxTerminalsHint": "每个项目允许的最大终端标签页数量。",
+    "renderer": "终端渲染器",
+    "rendererHint": "使用 GPU 加速渲染终端输出。WebGL 性能最佳。更改应用于新终端。",
+    "preview": "预览"
+  },
+  "editor": {
+    "source": "源代码",
+    "switchToSource": "切换到源代码模式",
+    "switchToWysiwyg": "切换到所见即所得模式",
+    "mermaidSyntaxError": "Mermaid 语法错误",
+    "emptyMermaidDiagram": "Mermaid 图表为空",
+    "loading": "加载中...",
+    "frontmatterKeyEmpty": "键不能为空",
+    "frontmatterKeyExists": "键已存在"
+  },
+  "customAgents": {
+    "nameRequired": "代理名称不能为空",
+    "commandRequired": "代理命令不能为空",
+    "invalidPromptMode": "提示模式无效：{{mode}}",
+    "promptFlagRequired": "提示模式为“{{mode}}”时必须填写提示参数",
+    "saveFailed": "保存自定义代理失败"
+  },
+  "registry": {
+    "snapshotRequired": "尚未获取远程注册表快照。请先检查更新，再应用注册表。",
+    "applyFailed": "无法应用远程注册表。",
+    "bundledFailed": "无法切换到内置注册表。"
+  },
+  "shell": {
+    "description": "设置新终端使用的默认 Shell。",
+    "label": "Shell",
+    "systemDefault": "系统默认",
+    "overrideHint": "可在项目设置中为各项目单独覆盖。"
+  },
+  "behavior": {
+    "description": "配置终端清理和编辑器自动保存行为。",
+    "openLinks": "终端链接打开方式",
+    "openLinksHint": "选择 Ctrl/Cmd+点击终端输出中的 URL 时，是在系统浏览器还是新的 Termul 浏览器标签页中打开。",
+    "orphanDetection": "孤立终端检测",
+    "enableOrphanDetection": "启用孤立终端检测",
+    "orphanDetectionHint": "自动清理长时间未活动的终端",
+    "cleanupTimeout": "清理前等待时间",
+    "cleanupTimeoutHint": "未活动达到此时长的终端将被清理（仅限未显示的终端）。",
+    "autoSave": "编辑器自动保存",
+    "enableAutoSave": "启用自动保存",
+    "autoSaveHint": "停止输入后自动保存编辑器文件",
+    "autoSaveDelay": "自动保存延迟",
+    "autoSaveDelayAria": "自动保存延迟",
+    "autoSaveDelayHint": "最后一次编辑后等待多长时间再自动保存。"
+  },
+  "projectDefaults": {
+    "description": "设置新项目的默认选项。",
+    "color": "默认颜色",
+    "colorHint": "新项目将默认使用此颜色。",
+    "colors": {
+      "blue": "蓝色",
+      "green": "绿色",
+      "purple": "紫色",
+      "orange": "橙色",
+      "red": "红色",
+      "pink": "粉色",
+      "cyan": "青色",
+      "yellow": "黄色"
+    }
+  },
+  "aiAgents": {
+    "description": "查看 ACP 代理的可用性、预热和认证状态。代理聊天会自动支持这些代理。",
+    "turnTimeout": "单轮超时（硬上限）",
+    "turnTimeoutHint": "单轮代理执行允许的最长实际时长。持续流式输出的活动轮次可运行到此上限；静默（卡死）的轮次会按下方的单轮空闲超时报错。TERMUL_ACP_TURN_TIMEOUT_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。",
+    "turnIdleTimeout": "单轮空闲超时",
+    "turnIdleTimeoutHint": "代理无活动达到此时长后，该轮次将被视为卡死并取消。TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。",
+    "sessionNewTimeout": "session/new 超时",
+    "sessionNewTimeoutHint": "等待代理响应 session/new 的最长时间，超时后启动失败（冷启动模型下载可能需要更久）。TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。",
+    "sessionReopenTimeout": "会话重新打开超时",
+    "sessionReopenTimeoutHint": "等待 session/load / session/resume 的最长时间（大型历史记录会在响应前重放，可能需要更久）。TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。",
+    "firstPromptWarmup": "首次提示预热超时",
+    "firstPromptWarmupHint": "session/new 后用于吸收代理冷启动停顿的预热提示预算；选择“禁用”可完全跳过预热。TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS 环境变量仍可覆盖此设置（运维/诊断用途）。仅桌面端有效——独立服务器使用环境变量。"
+  },
+  "mcpServers": {
+    "description": "配置全局 MCP 服务器，以便根据能力注入到新聊天中。"
+  },
+  "shortcuts": {
+    "description": "自定义键盘快捷键以匹配你的工作流。",
+    "resetAll": "重置所有快捷键",
+    "resetTitle": "重置键盘快捷键",
+    "resetMessage": "确定要将所有键盘快捷键重置为默认值吗？"
+  },
+  "updates": {
+    "description": "管理应用更新和版本信息。",
+    "currentVersion": "当前版本",
+    "releaseChannel": "发布渠道",
+    "releaseChannelHint": "选择稳定版、预览版或每日构建版更新渠道。",
+    "channels": {
+      "stable": "稳定版",
+      "stableDescription": "生产版本，最可靠。",
+      "insider": "预览版",
+      "insiderDescription": "稳定版之前的候选发布版本（rc）。",
+      "nightly": "每日构建版",
+      "nightlyDescription": "main 分支的自动构建。"
+    },
+    "nightlyWarning": "每日构建版来自最新提交的自动构建，可能不稳定。更新将以手动下载的方式从每日构建发布页面提供。",
+    "insiderWarning": "预览候选版本可能尚未完成。更新将以手动下载的方式从预览版发布页面提供。",
+    "available": "有可用更新",
+    "versionAvailable": "版本 {{version}} 已可用！",
+    "aurHint": "通过 AUR 更新：yay -S termul-manager",
+    "manualHint": "无法自动更新。请手动下载并安装最新版本。",
+    "downloadHint": "新版本已可下载。",
+    "error": "更新错误",
+    "check": "检查更新",
+    "checking": "正在检查更新...",
+    "openDownloadPage": "打开下载页面",
+    "lastChecked": "上次检查：{{date}}",
+    "autoUpdate": "自动更新",
+    "autoUpdateLabel": "自动检查更新",
+    "autoUpdateHint": "启用后，应用会定期检查新版本",
+    "skippedVersion": "已跳过版本",
+    "skipping": "当前正在跳过版本 {{version}}",
+    "skippingHint": "在更新版本可用之前，将不再提供此版本。"
+  },
+  "diagnostics": {
+    "description": "导出或复制应用日志以排查问题。",
+    "revealFolder": "显示日志文件夹",
+    "revealFolderHint": "在文件资源管理器中打开",
+    "exportFile": "导出日志文件...",
+    "exportFileHint": "保存到自定义位置",
+    "copyContents": "复制日志内容",
+    "copyContentsHint": "将日志复制到剪贴板",
+    "exportDefault": "导出到默认目录",
+    "exportDefaultHint": "直接保存到下载目录"
+  },
+  "reset": {
+    "description": "将所有设置恢复为默认值。",
+    "button": "重置为默认值",
+    "title": "重置设置",
+    "message": "确定要将所有应用设置重置为默认值吗？此操作无法撤销。"
+  },
+  "options": {
+    "lineCount_one": "{{formattedCount}} 行",
+    "lineCount_other": "{{formattedCount}} 行",
+    "terminalCount_one": "{{count}} 个终端",
+    "terminalCount_other": "{{count}} 个终端",
+    "halfSecond": "0.5 秒",
+    "seconds_one": "{{count}} 秒",
+    "seconds_other": "{{count}} 秒",
+    "minutes_one": "{{count}} 分钟",
+    "minutes_other": "{{count}} 分钟",
+    "hours_one": "{{count}} 小时",
+    "hours_other": "{{count}} 小时",
+    "years_one": "{{count}} 年",
+    "years_other": "{{count}} 年",
+    "environmentUnlimited": "环境变量/默认值（无限制）",
+    "environment60Seconds": "环境变量/默认值（60 秒）",
+    "environment45Seconds": "环境变量/默认值（45 秒）",
+    "disabled": "禁用",
+    "renderer": {
+      "auto": "自动（优先 WebGL，回退到 DOM）",
+      "webgl": "WebGL",
+      "dom": "DOM"
+    },
+    "urlMode": {
+      "system": "系统默认浏览器",
+      "termul": "Termul 浏览器"
+    }
+  }
+}

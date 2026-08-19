@@ -1,3 +1,4 @@
+import { runtimeT } from '@/i18n/runtime'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   deriveAgentConfig,
@@ -99,13 +100,18 @@ export function isCustomAgentEntry(entry: SupportedAcpAgentEntry): boolean {
 
 function runtimeUnavailableReason(launcher: 'npx' | 'uvx'): string {
   return launcher === 'npx'
-    ? 'Install Node.js so npx is available on your PATH.'
-    : 'Install uv so uvx is available on your PATH.'
+    ? runtimeT('agents', 'availability.npx', 'Install Node.js so npx is available on your PATH.')
+    : runtimeT('agents', 'availability.uvx', 'Install uv so uvx is available on your PATH.')
 }
 
 function manualInstallReason(agent: RegistryAgent, cmd: string, args: string[]): string {
   const suffix = args.length > 0 ? ` ${args.join(' ')}` : ''
-  return `Install ${agent.name} from the vendor, then ensure \`${cmd}${suffix}\` is on your PATH.`
+  return runtimeT(
+    'agents',
+    'availability.manual',
+    'Install {{name}} from the vendor, then ensure `{{command}}` is on your PATH.',
+    { name: agent.name, command: `${cmd}${suffix}` }
+  )
 }
 
 function toStoredConfig(agent: RegistryAgent, config: StoredAgentConfig): StoredAgentConfig
@@ -272,7 +278,11 @@ export function buildSupportedAcpAgents(
       install: null,
       manualInstall: null,
       runtimeLauncher: null,
-      unavailableReason: 'This agent is not available for your platform.'
+      unavailableReason: runtimeT(
+        'agents',
+        'availability.platform',
+        'This agent is not available for your platform.'
+      )
     })
   }
 
@@ -478,7 +488,11 @@ export async function resolveSupportedAcpAgents(
           : null,
       unavailableReason:
         agent.status === 'unavailable'
-          ? 'This agent is not available for your platform.'
+          ? runtimeT(
+              'agents',
+              'availability.platform',
+              'This agent is not available for your platform.'
+            )
           : agent.status === 'needs-runtime'
             ? runtimeUnavailableReason(
                 derived.kind === 'runnable' && derived.config.command === 'uvx' ? 'uvx' : 'npx'

@@ -1,3 +1,4 @@
+import i18n from 'i18next'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
@@ -83,6 +84,16 @@ describe('validateAgentConfig', () => {
   })
   it('accepts undefined args/env/allowTerminal', () => {
     expect(validateAgentConfig({ name: 'H', command: 'node' }).valid).toBe(true)
+  })
+  it('translates validation errors in Simplified Chinese', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      const result = validateAgentConfig({})
+      expect(result.errors).toEqual(['名称为必填项。', '命令为必填项。'])
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 })
 
@@ -176,6 +187,19 @@ describe('load/save agent configs', () => {
       error: 'disk full'
     })
     await expect(saveAgentConfigs([])).rejects.toThrow(/disk full/)
+  })
+
+  it('translates persistence fallbacks in Simplified Chinese', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({ success: false })
+      await expect(loadAgentConfigs()).rejects.toThrow('加载代理配置失败')
+      ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: false })
+      await expect(saveAgentConfigs([])).rejects.toThrow('保存代理配置失败')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('rejects a raw secret literal in env at the persistence boundary (AD-6)', async () => {

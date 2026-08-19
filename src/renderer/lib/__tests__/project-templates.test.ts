@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { i18n } from '@/i18n'
 import { filesystemApi } from '../api'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '../project-templates'
 
@@ -73,6 +74,29 @@ describe('Project Templates Scaffolding', () => {
       expect(result.error).toContain('Failed to create base directory')
     } else {
       expect.fail('Expected scaffolding to fail')
+    }
+  })
+
+  it('localizes scaffold failure framing while preserving backend details', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      vi.mocked(filesystemApi.createDirectory).mockResolvedValueOnce({
+        success: false,
+        error: 'Permission denied',
+        code: 'PERMISSION_ERROR'
+      })
+
+      const nodeTemplate = BUILT_IN_TEMPLATES.find((t) => t.id === 'node')!
+      const result = await scaffoldProject('/test/path', 'test', nodeTemplate)
+
+      expect(result).toMatchObject({
+        success: false,
+        error: '创建基础目录失败：Permission denied',
+        code: 'SCAFFOLD_BASE_DIR_ERROR'
+      })
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
     }
   })
 

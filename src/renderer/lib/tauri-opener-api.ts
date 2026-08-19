@@ -15,7 +15,7 @@
 
 import type { IpcResult } from '@shared/types/ipc.types'
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
-
+import { runtimeT } from '@/i18n/runtime'
 import { isTauriContext } from './tauri-runtime'
 
 export interface OpenerApi {
@@ -30,7 +30,11 @@ function createTauriOpenerApi(): OpenerApi {
       if (!isTauriContext()) {
         return {
           success: false,
-          error: 'Opening with external apps is not available in the web client',
+          error: runtimeT(
+            'projects',
+            'webUnsupported.openExternalApp',
+            'Opening with external apps is not available in the web client'
+          ),
           code: 'WEB_UNSUPPORTED'
         }
       }
@@ -83,7 +87,11 @@ function createTauriOpenerApi(): OpenerApi {
       if (!isTauriContext()) {
         return {
           success: false,
-          error: 'Revealing in file manager is not available in the web client',
+          error: runtimeT(
+            'projects',
+            'webUnsupported.revealInFileManager',
+            'Revealing in file manager is not available in the web client'
+          ),
           code: 'WEB_UNSUPPORTED'
         }
       }

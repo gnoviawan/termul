@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { i18n } from '@/i18n'
+import { formatNumber } from '@/i18n/format'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -1251,7 +1253,16 @@ async function createDefaultTerminal(
     SPAWN_CALL_COUNT++
 
     // Create default terminal - addTerminal also sets it as active
-    const newTerminal = terminalStore.addTerminal('Terminal 1', projectId, shell, cwd)
+    const newTerminal = terminalStore.addTerminal(
+      i18n.t('defaultName', {
+        ns: 'terminal',
+        number: formatNumber(1),
+        defaultValue: 'Terminal {{number}}'
+      }),
+      projectId,
+      shell,
+      cwd
+    )
     terminalStore.setTerminalPtyId(newTerminal.id, spawnData.id)
     // CAP-3: store the issued lease credential (in-memory only).
     if (spawnData.claim) {

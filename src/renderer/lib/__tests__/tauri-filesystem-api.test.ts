@@ -74,6 +74,7 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { i18n } from '../../i18n'
 import { _resetFilesystemStateForTesting, tauriFilesystemApi } from '../tauri-filesystem-api'
 
 function makeFileInfo(overrides: Partial<FileInfo>): FileInfo {
@@ -84,7 +85,8 @@ function makeFileInfo(overrides: Partial<FileInfo>): FileInfo {
 }
 
 describe('tauriFilesystemApi', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     _resetFilesystemStateForTesting()
 
@@ -223,6 +225,7 @@ describe('tauriFilesystemApi', () => {
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.code).toBe('FILE_TOO_LARGE')
+        expect(result.error).toBe('File too large (2097152 bytes, max 1048576)')
       }
       expect(readTextFile).not.toHaveBeenCalled()
     })
@@ -237,9 +240,34 @@ describe('tauriFilesystemApi', () => {
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.code).toBe('BINARY_FILE')
+        expect(result.error).toBe('Binary file cannot be displayed')
       }
       // Must NOT open a separate file handle for binary sampling
       expect(open).not.toHaveBeenCalled()
+    })
+
+    it('should localize file validation errors in Simplified Chinese', async () => {
+      await i18n.changeLanguage('zh-CN')
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 2 * 1024 * 1024 }))
+
+      const largeResult = await tauriFilesystemApi.readFile('/test/large.bin')
+
+      expect(largeResult.success).toBe(false)
+      if (!largeResult.success) {
+        expect(largeResult.code).toBe('FILE_TOO_LARGE')
+        expect(largeResult.error).toBe('文件过大（2097152 字节，上限 1048576 字节）')
+      }
+
+      vi.mocked(stat).mockResolvedValue(makeFileInfo({ size: 11 }))
+      vi.mocked(readTextFile).mockResolvedValue('Hello\u0000World')
+
+      const binaryResult = await tauriFilesystemApi.readFile('/test/binary.bin')
+
+      expect(binaryResult.success).toBe(false)
+      if (!binaryResult.success) {
+        expect(binaryResult.code).toBe('BINARY_FILE')
+        expect(binaryResult.error).toBe('无法显示二进制文件')
+      }
     })
 
     it('should handle errors', async () => {
@@ -250,6 +278,20 @@ describe('tauriFilesystemApi', () => {
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.code).toBe('READ_ERROR')
+      }
+    })
+  })
+
+  describe('searchContent', () => {
+    it('should localize the unavailable search backend error', async () => {
+      await i18n.changeLanguage('zh-CN')
+
+      const result = await tauriFilesystemApi.searchContent('/scope', '/root', 'query')
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('SEARCH_BACKEND_UNAVAILABLE')
+        expect(result.error).toBe('搜索后端不可用（ripgrep 命令执行失败）')
       }
     })
   })

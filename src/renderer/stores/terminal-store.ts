@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { i18n } from '@/i18n'
+import { formatNumber } from '@/i18n/format'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
@@ -105,7 +107,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // Check global terminal limit
     const { terminals } = get()
     if (terminals.length >= GLOBAL_TERMINAL_LIMIT) {
-      throw new Error(`Maximum ${GLOBAL_TERMINAL_LIMIT} terminals allowed across all projects`)
+      throw new Error(
+        i18n.t('limits.global', {
+          ns: 'terminal',
+          count: GLOBAL_TERMINAL_LIMIT,
+          formattedCount: formatNumber(GLOBAL_TERMINAL_LIMIT),
+          defaultValue: 'Maximum {{formattedCount}} terminals allowed across all projects'
+        })
+      )
     }
 
     const newTerminal: Terminal = {

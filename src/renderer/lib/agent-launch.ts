@@ -12,6 +12,7 @@
  * command-line quoting on Windows) guarantees this.
  */
 
+import { runtimeT } from '@/i18n/runtime'
 import { buildAgentArgv, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
@@ -78,18 +79,34 @@ export async function launchAgentInPane(
       (t) => t.projectId === projectId
     ).length
     if (projectTerminalCount >= options.maxTerminalsPerProject) {
+      const count = options.maxTerminalsPerProject
       return {
         success: false,
-        error: `Maximum ${options.maxTerminalsPerProject} terminals per project`
+        error: runtimeT(
+          'terminal',
+          'limits.perProject',
+          count === 1
+            ? 'Maximum {{formattedCount}} terminal per project'
+            : 'Maximum {{formattedCount}} terminals per project',
+          { count, formattedCount: String(count) }
+        )
       }
     }
   }
 
   // Global terminal limit.
   if (terminalStore.isTerminalLimitReached()) {
+    const count = terminalStore.terminals.length
     return {
       success: false,
-      error: `Maximum ${terminalStore.terminals.length} terminals allowed across all projects`
+      error: runtimeT(
+        'terminal',
+        'limits.global',
+        count === 1
+          ? 'Maximum {{formattedCount}} terminal allowed across all projects'
+          : 'Maximum {{formattedCount}} terminals allowed across all projects',
+        { count, formattedCount: String(count) }
+      )
     }
   }
 
@@ -128,7 +145,9 @@ export async function launchAgentInPane(
     if (!spawnResult.success) {
       return {
         success: false,
-        error: spawnResult.error || 'Failed to launch agent'
+        error:
+          spawnResult.error ||
+          runtimeT('terminal', 'errors.launchAgentFailed', 'Failed to launch agent')
       }
     }
 

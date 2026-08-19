@@ -1,10 +1,14 @@
 import type { SFTPEntry, SSHProfile } from '@shared/types/ssh.types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { runtimeT, type TranslationValues } from '@/i18n/runtime'
 import { createAskpassScript, sshApi, terminalApi } from '@/lib/api'
 import { isWindows } from '@/lib/platform'
 import { useSSHActions, useSSHConnections } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+
+const sshT = (key: string, fallback: string, values?: TranslationValues) =>
+  runtimeT('ssh', key, fallback, values)
 
 export function useSSHConnection(profile: SSHProfile | null) {
   const connections = useSSHConnections()
@@ -80,10 +84,17 @@ export function useSSHConnection(profile: SSHProfile | null) {
         if (result.success) {
           setEntries(result.data)
           setCurrentPath(path)
-        } else toast.error(`Failed to load: ${result.error}`)
+        } else
+          toast.error(
+            sshT('files.loadFailed', 'Failed to load: {{error}}', { error: result.error })
+          )
       } catch (error) {
         if (!isCurrentProfileGeneration(generation, operationProfileId)) return
-        toast.error(`Failed to load: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          sshT('files.loadFailed', 'Failed to load: {{error}}', {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        )
       } finally {
         if (isCurrentProfileGeneration(generation, operationProfileId)) setIsLoadingRoot(false)
       }
@@ -179,13 +190,25 @@ export function useSSHConnection(profile: SSHProfile | null) {
           // terminal does not work. The in-app SFTP/file browser (ssh2 backend)
           // still authenticates with the password; the terminal will prompt.
           toast.info(
-            'On Windows, type your password in the terminal when prompted. File browsing connects automatically.'
+            sshT(
+              'connection.windowsPasswordHint',
+              'On Windows, type your password in the terminal when prompted. File browsing connects automatically.'
+            )
           )
         } else {
           const result = await createAskpassScript(profile.password)
           if (!isCurrentProfileGeneration(generation, operationProfileId)) return
           if (result.success) spawnEnv = { SSH_ASKPASS: result.data, SSH_ASKPASS_REQUIRE: 'force' }
-          else toast.warning(`Password helper unavailable: ${result.error}`)
+          else
+            toast.warning(
+              sshT(
+                'connection.passwordHelperUnavailable',
+                'Password helper unavailable: {{error}}',
+                {
+                  error: result.error
+                }
+              )
+            )
         }
       }
 
@@ -195,7 +218,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
         return
       }
       if (!spawnResult.success) {
-        toast.error('Failed to create terminal')
+        toast.error(sshT('connection.terminalCreateFailed', 'Failed to create terminal'))
         return
       }
 
@@ -241,16 +264,22 @@ export function useSSHConnection(profile: SSHProfile | null) {
         setSftpReady(true)
         // connectionId state may not have updated within this tick; pass the id explicitly.
         void loadDirectory('/', backendId)
-        toast.success(`Connected: ${profile.name}`)
+        toast.success(sshT('connection.connectedTo', 'Connected: {{name}}', { name: profile.name }))
       } else {
         // SSH did not authenticate over the ssh2 backend. Keep the interactive
         // terminal visible (it stays mounted via localTerminalPtyId, so the user
         // can still type a password / read the error and a Disconnect control is
         // shown), but tell the truth in the badge. Cancel the queued command
         // write so it doesn't fire into a terminal the user may be using.
-        const errMsg = sftpResult.success ? 'connection not established' : sftpResult.error
+        const errMsg = sftpResult.success
+          ? sshT('errors.connectionNotEstablished', 'connection not established')
+          : sftpResult.error
         updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
-        toast.error(`SSH connection failed: ${errMsg ?? 'unknown error'}`)
+        toast.error(
+          sshT('connection.sshFailed', 'SSH connection failed: {{error}}', {
+            error: errMsg ?? sshT('errors.unknown', 'unknown error')
+          })
+        )
       }
     } catch (error) {
       if (isCurrentProfileGeneration(generation, operationProfileId)) {
@@ -260,7 +289,11 @@ export function useSSHConnection(profile: SSHProfile | null) {
             'failed',
             error instanceof Error ? error.message : String(error)
           )
-        toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          sshT('connection.connectFailed', 'Connection failed: {{error}}', {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        )
       }
     } finally {
       if (isCurrentProfileGeneration(generation, operationProfileId)) setIsConnecting(false)
@@ -293,7 +326,11 @@ export function useSSHConnection(profile: SSHProfile | null) {
     if (!isConnected) {
       setSftpReady(false)
       setEntries([])
-      updateConnectionStatusByProfile(profile.id, 'failed', 'SSH session ended')
+      updateConnectionStatusByProfile(
+        profile.id,
+        'failed',
+        sshT('connection.sessionEnded', 'SSH session ended')
+      )
     }
   }, [profile, isConnected, updateConnectionStatusByProfile])
 
@@ -322,12 +359,14 @@ export function useSSHConnection(profile: SSHProfile | null) {
     setLocalTerminalPtyId(null)
     setSftpReady(false)
     setEntries([])
-    toast.info(`Disconnected: ${profile.name}`)
+    toast.info(sshT('connection.disconnected', 'Disconnected: {{name}}', { name: profile.name }))
   }, [localTerminalPtyId, connection, profile?.id, profile?.name, markDisconnected, profile])
 
   const handleBrowseFiles = useCallback(async () => {
     if (!connectionId) {
-      toast.error('Not connected — open a terminal first')
+      toast.error(
+        sshT('connection.notConnectedOpenTerminal', 'Not connected — open a terminal first')
+      )
       return
     }
     // If SFTP never came up (id still the local placeholder), retry the backend connect.
@@ -354,17 +393,23 @@ export function useSSHConnection(profile: SSHProfile | null) {
         } else {
           // Don't leave the placeholder connection stuck: reflect the failure so
           // the badge and SFTP state are accurate.
-          const errMsg = sftpResult.success ? 'connection not established' : sftpResult.error
+          const errMsg = sftpResult.success
+            ? sshT('errors.connectionNotEstablished', 'connection not established')
+            : sftpResult.error
           updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
           setSftpReady(false)
-          toast.error(`SFTP unavailable: ${errMsg ?? 'connection not established'}`)
+          toast.error(
+            sshT('files.sftpUnavailable', 'SFTP unavailable: {{error}}', {
+              error: errMsg ?? sshT('errors.connectionNotEstablished', 'connection not established')
+            })
+          )
         }
       } catch (error) {
         if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         const errMsg = error instanceof Error ? error.message : String(error)
         updateConnectionStatusByProfile(profile.id, 'failed', errMsg)
         setSftpReady(false)
-        toast.error(`SFTP unavailable: ${errMsg}`)
+        toast.error(sshT('files.sftpUnavailable', 'SFTP unavailable: {{error}}', { error: errMsg }))
       }
       return
     }
@@ -399,11 +444,17 @@ export function useSSHConnection(profile: SSHProfile | null) {
         if (result.success) {
           setChildEntries((prev) => new Map(prev).set(dirPath, result.data))
           setExpandedDirs((prev) => new Set(prev).add(dirPath))
-        } else toast.error(`Permission denied: ${dirPath}`)
+        } else
+          toast.error(
+            sshT('files.permissionDenied', 'Permission denied: {{path}}', { path: dirPath })
+          )
       } catch (error) {
         if (!isCurrentProfileGeneration(generation, operationProfileId)) return
         toast.error(
-          `Failed to load ${dirPath}: ${error instanceof Error ? error.message : String(error)}`
+          sshT('files.loadPathFailed', 'Failed to load {{path}}: {{error}}', {
+            path: dirPath,
+            error: error instanceof Error ? error.message : String(error)
+          })
         )
       } finally {
         if (isCurrentProfileGeneration(generation, operationProfileId)) {

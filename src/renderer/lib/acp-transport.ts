@@ -33,6 +33,7 @@ import {
 } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { runtimeT } from '@/i18n/runtime'
 import type {
   AcpRegistrySnapshot,
   AgentConfig,
@@ -566,7 +567,12 @@ export class WsAcpTransport implements AcpTransport {
     }
     for (const [, p] of this.pending) {
       if (p.timer) clearTimeout(p.timer)
-      p.reject(new AcpTransportError('closed', 'transport disposed'))
+      p.reject(
+        new AcpTransportError(
+          'closed',
+          runtimeT('chat', 'transport.disposed', 'transport disposed')
+        )
+      )
     }
     this.pending.clear()
     this.socket?.close()
@@ -639,7 +645,14 @@ export class WsAcpTransport implements AcpTransport {
   async installRegistryBinary(
     _request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome> {
-    throw new AcpTransportError('unsupported', 'Registry binary install is desktop-only')
+    throw new AcpTransportError(
+      'unsupported',
+      runtimeT(
+        'chat',
+        'transport.registryInstallDesktopOnly',
+        'Registry binary install is desktop-only'
+      )
+    )
   }
 
   /**
@@ -1021,21 +1034,39 @@ export class WsAcpTransport implements AcpTransport {
 
       ws.onerror = () => {
         if (this.socket !== ws) return
-        this.rejectAllPending('closed', 'WebSocket error')
-        settleErr(new AcpTransportError('closed', 'WebSocket error'))
+        const message = runtimeT('chat', 'transport.websocketError', 'WebSocket error')
+        this.rejectAllPending('closed', message)
+        settleErr(new AcpTransportError('closed', message))
       }
 
       ws.onclose = () => {
         if (this.socket !== ws) {
-          settleErr(new AcpTransportError('closed', 'superseded WebSocket closed before auth'))
+          settleErr(
+            new AcpTransportError(
+              'closed',
+              runtimeT(
+                'chat',
+                'transport.websocketSupersededBeforeAuth',
+                'superseded WebSocket closed before auth'
+              )
+            )
+          )
           return
         }
         this.socket = null
         this.authed = false
         this.clearHeartbeat()
-        this.rejectAllPending('closed', 'WebSocket closed')
+        this.rejectAllPending(
+          'closed',
+          runtimeT('chat', 'transport.websocketClosed', 'WebSocket closed')
+        )
         if (!this.disposed) this.scheduleReconnect()
-        settleErr(new AcpTransportError('closed', 'WebSocket closed before auth'))
+        settleErr(
+          new AcpTransportError(
+            'closed',
+            runtimeT('chat', 'transport.websocketClosedBeforeAuth', 'WebSocket closed before auth')
+          )
+        )
       }
 
       authTimer = setTimeout(() => {
@@ -1045,7 +1076,12 @@ export class WsAcpTransport implements AcpTransport {
           } catch {
             /* ignore */
           }
-          settleErr(new AcpTransportError('closed', 'WebSocket auth handshake timeout'))
+          settleErr(
+            new AcpTransportError(
+              'closed',
+              runtimeT('chat', 'transport.websocketAuthTimeout', 'WebSocket auth handshake timeout')
+            )
+          )
         }
       }, REQUEST_TIMEOUT_MS)
     })
@@ -1204,11 +1240,24 @@ export class WsAcpTransport implements AcpTransport {
   private async validateRoundTrip(reason: string): Promise<void> {
     try {
       if (this.socket?.readyState !== WebSocket.OPEN || !this.authed) {
-        throw new AcpTransportError('closed', 'socket is not authenticated and open')
+        throw new AcpTransportError(
+          'closed',
+          runtimeT(
+            'chat',
+            'transport.socketNotAuthenticated',
+            'socket is not authenticated and open'
+          )
+        )
       }
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(
-          () => reject(new AcpTransportError('timeout', 'resume health check timed out')),
+          () =>
+            reject(
+              new AcpTransportError(
+                'timeout',
+                runtimeT('chat', 'transport.resumeHealthTimeout', 'resume health check timed out')
+              )
+            ),
           RESUME_VALIDATION_TIMEOUT_MS
         )
         void this.request<void>('ping', {}).then(
@@ -1390,7 +1439,14 @@ export class WsAcpTransport implements AcpTransport {
           source: 'WsAcpTransport.reconnect',
           message: `ACP subscription recovery failed for session ids: ${failedSessions.join(', ')}`
         })
-        throw new AcpTransportError('closed', 'required ACP subscriptions did not recover')
+        throw new AcpTransportError(
+          'closed',
+          runtimeT(
+            'chat',
+            'transport.subscriptionRecoveryFailed',
+            'required ACP subscriptions did not recover'
+          )
+        )
       }
       this.reconnectAttempt = 0
       // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and all
@@ -1472,7 +1528,12 @@ export class WsAcpTransport implements AcpTransport {
         } catch {
           /* ignore */
         }
-        throw err instanceof Error ? err : new AcpTransportError('closed', 'authenticate failed')
+        throw err instanceof Error
+          ? err
+          : new AcpTransportError(
+              'closed',
+              runtimeT('chat', 'transport.authenticateFailed', 'authenticate failed')
+            )
       }
       this.emitLocal(evt.type, evt.payload)
       return
@@ -1562,7 +1623,14 @@ export class WsAcpTransport implements AcpTransport {
         timerMs > 0
           ? setTimeout(() => {
               this.pending.delete(id)
-              pending.reject(new AcpTransportError('timeout', 'Request send_prompt timed out'))
+              pending.reject(
+                new AcpTransportError(
+                  'timeout',
+                  runtimeT('chat', 'transport.requestTimedOut', 'Request {{type}} timed out', {
+                    type: 'send_prompt'
+                  })
+                )
+              )
             }, timerMs)
           : null
     }
@@ -1633,7 +1701,14 @@ export class WsAcpTransport implements AcpTransport {
         timerMs > 0
           ? setTimeout(() => {
               this.pending.delete(id)
-              reject(new AcpTransportError('timeout', `Request ${type} timed out`))
+              reject(
+                new AcpTransportError(
+                  'timeout',
+                  runtimeT('chat', 'transport.requestTimedOut', 'Request {{type}} timed out', {
+                    type
+                  })
+                )
+              )
             }, timerMs)
           : null
       this.pending.set(id, {
@@ -1647,7 +1722,12 @@ export class WsAcpTransport implements AcpTransport {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         if (timer) clearTimeout(timer)
         this.pending.delete(id)
-        reject(new AcpTransportError('closed', 'WebSocket not open'))
+        reject(
+          new AcpTransportError(
+            'closed',
+            runtimeT('chat', 'transport.websocketNotOpen', 'WebSocket not open')
+          )
+        )
         return
       }
       this.socket.send(JSON.stringify(frame))

@@ -3,6 +3,7 @@ import type { SFTPEntry } from '@shared/types/ssh.types'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
@@ -44,6 +45,7 @@ import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import { runtimeT } from '@/i18n/runtime'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
@@ -211,6 +213,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 }
 
 export default function WorkspaceLayout(): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const location = useLocation()
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
@@ -294,7 +297,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleSSHMkdir = useCallback(async () => {
     if (!sshConn.connectionId) return
-    const name = prompt('New folder name:')
+    const name = prompt(runtimeT('ssh', 'files.newFolderPrompt', 'New folder name:'))
     if (!name) return
     const newPath = sshConn.currentPath.endsWith('/')
       ? `${sshConn.currentPath}${name}`
@@ -302,17 +305,21 @@ export default function WorkspaceLayout(): React.JSX.Element {
     try {
       const r = await sshApi.sftpMkdir(sshConn.connectionId, newPath)
       if (r.success) {
-        toast.success(`Created: ${name}`)
+        toast.success(runtimeT('ssh', 'files.created', 'Created: {{name}}', { name }))
         sshConn.loadDirectory(sshConn.currentPath)
-      } else toast.error(`Failed: ${r.error}`)
+      } else toast.error(runtimeT('ssh', 'files.failed', 'Failed: {{error}}', { error: r.error }))
     } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        runtimeT('ssh', 'files.failed', 'Failed: {{error}}', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
     }
   }, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory])
 
   const handleSSHCreateFile = useCallback(async () => {
     if (!sshConn.connectionId) return
-    const name = prompt('New file name:')
+    const name = prompt(runtimeT('ssh', 'files.newFilePrompt', 'New file name:'))
     if (!name) return
     const newPath = sshConn.currentPath.endsWith('/')
       ? `${sshConn.currentPath}${name}`
@@ -320,26 +327,45 @@ export default function WorkspaceLayout(): React.JSX.Element {
     try {
       const r = await sshApi.sftpCreateFile(sshConn.connectionId, newPath)
       if (r.success) {
-        toast.success(`Created: ${name}`)
+        toast.success(runtimeT('ssh', 'files.created', 'Created: {{name}}', { name }))
         sshConn.loadDirectory(sshConn.currentPath)
-      } else toast.error(`Failed: ${r.error}`)
+      } else toast.error(runtimeT('ssh', 'files.failed', 'Failed: {{error}}', { error: r.error }))
     } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        runtimeT('ssh', 'files.failed', 'Failed: {{error}}', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
     }
   }, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory])
 
   const handleSSHDelete = useCallback(
     async (entry: SFTPEntry) => {
       if (!sshConn.connectionId) return
-      if (!confirm(`Delete ${entry.entryType} "${entry.name}"?`)) return
+      if (
+        !confirm(
+          runtimeT('ssh', 'files.deletePrompt', 'Delete {{type}} "{{name}}"?', {
+            type: entry.entryType,
+            name: entry.name
+          })
+        )
+      )
+        return
       try {
         const r = await sshApi.sftpDelete(sshConn.connectionId, entry.path)
         if (r.success) {
-          toast.success(`Deleted: ${entry.name}`)
+          toast.success(runtimeT('ssh', 'files.deleted', 'Deleted: {{name}}', { name: entry.name }))
           sshConn.loadDirectory(sshConn.currentPath)
-        } else toast.error(`Delete failed: ${r.error}`)
+        } else
+          toast.error(
+            runtimeT('ssh', 'files.deleteFailed', 'Delete failed: {{error}}', { error: r.error })
+          )
       } catch (error) {
-        toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          runtimeT('ssh', 'files.deleteFailed', 'Delete failed: {{error}}', {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        )
       }
     },
     [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]
@@ -348,17 +374,32 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleSSHRename = useCallback(
     async (entry: SFTPEntry) => {
       if (!sshConn.connectionId) return
-      const newName = prompt(`Rename "${entry.name}" to:`, entry.name)
+      const newName = prompt(
+        runtimeT('ssh', 'files.renamePrompt', 'Rename "{{name}}" to:', { name: entry.name }),
+        entry.name
+      )
       if (!newName || newName === entry.name) return
       const pp = entry.path.substring(0, entry.path.lastIndexOf('/'))
       try {
         const r = await sshApi.sftpRename(sshConn.connectionId, entry.path, `${pp}/${newName}`)
         if (r.success) {
-          toast.success(`Renamed: ${entry.name} → ${newName}`)
+          toast.success(
+            runtimeT('ssh', 'files.renamed', 'Renamed: {{name}} → {{newName}}', {
+              name: entry.name,
+              newName
+            })
+          )
           sshConn.loadDirectory(sshConn.currentPath)
-        } else toast.error(`Rename failed: ${r.error}`)
+        } else
+          toast.error(
+            runtimeT('ssh', 'files.renameFailed', 'Rename failed: {{error}}', { error: r.error })
+          )
       } catch (error) {
-        toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          runtimeT('ssh', 'files.renameFailed', 'Rename failed: {{error}}', {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        )
       }
     },
     [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]
@@ -547,7 +588,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
           return
         }
 
-        const message = error instanceof Error ? error.message : 'Failed to watch project directory'
+        const message =
+          error instanceof Error
+            ? error.message
+            : runtimeT(
+                'projects',
+                'filesystemErrors.watchProjectDirectory',
+                'Failed to watch project directory'
+              )
         useFileExplorerStore.getState().setRootPath(nextRootPath)
         useFileExplorerStore.getState().setRootLoadError({
           message,
@@ -971,7 +1019,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
         maxTerminalsPerProject: maxTerminals
       })
       if (!result.success) {
-        toast.error(result.error || 'Failed to create terminal')
+        toast.error(
+          result.error ||
+            runtimeT('workspace', 'errors.createTerminal', 'Failed to create terminal')
+        )
       }
     },
     [
@@ -1002,7 +1053,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
     )
     if (!result.success) {
-      toast.error(result.error || 'Failed to launch agent')
+      toast.error(
+        result.error || runtimeT('workspace', 'errors.launchAgent', 'Failed to launch agent')
+      )
     }
   }, [activeProjectId, activeProject?.envVars, maxTerminals])
 
@@ -1131,7 +1184,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
           e.preventDefault()
           void updatePanelVisibility('fileExplorerVisible', !isExplorerVisible).catch((error) => {
             toast.error(
-              error instanceof Error ? error.message : 'Failed to update file explorer visibility'
+              error instanceof Error
+                ? error.message
+                : runtimeT(
+                    'workspace',
+                    'errors.updateFileExplorerVisibility',
+                    'Failed to update file explorer visibility'
+                  )
             )
           })
         }
@@ -1144,7 +1203,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
           e.stopPropagation()
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
             toast.error(
-              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
+              error instanceof Error
+                ? error.message
+                : runtimeT(
+                    'workspace',
+                    'errors.updateSidebarVisibility',
+                    'Failed to update sidebar visibility'
+                  )
             )
           })
         }
@@ -1354,7 +1419,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
         case 'sidebarToggle':
           void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
             toast.error(
-              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
+              error instanceof Error
+                ? error.message
+                : runtimeT(
+                    'workspace',
+                    'errors.updateSidebarVisibility',
+                    'Failed to update sidebar visibility'
+                  )
             )
           })
           break
@@ -1386,7 +1457,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
           const result = await terminalApi.kill(terminalToClose.ptyId)
           if (!result.success) {
             console.error('Failed to close terminal PTY:', result.error)
-            toast.error(result.error || 'Failed to close terminal process. Please try again.')
+            toast.error(
+              result.error ||
+                runtimeT(
+                  'workspace',
+                  'errors.closeTerminalProcess',
+                  'Failed to close terminal process. Please try again.'
+                )
+            )
             return false
           }
         }
@@ -1491,7 +1569,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     if (dirtyCloseFilePath) {
       const saved = await useEditorStore.getState().saveFile(dirtyCloseFilePath)
       if (!saved) {
-        toast.error('Failed to save file. Changes were not discarded.')
+        toast.error(t('failedSaveFile'))
         setDirtyCloseFilePath(null)
         return
       }
@@ -1499,7 +1577,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       useWorkspaceStore.getState().removeTab(editorTabId(dirtyCloseFilePath))
       setDirtyCloseFilePath(null)
     }
-  }, [dirtyCloseFilePath])
+  }, [dirtyCloseFilePath, t])
 
   const handleDiscardAndClose = useCallback(() => {
     if (dirtyCloseFilePath) {
@@ -1518,11 +1596,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
     await useEditorStore.getState().saveAllDirty()
     const remaining = useEditorStore.getState().getDirtyFileCount()
     if (remaining > 0) {
-      toast.error('Some files failed to save. Please try again or discard changes.')
+      toast.error(t('someFilesFailedSave'))
       return
     }
     await closeAppWithPersistenceFlush()
-  }, [closeAppWithPersistenceFlush])
+  }, [closeAppWithPersistenceFlush, t])
 
   const handleDiscardAllAndClose = useCallback(() => {
     void closeAppWithPersistenceFlush()
@@ -1549,7 +1627,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
     // Persist empty array first, then clear in-memory on success
     const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
     if (!result.success) {
-      toast.error(`Failed to clear history: ${result.error}`)
+      toast.error(
+        runtimeT('shell', 'commandHistory.clearFailed', 'Failed to clear history: {{error}}', {
+          error: result.error
+        })
+      )
       throw new Error(result.error)
     }
     // Only clear in-memory state after successful persistence
@@ -1565,7 +1647,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       return (
         <div className="flex h-screen flex-col overflow-hidden bg-background">
           <div className="flex flex-1 items-center justify-center">
-            <div className="text-sm text-muted-foreground">Loading...</div>
+            <div className="text-sm text-muted-foreground">{t('loading')}</div>
           </div>
         </div>
       )
@@ -1585,7 +1667,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <div className="flex-1 flex flex-col min-w-0">
               <TitleBar />
               <div className="flex-1 flex items-center justify-center">
-                <div className="text-muted-foreground text-sm">Loading...</div>
+                <div className="text-muted-foreground text-sm">{t('loading')}</div>
               </div>
             </div>
           </div>
@@ -1611,16 +1693,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <div className="mb-6">
               <FolderKanban className="h-24 w-24 text-muted-foreground/50" />
             </div>
-            <h2 className="mb-2 text-xl font-semibold text-foreground">No Projects Yet</h2>
+            <h2 className="mb-2 text-xl font-semibold text-foreground">{t('noProjectsTitle')}</h2>
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
-              Create your first project to organize your terminals, snapshots, and commands
+              {t('noProjectsDescription')}
             </p>
             <button
               type="button"
               onClick={() => setIsNewProjectModalOpen(true)}
               className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
             >
-              Create Your First Project
+              {t('createFirstProject')}
             </button>
           </motion.div>
         </div>
@@ -1733,10 +1815,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       {sshPasswordPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
-            <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
+            <h3 className="text-sm font-semibold mb-1">{t('sshPassword.title')}</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Enter password for{' '}
-              <span className="font-medium">{sshPasswordPrompt.profileName}</span>
+              {t('sshPassword.prompt', { name: sshPasswordPrompt.profileName })}
             </p>
             <input
               type="password"
@@ -1749,7 +1830,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   setSSHPasswordInput('')
                 }
               }}
-              placeholder="Password"
+              placeholder={runtimeT('ssh', 'profile.password', 'Password')}
               autoFocus
               className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
             />
@@ -1762,14 +1843,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 }}
                 className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
               >
-                Cancel
+                {runtimeT('ssh', 'actions.cancel', 'Cancel')}
               </button>
               <button
                 type="button"
                 onClick={handleSSHPasswordSubmit}
                 className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                Connect
+                {runtimeT('ssh', 'connection.connect', 'Connect')}
               </button>
             </div>
           </div>
@@ -1779,12 +1860,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       {/* Close Terminal Confirmation */}
       <ConfirmDialog
         isOpen={closeConfirmTerminal !== null}
-        title="Close Terminal"
-        message={`Are you sure you want to close "${
-          terminalToClose?.name || 'this terminal'
-        }"? Any running processes will be terminated.`}
-        confirmLabel="Close"
-        cancelLabel="Cancel"
+        title={t('closeTerminal.title')}
+        message={t('closeTerminal.message', {
+          name: terminalToClose?.name || t('closeTerminal.thisTerminal')
+        })}
+        confirmLabel={t('tabs.close')}
+        cancelLabel={t('cancel')}
         variant="danger"
         isLoading={closeConfirmLoading}
         onConfirm={handleConfirmCloseTerminal}
@@ -1798,18 +1879,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
             disabled={closeConfirmLoading}
             className="rounded border-border bg-background"
           />
-          Don't ask again when closing terminals
+          {t('closeTerminal.dontAsk')}
         </label>
       </ConfirmDialog>
 
       {/* Dirty File Close Confirmation */}
       <ConfirmDialog
         isOpen={dirtyCloseFilePath !== null}
-        title="Unsaved Changes"
-        message={`Save changes to "${dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''}" before closing?`}
-        confirmLabel="Save"
-        cancelLabel="Cancel"
-        secondaryAction={{ label: 'Discard', onClick: handleDiscardAndClose }}
+        title={t('unsaved.title')}
+        message={t('unsaved.saveChangesBeforeClose', {
+          name: dirtyCloseFilePath?.split(/[\\/]/).pop() ?? ''
+        })}
+        confirmLabel={t('unsaved.save')}
+        cancelLabel={t('cancel')}
+        secondaryAction={{ label: t('unsaved.discard'), onClick: handleDiscardAndClose }}
         onConfirm={handleSaveThenClose}
         onCancel={handleCancelDirtyClose}
       />
@@ -1817,12 +1900,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
       {/* App Close Unsaved Files Confirmation */}
       <ConfirmDialog
         isOpen={isAppCloseDialogOpen}
-        title="Unsaved Changes"
-        message={`You have ${appCloseDirtyCount} unsaved file${appCloseDirtyCount !== 1 ? 's' : ''}. Save changes before closing?`}
-        confirmLabel="Save All"
-        cancelLabel="Cancel"
+        title={t('unsaved.title')}
+        message={t('unsaved.unsavedFiles', { count: appCloseDirtyCount })}
+        confirmLabel={t('unsaved.saveAll')}
+        cancelLabel={t('cancel')}
         secondaryAction={{
-          label: "Don't Save",
+          label: t('unsaved.dontSave'),
           onClick: handleDiscardAllAndClose
         }}
         onConfirm={handleSaveAllAndClose}
@@ -1881,7 +1964,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             empty-content race when the active project loses its path; the
             `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
-          <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
+          <SheetContent side="bottom" className="h-full p-0" aria-label={t('gitChangesSheet')}>
             {activeProject?.path ? (
               <Suspense fallback={<ShellSkeleton />}>
                 <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />

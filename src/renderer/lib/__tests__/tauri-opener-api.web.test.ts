@@ -36,13 +36,15 @@ vi.mock('../tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
 }))
 
+import { i18n } from '@/i18n'
 import { openerApi } from '../tauri-opener-api'
 
 const URL = 'https://github.com/gnoviawan/termul/releases/tag/v0.4.8'
 const PATH = '/some/path/file.txt'
 
 describe('openerApi.openUrlWithSystemBrowser (web vs desktop branch)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     mockWindowOpen.mockReset()
     vi.stubGlobal('open', mockWindowOpen)
@@ -121,7 +123,8 @@ describe('openerApi.openUrlWithSystemBrowser (web vs desktop branch)', () => {
 })
 
 describe('openWithExternalApp (web branch: WEB_UNSUPPORTED)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     mockWindowOpen.mockReset()
     vi.stubGlobal('open', mockWindowOpen)
@@ -138,12 +141,26 @@ describe('openWithExternalApp (web branch: WEB_UNSUPPORTED)', () => {
 
     expect(result.success).toBe(false)
     if (!result.success) {
+      expect(result.error).toBe('Opening with external apps is not available in the web client')
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     // Must NOT call the stubbed plugin (which would throw tauriUnavailable).
     expect(mockOpenPath).not.toHaveBeenCalled()
     // Must NOT use window.open — no browser equivalent.
     expect(mockWindowOpen).not.toHaveBeenCalled()
+  })
+
+  it('web: localizes the unsupported error in Simplified Chinese', async () => {
+    await i18n.changeLanguage('zh-CN')
+    mockIsTauriContext.mockReturnValue(false)
+
+    const result = await openerApi.openWithExternalApp(PATH)
+
+    expect(result).toEqual({
+      success: false,
+      error: '网页客户端暂不支持使用外部应用打开文件',
+      code: 'WEB_UNSUPPORTED'
+    })
   })
 
   it('desktop: calls openPath(path)', async () => {
@@ -158,7 +175,8 @@ describe('openWithExternalApp (web branch: WEB_UNSUPPORTED)', () => {
 })
 
 describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     mockWindowOpen.mockReset()
     vi.stubGlobal('open', mockWindowOpen)
@@ -175,10 +193,24 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
 
     expect(result.success).toBe(false)
     if (!result.success) {
+      expect(result.error).toBe('Revealing in file manager is not available in the web client')
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockRevealItemInDir).not.toHaveBeenCalled()
     expect(mockWindowOpen).not.toHaveBeenCalled()
+  })
+
+  it('web: localizes the unsupported error in Simplified Chinese', async () => {
+    await i18n.changeLanguage('zh-CN')
+    mockIsTauriContext.mockReturnValue(false)
+
+    const result = await openerApi.revealInFileManager(PATH)
+
+    expect(result).toEqual({
+      success: false,
+      error: '网页客户端暂不支持在文件管理器中显示项目',
+      code: 'WEB_UNSUPPORTED'
+    })
   })
 
   it('desktop: calls revealItemInDir(path)', async () => {

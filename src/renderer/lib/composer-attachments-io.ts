@@ -9,12 +9,19 @@ import { join, tempDir } from '@tauri-apps/api/path'
 import { readImage } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
+import { runtimeT } from '@/i18n/runtime'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 
 export async function writeBytesToTempFile(bytes: Uint8Array, fileName: string): Promise<string> {
   if (!isTauriContext()) {
-    throw new Error('Temp file write is desktop-only; use inline File bytes on web')
+    throw new Error(
+      runtimeT(
+        'chat',
+        'attachments.errors.tempWriteDesktopOnly',
+        'Temp file write is desktop-only; use inline File bytes on web'
+      )
+    )
   }
   const safe = (fileName || 'pasted-image.png').replace(/[^\w.-]+/g, '_')
   const dir = await tempDir()
@@ -27,7 +34,10 @@ export async function pickAttachmentPaths(): Promise<string[] | null> {
   if (!isTauriContext()) {
     return pickAttachmentPathsBrowser()
   }
-  const selected = await open({ multiple: true, title: 'Attach files' })
+  const selected = await open({
+    multiple: true,
+    title: runtimeT('chat', 'composer.attachFiles', 'Attach files')
+  })
   if (selected == null) return null
   return Array.isArray(selected) ? selected : [selected]
 }

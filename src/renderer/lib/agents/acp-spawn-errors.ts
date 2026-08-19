@@ -1,3 +1,4 @@
+import { runtimeT } from '@/i18n/runtime'
 import type { AgentConfig, AuthMethod } from '@/lib/acp-api'
 
 // Match only explicit process-spawn / executable-launch failures. Generic
@@ -18,15 +19,32 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   if (!ENOENT_PATTERN.test(message)) return message
 
   if (config?.command === 'npx') {
-    return 'Could not run npx. Install Node.js and ensure npx is on your PATH, then try again.'
+    return runtimeT(
+      'agents',
+      'spawn.runNpx',
+      'Could not run npx. Install Node.js and ensure npx is on your PATH, then try again.'
+    )
   }
   if (config?.command === 'uvx') {
-    return 'Could not run uvx. Install uv and ensure uvx is on your PATH, then try again.'
+    return runtimeT(
+      'agents',
+      'spawn.runUvx',
+      'Could not run uvx. Install uv and ensure uvx is on your PATH, then try again.'
+    )
   }
   if (config?.command) {
-    return `Could not start "${config.command}". Check that the binary exists and is on your PATH.`
+    return runtimeT(
+      'agents',
+      'spawn.startCommand',
+      'Could not start "{{command}}". Check that the binary exists and is on your PATH.',
+      { command: config.command }
+    )
   }
-  return 'Could not start the ACP agent. Check that the command exists and is on your PATH.'
+  return runtimeT(
+    'agents',
+    'spawn.startAgent',
+    'Could not start the ACP agent. Check that the command exists and is on your PATH.'
+  )
 }
 
 /**
@@ -66,12 +84,24 @@ export interface PrepareChatError {
 
 /** Short, actionable label for each setup-failure category. */
 export const SETUP_ERROR_LABELS: Record<SetupErrorCategory, string> = {
-  'multi-auth': 'Multiple sign-in methods',
-  spawn: 'Agent unavailable',
-  transport: 'Agent connection lost',
-  auth: 'Authentication required',
-  timeout: 'Session setup timed out',
-  unknown: 'Setup failed'
+  get 'multi-auth'() {
+    return runtimeT('agents', 'spawn.labels.multiAuth', 'Multiple sign-in methods')
+  },
+  get spawn() {
+    return runtimeT('agents', 'spawn.labels.spawn', 'Agent unavailable')
+  },
+  get transport() {
+    return runtimeT('agents', 'spawn.labels.transport', 'Agent connection lost')
+  },
+  get auth() {
+    return runtimeT('agents', 'spawn.labels.auth', 'Authentication required')
+  },
+  get timeout() {
+    return runtimeT('agents', 'spawn.labels.timeout', 'Session setup timed out')
+  },
+  get unknown() {
+    return runtimeT('agents', 'spawn.labels.unknown', 'Setup failed')
+  }
 }
 
 /** Marker code carried by {@link AmbiguousAuthError} so it survives serialization. */
@@ -91,8 +121,12 @@ export class AmbiguousAuthError extends Error {
   constructor(methods: AuthMethod[]) {
     const names = methods.map((m) => m.name).join(', ')
     super(
-      `This agent advertises multiple sign-in methods (${names}). ` +
-        'Termul does not choose one automatically; select a single-method agent or configure the provider directly.'
+      runtimeT(
+        'agents',
+        'spawn.ambiguousAuth',
+        'This agent advertises multiple sign-in methods ({{names}}). Termul does not choose one automatically; select a single-method agent or configure the provider directly.',
+        { names }
+      )
     )
     this.name = 'AmbiguousAuthError'
     this.methods = methods

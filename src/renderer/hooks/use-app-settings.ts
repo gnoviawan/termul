@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react'
+import { runtimeT } from '@/i18n/runtime'
 import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
 import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
@@ -6,7 +7,7 @@ import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } from '@/types/settings'
-import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS, isUiLanguagePreference } from '@/types/settings'
 
 type PanelSettingKey = AppPanelVisibilitySettingKey
 
@@ -71,7 +72,12 @@ function enqueuePanelWrite(request: PanelWriteRequest): Promise<void> {
         applyPanelVisibilityToUi(request.panel, rollbackValue)
       }
 
-      throw new Error(result.error || `Failed to persist ${request.panel}`)
+      throw new Error(
+        result.error ||
+          runtimeT('common', 'persistence.failedPanel', 'Failed to persist {{panel}}', {
+            panel: request.panel
+          })
+      )
     }
 
     syncPersistedPanelSettingsSnapshot(settingsSnapshot)
@@ -157,6 +163,11 @@ export function useAppSettingsLoader(): void {
           shouldPersistSettings = true
         } else if (settings.appearanceMode !== 'light' && settings.appearanceMode !== 'dark') {
           settings = { ...settings, appearanceMode: 'dark' }
+          shouldPersistSettings = true
+        }
+
+        if (!isUiLanguagePreference(result.data.uiLanguage)) {
+          settings = { ...settings, uiLanguage: 'system' }
           shouldPersistSettings = true
         }
 

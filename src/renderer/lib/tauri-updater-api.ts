@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { runtimeT } from '@/i18n/runtime'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -117,8 +118,18 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 function createUpdaterCheckError(error: unknown, sourceUrl: string): Error {
-  const details = getErrorMessage(error, 'Unknown updater error')
-  return new Error(`Failed to check for updates from ${sourceUrl}: ${details}`)
+  const details = getErrorMessage(
+    error,
+    runtimeT('shell', 'updates.errors.unknownUpdater', 'Unknown updater error')
+  )
+  return new Error(
+    runtimeT(
+      'shell',
+      'updates.errors.checkSourceFailed',
+      'Failed to check for updates from {{sourceUrl}}: {{details}}',
+      { sourceUrl, details }
+    )
+  )
 }
 
 async function syncRecoveryVersionMetadata(): Promise<string> {
@@ -135,7 +146,17 @@ async function prepareUpdateRecovery(): Promise<IpcResult<void>> {
   } catch (error) {
     return {
       success: false,
-      error: `Failed to determine current app version: ${getErrorMessage(error, 'Unknown error')}`,
+      error: runtimeT(
+        'shell',
+        'updates.errors.currentVersionFailed',
+        'Failed to determine current app version: {{details}}',
+        {
+          details: getErrorMessage(
+            error,
+            runtimeT('shell', 'updates.errors.unknown', 'Unknown error')
+          )
+        }
+      ),
       code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
@@ -144,7 +165,9 @@ async function prepareUpdateRecovery(): Promise<IpcResult<void>> {
   if (!backupResult.success) {
     return {
       success: false,
-      error: backupResult.error ?? 'Failed to create backup before update',
+      error:
+        backupResult.error ??
+        runtimeT('shell', 'updates.errors.backupFailed', 'Failed to create backup before update'),
       code:
         backupResult.code === BackupErrorCodes.DISK_SPACE_ERROR
           ? UpdaterErrorCodes.DISK_SPACE_INSUFFICIENT
@@ -156,7 +179,13 @@ async function prepareUpdateRecovery(): Promise<IpcResult<void>> {
   if (!preserveResult.success) {
     return {
       success: false,
-      error: preserveResult.error ?? 'Failed to preserve current version before update',
+      error:
+        preserveResult.error ??
+        runtimeT(
+          'shell',
+          'updates.errors.preserveVersionFailed',
+          'Failed to preserve current version before update'
+        ),
       code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
@@ -545,14 +574,23 @@ export async function downloadUpdate(
     if (!pendingAurUpdate) {
       return {
         success: false,
-        error: 'No update available to download',
+        error: runtimeT(
+          'shell',
+          'updates.errors.noUpdateAvailable',
+          'No update available to download'
+        ),
         code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
       }
     }
 
     return {
       success: false,
-      error: 'AUR build cannot self-update. Update with: yay -S termul-manager',
+      error: runtimeT(
+        'shell',
+        'updates.errors.aurSelfUpdate',
+        'AUR build cannot self-update. Update with: {{command}}',
+        { command: 'yay -S termul-manager' }
+      ),
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
@@ -565,7 +603,11 @@ export async function downloadUpdate(
   if (!pendingTauriUpdate) {
     return {
       success: false,
-      error: 'No update available to download',
+      error: runtimeT(
+        'shell',
+        'updates.errors.noUpdateAvailable',
+        'No update available to download'
+      ),
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
@@ -614,7 +656,10 @@ export async function downloadUpdate(
   } catch (error) {
     return {
       success: false,
-      error: getErrorMessage(error, 'Failed to download update'),
+      error: getErrorMessage(
+        error,
+        runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update')
+      ),
       code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
   }
@@ -624,7 +669,12 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   if (isAurUpdateMode()) {
     return {
       success: false,
-      error: 'AUR build cannot self-install updates. Update with: yay -S termul-manager',
+      error: runtimeT(
+        'shell',
+        'updates.errors.aurSelfInstall',
+        'AUR build cannot self-install updates. Update with: {{command}}',
+        { command: 'yay -S termul-manager' }
+      ),
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
@@ -641,7 +691,11 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   ) {
     return {
       success: false,
-      error: 'No downloaded update ready to install',
+      error: runtimeT(
+        'shell',
+        'updates.errors.noDownloadedUpdate',
+        'No downloaded update ready to install'
+      ),
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
@@ -655,7 +709,14 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   } catch (error) {
     return {
       success: false,
-      error: getErrorMessage(error, 'Failed to install and restart after update'),
+      error: getErrorMessage(
+        error,
+        runtimeT(
+          'shell',
+          'updates.errors.installRestartFailed',
+          'Failed to install and restart after update'
+        )
+      ),
       code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
@@ -702,7 +763,17 @@ export async function getAutoUpdateEnabled(): Promise<IpcResult<boolean>> {
 export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers): () => void {
   void syncRecoveryVersionMetadata().catch((error) => {
     handlers.onError?.(
-      `Failed to initialize updater recovery metadata: ${getErrorMessage(error, 'Unknown error')}`
+      runtimeT(
+        'shell',
+        'updates.errors.recoveryMetadataFailed',
+        'Failed to initialize updater recovery metadata: {{details}}',
+        {
+          details: getErrorMessage(
+            error,
+            runtimeT('shell', 'updates.errors.unknown', 'Unknown error')
+          )
+        }
+      )
     )
   })
 

@@ -31,6 +31,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+import { i18n } from '@/i18n'
 import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import type { ChatMessage } from '@/stores/acp-store'
@@ -39,6 +40,7 @@ import {
   _resetPendingIndexWriteTrackerForTesting,
   deriveTitle,
   flushSessionHistory,
+  fromPersistedSessionSummary,
   getCachedSessionPayload,
   groupSessionsByRecency,
   INACTIVE_PAYLOAD_CACHE_BUDGET,
@@ -122,6 +124,32 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
     expect(deriveTitle([msg('user', 'First line\nSecond line')], 'fallback')).toBe('First line')
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
+  })
+
+  it('localizes a missing persisted session title at conversion time', async () => {
+    const previousLanguage = i18n.language
+    const summary = {
+      storageKey: 'session:test',
+      sessionId: 'test',
+      stableAgentNamespace: null,
+      cwd: '/project',
+      title: null,
+      createdAt: 1,
+      lastActivityAt: 2,
+      status: 'closed' as const,
+      messageCount: 0,
+      toolCount: 0,
+      lastSeq: 0,
+      resumeEligible: false
+    }
+    try {
+      await i18n.changeLanguage('en')
+      expect(fromPersistedSessionSummary(summary).title).toBe('Untitled Chat')
+      await i18n.changeLanguage('zh-CN')
+      expect(fromPersistedSessionSummary(summary).title).toBe('未命名对话')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('groups by recency and scopes by project/cwd with fallback', () => {
