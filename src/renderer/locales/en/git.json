@@ -165,9 +165,9 @@
     },
     "toasts": {
       "saved": "Changes stashed successfully",
-      "applied": "Stash@{ {{index}} } applied",
-      "popped": "Stash@{ {{index}} } popped",
-      "dropped": "Stash@{ {{index}} } dropped"
+      "applied": "Stash@{{{index}}} applied",
+      "popped": "Stash@{{{index}}} popped",
+      "dropped": "Stash@{{{index}}} dropped"
     }
   },
   "history": {

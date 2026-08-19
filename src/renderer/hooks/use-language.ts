@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { changeUiLanguage } from '@/i18n'
 import { getBrowserLanguages, resolveLanguagePreference } from '@/i18n/language'
+import { logFrontendError } from '@/lib/log-api'
 import { syncNativeUiLanguage } from '@/lib/native-ui-api'
 import { useAppSettingsLoaded, useUiLanguage } from '@/stores/app-settings-store'
 
@@ -13,7 +14,15 @@ export function useAppliedLanguageSync(): void {
 
     const applyPreference = (): void => {
       const language = resolveLanguagePreference(preference, getBrowserLanguages())
-      void changeUiLanguage(language).then(() => syncNativeUiLanguage(language))
+      void changeUiLanguage(language)
+        .then(() => syncNativeUiLanguage(language))
+        .catch((error) => {
+          void logFrontendError({
+            level: 'warn',
+            source: 'language-sync',
+            message: error instanceof Error ? error.message : String(error)
+          })
+        })
     }
 
     applyPreference()

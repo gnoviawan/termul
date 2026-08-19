@@ -20,6 +20,14 @@ export function runtimeT(
   if (!i18n.isInitialized) return interpolateFallback(fallback, values)
 
   // This boundary intentionally supports runtime keys supplied by ACP metadata.
+  // Filter reserved i18next options so callers cannot override `ns`/`defaultValue`
+  // or force `returnObjects` (which would break the declared `string` return).
+  const filteredValues: Record<string, unknown> = {}
+  if (values) {
+    for (const [k, v] of Object.entries(values)) {
+      if (k !== 'ns' && k !== 'defaultValue' && k !== 'returnObjects') filteredValues[k] = v
+    }
+  }
   const translate = i18n.t.bind(i18n) as RuntimeTranslate
-  return translate(key, { ns: namespace, defaultValue: fallback, ...values })
+  return translate(key, { ns: namespace, defaultValue: fallback, ...filteredValues })
 }

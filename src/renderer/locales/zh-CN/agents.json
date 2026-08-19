@@ -87,7 +87,7 @@
     "heading": "我们要在 {{project}} 中做什么？",
     "searchingFiles": "正在搜索文件…",
     "noMatchingFiles": "没有匹配的文件。",
-    "prompt": "询问任何问题..（@ 引用文件，/ 使用命令）",
+    "prompt": "询问任何问题…（@ 引用文件，/ 使用命令）",
     "optionalMessage": "添加消息（可选）…",
     "composerUnavailable": "输入框不可用",
     "promptAria": "代理提示词",

@@ -87,7 +87,7 @@
     "heading": "What should we do in {{project}}?",
     "searchingFiles": "Searching files…",
     "noMatchingFiles": "No matching files.",
-    "prompt": "Ask anything.. (@ for files, / for commands)",
+    "prompt": "Ask anything… (@ for files, / for commands)",
     "optionalMessage": "Add a message (optional)…",
     "composerUnavailable": "Composer unavailable",
     "promptAria": "Agent prompt",

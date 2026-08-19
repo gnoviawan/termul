@@ -165,9 +165,9 @@
     },
     "toasts": {
       "saved": "更改已成功暂存",
-      "applied": "已应用 stash@{ {{index}} }",
-      "popped": "已弹出 stash@{ {{index}} }",
-      "dropped": "已删除 stash@{ {{index}} }"
+      "applied": "已应用 stash@{{{index}}}",
+      "popped": "已弹出 stash@{{{index}}}",
+      "dropped": "已删除 stash@{{{index}}}"
     }
   },
   "history": {

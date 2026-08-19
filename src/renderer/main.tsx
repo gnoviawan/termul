@@ -30,7 +30,7 @@
  */
 
 import { createRoot } from 'react-dom/client'
-import { initializeI18nFromSettings } from '@/i18n/bootstrap'
+import { bootstrapI18n } from '@/i18n/bootstrap'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import App from './App'
 import { installGlobalErrorForwarding } from './lib/log-api'
@@ -58,7 +58,7 @@ const runIdle = (fn: () => void): void => {
  * preserve the existing Tauri-safe dynamic import boundary.
  */
 async function bootstrap(): Promise<void> {
-  await initializeI18nFromSettings()
+  await bootstrapI18n()
   const root = createRoot(document.getElementById('root')!)
 
   if (isTauriContext()) {

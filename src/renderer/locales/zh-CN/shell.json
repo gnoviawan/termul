@@ -146,7 +146,7 @@
       "terminalSearch": { "label": "终端搜索", "description": "搜索终端输出" },
       "commandHistory": { "label": "命令历史", "description": "搜索命令历史" },
       "newProject": { "label": "新建项目", "description": "创建新项目" },
-      "newTerminal": { "label": "Agent 启动器", "description": "在活动窗格中显示 Agent 启动提示" },
+      "newTerminal": { "label": "新建终端", "description": "在活动窗格中创建新终端" },
       "newBrowserTab": { "label": "新建浏览器标签页", "description": "创建新的浏览器标签页" },
       "nextTerminal": {
         "label": "下一个标签页",

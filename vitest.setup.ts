@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom'
 import React from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
-import { i18n, initializeI18n } from './src/renderer/i18n'
+import { initializeI18n } from './src/renderer/i18n'
 
 await initializeI18n('en')
 
@@ -86,7 +86,7 @@ beforeEach(() => {
   installTestStorage()
 })
 afterEach(async () => {
-  await i18n.changeLanguage('en')
+  await initializeI18n('en')
   resetTestStorage()
   installTestStorage()
 })

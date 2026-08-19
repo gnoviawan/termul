@@ -153,8 +153,8 @@
       "commandHistory": { "label": "Command History", "description": "Search command history" },
       "newProject": { "label": "New Project", "description": "Create a new project" },
       "newTerminal": {
-        "label": "Agent Launcher",
-        "description": "Show the agent launcher prompt in the active pane"
+        "label": "New Terminal",
+        "description": "Open a new shell in the active pane"
       },
       "newBrowserTab": { "label": "New Browser Tab", "description": "Create a new browser tab" },
       "nextTerminal": {
@@ -241,7 +241,7 @@
       "insider": "Insider",
       "nightly": "Nightly"
     },
-    "available": "{{channel}}Update available: version {{version}}",
+    "available": "{{channel}} Update available: version {{version}}",
     "whatsNew": "What's new:\n{{notes}}",
     "aurAvailable": "A new version is available. Update with yay.",
     "manualChannel": "A new {{channel}} build is available. Open the download page to install it manually.",

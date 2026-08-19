@@ -113,6 +113,20 @@ const NATIVE_APP_MENU_LABEL_KEYS: &[&str] = &[
     "menu.hideOthers",
     "menu.showAll",
     "menu.quit",
+    "tray.show",
+    "tray.quit",
+    "dialog.error",
+    "dialog.success",
+    "dialog.copied",
+    "log.files",
+    "log.resolvePath",
+    "log.notFound",
+    "log.exportSuccess",
+    "log.exportFailed",
+    "log.copyFailed",
+    "log.copySuccess",
+    "log.readFailed",
+    "log.defaultDirFailed",
 ];
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -138,6 +152,16 @@ static APP_MENU_SUSPENSION_STATE: OnceLock<Mutex<AppMenuSuspensionState>> = Once
 
 fn app_menu_suspension_state() -> &'static Mutex<AppMenuSuspensionState> {
     APP_MENU_SUSPENSION_STATE.get_or_init(|| Mutex::new(AppMenuSuspensionState::default()))
+}
+
+/// Serializes native UI language updates (language state + app-menu rebuild +
+/// tray replacement) so concurrent `set_native_ui_language` calls cannot
+/// reorder and leave stale labels installed. Distinct from the app-menu
+/// suspension state, which only tracks menu rebuild suspension.
+static NATIVE_UI_LANGUAGE_STATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn native_ui_language_state() -> &'static Mutex<()> {
+    NATIVE_UI_LANGUAGE_STATE.get_or_init(|| Mutex::new(()))
 }
 
 fn native_ui_language() -> NativeUiLanguage {
@@ -454,6 +478,11 @@ fn restore_app_menu(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn set_native_ui_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    // Serialize the complete native UI update: language state + app-menu rebuild
+    // + tray replacement, so a stale concurrent call cannot install older labels.
+    let _guard = native_ui_language_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     update_native_ui_language(&language);
 
     #[cfg(not(target_os = "linux"))]
@@ -464,16 +493,39 @@ fn set_native_ui_language(app: tauri::AppHandle, language: String) -> Result<(),
         if state.is_suspended() {
             log::debug!("[native-ui] deferred app menu language rebuild while suspended");
         } else {
-            let menu = build_app_menu(&app).map_err(|error| error.to_string())?;
-            app.set_menu(menu).map_err(|error| error.to_string())?;
+            let menu = build_app_menu(&app).map_err(|error| {
+                log::error!(
+                    "[native-ui] build_app_menu failed for language={}: {error}",
+                    language
+                );
+                error.to_string()
+            })?;
+            app.set_menu(menu).map_err(|error| {
+                log::error!(
+                    "[native-ui] app.set_menu failed for language={}: {error}",
+                    language
+                );
+                error.to_string()
+            })?;
         }
     }
 
     #[cfg(desktop)]
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let menu = build_tray_menu(&app).map_err(|error| error.to_string())?;
-        tray.set_menu(Some(menu))
-            .map_err(|error| error.to_string())?;
+        let menu = build_tray_menu(&app).map_err(|error| {
+            log::error!(
+                "[native-ui] build_tray_menu failed for language={}: {error}",
+                language
+            );
+            error.to_string()
+        })?;
+        tray.set_menu(Some(menu)).map_err(|error| {
+            log::error!(
+                "[native-ui] tray.set_menu failed for language={}: {error}",
+                language
+            );
+            error.to_string()
+        })?;
         let _ = tray.set_tooltip(Some("Termul Manager"));
     }
 

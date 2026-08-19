@@ -14,6 +14,8 @@
   },
   "badge": {
     "attachedTitle": "已连接 {{count}} 个 MCP 服务器",
+    "attachedTitle_one": "已连接 {{count}} 个 MCP 服务器",
+    "attachedTitle_other": "已连接 {{count}} 个 MCP 服务器",
     "attachedSr": "已连接 MCP 服务器",
     "manageAria": "MCP 服务器 — 已连接 {{count}} 个。点击管理各服务器的启用状态。",
     "attached_one": "此会话已连接 {{count}} 个。",

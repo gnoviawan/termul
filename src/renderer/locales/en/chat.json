@@ -17,8 +17,8 @@
     "off": "Off"
   },
   "composer": {
-    "placeholder": "Ask the agent anything...",
-    "askAnything": "Ask anything.. (/ for commands, @ for files )",
+    "placeholder": "Ask the agent anything…",
+    "askAnything": "Ask anything… (/ for commands, @ for files)",
     "optionalMessage": "Add a message (optional)…",
     "unavailable": "Composer unavailable",
     "sessionClosed": "Session closed",

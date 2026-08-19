@@ -17,8 +17,8 @@
     "off": "关闭"
   },
   "composer": {
-    "placeholder": "向代理询问任何问题...",
-    "askAnything": "询问任何问题..（/ 使用命令，@ 引用文件）",
+    "placeholder": "向代理询问任何问题…",
+    "askAnything": "询问任何问题…（/ 使用命令，@ 引用文件）",
     "optionalMessage": "添加消息（可选）…",
     "unavailable": "输入框不可用",
     "sessionClosed": "会话已关闭",
@@ -237,7 +237,7 @@
     "title": "计划",
     "task_one": "项任务",
     "task_other": "项任务",
-    "inProgress_one": "项任务进行中",
+    "inProgress_one": "{{count}} 项任务进行中",
     "inProgress_other": "{{count}} 项任务进行中",
     "aria": "计划，已完成 {{completed}} / {{total}} {{taskLabel}}{{progress}}",
     "snapshotIncomplete": "计划快照不完整",

@@ -44,3 +44,23 @@ export async function initializeI18nFromSettings(): Promise<void> {
   const preference = await readPersistedLanguagePreference()
   await initializeI18n(resolveLanguagePreference(preference, getBrowserLanguages()))
 }
+
+/**
+ * Initialize i18n for bootstrap, recovering to the default language so the
+ * renderer still mounts on a settings/i18n failure instead of staying blank.
+ * Failures are logged at the i18n boundary; this only keeps rendering alive.
+ */
+export async function bootstrapI18n(): Promise<void> {
+  try {
+    await initializeI18nFromSettings()
+  } catch (error) {
+    void logFrontendError({
+      level: 'error',
+      source: 'i18n.bootstrap',
+      message: `i18n bootstrap failed; falling back to en: ${error instanceof Error ? error.message : String(error)}`
+    })
+    await initializeI18n('en').catch(() => {
+      // i18n itself is broken — render anyway; logged above.
+    })
+  }
+}
