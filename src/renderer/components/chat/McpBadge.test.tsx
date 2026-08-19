@@ -14,7 +14,7 @@ describe('McpBadge (count-only fallback)', () => {
 
   it('renders the count-only button when MCP servers are attached (no server list)', () => {
     render(<McpBadge count={3} />)
-    const btn = screen.getByRole('button', { name: /MCP servers — 3 attached/i })
+    const btn = screen.getByRole('button', { name: /3 MCP servers attached/i })
     expect(btn).toBeInTheDocument()
   })
 })

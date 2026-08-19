@@ -24,6 +24,7 @@ import {
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { ContentBlock } from '@/lib/acp-api'
 import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
@@ -186,12 +187,13 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
 }
 
 function InlineAudio({ block }: { block: ContentBlock }): React.JSX.Element | null {
+  const t = useRuntimeTranslation('chat')
   const src = inlineAudioUrl(block)
   if (!src) return null
   return (
     // biome-ignore lint/a11y/useMediaCaption: ACP audio blocks do not provide caption tracks.
     <audio
-      aria-label={`Play ${blockDisplayName(block)}`}
+      aria-label={t('messages.playAudio', 'Play {{name}}', { name: blockDisplayName(block) })}
       className="max-w-full"
       controls
       preload="metadata"
@@ -288,6 +290,7 @@ function StreamdownLinkSafetyModal({
   onClose,
   url
 }: LinkSafetyModalProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   return (
     <AlertDialog
       open={isOpen}
@@ -297,18 +300,18 @@ function StreamdownLinkSafetyModal({
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Open external link?</AlertDialogTitle>
+          <AlertDialogTitle>{t('messages.openExternal', 'Open external link?')}</AlertDialogTitle>
           <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('common.cancel', 'Cancel')}</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => {
               void openerApi.openUrlWithSystemBrowser(url)
               onClose()
             }}
           >
-            Open
+            {t('common.open', 'Open')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -335,6 +338,7 @@ function AgentProse({
   reduced: boolean
   filePathContext?: FilePathResolutionContext
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const filePathComponents = useMemo<Components | undefined>(() => {
     if (!filePathContext) return undefined
@@ -370,7 +374,7 @@ function AgentProse({
               props.className,
               'cursor-pointer appearance-none text-left font-medium text-primary underline'
             )}
-            title="Open in editor"
+            title={t('messages.openInEditor', 'Open in editor')}
             onClick={(event) => {
               if (event.button !== 0 || event.shiftKey) return
               const selection = window.getSelection()
@@ -386,7 +390,7 @@ function AgentProse({
                     source: 'ChatMessage.filePathLink',
                     message: `Failed to open ${candidate}: ${String(error)}`
                   })
-                  toast.error('Failed to open file from chat.')
+                  toast.error(t('messages.openFileFailed', 'Failed to open file from chat.'))
                 })
             }}
           >
@@ -395,7 +399,7 @@ function AgentProse({
         )
       }
     }
-  }, [filePathContext])
+  }, [filePathContext, t])
 
   return (
     <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">

@@ -1,5 +1,6 @@
 import { Zap } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { isFastModeEnabled, oppositeFastModeValue } from './chat-input-bar-config'
@@ -21,6 +22,7 @@ export function FastModeToggle({
   disabled,
   onSelect
 }: FastModeToggleProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const { displayValue, pending, select } = useOptimisticSelect(option.currentValue, onSelect)
   const on = isFastModeEnabled(option, displayValue)
   const nextValue = oppositeFastModeValue(option, displayValue)
@@ -56,8 +58,7 @@ export function FastModeToggle({
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {option.name}
-        {on ? ' · On' : ' · Off'}
+        {option.name} · {on ? t('common.on', 'On') : t('common.off', 'Off')}
       </TooltipContent>
     </Tooltip>
   )

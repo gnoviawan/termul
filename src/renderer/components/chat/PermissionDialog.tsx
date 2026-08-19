@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { PermissionOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { type PendingPermission, useAcpStore } from '@/stores/acp-store'
@@ -24,12 +25,12 @@ interface PermissionDialogProps {
 }
 
 /** Title text for the requesting tool call, best-effort from the update fields. */
-function toolTitle(toolCall: unknown): string {
+function toolTitle(toolCall: unknown, fallback = 'this action'): string {
   if (toolCall && typeof toolCall === 'object') {
     const t = toolCall as { title?: string; toolCallId?: string }
-    return t.title ?? t.toolCallId ?? 'this action'
+    return t.title ?? t.toolCallId ?? fallback
   }
-  return 'this action'
+  return fallback
 }
 
 function optionVariant(
@@ -51,15 +52,18 @@ function optionVariant(
  * a visual break before Reject options.
  */
 export function PermissionDialog({ permission }: PermissionDialogProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const respond = useAcpStore((s) => s.respondPermission)
 
   const choose = useCallback(
     (optionId?: string) => {
       void respond(permission.requestId, optionId).catch(() => {
-        toast.error('Could not send the permission response. Try again.')
+        toast.error(
+          t('permission.responseFailed', 'Could not send the permission response. Try again.')
+        )
       })
     },
-    [respond, permission.requestId]
+    [respond, permission.requestId, t]
   )
 
   const handleOpenChange = useCallback(
@@ -102,15 +106,18 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Permission required</DialogTitle>
+          <DialogTitle>{t('permission.title', 'Permission required')}</DialogTitle>
           <DialogDescription>
-            The agent wants to run{' '}
-            <span className="font-medium">{toolTitle(permission.toolCall)}</span>.
+            {t('permission.description', 'The agent wants to run {{action}}.', {
+              action: toolTitle(permission.toolCall, t('permission.actionFallback', 'this action'))
+            })}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
           {permission.options.length === 0 && (
-            <p className="text-sm text-muted-foreground">No options were provided.</p>
+            <p className="text-sm text-muted-foreground">
+              {t('permission.noOptions', 'No options were provided.')}
+            </p>
           )}
           {allows.map(renderOption)}
           {others.map(renderOption)}
@@ -131,13 +138,13 @@ export function PermissionDialog({ permission }: PermissionDialogProps): React.J
               className="mt-1 min-h-11 justify-start"
               onClick={() => choose(undefined)}
             >
-              Cancel
+              {t('common.cancel', 'Cancel')}
             </Button>
           )}
         </div>
         <DialogFooter className="sm:justify-start">
           <span className="text-2xs text-muted-foreground">
-            Closing this dialog declines the request.
+            {t('permission.declineHint', 'Closing this dialog declines the request.')}
           </span>
         </DialogFooter>
       </DialogContent>

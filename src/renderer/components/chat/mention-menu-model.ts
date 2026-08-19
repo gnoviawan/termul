@@ -7,6 +7,8 @@
  * the caret sits within `(at, end]`. See ADR 0003.
  */
 
+import { runtimeT } from '@/i18n/runtime'
+
 export interface MentionToken {
   /** Index of the `@` in the composer value. */
   at: number
@@ -113,9 +115,9 @@ export function buildMentionSections(input: {
   if (filter.trim() === '') {
     const items = recents.map(toMentionItem)
     if (items.length === 0) return []
-    return [{ id: 'recents', heading: 'Recent', items }]
+    return [{ id: 'recents', heading: runtimeT('chat', 'mention.recent', 'Recent'), items }]
   }
   const items = dedupByPath(matches).map(toMentionItem)
   if (items.length === 0) return []
-  return [{ id: 'files', heading: 'Files', items }]
+  return [{ id: 'files', heading: runtimeT('chat', 'mention.files', 'Files'), items }]
 }

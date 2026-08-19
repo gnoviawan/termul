@@ -1027,10 +1027,10 @@ describe('AgentLauncher ACP new thread', () => {
       await screen.findByRole('button', { name: 'Select model: OpenAI/GPT-5.4 mini Fast' })
     )
 
-    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
+    expect(screen.getByLabelText('Search models...')).toBeInTheDocument()
     expect(screen.getByTestId('acp-model-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
 
-    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+    fireEvent.change(screen.getByLabelText('Search models...'), { target: { value: 'grok 4.3' } })
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()

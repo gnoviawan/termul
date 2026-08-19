@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 
@@ -33,19 +34,20 @@ export function MessageActions({
   onRetry,
   className
 }: MessageActionsProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const [copied, setCopied] = useState(false)
 
   const copy = useCallback(() => {
     if (!text) return
     void copyText(text).then((ok) => {
       if (!ok) {
-        toast.error('Failed to copy')
+        toast.error(t('messages.copyFailed', 'Failed to copy'))
         return
       }
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
-  }, [text])
+  }, [text, t])
 
   return (
     <div
@@ -62,18 +64,21 @@ export function MessageActions({
       )}
     >
       <div className={cn('flex items-center gap-0.5', align === 'end' && 'flex-row-reverse')}>
-        <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy}>
+        <IconActionButton
+          label={copied ? t('common.copied', 'Copied') : t('common.copy', 'Copy')}
+          onClick={copy}
+        >
           <IconSwap iconKey={copied}>
             {copied ? <Check className="text-success" /> : <Copy />}
           </IconSwap>
         </IconActionButton>
         {onEdit && (
-          <IconActionButton label="Edit" onClick={onEdit}>
+          <IconActionButton label={t('common.edit', 'Edit')} onClick={onEdit}>
             <Pencil />
           </IconActionButton>
         )}
         {onRetry && (
-          <IconActionButton label="Retry" onClick={onRetry}>
+          <IconActionButton label={t('common.retry', 'Retry')} onClick={onRetry}>
             <RotateCcw />
           </IconActionButton>
         )}

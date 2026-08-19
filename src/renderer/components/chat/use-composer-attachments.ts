@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { runtimeT } from '@/i18n/runtime'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
 import {
@@ -313,14 +314,37 @@ export function useComposerAttachments(opts: {
           const read = await Promise.all(reads)
           setAttachments((prev) => [...prev, ...read])
         } catch {
-          toast.error('Failed to read attachment')
+          toast.error(
+            runtimeT('chat', 'attachments.errors.readFailed', 'Failed to read attachment')
+          )
         }
       }
-      if (tooLarge > 0) toast.error('File too large')
+      if (tooLarge > 0)
+        toast.error(runtimeT('chat', 'attachments.errors.tooLarge', 'File too large'))
       if (needEmbed > 0)
-        toast.error("This agent can't embed files — use the attach button to link by path")
-      if (needImageCap > 0) toast.error("This agent can't accept images in the browser")
-      if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
+        toast.error(
+          runtimeT(
+            'chat',
+            'attachments.errors.embedUnsupported',
+            "This agent can't embed files — use the attach button to link by path"
+          )
+        )
+      if (needImageCap > 0)
+        toast.error(
+          runtimeT(
+            'chat',
+            'attachments.errors.imagesUnsupported',
+            "This agent can't accept images in the browser"
+          )
+        )
+      if (unsupported > 0)
+        toast.error(
+          runtimeT(
+            'chat',
+            'attachments.errors.unsupportedType',
+            'Unsupported file type (text or image only)'
+          )
+        )
     },
     [imageCapable, embedCapable]
   )
@@ -334,7 +358,9 @@ export function useComposerAttachments(opts: {
         const files = await pickAttachmentFilesBrowser()
         if (files && files.length > 0) await addFiles(files)
       } catch {
-        toast.error('Failed to open file picker')
+        toast.error(
+          runtimeT('chat', 'attachments.errors.pickerFailed', 'Failed to open file picker')
+        )
       }
       return
     }
@@ -343,7 +369,7 @@ export function useComposerAttachments(opts: {
     try {
       paths = await pickAttachmentPaths()
     } catch {
-      toast.error('Failed to open file picker')
+      toast.error(runtimeT('chat', 'attachments.errors.pickerFailed', 'Failed to open file picker'))
       return
     }
     if (!paths) return
@@ -373,8 +399,22 @@ export function useComposerAttachments(opts: {
       }
     }
     if (next.length > 0) setAttachments((prev) => [...prev, ...next])
-    if (readFell > 0) toast.error('Could not read image inline — linked by path instead')
-    if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
+    if (readFell > 0)
+      toast.error(
+        runtimeT(
+          'chat',
+          'attachments.errors.inlineReadFailed',
+          'Could not read image inline — linked by path instead'
+        )
+      )
+    if (unsupported > 0)
+      toast.error(
+        runtimeT(
+          'chat',
+          'attachments.errors.unsupportedType',
+          'Unsupported file type (text or image only)'
+        )
+      )
   }, [disabled, imageCapable, addFiles])
 
   /**
@@ -426,14 +466,22 @@ export function useComposerAttachments(opts: {
         if (!att) return // empty/non-image clipboard — nothing to do
         if (imageCapable) {
           if ((att.base64.length * 3) / 4 > MAX_IMAGE_BYTES) {
-            toast.error('Image too large (max 10 MB)')
+            toast.error(
+              runtimeT('chat', 'attachments.errors.imageTooLarge', 'Image too large (max 10 MB)')
+            )
             return
           }
           setAttachments((prev) => [...prev, att])
           return
         }
         if (!isTauriContext()) {
-          toast.error("This agent can't accept images in the browser")
+          toast.error(
+            runtimeT(
+              'chat',
+              'attachments.errors.imagesUnsupported',
+              "This agent can't accept images in the browser"
+            )
+          )
           return
         }
         // Agent can't take inline images but can read files by path: persist
@@ -448,7 +496,9 @@ export function useComposerAttachments(opts: {
           )
           setAttachments((prev) => [...prev, link])
         } catch {
-          toast.error('Failed to attach pasted image')
+          toast.error(
+            runtimeT('chat', 'attachments.errors.pasteFailed', 'Failed to attach pasted image')
+          )
         }
       })()
     },

@@ -1,5 +1,6 @@
 import { Paperclip } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
 
 interface AttachFilesButtonProps {
@@ -17,6 +18,8 @@ export function AttachFilesButton({
   disabled = false,
   className
 }: AttachFilesButtonProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
+  const label = t('composer.attachFiles', 'Attach files')
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -24,7 +27,7 @@ export function AttachFilesButton({
           type="button"
           onClick={onClick}
           disabled={disabled}
-          aria-label="Attach files"
+          aria-label={label}
           className={cn(
             'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
             // Expand hit to ~44×44 without growing toolbar chrome.
@@ -36,7 +39,7 @@ export function AttachFilesButton({
           <Paperclip size={16} />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Attach files</TooltipContent>
+      <TooltipContent side="bottom">{label}</TooltipContent>
     </Tooltip>
   )
 }

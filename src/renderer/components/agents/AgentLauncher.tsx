@@ -58,6 +58,8 @@ import {
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
+import { runtimeT } from '@/i18n/runtime'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AuthMethod,
@@ -122,6 +124,7 @@ export function __resetLauncherSelectionCache(): void {
 }
 
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
@@ -149,7 +152,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const activeProject = useActiveProject()
-  const projectLabel = activeProject?.name ?? 'this folder'
+  const projectLabel = activeProject?.name ?? t('launcher.folderFallback', 'this folder')
   const projectRoot = activeProjectId ? getDefaultCwdForProject(activeProjectId) : undefined
   const projectIsGitRepo = Boolean(activeProject?.isGitRepo)
   const projectGitBranch = activeProject?.gitBranch ?? null
@@ -358,11 +361,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       try {
         await useAcpStore.getState().setConfigOption(preparedSessionId, configId, valueId)
       } catch (err) {
-        toast.error(`Failed to set option: ${String(err)}`)
+        toast.error(
+          t('launcher.errors.setOption', 'Failed to set option: {{error}}', {
+            error: String(err)
+          })
+        )
         throw err
       }
     },
-    [preparedSessionId, activeConfigId]
+    [preparedSessionId, activeConfigId, t]
   )
 
   const handleSetModel = useCallback(
@@ -376,7 +383,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           return
         }
         if (!modelOption) {
-          throw new Error('No model option is available for this session')
+          throw new Error(
+            t('launcher.errors.noModelOption', 'No model option is available for this session')
+          )
         }
         setPendingOptions((prev) => ({
           ...prev,
@@ -395,17 +404,23 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         try {
           await useAcpStore.getState().setModel(preparedSessionId, valueId)
         } catch (err) {
-          toast.error(`Failed to set model: ${String(err)}`)
+          toast.error(
+            t('launcher.errors.setModel', 'Failed to set model: {{error}}', {
+              error: String(err)
+            })
+          )
           throw err
         }
         return
       }
       if (!modelOption) {
-        throw new Error('No model option is available for this session')
+        throw new Error(
+          t('launcher.errors.noModelOption', 'No model option is available for this session')
+        )
       }
       await handleSetConfig(modelOption.id, valueId)
     },
-    [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId]
+    [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId, t]
   )
 
   const handleSetMode = useCallback(
@@ -420,11 +435,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       try {
         await useAcpStore.getState().setMode(preparedSessionId, modeId)
       } catch (err) {
-        toast.error(`Failed to set agent: ${String(err)}`)
+        toast.error(
+          t('launcher.errors.setAgent', 'Failed to set agent: {{error}}', {
+            error: String(err)
+          })
+        )
         throw err
       }
     },
-    [preparedSessionId, activeConfigId]
+    [preparedSessionId, activeConfigId, t]
   )
 
   const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
@@ -435,7 +454,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading
+    ? t('launcher.searchingFiles', 'Searching files…')
+    : t('launcher.noMatchingFiles', 'No matching files.')
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value: prompt,
@@ -740,9 +761,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         await saveAgentConfig(config)
         setSelectedConfigId(config.id)
         persistSelection(config.id)
-        toast.success(`${entry.agent.name} installed`)
+        toast.success(t('launcher.installed', '{{name}} installed', { name: entry.agent.name }))
       } catch (err) {
-        toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
+        toast.error(
+          t('launcher.errors.install', 'Failed to install {{name}}: {{error}}', {
+            name: entry.agent.name,
+            error: String(err)
+          })
+        )
         setManualInstallOverride({
           cmd: entry.install.cmd,
           args: entry.install.args,
@@ -752,26 +778,28 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         setInstallingConfigId(null)
       }
     },
-    [installingConfigId, persistSelection, saveAgentConfig]
+    [installingConfigId, persistSelection, saveAgentConfig, t]
   )
 
   const handleBrowseManualPath = useCallback(async () => {
     const result = await dialogApi.selectFile({
-      title: 'Select ACP agent executable',
+      title: t('settings.selectExecutable', 'Select ACP agent executable'),
       filters:
         osPlatform() === 'windows' ? [{ name: 'Executable', extensions: ['exe'] }] : undefined
     })
     if (result.success && result.data) {
       setManualPath(result.data)
     }
-  }, [])
+  }, [t])
 
   const handleSaveManualPath = useCallback(
     async (entry: SupportedAcpAgentEntry, manual: SupportedAcpAgentManualInstall) => {
       if (savingManualPath) return
       const command = manualPath.trim()
       if (!command) {
-        toast.error('Enter the path to the installed ACP binary.')
+        toast.error(
+          t('launcher.errors.enterInstalledPath', 'Enter the path to the installed ACP binary.')
+        )
         return
       }
       setSelectedConfigId(entry.configId)
@@ -782,14 +810,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         await saveAgentConfig(config)
         setSelectedConfigId(config.id)
         persistSelection(config.id)
-        toast.success(`${entry.agent.name} configured`)
+        toast.success(t('launcher.configured', '{{name}} configured', { name: entry.agent.name }))
       } catch (err) {
-        toast.error(`Failed to save ${entry.agent.name}: ${String(err)}`)
+        toast.error(
+          t('launcher.errors.saveAgent', 'Failed to save {{name}}: {{error}}', {
+            name: entry.agent.name,
+            error: String(err)
+          })
+        )
       } finally {
         setSavingManualPath(false)
       }
     },
-    [manualPath, persistSelection, saveAgentConfig, savingManualPath]
+    [manualPath, persistSelection, saveAgentConfig, savingManualPath, t]
   )
 
   const handleRetryPrepare = useCallback(() => {
@@ -807,7 +840,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const runAuthenticate = useCallback(
     async (methodId: string) => {
       if (!liveAgentId) {
-        toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
+        toast.error(
+          t(
+            'launcher.errors.notConnected',
+            'Agent is not connected. Use Retry to reconnect, then sign in again.'
+          )
+        )
         return
       }
       if (signingInMethodId) return
@@ -816,21 +854,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         await useAcpStore.getState().authenticateAgent(liveAgentId, methodId)
         handleRetryPrepare()
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+        toast.error(
+          err instanceof Error ? err.message : t('launcher.errors.signIn', 'Sign-in failed')
+        )
       } finally {
         setSigningInMethodId(null)
       }
     },
-    [liveAgentId, signingInMethodId, handleRetryPrepare]
+    [liveAgentId, signingInMethodId, handleRetryPrepare, t]
   )
 
   const handleSignIn = useCallback(() => {
     if (!signInMethod) {
-      toast.error('No sign-in method is available for this agent yet.')
+      toast.error(
+        t('launcher.errors.noSignIn', 'No sign-in method is available for this agent yet.')
+      )
       return
     }
     void runAuthenticate(signInMethod.id)
-  }, [signInMethod, runAuthenticate])
+  }, [signInMethod, runAuthenticate, t])
 
   // If prepare finishes while the launcher is still open, flush queued selections.
   useEffect(() => {
@@ -843,7 +885,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         if (!cancelled) setPendingOptions(emptyPendingLauncherOptions())
       } catch (err) {
         if (!cancelled) {
-          toast.error(`Failed to apply options: ${String(err)}`)
+          toast.error(
+            t('launcher.errors.applyOptions', 'Failed to apply options: {{error}}', {
+              error: String(err)
+            })
+          )
         }
       }
     })()
@@ -852,11 +898,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     // Flush once when a prepared session appears; pending is snapshotted above.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, [preparedSessionId, pendingOptions])
+  }, [preparedSessionId, pendingOptions, t])
 
   const launch = useCallback(async () => {
     if (!activeProjectId || !projectRoot) {
-      toast.error('No active project')
+      toast.error(t('launcher.errors.noProject', 'No active project'))
       return
     }
     if (!selectedConfig || selectedEntry?.status !== 'ready' || launchInFlightRef.current) return
@@ -887,7 +933,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     try {
       parts = buildPromptParts()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t('launcher.errors.startChat', 'Failed to start agent chat')
+      )
       launchInFlightRef.current = false
       return
     }
@@ -902,7 +952,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let launchCwd = projectRootSnapshot
     if (isolationMode === 'worktree' && canUseWorktree) {
       if (!baseBranch) {
-        toast.error('Pick a base branch for the worktree')
+        toast.error(t('launcher.errors.pickBase', 'Pick a base branch for the worktree'))
         launchInFlightRef.current = false
         return
       }
@@ -948,12 +998,30 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               worktreeBranchResult = retryBranch
               worktreeNameResult = retryId
             } else {
-              const retryErr = retryResult.success ? 'unknown' : retryResult.error
-              throw new Error(`Worktree creation failed: ${retryErr}`)
+              const retryErr = retryResult.success
+                ? runtimeT('chat', 'store.unknownError', 'unknown')
+                : retryResult.error
+              throw new Error(
+                runtimeT(
+                  'chat',
+                  'store.worktreeCreationFailed',
+                  'Worktree creation failed: {{error}}',
+                  { error: retryErr }
+                )
+              )
             }
           } else {
-            const createErr = createResult.success ? 'unknown' : createResult.error
-            throw new Error(`Worktree creation failed: ${createErr}`)
+            const createErr = createResult.success
+              ? runtimeT('chat', 'store.unknownError', 'unknown')
+              : createResult.error
+            throw new Error(
+              runtimeT(
+                'chat',
+                'store.worktreeCreationFailed',
+                'Worktree creation failed: {{error}}',
+                { error: createErr }
+              )
+            )
           }
         }
         if (worktreePathResult) {
@@ -1035,7 +1103,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
       } catch (err) {
         setWorktreeCreating(false)
-        toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : t('launcher.errors.createWorktree', 'Failed to create worktree')
+        )
         launchInFlightRef.current = false
         return
       }
@@ -1153,7 +1225,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         registerSessionTempFiles(realId, appOwnedPaths)
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : t('launcher.errors.startChat', 'Failed to start agent chat')
+        )
       } finally {
         launchInFlightRef.current = false
       }
@@ -1180,7 +1256,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     skillPathsRef,
     isolationMode,
     canUseWorktree,
-    baseBranch
+    baseBranch,
+    t
   ])
 
   const handleKeyDown = useCallback(
@@ -1238,7 +1315,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (!value) return
       if (seen.has(value)) return
       seen.add(value)
-      out.push({ value, label: isCurrent ? `${value} (current)` : value })
+      out.push({
+        value,
+        label: isCurrent
+          ? t('launcher.currentBranch', '{{branch}} (current)', { branch: value })
+          : value
+      })
     }
     add(baseBranchInfo?.currentBranch, true)
     add(baseBranchInfo?.defaultBase)
@@ -1257,7 +1339,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
         <TermulMark size={48} className="text-foreground" />
         <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          {`What should we do in ${projectLabel}?`}
+          {t('launcher.heading', 'What should we do in {{project}}?', { project: projectLabel })}
         </h1>
       </div>
 
@@ -1329,13 +1411,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             {selectedEntry?.status === 'unavailable' && (
               <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
                 {selectedEntry.unavailableReason ??
-                  'This ACP agent is not available on this platform.'}
+                  t(
+                    'launcher.platformUnavailable',
+                    'This ACP agent is not available on this platform.'
+                  )}
               </div>
             )}
             {prepareError &&
               (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
                 <AuthRequiredBanner
-                  agentName={selectedEntry?.agent.name ?? 'Agent'}
+                  agentName={selectedEntry?.agent.name ?? t('common.agent', 'Agent')}
                   setupError={prepareError}
                   authMethods={authMethods}
                   signingInMethodId={signingInMethodId}
@@ -1369,10 +1454,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 maxHeight={160}
                 placeholder={
                   hasCommandToken
-                    ? 'Add a message (optional)…'
-                    : 'Ask anything.. (@ for files, / for commands)'
+                    ? t('launcher.optionalMessage', 'Add a message (optional)…')
+                    : t('launcher.prompt', 'Ask anything.. (@ for files, / for commands)')
                 }
-                ariaLabel="Agent prompt"
+                ariaLabel={t('launcher.promptAria', 'Agent prompt')}
                 autoFocus
               />
               {/* Tiptap's `Placeholder` extension is configured with
@@ -1385,7 +1470,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   text-base/leading-relaxed/muted-foreground styling. */}
               {composerDisabled && (
                 <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground">
-                  Composer unavailable
+                  {t('launcher.composerUnavailable', 'Composer unavailable')}
                 </p>
               )}
             </div>
@@ -1405,7 +1490,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                       })
                       .catch(() => {
                         toast.error(
-                          'Could not update the MCP server. Your previous setting was restored.'
+                          t(
+                            'launcher.errors.updateMcp',
+                            'Could not update the MCP server. Your previous setting was restored.'
+                          )
                         )
                       })
                   }}
@@ -1471,7 +1559,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     session={modePreviewSession}
                     disabled={!optionsInteractive}
                     onSelect={handleSetMode}
-                    label="Agent"
+                    label={t('common.agent', 'Agent')}
                   />
                 )}
                 <button
@@ -1484,8 +1572,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                       ? 'bg-foreground text-background hover:bg-foreground/90'
                       : 'cursor-not-allowed bg-muted text-muted-foreground'
                   )}
-                  aria-label="Start agent chat"
-                  title="Start agent chat"
+                  aria-label={t('launcher.startChat', 'Start agent chat')}
+                  title={t('launcher.startChat', 'Start agent chat')}
                 >
                   <ArrowUp size={18} />
                 </button>
@@ -1504,7 +1592,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 }
               >
                 <SelectTrigger
-                  aria-label="Isolation mode"
+                  aria-label={t('launcher.isolationMode', 'Isolation mode')}
                   className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
                 >
                   {isolationMode === 'worktree' ? (
@@ -1515,8 +1603,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="current">Local</SelectItem>
-                  <SelectItem value="worktree">New worktree</SelectItem>
+                  <SelectItem value="current">{t('common.local', 'Local')}</SelectItem>
+                  <SelectItem value="worktree">
+                    {t('common.newWorktree', 'New worktree')}
+                  </SelectItem>
                 </SelectContent>
               </Select>
 
@@ -1524,16 +1614,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 <div className="flex min-w-0 items-center justify-end gap-2">
                   {!baseBranch && baseBranchInfo?.isDetached && (
                     <span className="truncate text-xs text-destructive">
-                      Detached HEAD - pick a base
+                      {t('launcher.detachedHead', 'Detached HEAD - pick a base')}
                     </span>
                   )}
                   <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
                     <SelectTrigger
-                      aria-label="Base branch"
+                      aria-label={t('launcher.baseBranch', 'Base branch')}
                       className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
                     >
                       <GitBranch className="size-3.5 shrink-0" />
-                      <SelectValue placeholder="Base branch" />
+                      <SelectValue placeholder={t('launcher.baseBranch', 'Base branch')} />
                     </SelectTrigger>
                     <SelectContent>
                       {baseOptions.map((opt) => (
@@ -1569,6 +1659,7 @@ function AuthRequiredBanner({
   onAuthenticate: (methodId: string) => void
   onRetry: () => void
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
   const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
 
@@ -1577,14 +1668,19 @@ function AuthRequiredBanner({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-foreground">
-            {signingInMethod ? `Authenticating to ${agentName}…` : `Authenticate to ${agentName}`}
+            {signingInMethod
+              ? t('launcher.authenticating', 'Authenticating to {{name}}…', { name: agentName })
+              : t('launcher.authenticate', 'Authenticate to {{name}}', { name: agentName })}
           </div>
           <p className="mt-0.5 line-clamp-4 break-words text-xs text-muted-foreground">
             {setupError.detail}
           </p>
           {setupError.category === 'multi-auth' && actionableMethods.length > 1 ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Choose one of the following authentication options:
+              {t(
+                'launcher.chooseAuthentication',
+                'Choose one of the following authentication options:'
+              )}
             </p>
           ) : null}
         </div>
@@ -1592,7 +1688,9 @@ function AuthRequiredBanner({
           {signingInMethod ? (
             <Button type="button" size="sm" disabled>
               <Loader2 size={14} className="mr-1.5 animate-spin" />
-              {`Signing in with ${signingInMethod.name}…`}
+              {t('launcher.signingIn', 'Signing in with {{method}}…', {
+                method: signingInMethod.name
+              })}
             </Button>
           ) : actionableMethods.length > 0 ? (
             actionableMethods.map((method, index) => (
@@ -1609,7 +1707,7 @@ function AuthRequiredBanner({
             ))
           ) : (
             <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-              Retry
+              {t('common.retry', 'Retry')}
             </Button>
           )}
         </div>
@@ -1629,12 +1727,19 @@ function InstallRequiredBanner({
   onInstall: () => void
   onUseCustomPath?: () => void
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
       <div className="min-w-0">
-        <div className="text-xs font-medium text-foreground">Install required</div>
+        <div className="text-xs font-medium text-foreground">
+          {t('launcher.installRequired', 'Install required')}
+        </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {entry.agent.name} needs a local ACP binary before it can start chats.
+          {t(
+            'launcher.installRequiredDescription',
+            '{{name}} needs a local ACP binary before it can start chats.',
+            { name: entry.agent.name }
+          )}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -1646,7 +1751,7 @@ function InstallRequiredBanner({
             disabled={installing}
             onClick={onUseCustomPath}
           >
-            Custom path
+            {t('launcher.customPath', 'Custom path')}
           </Button>
         )}
         <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
@@ -1655,7 +1760,7 @@ function InstallRequiredBanner({
           ) : (
             <Download size={14} className="mr-1.5" />
           )}
-          {installing ? 'Installing…' : 'Install'}
+          {installing ? t('common.installing', 'Installing…') : t('common.install', 'Install')}
         </Button>
       </div>
     </div>
@@ -1668,14 +1773,20 @@ const RUNTIME_HELP_URLS = {
 } as const
 
 function NeedsRuntimeBanner({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const launcher = entry.runtimeLauncher ?? 'npx'
   const helpUrl = RUNTIME_HELP_URLS[launcher]
-  const helpLabel = launcher === 'uvx' ? 'Install uv' : 'Install Node.js'
+  const helpLabel =
+    launcher === 'uvx'
+      ? t('launcher.installUv', 'Install uv')
+      : t('launcher.installNode', 'Install Node.js')
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
       <div className="min-w-0">
-        <div className="text-xs font-medium text-foreground">Runtime required</div>
+        <div className="text-xs font-medium text-foreground">
+          {t('launcher.runtimeRequired', 'Runtime required')}
+        </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{entry.unavailableReason}</p>
       </div>
       <Button
@@ -1707,19 +1818,28 @@ function ManualInstallBanner({
   onBrowse: () => void
   onSave: () => void
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const expectedCommand = `${manual.cmd}${manual.args.length > 0 ? ` ${manual.args.join(' ')}` : ''}`
 
   return (
     <div className="space-y-3 border-b border-border/60 px-5 py-3">
       <div>
-        <div className="text-xs font-medium text-foreground">Manual install</div>
+        <div className="text-xs font-medium text-foreground">
+          {t('launcher.manualInstall', 'Manual install')}
+        </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {entry.unavailableReason ??
-            `Install ${entry.agent.name} from the vendor, then point Termul at the binary.`}
+            t(
+              'launcher.manualInstallDescription',
+              'Install {{name}} from the vendor, then point Termul at the binary.',
+              { name: entry.agent.name }
+            )}
         </p>
         {expectedCommand && (
           <p className="mt-1 font-mono text-2xs text-muted-foreground">
-            Expected: {expectedCommand}
+            {t('launcher.expectedCommand', 'Expected: {{command}}', {
+              command: expectedCommand
+            })}
           </p>
         )}
       </div>
@@ -1727,8 +1847,8 @@ function ManualInstallBanner({
         <Input
           value={path}
           onChange={(event) => onPathChange(event.target.value)}
-          placeholder="Path to installed ACP binary"
-          aria-label="ACP agent executable path"
+          placeholder={t('launcher.pathPlaceholder', 'Path to installed ACP binary')}
+          aria-label={t('launcher.pathAria', 'ACP agent executable path')}
           className="h-8 font-mono text-xs"
           disabled={saving}
         />
@@ -1738,7 +1858,7 @@ function ManualInstallBanner({
           variant="outline"
           disabled={saving}
           onClick={onBrowse}
-          aria-label="Browse for ACP agent executable"
+          aria-label={t('launcher.browsePathAria', 'Browse for ACP agent executable')}
         >
           <FolderOpen size={14} />
         </Button>
@@ -1748,7 +1868,7 @@ function ManualInstallBanner({
           disabled={saving || path.trim().length === 0}
           onClick={onSave}
         >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : 'Save'}
+          {saving ? <Loader2 size={14} className="animate-spin" /> : t('common.save', 'Save')}
         </Button>
       </div>
     </div>
@@ -1770,16 +1890,18 @@ function AcpAgentPicker({
   installingConfigId: string | null
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [query, setQuery] = useState('')
   const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
-  const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
+  const rawLabel =
+    selectedConfig?.name ?? selectedEntry?.agent.name ?? t('launcher.agentPicker', 'ACP Agent')
   const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
   return (
     <Popover>
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill
           disabled={disabled}
-          aria-label={`Select ACP agent: ${label}`}
+          aria-label={t('launcher.selectAgent', 'Select ACP agent: {{name}}', { name: label })}
           className="max-w-[260px]"
           chevron
         >
@@ -1793,20 +1915,22 @@ function AcpAgentPicker({
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          ACP Agent
+          {t('launcher.agentPicker', 'ACP Agent')}
         </div>
         <div className="px-2 pb-1">
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search agents…"
-            aria-label="Search ACP agents"
+            placeholder={t('launcher.searchAgents', 'Search agents…')}
+            aria-label={t('launcher.searchAgentsAria', 'Search ACP agents')}
             className="h-7 text-xs"
           />
         </div>
         <div className="max-h-64 overflow-y-auto pr-1">
           {visibleAgents.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
+            <div className="px-2 py-2 text-xs text-muted-foreground">
+              {t('launcher.noAgents', 'No agents match.')}
+            </div>
           ) : (
             visibleAgents.map((entry) => (
               <button
@@ -1828,19 +1952,27 @@ function AcpAgentPicker({
                 </span>
                 {entry.status === 'install-required' && (
                   <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                    {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+                    {installingConfigId === entry.configId
+                      ? t('common.installing', 'Installing…')
+                      : t('common.install', 'Install')}
                   </span>
                 )}
                 {entry.status === 'needs-runtime' && (
                   <span className="text-3xs text-muted-foreground">
-                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+                    {entry.runtimeLauncher === 'uvx'
+                      ? t('launcher.needsUv', 'Needs uv')
+                      : t('launcher.needsNode', 'Needs Node')}
                   </span>
                 )}
                 {entry.status === 'manual-install' && (
-                  <span className="text-3xs text-muted-foreground">Manual install</span>
+                  <span className="text-3xs text-muted-foreground">
+                    {t('common.manualInstall', 'Manual install')}
+                  </span>
                 )}
                 {entry.status === 'unavailable' && (
-                  <span className="text-3xs text-muted-foreground">Unavailable</span>
+                  <span className="text-3xs text-muted-foreground">
+                    {t('common.unavailable', 'Unavailable')}
+                  </span>
                 )}
                 {entry.configId === selectedEntry?.configId && (
                   <Check size={14} className="text-muted-foreground" />
@@ -1879,6 +2011,7 @@ function AcpModelPicker({
   onRetry: () => void
   onSelectModel: (valueId: string) => void | Promise<void>
 }): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const { displayValue, pending, select } = useOptimisticSelect(
@@ -1890,10 +2023,10 @@ function AcpModelPicker({
   // neutral "Model" pill — setup failures get an actionable label instead of a
   // misleading "Model unavailable".
   const label = loading
-    ? 'Loading model…'
+    ? t('launcher.loadingModel', 'Loading model…')
     : setupError
       ? setupError.label
-      : (currentModel?.name ?? 'Model')
+      : (currentModel?.name ?? t('common.model', 'Model'))
   const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !setupError)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredModels =
@@ -1916,7 +2049,7 @@ function AcpModelPicker({
       <PopoverTrigger asChild disabled={disabled}>
         <ComposerPill
           disabled={disabled}
-          aria-label={`Select model: ${label}`}
+          aria-label={t('launcher.selectModel', 'Select model: {{name}}', { name: label })}
           className={cn('max-w-[220px]', (connecting || stale) && !setupError && 'opacity-80')}
           chevron
           pending={pending || (connecting && !setupError)}
@@ -1926,23 +2059,36 @@ function AcpModelPicker({
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          Model
+          {t('common.model', 'Model')}
           {connecting && !setupError && (
-            <span className="ml-1 font-normal normal-case tracking-normal">· Connecting…</span>
+            <span className="ml-1 font-normal normal-case tracking-normal">
+              · {t('launcher.connecting', 'Connecting…')}
+            </span>
           )}
           {stale && !connecting && !setupError && (
-            <span className="ml-1 font-normal normal-case tracking-normal">· Cached</span>
+            <span className="ml-1 font-normal normal-case tracking-normal">
+              · {t('launcher.cached', 'Cached')}
+            </span>
           )}
         </div>
         {selectedEntry?.status !== 'ready' ? (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {selectedEntry?.status === 'install-required'
-              ? 'Install this ACP agent to load model options.'
+              ? t('launcher.installForModels', 'Install this ACP agent to load model options.')
               : selectedEntry?.status === 'needs-runtime'
-                ? 'Install the required runtime before loading model options.'
+                ? t(
+                    'launcher.runtimeForModels',
+                    'Install the required runtime before loading model options.'
+                  )
                 : selectedEntry?.status === 'manual-install'
-                  ? 'Install this agent manually before loading model options.'
-                  : 'This ACP agent is not available on this platform.'}
+                  ? t(
+                      'launcher.manualForModels',
+                      'Install this agent manually before loading model options.'
+                    )
+                  : t(
+                      'launcher.platformUnavailable',
+                      'This ACP agent is not available on this platform.'
+                    )}
           </div>
         ) : !setupError && modelOption ? (
           <>
@@ -1950,8 +2096,8 @@ function AcpModelPicker({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search models..."
-                aria-label="Search models"
+                placeholder={t('launcher.searchModels', 'Search models...')}
+                aria-label={t('launcher.searchModels', 'Search models...')}
                 className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
               />
             )}
@@ -1984,7 +2130,9 @@ function AcpModelPicker({
                   </button>
                 ))
               ) : (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  {t('launcher.noModels', 'No matching models.')}
+                </div>
               )}
             </div>
           </>
@@ -1994,14 +2142,16 @@ function AcpModelPicker({
               <div className="font-medium text-foreground/85">
                 {setupError.category === 'auth' || setupError.category === 'multi-auth'
                   ? setupError.label
-                  : 'Could not load model options.'}
+                  : t('launcher.loadModelFailed', 'Could not load model options.')}
               </div>
               <div className="mt-1 line-clamp-3 break-words">{setupError.detail}</div>
             </div>
             {setupError.category === 'multi-auth' ? null : setupError.category === 'auth' &&
               signInMethod ? (
               <Button type="button" size="sm" className="h-7 text-xs" onClick={onSignIn}>
-                {`Sign in with ${signInMethod.name}`}
+                {t('launcher.signIn', 'Sign in with {{method}}', {
+                  method: signInMethod.name
+                })}
               </Button>
             ) : (
               <Button
@@ -2011,15 +2161,18 @@ function AcpModelPicker({
                 className="h-7 text-xs"
                 onClick={onRetry}
               >
-                Retry
+                {t('common.retry', 'Retry')}
               </Button>
             )}
           </div>
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {loading
-              ? 'Loading model options…'
-              : 'This ACP agent has not advertised model options.'}
+              ? t('launcher.loadingModelOptions', 'Loading model options…')
+              : t(
+                  'launcher.noAdvertisedModels',
+                  'This ACP agent has not advertised model options.'
+                )}
           </div>
         )}
       </PopoverContent>

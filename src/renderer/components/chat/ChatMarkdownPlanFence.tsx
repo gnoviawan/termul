@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { CustomRendererProps } from 'streamdown'
 
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { PlanEntry } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 
@@ -21,6 +22,7 @@ import { PlanPanel } from './PlanPanel'
  * independently logs the malformed fence and leaves `plans[sessionId]` empty.
  */
 export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const loggedRef = useRef<string | null>(null)
 
   // Parse the fence JSON. An incomplete fence on a non-streaming message is a
@@ -63,7 +65,7 @@ export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps):
         role="status"
         className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground/70"
       >
-        Plan snapshot incomplete
+        {t('plan.snapshotIncomplete', 'Plan snapshot incomplete')}
       </div>
     )
   }
@@ -74,7 +76,7 @@ export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps):
         role="alert"
         className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
       >
-        Plan snapshot unavailable
+        {t('plan.snapshotUnavailable', 'Plan snapshot unavailable')}
       </div>
     )
   }
