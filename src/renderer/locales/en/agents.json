@@ -63,6 +63,14 @@
     "confirmExecute": "Confirm — Execute Command",
     "confirmTerminal": "Confirm — Allow Terminal",
     "saved": "Agent \"{{name}}\" saved",
+    "fields": {
+      "name": "Name",
+      "command": "Command",
+      "args": "Arguments",
+      "configId": "Config ID",
+      "allowTerminal": "Allow terminal",
+      "empty": "—"
+    },
     "errors": {
       "pasteFirst": "Paste an agent config JSON first.",
       "invalidJson": "Invalid JSON: {{message}}",

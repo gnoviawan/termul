@@ -63,6 +63,14 @@
     "confirmExecute": "确认 — 执行命令",
     "confirmTerminal": "确认 — 允许终端",
     "saved": "代理“{{name}}”已保存",
+    "fields": {
+      "name": "名称",
+      "command": "命令",
+      "args": "参数",
+      "configId": "配置 ID",
+      "allowTerminal": "允许终端",
+      "empty": "—"
+    },
     "errors": {
       "pasteFirst": "请先粘贴代理配置 JSON。",
       "invalidJson": "JSON 无效：{{message}}",

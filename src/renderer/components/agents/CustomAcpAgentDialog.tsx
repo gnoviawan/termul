@@ -396,17 +396,25 @@ export function CustomAcpAgentDialog({
                   : t('customAcp.arbitraryCommandPrompt', ARBITRARY_COMMAND_PROMPT)}
               </p>
               <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 rounded-md border border-border/60 bg-muted/40 px-3 py-2 font-mono text-xs">
-                <dt className="text-muted-foreground">name</dt>
+                <dt className="text-muted-foreground">{t('customAcp.fields.name', 'Name')}</dt>
                 <dd className="truncate">{pendingConfig.name}</dd>
-                <dt className="text-muted-foreground">command</dt>
+                <dt className="text-muted-foreground">
+                  {t('customAcp.fields.command', 'Command')}
+                </dt>
                 <dd className="truncate">{pendingConfig.command}</dd>
-                <dt className="text-muted-foreground">args</dt>
-                <dd className="truncate">{pendingConfig.args.join(' ') || '—'}</dd>
-                <dt className="text-muted-foreground">configId</dt>
+                <dt className="text-muted-foreground">{t('customAcp.fields.args', 'Arguments')}</dt>
+                <dd className="truncate">
+                  {pendingConfig.args.join(' ') || t('customAcp.fields.empty', '—')}
+                </dd>
+                <dt className="text-muted-foreground">
+                  {t('customAcp.fields.configId', 'Config ID')}
+                </dt>
                 <dd className="truncate">{pendingConfig.configId}</dd>
                 {pendingConfig.allowTerminal === true && (
                   <>
-                    <dt className="text-muted-foreground">allowTerminal</dt>
+                    <dt className="text-muted-foreground">
+                      {t('customAcp.fields.allowTerminal', 'Allow terminal')}
+                    </dt>
                     <dd className="text-amber-500">true</dd>
                   </>
                 )}
