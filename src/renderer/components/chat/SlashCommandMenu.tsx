@@ -1,5 +1,6 @@
 import { SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { SlashItem, SlashSection } from './slash-menu-model'
 
@@ -57,6 +58,7 @@ function slashItemToComposer(item: SlashItem): ComposerMenuItem {
  */
 export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProps>(
   ({ sections, onSelect, inputRef }, ref) => {
+    const { t } = useTranslation('chat')
     const composerSections: ComposerMenuSection[] = sections.map((s) => ({
       id: s.id,
       heading: s.heading,
@@ -67,7 +69,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel="No commands available."
+        emptyLabel={t('selectors.noCommands')}
         inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as SlashItem)}
       />

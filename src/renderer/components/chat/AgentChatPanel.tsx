@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
 import { TermulMark } from '@/components/TermulMark'
@@ -35,12 +36,13 @@ const EMPTY_TOOL_CALLS: ToolCall[] = []
 const EMPTY_PLAN: PlanEntry[] = []
 
 function ChatRestorePreload(): React.JSX.Element {
+  const { t } = useTranslation('chat')
   return (
     <div
       className="flex h-full flex-col items-center justify-center gap-4 bg-background text-muted-foreground"
       role="status"
       aria-live="polite"
-      aria-label="Restoring chat"
+      aria-label={t('panel.restoring')}
     >
       <div className="flex size-16 items-center justify-center">
         <TermulMark
@@ -49,8 +51,8 @@ function ChatRestorePreload(): React.JSX.Element {
         />
       </div>
       <div className="space-y-1 text-center">
-        <div className="text-sm font-medium text-foreground/90">Restoring chat</div>
-        <div className="text-xs text-muted-foreground">Loading your conversation…</div>
+        <div className="text-sm font-medium text-foreground/90">{t('panel.restoring')}</div>
+        <div className="text-xs text-muted-foreground">{t('panel.loadingConversation')}</div>
       </div>
     </div>
   )
@@ -74,6 +76,7 @@ export function AgentChatPanel({
   sessionId,
   isVisible = true
 }: AgentChatPanelProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const session = useAcpSession(sessionId)
   const messages = useAcpMessages(sessionId)
   // Available skills (with paths) so retry can re-frame the wire from the
@@ -192,48 +195,48 @@ export function AgentChatPanel({
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error('Could not send the queued message. Try again.')
+        toast.error(t('panel.queuedSendFailed'))
       })
     },
-    [sendQueuedPromptNow, sessionId]
+    [sendQueuedPromptNow, sessionId, t]
   )
 
   const handleSend = useCallback(
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error('Could not send your message. Try again.')
+        toast.error(t('composer.sendFailed'))
       })
     },
-    [sendPrompt, sessionId]
+    [sendPrompt, sessionId, t]
   )
 
   const handleSendBlocks = useCallback(
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error('Could not send your message. Try again.')
+        toast.error(t('composer.sendFailed'))
       })
     },
-    [sendPromptBlocks, sessionId]
+    [sendPromptBlocks, sessionId, t]
   )
 
   const handleCancel = useCallback(() => {
     void cancelPrompt(sessionId).catch(() => {
-      toast.error('Could not cancel the turn. Try again.')
+      toast.error(t('panel.cancelFailed'))
     })
-  }, [cancelPrompt, sessionId])
+  }, [cancelPrompt, sessionId, t])
 
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string) => {
       try {
         await setConfigOption(sessionId, configId, valueId)
       } catch (err) {
-        toast.error('Could not update that setting. Try again.')
+        toast.error(t('panel.settingFailed'))
         throw err
       }
     },
-    [setConfigOption, sessionId]
+    [setConfigOption, sessionId, t]
   )
 
   const handleSetMode = useCallback(
@@ -241,11 +244,11 @@ export function AgentChatPanel({
       try {
         await setMode(sessionId, modeId)
       } catch (err) {
-        toast.error('Could not switch mode. Try again.')
+        toast.error(t('panel.modeFailed'))
         throw err
       }
     },
-    [setMode, sessionId]
+    [setMode, sessionId, t]
   )
 
   const handleSetModel = useCallback(
@@ -253,11 +256,11 @@ export function AgentChatPanel({
       try {
         await setModel(sessionId, modelId)
       } catch (err) {
-        toast.error('Could not switch model. Try again.')
+        toast.error(t('panel.modelFailed'))
         throw err
       }
     },
-    [setModel, sessionId]
+    [setModel, sessionId, t]
   )
 
   // Most recent user turn — drives the regenerate/retry affordances. We keep
@@ -284,7 +287,7 @@ export function AgentChatPanel({
     if (session?.status === 'error' || session?.status === 'closed') {
       void retryCrashedSession(sessionId).catch((err) => {
         if (isAgentDeadError(err)) return
-        toast.error('Could not retry. Try again.')
+        toast.error(t('panel.retryFailed'))
       })
       return
     }
@@ -303,7 +306,7 @@ export function AgentChatPanel({
     }))
     const missingPath = skills.find((s) => !s.path)
     if (missingPath) {
-      toast.error(`Skill '${missingPath.name}' is missing a path`)
+      toast.error(t('panel.missingSkillPath', { name: missingPath.name }))
       return
     }
     const wireText = skills.length > 0 ? buildPromptWithLoadedSkills(skills, tokenText) : tokenText
@@ -318,7 +321,7 @@ export function AgentChatPanel({
     // Display = the original (token) blocks so the timeline keeps chips.
     void sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: lastUserBlocks }).catch((err) => {
       if (isAgentDeadError(err)) return
-      toast.error('Could not send your message. Try again.')
+      toast.error(t('composer.sendFailed'))
     })
   }, [
     lastUserBlocks,
@@ -329,7 +332,8 @@ export function AgentChatPanel({
     retryCrashedSession,
     sessionId,
     session?.status,
-    session?.lastError
+    session?.lastError,
+    t
   ])
 
   const filePathContext = useMemo(
@@ -365,11 +369,11 @@ export function AgentChatPanel({
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
           <div className="max-w-md space-y-1 px-6 text-center">
-            <div className="text-foreground">Failed to restore chat.</div>
+            <div className="text-foreground">{t('panel.restoreFailed')}</div>
             <div className="break-words text-xs text-muted-foreground">{rehydrateError}</div>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={() => setRehydrateError(null)}>
-            Retry
+            {t('common.retry')}
           </Button>
         </div>
       )
@@ -377,7 +381,7 @@ export function AgentChatPanel({
     if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        No active chat for this pane.
+        {t('panel.noActive')}
       </div>
     )
   }
@@ -391,7 +395,7 @@ export function AgentChatPanel({
           discoveredReopenContext.cwd,
           discoveredReopenContext.projectId
         ).catch(() => {
-          toast.error('Could not open that chat. Try again.')
+          toast.error(t('history.openFailed'))
         })
       }
     : undefined
@@ -421,13 +425,13 @@ export function AgentChatPanel({
         (isLaunchingSession && session.activeTurn)) && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
-          Starting agent…
+          {t('panel.startingAgent')}
         </div>
       )}
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
-          Reconnecting to agent…
+          {t('panel.reconnectingAgent')}
         </div>
       )}
       {isClosed &&
@@ -436,13 +440,13 @@ export function AgentChatPanel({
         discoveredReopenContext &&
         session.lastError && (
           <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
-            <span>Failed to restore agent chat.</span>
+            <span>{t('panel.restoreAgentFailed')}</span>
             <button
               type="button"
               onClick={retryDiscoveredReopen}
               className="rounded-md border border-destructive/40 px-2 py-0.5 text-xs font-medium hover:bg-destructive/15"
             >
-              Retry
+              {t('common.retry')}
             </button>
           </div>
         )}
@@ -452,17 +456,17 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected (read-only).</span>
+            <span>{t('panel.disconnectedReadonly')}</span>
             <button
               type="button"
               onClick={() => {
                 void openHistorySession(sessionId).catch(() => {
-                  toast.error('Could not reconnect. Try again.')
+                  toast.error(t('history.reconnectFailed'))
                 })
               }}
               className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium hover:bg-warning/15"
             >
-              Reconnect
+              {t('common.reconnect')}
             </button>
           </div>
         )}
@@ -480,7 +484,7 @@ export function AgentChatPanel({
           aria-live="polite"
         >
           <AgentConnectionLamp connected={false} reconnecting decorative size={8} />
-          <span>Reconnecting…</span>
+          <span>{t('panel.reconnecting')}</span>
         </div>
       )}
       <ChatErrorNotice

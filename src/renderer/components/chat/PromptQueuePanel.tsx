@@ -15,6 +15,7 @@ import {
   QueueSectionLabel,
   QueueSectionTrigger
 } from '@/components/ai-elements/queue'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { QueuedPrompt } from '@/stores/acp-store'
 import { previewQueuedPrompt } from './prompt-queue-utils'
 
@@ -31,6 +32,7 @@ interface QueueMessageActionsProps {
 }
 
 const QueueMessageActions = memo(({ queueId, onRemove, onSendNow }: QueueMessageActionsProps) => {
+  const t = useRuntimeTranslation('chat')
   const handleRemove = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
@@ -51,16 +53,16 @@ const QueueMessageActions = memo(({ queueId, onRemove, onSendNow }: QueueMessage
   return (
     <QueueItemActions className="items-center gap-2">
       <QueueItemAction
-        aria-label="Send now"
-        title="Send now"
+        aria-label={t('queue.sendNow', 'Send now')}
+        title={t('queue.sendNow', 'Send now')}
         onClick={handleSendNow}
         className="opacity-100 text-foreground hover:bg-foreground/10"
       >
         <ArrowUp size={14} />
       </QueueItemAction>
       <QueueItemAction
-        aria-label="Remove from queue"
-        title="Remove from queue"
+        aria-label={t('queue.remove', 'Remove from queue')}
+        title={t('queue.remove', 'Remove from queue')}
         onClick={handleRemove}
         className="opacity-100 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
       >
@@ -77,13 +79,18 @@ export function PromptQueuePanel({
   onRemove,
   onSendNow
 }: PromptQueuePanelProps): React.JSX.Element | null {
+  const t = useRuntimeTranslation('chat')
   if (items.length === 0) return null
 
   return (
     <Queue className="mb-2">
       <QueueSection defaultOpen>
         <QueueSectionTrigger>
-          <QueueSectionLabel count={items.length} label="Queued" className="tabular-nums" />
+          <QueueSectionLabel
+            count={items.length}
+            label={t('queue.label', 'Queued')}
+            className="tabular-nums"
+          />
         </QueueSectionTrigger>
         <QueueSectionContent>
           <QueueList>
@@ -91,7 +98,10 @@ export function PromptQueuePanel({
               // Preview the display (token) blocks so the queue reads as the
               // user's typed text + chips, not the path-framed wire payload.
               const preview = previewQueuedPrompt(item.displayBlocks ?? item.blocks)
-              const summary = preview.text || preview.attachments[0]?.filename || '(queued message)'
+              const summary =
+                preview.text ||
+                preview.attachments[0]?.filename ||
+                t('queue.fallback', '(queued message)')
               const hasAttachments = preview.attachments.length > 0
 
               return (

@@ -32,6 +32,8 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { runtimeT } from '@/i18n/runtime'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import {
   looksLikeSecretValue,
   type StoredAgentConfig,
@@ -105,23 +107,35 @@ type ParsedConfig = {
  * (rather than silently trimmed to a fresh identity).
  */
 function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
+  const t = (key: string, fallback: string, values?: Record<string, unknown>) =>
+    runtimeT('agents', key, fallback, values)
   const trimmed = raw.trim()
-  if (trimmed.length === 0) return { error: 'Paste an agent config JSON first.' }
+  if (trimmed.length === 0) {
+    return { error: t('customAcp.errors.pasteFirst', 'Paste an agent config JSON first.') }
+  }
 
   let json: unknown
   try {
     json = JSON.parse(trimmed)
   } catch (err) {
-    return { error: `Invalid JSON: ${err instanceof Error ? err.message : String(err)}` }
+    return {
+      error: t('customAcp.errors.invalidJson', 'Invalid JSON: {{message}}', {
+        message: err instanceof Error ? err.message : String(err)
+      })
+    }
   }
   if (json === null || typeof json !== 'object' || Array.isArray(json)) {
-    return { error: 'Agent config must be a JSON object.' }
+    return { error: t('customAcp.errors.objectRequired', 'Agent config must be a JSON object.') }
   }
   const obj = json as Record<string, unknown>
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_AGENT_CONFIG_FIELDS.has(key as keyof AgentConfig)) {
       return {
-        error: `Unknown field "${key}". Only configId, name, command, args, env, allowTerminal are allowed.`
+        error: t(
+          'customAcp.errors.unknownField',
+          'Unknown field "{{field}}". Only configId, name, command, args, env, allowTerminal are allowed.',
+          { field: key }
+        )
       }
     }
   }
@@ -129,11 +143,11 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   // configId: a string is required when present; a whitespace-only value is
   // rejected (not silently trimmed) so the user keeps their intended namespace.
   if (obj.configId !== undefined && typeof obj.configId !== 'string') {
-    return { error: 'configId must be a string.' }
+    return { error: t('customAcp.errors.configIdString', 'configId must be a string.') }
   }
   const rawConfigId = typeof obj.configId === 'string' ? obj.configId : undefined
   if (rawConfigId !== undefined && rawConfigId.trim().length === 0) {
-    return { error: 'configId cannot be empty or whitespace.' }
+    return { error: t('customAcp.errors.configIdBlank', 'configId cannot be empty or whitespace.') }
   }
 
   const args = obj.args
@@ -142,12 +156,14 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   // undefined is allowed (field optional); when present, must be the right
   // type. The shared `validateAgentConfig` covers element/value-type checks
   // too, but surface a clearer error here before constructing a typed object.
-  if (args !== undefined && !Array.isArray(args)) return { error: 'args must be an array.' }
+  if (args !== undefined && !Array.isArray(args)) {
+    return { error: t('customAcp.errors.argsArray', 'args must be an array.') }
+  }
   if (args !== undefined && Array.isArray(args) && args.some((a) => typeof a !== 'string')) {
-    return { error: 'args must be an array of strings.' }
+    return { error: t('customAcp.errors.argsStrings', 'args must be an array of strings.') }
   }
   if (env !== undefined && (typeof env !== 'object' || env === null || Array.isArray(env))) {
-    return { error: 'env must be an object.' }
+    return { error: t('customAcp.errors.envObject', 'env must be an object.') }
   }
   if (
     env !== undefined &&
@@ -155,10 +171,12 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
     env !== null &&
     Object.values(env).some((v) => typeof v !== 'string')
   ) {
-    return { error: 'env values must be strings.' }
+    return { error: t('customAcp.errors.envStrings', 'env values must be strings.') }
   }
   if (allowTerminal !== undefined && typeof allowTerminal !== 'boolean') {
-    return { error: 'allowTerminal must be a boolean.' }
+    return {
+      error: t('customAcp.errors.allowTerminalBoolean', 'allowTerminal must be a boolean.')
+    }
   }
 
   const cfg: AgentConfig = {
@@ -184,9 +202,11 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   for (const [key, value] of Object.entries(cfg.env)) {
     if (looksLikeSecretValue(value)) {
       return {
-        error:
-          `refusing to persist a raw secret for env "${key}" on agent "${cfg.name}"; ` +
-          `store it in secure storage and reference it as $${key}`
+        error: t(
+          'customAcp.errors.rawSecret',
+          'refusing to persist a raw secret for env "{{key}}" on agent "{{name}}"; store it in secure storage and reference it as ${{key}}',
+          { key, name: cfg.name }
+        )
       }
     }
   }
@@ -198,6 +218,7 @@ export function CustomAcpAgentDialog({
   open,
   onOpenChange
 }: CustomAcpAgentDialogProps): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [jsonText, setJsonText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -234,7 +255,7 @@ export function CustomAcpAgentDialog({
     setSaving(true)
     try {
       await saveAgentConfig(stored)
-      toast.success(`Agent "${stored.name}" saved`)
+      toast.success(t('customAcp.saved', 'Agent "{{name}}" saved', { name: stored.name }))
       reset()
       onOpenChange(false)
     } catch (err) {
@@ -251,7 +272,7 @@ export function CustomAcpAgentDialog({
     } finally {
       setSaving(false)
     }
-  }, [pendingConfig, saving, saveAgentConfig, reset, onOpenChange])
+  }, [pendingConfig, saving, saveAgentConfig, reset, onOpenChange, t])
 
   const handleSave = useCallback(async () => {
     // Guard re-entry (double-click before the confirm step mounts).
@@ -314,12 +335,20 @@ export function CustomAcpAgentDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus size={18} />
-            {confirming ? 'Confirm arbitrary command' : 'Add Custom ACP Agent'}
+            {confirming
+              ? t('customAcp.confirmTitle', 'Confirm arbitrary command')
+              : t('customAcp.title', 'Add Custom ACP Agent')}
           </DialogTitle>
           <DialogDescription>
             {confirming
-              ? 'Persisting this agent will let it execute the configured command. Review it before confirming.'
-              : 'Paste an ACP agent config as JSON. Only configId, name, command, args, env, and allowTerminal fields are accepted; env values must be $VAR placeholders.'}
+              ? t(
+                  'customAcp.confirmDescription',
+                  'Persisting this agent will let it execute the configured command. Review it before confirming.'
+                )
+              : t(
+                  'customAcp.description',
+                  'Paste an ACP agent config as JSON. Only configId, name, command, args, env, and allowTerminal fields are accepted; env values must be $VAR placeholders.'
+                )}
           </DialogDescription>
         </DialogHeader>
 
@@ -327,7 +356,7 @@ export function CustomAcpAgentDialog({
           {!confirming && (
             <>
               <Label htmlFor="custom-acp-agent-json" className="text-xs">
-                Agent config JSON
+                {t('customAcp.jsonLabel', 'Agent config JSON')}
               </Label>
               <Textarea
                 id="custom-acp-agent-json"
@@ -351,8 +380,10 @@ export function CustomAcpAgentDialog({
               )}
               <p className="text-2xs text-muted-foreground">
                 <ClipboardPaste size={12} className="mr-1 inline-block" />
-                Saved agents appear in the ACP launcher and reattach to their session on restart.
-                Use Copy JSON on a saved agent to share it.
+                {t(
+                  'customAcp.savedHint',
+                  'Saved agents appear in the ACP launcher and reattach to their session on restart. Use Copy JSON on a saved agent to share it.'
+                )}
               </p>
             </>
           )}
@@ -361,8 +392,8 @@ export function CustomAcpAgentDialog({
             <div className="space-y-3">
               <p className="text-sm text-destructive">
                 {step === 'confirmTerminal'
-                  ? ARBITRARY_COMMAND_TERMINAL_PROMPT
-                  : ARBITRARY_COMMAND_PROMPT}
+                  ? t('customAcp.terminalPrompt', ARBITRARY_COMMAND_TERMINAL_PROMPT)
+                  : t('customAcp.arbitraryCommandPrompt', ARBITRARY_COMMAND_PROMPT)}
               </p>
               <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 rounded-md border border-border/60 bg-muted/40 px-3 py-2 font-mono text-xs">
                 <dt className="text-muted-foreground">name</dt>
@@ -382,8 +413,10 @@ export function CustomAcpAgentDialog({
               </dl>
               {step === 'confirmTerminal' && (
                 <p className="text-2xs text-amber-500">
-                  This is the second confirmation: terminal capability lets the agent run arbitrary
-                  commands on your machine.
+                  {t(
+                    'customAcp.terminalSecondConfirmation',
+                    'This is the second confirmation: terminal capability lets the agent run arbitrary commands on your machine.'
+                  )}
                 </p>
               )}
             </div>
@@ -399,20 +432,22 @@ export function CustomAcpAgentDialog({
                 onClick={() => handleOpenChange(false)}
                 disabled={saving}
               >
-                Cancel
+                {t('common.cancel', 'Cancel')}
               </Button>
               <Button
                 size="sm"
                 onClick={() => void handleSave()}
                 disabled={saving || !jsonText.trim()}
               >
-                {saving ? 'Saving…' : 'Save Agent'}
+                {saving ? t('common.saving', 'Saving…') : t('customAcp.saveAgent', 'Save Agent')}
               </Button>
             </>
           ) : (
             <>
               <Button variant="outline" size="sm" onClick={cancelConfirm} disabled={saving}>
-                {step === 'confirmTerminal' ? 'Back' : 'Cancel'}
+                {step === 'confirmTerminal'
+                  ? t('common.back', 'Back')
+                  : t('common.cancel', 'Cancel')}
               </Button>
               <Button
                 size="sm"
@@ -423,10 +458,10 @@ export function CustomAcpAgentDialog({
                 disabled={saving}
               >
                 {saving
-                  ? 'Saving…'
+                  ? t('common.saving', 'Saving…')
                   : step === 'confirmTerminal'
-                    ? 'Confirm — Allow Terminal'
-                    : 'Confirm — Execute Command'}
+                    ? t('customAcp.confirmTerminal', 'Confirm — Allow Terminal')
+                    : t('customAcp.confirmExecute', 'Confirm — Execute Command')}
               </Button>
             </>
           )}

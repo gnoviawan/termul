@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ShimmerText } from '@/components/ui/shimmer-text'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
@@ -34,6 +35,7 @@ export function TurnActivity({
   shouldAnimateEnter,
   filePathContext
 }: TurnActivityProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
   const wasActive = useRef(active)
@@ -48,7 +50,11 @@ export function TurnActivity({
   }, [active, attentionRequired, hasFinalResponse])
 
   const duration = formatTurnDuration(durationMs)
-  const label = active ? 'Working…' : duration ? `Worked for ${duration}` : 'Worked'
+  const label = active
+    ? t('turn.working', 'Working…')
+    : duration
+      ? t('turn.workedFor', 'Worked for {{duration}}', { duration })
+      : t('turn.worked', 'Worked')
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1 min-w-0">
@@ -68,7 +74,9 @@ export function TurnActivity({
           <ChevronRight size={13} />
         </motion.span>
         <span className="font-medium">{active ? <ShimmerText text={label} /> : label}</span>
-        {attentionRequired && !active ? <span>· needs attention</span> : null}
+        {attentionRequired && !active ? (
+          <span>{t('turn.needsAttention', '· needs attention')}</span>
+        ) : null}
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open}>

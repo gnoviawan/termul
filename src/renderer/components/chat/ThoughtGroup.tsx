@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -160,6 +161,7 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
  * Default is minimized (collapsed).
  */
 export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const reduced = useReducedMotion() ?? false
   const isStreaming = isLiveTail && messages.some((m) => m.streaming)
   const text = thoughtTexts(messages)
@@ -214,12 +216,12 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
             <Brain />
           </MarkerIcon>
           <MarkerContent className="min-w-0 flex-1">
-            {isStreaming ? <ShimmerText text="Thinking…" /> : 'Thought'}
+            {isStreaming ? <ShimmerText text={t('thinking.thinking')} /> : t('thinking.thought')}
             {lines > 0 ? (
               <>
                 {' · '}
                 <span className="tabular-nums font-normal">
-                  {lines} line{lines === 1 ? '' : 's'}
+                  {t('thinking.lines', { count: lines })}
                 </span>
               </>
             ) : null}
@@ -252,10 +254,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
                   type="button"
                   onClick={handleJumpToLatest}
                   className="absolute bottom-1.5 right-1.5 z-10 inline-flex size-11 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
-                  aria-label="Jump to latest thinking"
+                  aria-label={t('thinking.jump')}
                 >
                   <ArrowDown size={13} />
-                  <span className="sr-only">Jump to latest</span>
+                  <span className="sr-only">{t('thinking.jumpShort')}</span>
                 </button>
               ) : null}
             </div>
@@ -264,17 +266,17 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
                 type="button"
                 onClick={handleExpandToggle}
                 className="mt-1 flex cursor-pointer items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
-                aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
+                aria-label={expanded ? t('thinking.collapse') : t('thinking.expand')}
               >
                 {expanded ? (
                   <>
                     <Minimize2 size={12} />
-                    <span>Less</span>
+                    <span>{t('thinking.less')}</span>
                   </>
                 ) : (
                   <>
                     <Maximize2 size={12} />
-                    <span>More</span>
+                    <span>{t('thinking.more')}</span>
                   </>
                 )}
               </button>

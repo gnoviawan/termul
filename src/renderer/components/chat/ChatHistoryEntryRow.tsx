@@ -1,4 +1,5 @@
 import { Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { useAgentTemplateId } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'
@@ -40,6 +41,7 @@ export function ChatHistoryEntryRow({
   onOpen,
   onDelete
 }: ChatHistoryEntryRowProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   return (
     <div
       className={cn(
@@ -54,9 +56,9 @@ export function ChatHistoryEntryRow({
         onClick={() => onOpen(entry)}
         title={
           entry.discovered && !entry.canOpen
-            ? 'Agent does not support loading or resuming sessions'
+            ? t('history.unsupported')
             : entry.discovered && entry.agentName
-              ? `${entry.title} — ${entry.agentName} (resume from CLI history)`
+              ? t('history.resumeTitle', { title: entry.title, agent: entry.agentName })
               : entry.title
         }
         className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed"
@@ -74,8 +76,8 @@ export function ChatHistoryEntryRow({
       {!entry.discovered && (
         <button
           type="button"
-          aria-label="Delete chat"
-          title="Delete chat"
+          aria-label={t('history.delete')}
+          title={t('history.delete')}
           onClick={() => onDelete(entry.id)}
           className={cn(
             'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground',

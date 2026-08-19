@@ -12,6 +12,8 @@ import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
 import { createContext, forwardRef, useCallback, useContext, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { runtimeT } from '@/i18n/runtime'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
 
 // ============================================================================
@@ -68,17 +70,27 @@ export const getMediaCategory = (data: AttachmentData): AttachmentMediaCategory 
 
 export const getAttachmentLabel = (data: AttachmentData): string => {
   if (data.type === 'source-document') {
-    return data.title || data.filename || 'Source'
+    return data.title || data.filename || runtimeT('chat', 'attachments.source', 'Source')
   }
 
   const category = getMediaCategory(data)
-  return data.filename || (category === 'image' ? 'Image' : 'Attachment')
+  return (
+    data.filename ||
+    (category === 'image'
+      ? runtimeT('chat', 'attachments.image', 'Image')
+      : runtimeT('chat', 'attachments.attachment', 'Attachment'))
+  )
 }
 
-const renderAttachmentImage = (url: string, filename: string | undefined, isGrid: boolean) =>
+const renderAttachmentImage = (
+  url: string,
+  filename: string | undefined,
+  isGrid: boolean,
+  imageLabel: string
+) =>
   isGrid ? (
     <img
-      alt={filename || 'Image'}
+      alt={filename || imageLabel}
       className="size-full object-cover"
       height={96}
       src={url}
@@ -86,7 +98,7 @@ const renderAttachmentImage = (url: string, filename: string | undefined, isGrid
     />
   ) : (
     <img
-      alt={filename || 'Image'}
+      alt={filename || imageLabel}
       className="size-full rounded object-cover"
       height={20}
       src={url}
@@ -232,6 +244,7 @@ export const AttachmentPreview = ({
   className,
   ...props
 }: AttachmentPreviewProps): React.JSX.Element => {
+  const t = useRuntimeTranslation('chat')
   const { data, mediaCategory, variant } = useAttachmentContext()
 
   const iconSize = variant === 'inline' ? 'size-3' : 'size-4'
@@ -247,7 +260,12 @@ export const AttachmentPreview = ({
       data.url &&
       isAutoPreviewableUrl(data.url)
     ) {
-      return renderAttachmentImage(data.url, data.filename, variant === 'grid')
+      return renderAttachmentImage(
+        data.url,
+        data.filename,
+        variant === 'grid',
+        t('attachments.image', 'Image')
+      )
     }
 
     if (
@@ -292,6 +310,7 @@ export const AttachmentInfo = ({
   className,
   ...props
 }: AttachmentInfoProps): React.JSX.Element | null => {
+  useRuntimeTranslation('chat')
   const { data, variant } = useAttachmentContext()
   const label = getAttachmentLabel(data)
 
@@ -318,12 +337,14 @@ export type AttachmentRemoveProps = ComponentProps<typeof Button> & {
 }
 
 export const AttachmentRemove = ({
-  label = 'Remove',
+  label,
   className,
   children,
   ...props
 }: AttachmentRemoveProps): React.JSX.Element | null => {
+  const t = useRuntimeTranslation('chat')
   const { onRemove, variant } = useAttachmentContext()
+  const resolvedLabel = label ?? t('attachments.removeAction', 'Remove')
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -339,7 +360,7 @@ export const AttachmentRemove = ({
 
   return (
     <Button
-      aria-label={label}
+      aria-label={resolvedLabel}
       className={cn(
         variant === 'grid' && [
           'absolute top-2 right-2 size-6 rounded-full p-0',
@@ -362,7 +383,7 @@ export const AttachmentRemove = ({
       {...props}
     >
       {children ?? <XIcon />}
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{resolvedLabel}</span>
     </Button>
   )
 }
@@ -407,11 +428,18 @@ export const AttachmentEmpty = ({
   className,
   children,
   ...props
-}: AttachmentEmptyProps): React.JSX.Element => (
-  <div
-    className={cn('flex items-center justify-center p-4 text-muted-foreground text-sm', className)}
-    {...props}
-  >
-    {children ?? 'No attachments'}
-  </div>
-)
+}: AttachmentEmptyProps): React.JSX.Element => {
+  const t = useRuntimeTranslation('chat')
+
+  return (
+    <div
+      className={cn(
+        'flex items-center justify-center p-4 text-muted-foreground text-sm',
+        className
+      )}
+      {...props}
+    >
+      {children ?? t('attachments.empty', 'No attachments')}
+    </div>
+  )
+}

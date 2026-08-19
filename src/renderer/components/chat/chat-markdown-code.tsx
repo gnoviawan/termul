@@ -9,6 +9,7 @@ import {
   useContext,
   useState
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { CodeBlock, Streamdown, StreamdownContext, useIsCodeFenceIncomplete } from 'streamdown'
 import { IconActionButton } from '@/components/ui/icon-action-button'
@@ -56,6 +57,7 @@ function downloadCodeFile(filename: string, code: string): void {
 }
 
 function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const { isAnimating } = useContext(StreamdownContext)
   const [copied, setCopied] = useState(false)
 
@@ -63,17 +65,17 @@ function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
     if (!code || isAnimating) return
     void copyText(code).then((ok) => {
       if (!ok) {
-        toast.error('Failed to copy')
+        toast.error(t('messages.copyFailed'))
         return
       }
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
-  }, [code, isAnimating])
+  }, [code, isAnimating, t])
 
   return (
     <IconActionButton
-      label={copied ? 'Copied' : 'Copy'}
+      label={copied ? t('common.copied') : t('common.copy')}
       onClick={copy}
       disabled={isAnimating}
       size="sm"
@@ -90,6 +92,7 @@ function CodeDownloadAction({
   code: string
   language: string
 }): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const { isAnimating } = useContext(StreamdownContext)
 
   const download = useCallback(() => {
@@ -98,12 +101,17 @@ function CodeDownloadAction({
       const ext = language && language !== 'text' ? language : 'txt'
       downloadCodeFile(`file.${ext}`, code)
     } catch {
-      toast.error('Failed to download')
+      toast.error(t('code.downloadFailed'))
     }
-  }, [code, isAnimating, language])
+  }, [code, isAnimating, language, t])
 
   return (
-    <IconActionButton label="Download" onClick={download} disabled={isAnimating} size="sm">
+    <IconActionButton
+      label={t('common.download')}
+      onClick={download}
+      disabled={isAnimating}
+      size="sm"
+    >
       <Download />
     </IconActionButton>
   )

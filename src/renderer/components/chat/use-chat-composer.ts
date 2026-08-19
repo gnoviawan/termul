@@ -1,7 +1,9 @@
 import type { Editor } from '@tiptap/core'
 import type { MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
+import { runtimeT } from '@/i18n/runtime'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import {
@@ -26,6 +28,14 @@ import {
   slashFilter
 } from './slash-menu-model'
 import type { ComposerMentions } from './use-composer-mentions'
+
+/** A skill chip was submitted without a resolvable SKILL.md path. */
+export class SkillPathError extends Error {
+  constructor(name: string) {
+    super(runtimeT('chat', 'panel.missingSkillPath', `Skill '${name}' is missing a path`, { name }))
+    this.name = 'SkillPathError'
+  }
+}
 
 /**
  * Shared chat-composer state + handlers for the two composer hosts
@@ -202,6 +212,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     scheduleRestoreCaret
   } = args
 
+  const { i18n } = useTranslation('chat')
+
   // name → SKILL.md path, captured when a skill is picked from the slash menu
   // so the wire prompt can cite paths synchronously at send time (no IPC read,
   // no failure path). The composer value carries the inline skill tokens; this
@@ -210,10 +222,14 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
 
   const slashOpen = isSlashTriggerAny(value) && !disabled
   const filter = slashFilter(value)
-  const slashSections = useMemo(
-    () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
-    [slashOpen, commands, configOptions, modes, skills, filter]
-  )
+  const slashMenuLanguage = i18n.resolvedLanguage ?? i18n.language
+  const slashSections = useMemo(() => {
+    if (!slashOpen) return []
+    // `buildSlashSections` reads the active i18n instance through `runtimeT`.
+    // Reading this value makes an already-open menu rebuild when that instance changes language.
+    void slashMenuLanguage
+    return buildSlashSections({ commands, configOptions, modes, skills, filter })
+  }, [slashOpen, commands, configOptions, modes, skills, filter, slashMenuLanguage])
   // Pills are real DOM nodes now, so there is no transparent-text overlay to
   // gate. `hasSkillToken` is still exposed for hosts that branch on whether the
   // value carries a skill (e.g. placeholder copy).
@@ -358,7 +374,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     }))
     const missingPath = resolvedSkills.find((s) => !s.path)
     if (missingPath) {
-      throw new Error(`Skill '${missingPath.name}' is missing a path`)
+      throw new SkillPathError(missingPath.name)
     }
     const hasSkills = resolvedSkills.length > 0
     const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDecommanded)

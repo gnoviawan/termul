@@ -1,5 +1,6 @@
 import { File } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { MentionMatch, MentionSection } from './mention-menu-model'
 
@@ -25,6 +26,7 @@ interface FileMentionMenuProps {
  */
 export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenuProps>(
   ({ sections, onSelect, emptyLabel, inputRef }, ref) => {
+    const { t } = useTranslation('chat')
     const composerSections: ComposerMenuSection[] = sections.map((s) => ({
       id: s.id,
       heading: s.heading,
@@ -42,7 +44,7 @@ export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenu
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel={emptyLabel ?? 'No matching files.'}
+        emptyLabel={emptyLabel ?? t('composer.noMatchingFiles')}
         inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as MentionMatch)}
       />

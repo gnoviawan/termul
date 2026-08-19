@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
 import { CHAT_GUTTER_X } from './chat-layout'
 
@@ -17,6 +18,7 @@ export function ChatErrorNotice({
   onRetry,
   onDismiss
 }: ChatErrorNoticeProps): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const reduced = useReducedMotion() ?? false
   return (
     <AnimatePresence initial={false}>
@@ -43,13 +45,13 @@ export function ChatErrorNotice({
                 className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
               >
                 <RotateCcw className="size-3.5" />
-                Retry
+                {t('common.retry', 'Retry')}
               </button>
             )}
             <button
               type="button"
               onClick={onDismiss}
-              aria-label="Dismiss error"
+              aria-label={t('errorNotice.dismiss', 'Dismiss error')}
               className={cn(
                 'relative flex size-11 shrink-0 items-center justify-center rounded-md text-destructive/80',
                 'transition-colors hover:bg-destructive/15 hover:text-destructive active:scale-[0.96]',

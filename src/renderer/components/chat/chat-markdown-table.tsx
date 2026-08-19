@@ -8,6 +8,7 @@ import {
   useState
 } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import {
   type ControlsConfig,
   StreamdownContext,
@@ -46,6 +47,7 @@ function TableFullscreen({
   showDownload,
   disabled = false
 }: TableFullscreenProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
 
@@ -61,7 +63,7 @@ function TableFullscreen({
   return (
     <>
       <IconActionButton
-        label="View fullscreen"
+        label={t('code.viewFullscreen')}
         onClick={() => setOpen(true)}
         disabled={disabled}
         size="sm"
@@ -71,7 +73,7 @@ function TableFullscreen({
       {open
         ? createPortal(
             <div
-              aria-label="View fullscreen"
+              aria-label={t('code.viewFullscreen')}
               aria-modal="true"
               className="fixed inset-0 z-50 flex flex-col bg-background"
               data-streamdown="table-fullscreen"
@@ -100,7 +102,7 @@ function TableFullscreen({
                         <Download />
                       </TableDownloadDropdown>
                     ) : null}
-                    <IconActionButton label="Exit fullscreen" onClick={close} size="sm">
+                    <IconActionButton label={t('code.exitFullscreen')} onClick={close} size="sm">
                       <X />
                     </IconActionButton>
                   </IconActionGroup>
@@ -131,6 +133,7 @@ function ChatMarkdownTableComponent({
   node: _node,
   ...props
 }: ChatMarkdownTableProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const { controls, isAnimating } = useContext(StreamdownContext)
   const showControls = tableControlsEnabled(controls)
   const showCopy = showControls && tableControlEnabled(controls, 'copy')
@@ -173,7 +176,7 @@ function ChatMarkdownTableComponent({
       ) : null}
       <section
         className="max-w-full overflow-x-auto bg-background"
-        aria-label="Markdown table"
+        aria-label={t('code.markdownTable')}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable table region is intentionally focusable so keyboard users can scroll wide tables (WAI-ARIA scrollable-region pattern)
         tabIndex={0}
       >

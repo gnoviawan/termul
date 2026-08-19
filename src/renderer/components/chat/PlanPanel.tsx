@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from 'lucide-react'
 import { useId, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
@@ -12,17 +13,17 @@ interface PlanPanelProps {
   entries: PlanEntry[]
 }
 
-const PRIORITY_LABEL: Record<string, string> = {
-  high: 'High',
-  medium: 'Med',
-  low: 'Low'
-}
-
 const PRIORITY_CLASS: Record<string, string> = {
   high: 'bg-destructive/15 text-destructive',
   medium: 'bg-warning/15 text-warning',
   low: 'bg-muted text-muted-foreground'
 }
+
+const PRIORITY_KEYS = {
+  high: 'plan.priority.high',
+  medium: 'plan.priority.medium',
+  low: 'plan.priority.low'
+} as const
 
 function getPlanDetail(entry: PlanEntry): string | undefined {
   const directDetail = entry.detail
@@ -73,7 +74,8 @@ function getPlanEntryIdentity(entry: PlanEntry): string {
 }
 
 function PriorityBadge({ priority }: { priority?: string }): React.JSX.Element {
-  const key = priority && PRIORITY_LABEL[priority] ? priority : 'low'
+  const { t } = useTranslation('chat')
+  const key = priority === 'high' || priority === 'medium' ? priority : 'low'
   return (
     <span
       className={cn(
@@ -81,7 +83,7 @@ function PriorityBadge({ priority }: { priority?: string }): React.JSX.Element {
         PRIORITY_CLASS[key]
       )}
     >
-      {PRIORITY_LABEL[key]}
+      {t(PRIORITY_KEYS[key])}
     </span>
   )
 }
@@ -105,6 +107,7 @@ function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
 
 /** Execution plan panel. Renders nothing when there are no entries. */
 export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
+  const { t } = useTranslation('chat')
   const reduced = useReducedMotion() ?? false
   // Collapse state is component-local: it survives `entries` changes so
   // mid-turn `acp:plan_update` events keep the user's collapse choice. Reset
@@ -116,9 +119,8 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
   const completed = entries.filter((e) => e.status === 'completed').length
   const inProgressCount = entries.filter((e) => e.status === 'in_progress').length
   const hasInProgress = inProgressCount > 0
-  const taskLabel = entries.length === 1 ? 'task' : 'tasks'
-  const inProgressLabel =
-    inProgressCount === 1 ? 'task in progress' : `${inProgressCount} tasks in progress`
+  const taskLabel = t('plan.task', { count: entries.length })
+  const inProgressLabel = t('plan.inProgress', { count: inProgressCount })
 
   return (
     <AnimatePresence initial={false}>
@@ -134,20 +136,23 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
           <div className={cn(CHAT_GUTTER_X, 'py-2')}>
             <section
               className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
-              aria-label="Execution plan"
+              aria-label={t('plan.execution')}
             >
               <button
                 type="button"
                 onClick={() => setCollapsed((c) => !c)}
                 aria-expanded={!collapsed}
                 aria-controls={bodyId}
-                aria-label={`Plan, ${completed} of ${entries.length} ${taskLabel}${
-                  hasInProgress ? `, ${inProgressLabel}` : ''
-                }`}
+                aria-label={t('plan.aria', {
+                  completed,
+                  total: entries.length,
+                  taskLabel,
+                  progress: hasInProgress ? `, ${inProgressLabel}` : ''
+                })}
                 className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
-                <span className="text-balance">Plan</span>
+                <span className="text-balance">{t('plan.title')}</span>
                 {hasInProgress && (
                   <Loader2
                     size={12}

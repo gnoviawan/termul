@@ -1,6 +1,7 @@
 import { Check, Pencil } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import {
   BUNDLED_ICON_CATALOG,
   findBundledIconBySvg,
@@ -29,6 +30,7 @@ function InlineIcon({ svg, className }: { svg: string; className?: string }): Re
  * All icons render as white on muted/secondary backgrounds.
  */
 export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Element {
+  const t = useRuntimeTranslation('agents')
   const [open, setOpen] = useState(false)
 
   const selectedEntry = useMemo(() => findBundledIconBySvg(value), [value])
@@ -54,8 +56,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
         type="button"
         onClick={() => setOpen(true)}
         className="shrink-0"
-        title="Choose icon"
-        aria-label="Choose icon"
+        title={t('iconPicker.choose', 'Choose icon')}
+        aria-label={t('iconPicker.choose', 'Choose icon')}
       >
         {triggerIcon}
       </button>
@@ -63,7 +65,7 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-[400px] max-h-[70vh]">
           <DialogHeader>
-            <DialogTitle className="text-sm">Choose icon</DialogTitle>
+            <DialogTitle className="text-sm">{t('iconPicker.choose', 'Choose icon')}</DialogTitle>
           </DialogHeader>
 
           <div className="overflow-y-auto max-h-[50vh] -mx-2 px-2">
@@ -78,8 +80,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
                     ? 'border-primary/60 bg-primary/10 text-foreground ring-2 ring-primary/30'
                     : 'border-border hover:bg-secondary'
                 )}
-                title="No icon"
-                aria-label="No icon"
+                title={t('iconPicker.none', 'No icon')}
+                aria-label={t('iconPicker.none', 'No icon')}
                 aria-pressed={!value}
               >
                 —
@@ -87,6 +89,12 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
 
               {BUNDLED_ICON_CATALOG.map((entry) => {
                 const isSelected = selectedEntry?.key === entry.key
+                const genericKey = entry.key.startsWith('generic:')
+                  ? entry.key.slice('generic:'.length)
+                  : null
+                const label = genericKey
+                  ? t(`iconPicker.generic.${genericKey}`, entry.label)
+                  : entry.label
                 return (
                   <button
                     key={entry.key}
@@ -98,8 +106,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
                         ? 'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-white'
                         : 'border-border bg-muted hover:bg-muted/80 text-white'
                     )}
-                    title={entry.label}
-                    aria-label={entry.label}
+                    title={label}
+                    aria-label={label}
                     aria-pressed={isSelected}
                   >
                     <InlineIcon svg={entry.svg} className="h-5 w-5" />
