@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { Keyboard } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { useResetShortcut, useUpdateShortcut } from '@/hooks/use-keyboard-shortcuts'
@@ -30,6 +31,7 @@ export function TitleBarShortcutsPopover({
   open,
   onOpenChange
 }: TitleBarShortcutsPopoverProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const [openFallback, setOpenFallback] = useState(false)
   const isOpen = open ?? openFallback
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
@@ -55,13 +57,13 @@ export function TitleBarShortcutsPopover({
 
   const handleUpdate = (id: string, customKey: string): void => {
     void updateShortcut(id, customKey).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Failed to save shortcut')
+      toast.error(error instanceof Error ? error.message : t('shortcuts.saveFailed'))
     })
   }
 
   const handleReset = (id: string): void => {
     void resetShortcut(id).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Failed to reset shortcut')
+      toast.error(error instanceof Error ? error.message : t('shortcuts.resetFailed'))
     })
   }
 
@@ -102,8 +104,8 @@ export function TitleBarShortcutsPopover({
       <button
         type="button"
         className={buttonClassName}
-        title="Keyboard shortcuts"
-        aria-label="Open keyboard shortcuts menu"
+        title={t('titleBar.keyboardShortcuts')}
+        aria-label={t('titleBar.openKeyboardShortcuts')}
         aria-expanded={isOpen}
         onClick={(event) => {
           event.stopPropagation()
@@ -140,10 +142,10 @@ export function TitleBarShortcutsPopover({
                     className="flex items-center gap-2 text-sm font-semibold text-foreground"
                   >
                     <Keyboard aria-hidden="true" size={15} />
-                    Shortcut Menu
+                    {t('titleBar.shortcutMenu')}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    View and edit common workspace shortcuts.
+                    {t('titleBar.shortcutMenuDescription')}
                   </p>
                 </div>
                 <button
@@ -159,7 +161,7 @@ export function TitleBarShortcutsPopover({
               <div className="max-h-[52vh] overflow-y-auto px-2 py-2">
                 {quickShortcuts.length === 0 ? (
                   <div className="px-2 py-6 text-center text-xs text-muted-foreground">
-                    No shortcuts available.
+                    {t('titleBar.noShortcuts')}
                   </div>
                 ) : (
                   <div className="space-y-1">

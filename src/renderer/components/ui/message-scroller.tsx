@@ -4,6 +4,7 @@ import * as React from 'react'
 
 import { CHAT_SPRING } from '@/components/chat/chat-motion'
 import { Button } from '@/components/ui/button'
+import { useRuntimeTranslation } from '@/i18n/use-runtime-translation'
 import { cn } from '@/lib/utils'
 
 /**
@@ -193,6 +194,7 @@ function MessageScrollerButton({
   className,
   ...props
 }: Omit<React.ComponentProps<typeof Button>, 'children'>): React.JSX.Element {
+  const t = useRuntimeTranslation('chat')
   const { showButton, newCount, scrollToEnd } = useMessageScroller()
   const reduced = useReducedMotion() ?? false
   const hasNew = newCount > 0
@@ -231,7 +233,11 @@ function MessageScrollerButton({
             >
               <ArrowDown />
               <span className="sr-only">
-                {hasNew ? `Scroll to latest (${newCount} new)` : 'Scroll to latest'}
+                {hasNew
+                  ? t('scroll.latestWithNew', 'Scroll to latest ({{count}} new)', {
+                      count: newCount
+                    })
+                  : t('scroll.latest', 'Scroll to latest')}
               </span>
             </Button>
           </motion.div>

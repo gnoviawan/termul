@@ -5,10 +5,20 @@
  * (Cursor, Aider, Claude Code) with extensible template support.
  */
 
+export type AiPromptTemplateTranslationKey =
+  | 'aiPromptTemplates.cursor.name'
+  | 'aiPromptTemplates.cursor.description'
+  | 'aiPromptTemplates.aider.name'
+  | 'aiPromptTemplates.aider.description'
+  | 'aiPromptTemplates.claudeCode.name'
+  | 'aiPromptTemplates.claudeCode.description'
+
 export interface AiPromptTemplate {
   id: string
   name: string
   description: string
+  nameKey: AiPromptTemplateTranslationKey
+  descriptionKey: AiPromptTemplateTranslationKey
   /** Tool name for display label */
   toolName: string
   /** Template string with {{variable}} placeholders */
@@ -34,6 +44,8 @@ export const BUILT_IN_TEMPLATES: AiPromptTemplate[] = [
     id: 'cursor-default',
     name: 'Cursor Default',
     description: 'Standard prompt for Cursor AI editor',
+    nameKey: 'aiPromptTemplates.cursor.name',
+    descriptionKey: 'aiPromptTemplates.cursor.description',
     toolName: 'Cursor',
     template: `I'm working on the {{sourceBranch}} branch in {{projectName}}. The active worktree is at {{worktreePath}}.
 
@@ -52,6 +64,8 @@ Please review the current changes and suggest improvements.`,
     id: 'aider-default',
     name: 'Aider Default',
     description: 'Standard prompt for Aider AI coding assistant',
+    nameKey: 'aiPromptTemplates.aider.name',
+    descriptionKey: 'aiPromptTemplates.aider.description',
     toolName: 'Aider',
     template: `I'm working on branch {{sourceBranch}} in project {{projectName}}.
 Worktree path: {{worktreePath}}
@@ -69,6 +83,8 @@ Focus on clean, maintainable code changes.`,
     id: 'claude-code-default',
     name: 'Claude Code Default',
     description: 'Standard prompt for Claude Code CLI',
+    nameKey: 'aiPromptTemplates.claudeCode.name',
+    descriptionKey: 'aiPromptTemplates.claudeCode.description',
     toolName: 'Claude Code',
     template: `Context: Working on {{sourceBranch}} branch in {{projectName}} (worktree: {{worktreePath}})
 

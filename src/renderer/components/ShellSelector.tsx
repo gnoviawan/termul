@@ -1,6 +1,7 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { ChevronDown, Terminal } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Skeleton } from '@/components/ui/skeleton'
 import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -12,6 +13,7 @@ interface ShellSelectorProps {
 }
 
 export function ShellSelector({ onSelectShell, defaultShell, className }: ShellSelectorProps) {
+  const { t } = useTranslation('shell')
   const [isOpen, setIsOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [loading, setLoading] = useState(true)
@@ -71,7 +73,7 @@ export function ShellSelector({ onSelectShell, defaultShell, className }: ShellS
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="h-8 px-2 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors gap-1"
-        title="Select shell"
+        title={t('terminalTabs.selectShell')}
       >
         <Terminal size={14} />
         <ChevronDown size={12} />
@@ -99,13 +101,17 @@ export function ShellSelector({ onSelectShell, defaultShell, className }: ShellS
                   <Terminal size={14} />
                   <span>{shell.displayName}</span>
                   {shell.name === defaultShell && (
-                    <span className="ml-auto text-xs text-muted-foreground">(default)</span>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {t('terminalTabs.default')}
+                    </span>
                   )}
                 </button>
               ))}
             </div>
           ) : (
-            <div className="px-3 py-2 text-sm text-muted-foreground">No shells detected</div>
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              {t('terminalTabs.noShells')}
+            </div>
           )}
         </div>
       )}

@@ -1,5 +1,6 @@
 import { Copy, Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   FileExplorerToggleButton,
   SidebarToggleButton,
@@ -28,6 +29,7 @@ const windowControlClass =
  * controls instead of pinned to the bottom of the rail.
  */
 export function TitleBar(): React.JSX.Element | null {
+  const { t } = useTranslation('shell')
   const [isMaximized, setIsMaximized] = useState(false)
   const activeProject = useActiveProject()
 
@@ -68,8 +70,8 @@ export function TitleBar(): React.JSX.Element | null {
             void windowApi.minimize()
           }}
           className={windowControlClass}
-          title="Minimize"
-          aria-label="Minimize window"
+          title={t('titleBar.minimize')}
+          aria-label={t('titleBar.minimizeWindow')}
         >
           <Minus size={16} />
         </button>
@@ -84,8 +86,8 @@ export function TitleBar(): React.JSX.Element | null {
             })
           }}
           className={windowControlClass}
-          title={isMaximized ? 'Restore' : 'Maximize'}
-          aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+          title={isMaximized ? t('titleBar.restore') : t('titleBar.maximize')}
+          aria-label={isMaximized ? t('titleBar.restoreWindow') : t('titleBar.maximizeWindow')}
         >
           {isMaximized ? <Copy size={14} /> : <Square size={14} />}
         </button>
@@ -96,8 +98,8 @@ export function TitleBar(): React.JSX.Element | null {
             void windowApi.close()
           }}
           className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
-          title="Close"
-          aria-label="Close window"
+          title={t('titleBar.close')}
+          aria-label={t('titleBar.closeWindow')}
         >
           <X size={16} />
         </button>

@@ -1,4 +1,5 @@
 import { Settings } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'
@@ -21,6 +22,7 @@ function SettingToggle({ label, checked, onCheckedChange }: SettingToggleProps):
 }
 
 export function ContextBarSettingsPopover(): React.JSX.Element {
+  const { t } = useTranslation('shell')
   const settings = useContextBarSettingsStore((state) => state.settings)
   const updateContextBarSetting = useUpdateContextBarSetting()
 
@@ -33,31 +35,31 @@ export function ContextBarSettingsPopover(): React.JSX.Element {
       <PopoverTrigger asChild>
         <button
           className="flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors"
-          aria-label="Context bar settings"
+          aria-label={t('contextBar.settings')}
         >
           <Settings size={14} />
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56">
         <div className="space-y-1">
-          <h4 className="font-medium text-sm mb-2">Show in Context Bar</h4>
+          <h4 className="font-medium text-sm mb-2">{t('contextBar.showInBar')}</h4>
           <SettingToggle
-            label="Git Branch"
+            label={t('contextBar.gitBranch')}
             checked={settings.showGitBranch}
             onCheckedChange={() => handleToggle('showGitBranch')}
           />
           <SettingToggle
-            label="Git Status"
+            label={t('contextBar.gitStatus')}
             checked={settings.showGitStatus}
             onCheckedChange={() => handleToggle('showGitStatus')}
           />
           <SettingToggle
-            label="Working Directory"
+            label={t('contextBar.workingDirectory')}
             checked={settings.showWorkingDirectory}
             onCheckedChange={() => handleToggle('showWorkingDirectory')}
           />
           <SettingToggle
-            label="Exit Code"
+            label={t('contextBar.exitCode')}
             checked={settings.showExitCode}
             onCheckedChange={() => handleToggle('showExitCode')}
           />

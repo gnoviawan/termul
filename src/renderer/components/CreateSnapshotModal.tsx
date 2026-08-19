@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface CreateSnapshotModalProps {
   isOpen: boolean
@@ -13,6 +14,7 @@ export function CreateSnapshotModal({
   onClose,
   onCreateSnapshot
 }: CreateSnapshotModalProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [isCreating, setIsCreating] = useState(false)
@@ -90,7 +92,9 @@ export function CreateSnapshotModal({
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
-              <h3 className="text-sm font-semibold text-foreground">Create Snapshot</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                {t('snapshots.createTitle')}
+              </h3>
               <button
                 onClick={onClose}
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -103,25 +107,25 @@ export function CreateSnapshotModal({
             <div className="p-4 space-y-4">
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Snapshot Name
+                  {t('snapshots.name')}
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Pre-deployment state"
+                  placeholder={t('snapshots.namePlaceholder')}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Description (optional)
+                  {t('snapshots.descriptionOptional')}
                 </label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the state of your workspace..."
+                  placeholder={t('snapshots.descriptionPlaceholder')}
                   rows={3}
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground resize-none"
                 />
@@ -134,14 +138,14 @@ export function CreateSnapshotModal({
                 onClick={onClose}
                 className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Cancel
+                {t('snapshots.cancel')}
               </button>
               <button
                 onClick={handleCreate}
                 disabled={!name.trim() || isCreating}
                 className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isCreating ? 'Creating...' : 'Create'}
+                {isCreating ? t('snapshots.creating') : t('snapshots.create')}
               </button>
             </div>
           </motion.div>
