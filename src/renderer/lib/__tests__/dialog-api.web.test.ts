@@ -9,8 +9,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { changeUiLanguage } from '@/i18n'
 
-const { mockIsTauriContext, mockOpen, mockRegister } = vi.hoisted(() => ({
+const { mockConfirm, mockIsTauriContext, mockOpen, mockRegister } = vi.hoisted(() => ({
+  mockConfirm: vi.fn(),
   mockIsTauriContext: vi.fn(),
   mockOpen: vi.fn(),
   // Captures the opener registered by the (real) dialog-api module so we can
@@ -26,11 +28,12 @@ vi.mock('../tauri-runtime', () => ({
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: mockOpen,
-  confirm: vi.fn()
+  confirm: mockConfirm
 }))
 
 import {
   _resetWebDirectoryPickerForTesting,
+  confirmDialog,
   dialogApi,
   registerWebDirectoryPicker
 } from '../dialog-api'
@@ -41,8 +44,9 @@ describe('dialogApi.selectDirectory (web vs desktop branch)', () => {
     _resetWebDirectoryPickerForTesting()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     _resetWebDirectoryPickerForTesting()
+    await changeUiLanguage('en')
   })
 
   it('delegates to the registered web picker when !isTauriContext()', async () => {
@@ -112,6 +116,36 @@ describe('dialogApi.selectDirectory (web vs desktop branch)', () => {
     if (!result.success) {
       expect(result.code).toBe('CANCELLED')
     }
+  })
+
+  it('uses the active language for native dialog titles and cancellation errors', async () => {
+    await changeUiLanguage('zh-CN')
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpen.mockResolvedValueOnce(null)
+
+    const result = await dialogApi.selectDirectory()
+
+    expect(mockOpen).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: '选择项目文件夹'
+    })
+    expect(result).toEqual({
+      success: false,
+      error: '未选择目录',
+      code: 'CANCELLED'
+    })
+  })
+
+  it('uses the active language for the default confirm title', async () => {
+    await changeUiLanguage('zh-CN')
+    mockConfirm.mockResolvedValueOnce(true)
+
+    await expect(confirmDialog('继续吗？')).resolves.toBe(true)
+    expect(mockConfirm).toHaveBeenCalledWith('继续吗？', {
+      title: '确认',
+      kind: 'warning'
+    })
   })
 })
 

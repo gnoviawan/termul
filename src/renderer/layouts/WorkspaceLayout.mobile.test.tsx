@@ -206,6 +206,11 @@ vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {
     ...actual,
+    filesystemApi: {
+      ...actual.filesystemApi,
+      onSearchFileNamesBatch: vi.fn(() => vi.fn()),
+      onSearchFileNamesDone: vi.fn(() => vi.fn())
+    },
     remoteServerApi: { start: vi.fn(), stop: vi.fn(), status: vi.fn() },
     openerApi: { openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true })) }
   }

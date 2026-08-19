@@ -1,5 +1,6 @@
 import { Camera, Clock, Cpu, Edit2, Grid3X3, RotateCcw, Trash2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { DeleteSnapshotModal } from '@/components/DeleteSnapshotModal'
@@ -24,6 +25,7 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import type { Snapshot } from '@/types/project'
 
 export default function WorkspaceSnapshots(): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   const navigate = useNavigate()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
@@ -123,17 +125,17 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
-    if (diffHours < 1) return 'Just now'
-    if (diffHours < 24) return `${diffHours} hours ago`
-    if (diffDays === 1) return 'Yesterday'
-    return `${diffDays} days ago`
+    if (diffHours < 1) return t('snapshots.justNow')
+    if (diffHours < 24) return t('snapshots.hoursAgo', { count: diffHours })
+    if (diffDays === 1) return t('snapshots.yesterday')
+    return t('snapshots.daysAgo', { count: diffDays })
   }
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-muted-foreground text-sm">Loading...</div>
+        <div className="text-muted-foreground text-sm">{t('loading')}</div>
       </div>
     )
   }
@@ -148,7 +150,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
               <span className={cn('w-3 h-3 rounded-full shadow-sm', colors.bg, colors.shadow)} />
               {activeProject?.name}
               <span className="text-border text-lg mx-1">/</span>
-              <span className="text-secondary-foreground font-normal">Workspace Snapshots</span>
+              <span className="text-secondary-foreground font-normal">{t('snapshots.title')}</span>
             </h1>
           </div>
           <button
@@ -156,7 +158,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
             className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
           >
             <Camera size={14} className="mr-2" />
-            Create New Snapshot
+            {t('snapshots.createNew')}
           </button>
         </div>
 
@@ -166,16 +168,18 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
             {snapshots.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Camera size={48} className="text-muted-foreground/50 mb-4" />
-                <h3 className="text-lg font-medium text-foreground mb-2">No snapshots yet</h3>
+                <h3 className="text-lg font-medium text-foreground mb-2">
+                  {t('snapshots.emptyTitle')}
+                </h3>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Create a snapshot to save your current workspace state
+                  {t('snapshots.emptyDescription')}
                 </p>
                 <button
                   onClick={() => setIsCreateSnapshotModalOpen(true)}
                   className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
                 >
                   <Camera size={14} className="mr-2" />
-                  Create First Snapshot
+                  {t('snapshots.createFirst')}
                 </button>
               </div>
             ) : (
@@ -238,6 +242,7 @@ function SnapshotCard({
   onRestore,
   onDelete
 }: SnapshotCardProps): React.JSX.Element {
+  const { t } = useTranslation('workspace')
   return (
     <div className="group bg-card/50 border border-border rounded-lg p-4 flex items-start gap-5 hover:border-muted-foreground/50 transition-colors">
       {/* Thumbnail */}
@@ -264,14 +269,14 @@ function SnapshotCard({
           <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
-              title="Rename"
+              title={t('snapshots.rename')}
             >
               <Edit2 size={14} />
             </button>
             <button
               onClick={() => onDelete(snapshot)}
               className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-              title="Delete"
+              title={t('snapshots.delete')}
             >
               <Trash2 size={14} />
             </button>
@@ -287,11 +292,11 @@ function SnapshotCard({
           </div>
           <div className="flex items-center gap-1.5">
             <Cpu size={14} />
-            {snapshot.processCount} Active Processes
+            {t('snapshots.activeProcesses', { count: snapshot.processCount })}
           </div>
           <div className="flex items-center gap-1.5">
             <Grid3X3 size={14} />
-            {snapshot.paneCount} Panes
+            {t('snapshots.panes', { count: snapshot.paneCount })}
           </div>
         </div>
       </div>
@@ -303,7 +308,7 @@ function SnapshotCard({
           className="bg-card hover:bg-secondary text-foreground text-xs font-medium py-1.5 px-3 rounded border border-border transition-colors flex items-center gap-2 shadow-sm"
         >
           <RotateCcw size={14} />
-          Restore
+          {t('snapshots.restore')}
         </button>
       </div>
     </div>

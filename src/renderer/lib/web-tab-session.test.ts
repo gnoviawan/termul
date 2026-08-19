@@ -55,4 +55,20 @@ describe('web-tab-session', () => {
     expect(getTabFocusedSessionId()).toBe('session-tab2')
     expect(getTabFocusedSessionId()).not.toBe('session-tab1')
   })
+
+  it('keeps localStorage and sessionStorage independent', () => {
+    localStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY, 'local-value')
+    sessionStorage.setItem(WEB_TAB_FOCUSED_SESSION_KEY, 'session-value')
+
+    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('local-value')
+    expect(sessionStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('session-value')
+
+    sessionStorage.clear()
+    expect(localStorage.getItem(WEB_TAB_FOCUSED_SESSION_KEY)).toBe('local-value')
+  })
+
+  it('starts each test with both storage areas empty', () => {
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+  })
 })

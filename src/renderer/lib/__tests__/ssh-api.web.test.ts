@@ -11,6 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { i18n } from '@/i18n'
 
 const { mockIsTauriContext, mockInvoke, mockPersistenceApi } = vi.hoisted(() => ({
   mockIsTauriContext: vi.fn(),
@@ -115,6 +116,31 @@ describe('sshApi (web branch)', () => {
     expect(result.success).toBe(true)
     const written = mockPersistenceApi.write.mock.calls[0]?.[1] as SSHProfile[]
     expect(written.map((p) => p.id)).toEqual(['keep'])
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('connect returns a localized WEB_UNSUPPORTED result when !isTauriContext()', async () => {
+    const previousLanguage = i18n.language
+    const api = createSSHApi()
+    try {
+      await i18n.changeLanguage('en')
+      const englishResult = await api.connect('profile-1')
+      expect(englishResult.success).toBe(false)
+      if (!englishResult.success) {
+        expect(englishResult.code).toBe('WEB_UNSUPPORTED')
+        expect(englishResult.error).toBe('SSH is not available in the web client')
+      }
+
+      await i18n.changeLanguage('zh-CN')
+      const chineseResult = await api.connect('profile-1')
+      expect(chineseResult.success).toBe(false)
+      if (!chineseResult.success) {
+        expect(chineseResult.code).toBe('WEB_UNSUPPORTED')
+        expect(chineseResult.error).toBe('Web 客户端不支持 SSH')
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 

@@ -1,5 +1,6 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
+import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from './api'
 
 export const BUILT_IN_TEMPLATES: ProjectTemplate[] = [
@@ -374,7 +375,14 @@ export async function scaffoldProject(
     if (!baseDirResult.success) {
       return {
         success: false,
-        error: `Failed to create base directory: ${baseDirResult.error}`,
+        error: runtimeT(
+          'projects',
+          'scaffoldErrors.baseDirectory',
+          'Failed to create base directory: {{error}}',
+          {
+            error: baseDirResult.error
+          }
+        ),
         code: 'SCAFFOLD_BASE_DIR_ERROR'
       }
     }
@@ -386,7 +394,12 @@ export async function scaffoldProject(
         if (!dirResult.success) {
           return {
             success: false,
-            error: `Failed to create directory ${dir}: ${dirResult.error}`,
+            error: runtimeT(
+              'projects',
+              'scaffoldErrors.directory',
+              'Failed to create directory {{directory}}: {{error}}',
+              { directory: dir, error: dirResult.error }
+            ),
             code: 'SCAFFOLD_DIR_ERROR'
           }
         }
@@ -401,7 +414,12 @@ export async function scaffoldProject(
         if (!fileResult.success) {
           return {
             success: false,
-            error: `Failed to create file ${file.path}: ${fileResult.error}`,
+            error: runtimeT(
+              'projects',
+              'scaffoldErrors.file',
+              'Failed to create file {{file}}: {{error}}',
+              { file: file.path, error: fileResult.error }
+            ),
             code: 'SCAFFOLD_FILE_ERROR'
           }
         }

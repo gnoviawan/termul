@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { changeUiLanguage } from '@/i18n'
 import type { Annotation } from '@/stores/annotation-store'
 import {
   exportAnnotationsToAfsJson,
@@ -42,12 +43,16 @@ const baseAnnotation: Annotation = {
 }
 
 describe('annotation-export', () => {
+  afterEach(async () => {
+    await changeUiLanguage('en')
+  })
+
   it('exports element annotations in compact markdown', () => {
     const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'compact')
 
     expect(markdown).toContain('# Example \\*Page\\*')
     expect(markdown).toContain(
-      '1. button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)'
+      '1. button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (Unique class)'
     )
     expect(markdown).toContain('> Review this \\_button\\_')
   })
@@ -56,7 +61,7 @@ describe('annotation-export', () => {
     const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'standard')
 
     expect(markdown).toContain(
-      'Element: button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (unique-class)'
+      'Element: button > button\\.btn\\-primary\\[data\\-testid="submit\\-button"\\] (Unique class)'
     )
     expect(markdown).toContain('Text: Submit \\*\\*now\\*\\* \\> later')
   })
@@ -65,11 +70,23 @@ describe('annotation-export', () => {
     const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'detailed')
 
     expect(markdown).toContain('- **Tag:** button')
-    expect(markdown).toContain('- **Selector Confidence:** unique-class')
+    expect(markdown).toContain('- **Selector Confidence:** Unique class')
     expect(markdown).toContain('- **Bounding Box:** x=10, y=20, w=120, h=36')
     expect(markdown).toContain('| Attribute | Value |')
     expect(markdown).toContain('| class | btn\\-primary |')
     expect(markdown).toContain('| data\\-testid | submit\\-button |')
+  })
+
+  it('localizes human-readable markdown labels without changing annotation data', async () => {
+    await changeUiLanguage('zh-CN')
+
+    const markdown = exportAnnotationsToMarkdown([baseAnnotation], 'detailed')
+
+    expect(markdown).toContain('## 标注 1')
+    expect(markdown).toContain('- **类型:** 元素')
+    expect(markdown).toContain('- **意图:** 问题')
+    expect(markdown).toContain('| 属性 | 值 |')
+    expect(markdown).toContain('button\\.btn\\-primary')
   })
 
   it('truncates long element selector and text previews in markdown', () => {

@@ -9,6 +9,7 @@
 
 import type { DirEntry } from '@tauri-apps/plugin-fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { i18n } from '@/i18n'
 
 vi.mock('@tauri-apps/api/path', () => ({
   appDataDir: vi.fn(async () => '/appdata')
@@ -56,6 +57,42 @@ describe('tauri-backup-api createBackup directory skipping', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('localizes backup failure framing while preserving the underlying error', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      vi.mocked(mkdir).mockRejectedValueOnce(new Error('Permission denied'))
+
+      const result = await createBackup()
+
+      expect(result).toMatchObject({
+        success: false,
+        error: '创建备份失败：Permission denied',
+        code: 'BACKUP_FAILED'
+      })
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('localizes disk-space failures while preserving the underlying error', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      vi.mocked(mkdir).mockRejectedValueOnce(new Error('ENOSPC: no space left'))
+
+      const result = await createBackup()
+
+      expect(result).toMatchObject({
+        success: false,
+        error: '磁盘空间不足，无法创建备份：ENOSPC: no space left',
+        code: 'DISK_SPACE_ERROR'
+      })
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('skips the backups and versions directories but copies other content', async () => {

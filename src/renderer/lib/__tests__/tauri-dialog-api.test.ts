@@ -3,7 +3,8 @@
  * Tests the tauriDialogApi implementation using Tauri plugin-dialog
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { changeUiLanguage } from '@/i18n'
 
 // Mock @tauri-apps/plugin-dialog BEFORE importing
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -32,6 +33,10 @@ describe('tauriDialogApi', () => {
     mockConfirm.mockResolvedValue(true)
   })
 
+  afterEach(async () => {
+    await changeUiLanguage('en')
+  })
+
   describe('selectDirectory', () => {
     it('should successfully select a directory', async () => {
       const testPath = '/home/user/projects'
@@ -42,7 +47,7 @@ describe('tauriDialogApi', () => {
       expect(mockOpen).toHaveBeenCalledWith({
         directory: true,
         multiple: false,
-        title: 'Pilih Folder Project'
+        title: 'Select Project Folder'
       })
       expect(result).toEqual({
         success: true,
@@ -108,7 +113,8 @@ describe('tauriDialogApi', () => {
 
       expect(mockOpen).toHaveBeenCalledWith({
         multiple: false,
-        filters
+        filters,
+        title: 'Select File'
       })
     })
 
@@ -144,7 +150,8 @@ describe('tauriDialogApi', () => {
       await tauriDialogApi.saveFile({ filters })
 
       expect(mockSave).toHaveBeenCalledWith({
-        filters
+        filters,
+        title: 'Save File'
       })
     })
 
@@ -168,7 +175,7 @@ describe('tauriDialogApi', () => {
 
       expect(result).toBe(true)
       expect(mockConfirm).toHaveBeenCalledWith('Are you sure?', {
-        title: 'Konfirmasi',
+        title: 'Confirm',
         kind: 'warning'
       })
     })
@@ -186,6 +193,38 @@ describe('tauriDialogApi', () => {
 
       // confirmClose throws on error
       await expect(tauriDialogApi.confirmClose('Continue?')).rejects.toThrow()
+    })
+
+    it('should use the active language for native dialog defaults', async () => {
+      await changeUiLanguage('zh-CN')
+
+      await tauriDialogApi.selectDirectory()
+      await tauriDialogApi.selectFile()
+      await tauriDialogApi.saveFile()
+      await tauriDialogApi.confirmClose('继续吗？')
+      await tauriDialogApi.showMessage('测试消息')
+
+      expect(mockOpen).toHaveBeenNthCalledWith(1, {
+        directory: true,
+        multiple: false,
+        title: '选择项目文件夹'
+      })
+      expect(mockOpen).toHaveBeenNthCalledWith(2, {
+        multiple: false,
+        filters: undefined,
+        title: '选择文件'
+      })
+      expect(mockSave).toHaveBeenCalledWith({
+        filters: undefined,
+        title: '保存文件'
+      })
+      expect(mockConfirm).toHaveBeenCalledWith('继续吗？', {
+        title: '确认',
+        kind: 'warning'
+      })
+      expect(mockMessage).toHaveBeenCalledWith('测试消息', {
+        title: '信息'
+      })
     })
   })
 

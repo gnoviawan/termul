@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from '@/lib/api'
 import {
   cancelAllAutoSaves,
@@ -126,8 +127,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (oldestPath) {
         newFiles.delete(oldestPath)
       } else {
-        toast.warning('Too many open tabs', {
-          description: 'Close a tab or save your changes to open more files.'
+        toast.warning(runtimeT('workspace', 'tabs.tooManyTitle', 'Too many open tabs'), {
+          description: runtimeT(
+            'workspace',
+            'tabs.tooManyDescription',
+            'Close a tab or save your changes to open more files.'
+          )
         })
         return
       }

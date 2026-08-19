@@ -1,6 +1,7 @@
 import type { FileChangeEvent } from '@shared/types/filesystem.types'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
+import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from '@/lib/api'
 import { consumeEditorSelfSave } from '@/lib/editor-self-save'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
@@ -65,10 +66,10 @@ export function useFileWatcher(): void {
         if (!fileState.isDirty) {
           void editorState.reloadFile(path)
         } else {
-          toast('File changed externally', {
+          toast(runtimeT('terminal', 'fileWatcher.changedExternally', 'File changed externally'), {
             description: path.split(/[\\/]/).pop() || path,
             action: {
-              label: 'Reload',
+              label: runtimeT('terminal', 'fileWatcher.reload', 'Reload'),
               onClick: () => {
                 void useEditorStore.getState().reloadFile(path)
               }

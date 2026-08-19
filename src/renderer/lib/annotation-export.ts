@@ -1,4 +1,25 @@
+import { runtimeT } from '@/i18n/runtime'
 import type { Annotation, ElementGeometry, OutputLevel } from '@/stores/annotation-store'
+
+function exportT(key: string, fallback: string): string {
+  return runtimeT('browser', `export.markdownLabels.${key}`, fallback)
+}
+
+function formatAnnotationType(type: Annotation['type']): string {
+  return runtimeT('browser', `export.annotationType.${type}`, type)
+}
+
+function formatIntent(intent: Annotation['intent']): string {
+  return runtimeT('browser', `annotation.intent.${intent}`, intent)
+}
+
+function formatSeverity(severity: Annotation['severity']): string {
+  return runtimeT('browser', `annotation.severity.${severity}`, severity)
+}
+
+function formatSelectorConfidence(confidence: ElementGeometry['selectorConfidence']): string {
+  return runtimeT('browser', `annotation.selectorConfidence.${confidence}`, confidence)
+}
 
 function truncateForExport(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -17,11 +38,13 @@ function formatRect(geometry: { x: number; y: number; width: number; height: num
 }
 
 function formatElementCompact(geometry: ElementGeometry): string {
-  return `${escapeMarkdown(geometry.tagName)} > ${escapeMarkdown(truncateForExport(geometry.selector, 60))} (${geometry.selectorConfidence})`
+  return `${escapeMarkdown(geometry.tagName)} > ${escapeMarkdown(truncateForExport(geometry.selector, 60))} (${formatSelectorConfidence(geometry.selectorConfidence)})`
 }
 
 function formatElementTextPreview(geometry: ElementGeometry): string {
-  return escapeMarkdown(truncateForExport(geometry.textContent, 80) || '(no text)')
+  return escapeMarkdown(
+    truncateForExport(geometry.textContent, 80) || exportT('noText', '(no text)')
+  )
 }
 
 function formatElementBoundingBox(geometry: ElementGeometry): string {
@@ -30,11 +53,11 @@ function formatElementBoundingBox(geometry: ElementGeometry): string {
 
 export function exportAnnotationsToMarkdown(annotations: Annotation[], level: OutputLevel): string {
   if (annotations.length === 0) {
-    return 'No annotations.'
+    return exportT('noAnnotations', 'No annotations.')
   }
 
   const lines: string[] = []
-  const title = annotations[0]?.pageTitle ?? 'Annotations'
+  const title = annotations[0]?.pageTitle ?? exportT('titleFallback', 'Annotations')
   const url = annotations[0]?.url ?? ''
 
   lines.push(`# ${escapeMarkdown(title)}`)
@@ -47,58 +70,80 @@ export function exportAnnotationsToMarkdown(annotations: Annotation[], level: Ou
     annotations.forEach((a, i) => {
       if (a.type === 'region' && a.geometry.type === 'rect') {
         lines.push(
-          `${i + 1}. ${formatRect(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`
+          `${i + 1}. ${formatRect(a.geometry)} > ${escapeMarkdown(
+            a.description || exportT('noComment', '(no comment)')
+          )}`
         )
       } else if (a.type === 'element' && a.geometry.type === 'element') {
         lines.push(
-          `${i + 1}. ${formatElementCompact(a.geometry)} > ${escapeMarkdown(a.description || '(no comment)')}`
+          `${i + 1}. ${formatElementCompact(a.geometry)} > ${escapeMarkdown(
+            a.description || exportT('noComment', '(no comment)')
+          )}`
         )
       } else {
-        lines.push(`${i + 1}. note > ${escapeMarkdown(a.description || '(no comment)')}`)
+        lines.push(
+          `${i + 1}. ${exportT('note', 'note')} > ${escapeMarkdown(
+            a.description || exportT('noComment', '(no comment)')
+          )}`
+        )
       }
     })
   } else if (level === 'standard') {
     annotations.forEach((a, i) => {
       lines.push(
-        `${i + 1}. **[${a.intent}]** *${a.severity}* — ${escapeMarkdown(a.description || '(no description)')}`
+        `${i + 1}. **[${formatIntent(a.intent)}]** *${formatSeverity(a.severity)}* — ${escapeMarkdown(
+          a.description || exportT('noDescription', '(no description)')
+        )}`
       )
       if (a.type === 'region' && a.geometry.type === 'rect') {
-        lines.push(`   Region: ${formatRect(a.geometry)}`)
+        lines.push(`   ${exportT('region', 'Region')}: ${formatRect(a.geometry)}`)
       } else if (a.type === 'element' && a.geometry.type === 'element') {
-        lines.push(`   Element: ${formatElementCompact(a.geometry)}`)
-        lines.push(`   Text: ${formatElementTextPreview(a.geometry)}`)
+        lines.push(`   ${exportT('element', 'Element')}: ${formatElementCompact(a.geometry)}`)
+        lines.push(`   ${exportT('text', 'Text')}: ${formatElementTextPreview(a.geometry)}`)
       }
       lines.push('')
     })
   } else {
     annotations.forEach((a, i) => {
-      lines.push(`## Annotation ${i + 1}`)
-      lines.push(`- **Type:** ${a.type}`)
-      lines.push(`- **Intent:** ${a.intent}`)
-      lines.push(`- **Severity:** ${a.severity}`)
-      lines.push(`- **Description:** ${escapeMarkdown(a.description || '(none)')}`)
+      lines.push(`## ${exportT('annotation', 'Annotation')} ${i + 1}`)
+      lines.push(`- **${exportT('type', 'Type')}:** ${formatAnnotationType(a.type)}`)
+      lines.push(`- **${exportT('intent', 'Intent')}:** ${formatIntent(a.intent)}`)
+      lines.push(`- **${exportT('severity', 'Severity')}:** ${formatSeverity(a.severity)}`)
+      lines.push(
+        `- **${exportT('description', 'Description')}:** ${escapeMarkdown(
+          a.description || exportT('none', '(none)')
+        )}`
+      )
       if (a.type === 'region' && a.geometry.type === 'rect') {
-        lines.push(`- **Geometry:** ${formatRect(a.geometry)}`)
+        lines.push(`- **${exportT('geometry', 'Geometry')}:** ${formatRect(a.geometry)}`)
       } else if (a.type === 'element' && a.geometry.type === 'element') {
-        lines.push(`- **Tag:** ${escapeMarkdown(a.geometry.tagName)}`)
-        lines.push(`- **Selector:** ${escapeMarkdown(a.geometry.selector)}`)
-        lines.push(`- **Selector Confidence:** ${a.geometry.selectorConfidence}`)
-        lines.push(`- **Text Preview:** ${formatElementTextPreview(a.geometry)}`)
-        lines.push(`- **Bounding Box:** ${formatElementBoundingBox(a.geometry)}`)
+        lines.push(`- **${exportT('tag', 'Tag')}:** ${escapeMarkdown(a.geometry.tagName)}`)
+        lines.push(
+          `- **${exportT('selector', 'Selector')}:** ${escapeMarkdown(a.geometry.selector)}`
+        )
+        lines.push(
+          `- **${exportT('selectorConfidence', 'Selector Confidence')}:** ${formatSelectorConfidence(a.geometry.selectorConfidence)}`
+        )
+        lines.push(
+          `- **${exportT('textPreview', 'Text Preview')}:** ${formatElementTextPreview(a.geometry)}`
+        )
+        lines.push(
+          `- **${exportT('boundingBox', 'Bounding Box')}:** ${formatElementBoundingBox(a.geometry)}`
+        )
         lines.push('')
-        lines.push('| Attribute | Value |')
+        lines.push(`| ${exportT('attribute', 'Attribute')} | ${exportT('value', 'Value')} |`)
         lines.push('| --- | --- |')
         const entries = Object.entries(a.geometry.attributes)
         if (entries.length === 0) {
-          lines.push('| (none) | |')
+          lines.push(`| ${exportT('none', '(none)')} | |`)
         } else {
           entries.forEach(([key, value]) => {
             lines.push(`| ${escapeMarkdown(key)} | ${escapeMarkdown(value)} |`)
           })
         }
       }
-      lines.push(`- **Viewport:** ${a.viewportWidth}x${a.viewportHeight}`)
-      lines.push(`- **Created:** ${new Date(a.createdAt).toISOString()}`)
+      lines.push(`- **${exportT('viewport', 'Viewport')}:** ${a.viewportWidth}x${a.viewportHeight}`)
+      lines.push(`- **${exportT('created', 'Created')}:** ${new Date(a.createdAt).toISOString()}`)
       lines.push('')
     })
   }

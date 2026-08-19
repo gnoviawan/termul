@@ -1,6 +1,7 @@
 import type { GitCommit } from '@shared/types/ipc.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
+import { i18n } from '@/i18n'
 import { gitApi } from '@/lib/git-api'
 
 export interface GitHistoryState {
@@ -47,7 +48,13 @@ export const useGitHistoryStore = create<GitHistoryState>((set) => ({
         loading: { ...state.loading, [cwd]: false },
         error: { ...state.error, [cwd]: message }
       }))
-      toast.error(`Failed to load git history: ${message}`)
+      toast.error(
+        i18n.t('history.errors.loadFailed', {
+          ns: 'git',
+          details: message,
+          defaultValue: 'Failed to load git history: {{details}}'
+        })
+      )
     }
   }
 }))

@@ -37,6 +37,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 // a JSON `IpcBody` so `parseBody` succeeds.
 vi.stubGlobal('fetch', mockFetch)
 
+import { i18n } from '@/i18n'
 import { worktreeApi } from '../worktree-api'
 
 /** Build a fetch Response that resolves to the given `IpcBody` JSON. */
@@ -49,7 +50,8 @@ function okResponse(body: unknown): Response {
 }
 
 describe('worktreeApi (web branch) — 7 launch-flow methods hit HTTP', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
     mockInvoke.mockReset()
@@ -201,7 +203,8 @@ describe('worktreeApi (web branch) — 7 launch-flow methods hit HTTP', () => {
 })
 
 describe('worktreeApi (web branch) — 8 advanced ops stay WEB_UNSUPPORTED', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
     mockInvoke.mockReset()
@@ -212,6 +215,7 @@ describe('worktreeApi (web branch) — 8 advanced ops stay WEB_UNSUPPORTED', () 
     const result = await worktreeApi.removeAllManaged('/project', [])
     expect(result.success).toBe(false)
     if (!result.success) {
+      expect(result.error).toBe('Worktrees are not available in the web client')
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
@@ -225,6 +229,18 @@ describe('worktreeApi (web branch) — 8 advanced ops stay WEB_UNSUPPORTED', () 
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('localizes WEB_UNSUPPORTED errors in Simplified Chinese', async () => {
+    await i18n.changeLanguage('zh-CN')
+
+    const result = await worktreeApi.parseGitignore('/project')
+
+    expect(result).toEqual({
+      success: false,
+      error: '网页客户端暂不支持工作树操作',
+      code: 'WEB_UNSUPPORTED'
+    })
   })
 
   it('createSymlinks returns WEB_UNSUPPORTED when !isTauriContext()', async () => {

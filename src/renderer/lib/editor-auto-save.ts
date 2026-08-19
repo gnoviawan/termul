@@ -1,4 +1,5 @@
 import { toast } from 'sonner'
+import { runtimeT } from '@/i18n/runtime'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useEditorStore } from '@/stores/editor-store'
 
@@ -73,7 +74,9 @@ export function scheduleAutoSave(filePath: string): void {
           // Toast once per failure episode; the retry keeps trying quietly.
           if (!failedAutoSavePaths.has(filePath)) {
             failedAutoSavePaths.add(filePath)
-            toast.error('Auto save failed', { description: getBasename(filePath) })
+            toast.error(runtimeT('workspace', 'tabs.autoSaveFailed', 'Auto save failed'), {
+              description: getBasename(filePath)
+            })
           }
           if (useAppSettingsStore.getState().settings.editorAutoSave) {
             scheduleAutoSave(filePath)
@@ -84,7 +87,9 @@ export function scheduleAutoSave(filePath: string): void {
           if (!stillDirty) return
           if (!failedAutoSavePaths.has(filePath)) {
             failedAutoSavePaths.add(filePath)
-            toast.error('Auto save failed', { description: getBasename(filePath) })
+            toast.error(runtimeT('workspace', 'tabs.autoSaveFailed', 'Auto save failed'), {
+              description: getBasename(filePath)
+            })
           }
           if (useAppSettingsStore.getState().settings.editorAutoSave) {
             scheduleAutoSave(filePath)

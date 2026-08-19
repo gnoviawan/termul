@@ -14,6 +14,7 @@ vi.mock('./log-api', () => ({
   logFrontendError: vi.fn().mockResolvedValue(undefined)
 }))
 
+import { i18n } from '@/i18n'
 import { persistenceApi } from '@/lib/api'
 import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -45,6 +46,23 @@ describe('MCP registry helpers', () => {
     expect(validateMcpServer({ type: 'sse', name: 'api', url: 'https://x.test/sse' }).valid).toBe(
       true
     )
+  })
+
+  it('localizes validation errors in Simplified Chinese', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      expect(validateMcpServer({ type: 'stdio' }).errors).toEqual([
+        '名称为必填项。',
+        'stdio 传输必须填写命令。'
+      ])
+      expect(validateMcpServer({ type: 'http', name: 'api' }).errors).toEqual(['URL 为必填项。'])
+      expect(validateMcpServer({ type: 'sse', name: 'api', url: 'not a url' }).errors).toEqual([
+        'URL 无效。'
+      ])
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('defaults omitted transport to stdio', () => {
@@ -157,6 +175,27 @@ describe('registry persistence parity', () => {
       error: 'offline'
     })
     await expect(loadMcpServers()).rejects.toThrow('offline')
+  })
+
+  it('localizes persistence fallbacks without replacing backend errors', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh-CN')
+    try {
+      vi.mocked(persistenceApi.read).mockResolvedValue({ success: false, code: 'READ_ERROR' })
+      await expect(loadMcpServers()).rejects.toThrow('加载 MCP 服务器失败')
+
+      vi.mocked(persistenceApi.write).mockResolvedValue({ success: false, code: 'WRITE_ERROR' })
+      await expect(saveMcpServers([])).rejects.toThrow('保存 MCP 服务器失败')
+
+      vi.mocked(persistenceApi.read).mockResolvedValue({
+        success: false,
+        code: 'READ_ERROR',
+        error: 'backend offline'
+      })
+      await expect(loadMcpServers()).rejects.toThrow('backend offline')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 })
 

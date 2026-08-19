@@ -11,6 +11,7 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
+import { runtimeT } from '@/i18n/runtime'
 
 // Backup error codes
 export const BackupErrorCodes = {
@@ -119,7 +120,11 @@ function validateBackupId(backupId: string): boolean {
  */
 async function getBackupPath(backupId: string): Promise<string> {
   if (!validateBackupId(backupId)) {
-    throw new Error(`Invalid backup ID: ${backupId}`)
+    throw new Error(
+      runtimeT('shell', 'updates.errors.backupInvalidId', 'Invalid backup ID: {{backupId}}', {
+        backupId
+      })
+    )
   }
 
   const backupsDir = await getBackupsDir()
@@ -130,7 +135,14 @@ async function getBackupPath(backupId: string): Promise<string> {
   const normalizedBackupsDir = backupsDir.replace(/\\/g, '/')
 
   if (!normalizedPath.startsWith(normalizedBackupsDir)) {
-    throw new Error(`Backup path traversal detected: ${backupId}`)
+    throw new Error(
+      runtimeT(
+        'shell',
+        'updates.errors.backupPathTraversal',
+        'Backup path traversal detected: {{backupId}}',
+        { backupId }
+      )
+    )
   }
 
   return backupPath
@@ -343,7 +355,10 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     return { success: true, data: backupInfo }
   } catch (err) {
     // Check for disk space errors
-    const errorMessage = extractErrorMessage(err, 'Unknown error')
+    const errorMessage = extractErrorMessage(
+      err,
+      runtimeT('shell', 'updates.errors.unknown', 'Unknown error')
+    )
 
     if (
       errorMessage.includes('ENOSPC') ||
@@ -353,14 +368,24 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     ) {
       return {
         success: false,
-        error: `Insufficient disk space to create backup: ${errorMessage}`,
+        error: runtimeT(
+          'shell',
+          'updates.errors.backupInsufficientSpace',
+          'Insufficient disk space to create backup: {{details}}',
+          { details: errorMessage }
+        ),
         code: BackupErrorCodes.DISK_SPACE_ERROR
       }
     }
 
     return {
       success: false,
-      error: `Failed to create backup: ${errorMessage}`,
+      error: runtimeT(
+        'shell',
+        'updates.errors.backupCreateFailed',
+        'Failed to create backup: {{details}}',
+        { details: errorMessage }
+      ),
       code: BackupErrorCodes.BACKUP_FAILED
     }
   }
@@ -436,7 +461,10 @@ export async function listBackups(): Promise<IpcResult<BackupInfo[]>> {
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to list backups',
+      error:
+        err instanceof Error
+          ? err.message
+          : runtimeT('shell', 'updates.errors.backupListFailed', 'Failed to list backups'),
       code: BackupErrorCodes.BACKUP_FAILED
     }
   }
@@ -462,7 +490,12 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
     } catch {
       return {
         success: false,
-        error: `Backup not found or invalid: ${backupId}`,
+        error: runtimeT(
+          'shell',
+          'updates.errors.backupNotFound',
+          'Backup not found or invalid: {{backupId}}',
+          { backupId }
+        ),
         code: BackupErrorCodes.BACKUP_NOT_FOUND
       }
     }
@@ -503,7 +536,10 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
 
     return { success: true, data: undefined }
   } catch (err) {
-    const errorMessage = extractErrorMessage(err, 'Unknown error')
+    const errorMessage = extractErrorMessage(
+      err,
+      runtimeT('shell', 'updates.errors.unknown', 'Unknown error')
+    )
 
     // Attempt rollback: detect actual state and restore original data
     if (oldUserDataPath && tempRestorePath) {
@@ -548,14 +584,24 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
     ) {
       return {
         success: false,
-        error: `Insufficient disk space to restore backup: ${errorMessage}`,
+        error: runtimeT(
+          'shell',
+          'updates.errors.backupRestoreInsufficientSpace',
+          'Insufficient disk space to restore backup: {{details}}',
+          { details: errorMessage }
+        ),
         code: BackupErrorCodes.DISK_SPACE_ERROR
       }
     }
 
     return {
       success: false,
-      error: `Failed to restore backup: ${errorMessage}`,
+      error: runtimeT(
+        'shell',
+        'updates.errors.backupRestoreFailed',
+        'Failed to restore backup: {{details}}',
+        { details: errorMessage }
+      ),
       code: BackupErrorCodes.RESTORE_FAILED
     }
   }
@@ -602,7 +648,14 @@ export async function cleanupOldBackups(): Promise<IpcResult<void>> {
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to cleanup old backups',
+      error:
+        err instanceof Error
+          ? err.message
+          : runtimeT(
+              'shell',
+              'updates.errors.backupCleanupFailed',
+              'Failed to clean up old backups'
+            ),
       code: BackupErrorCodes.BACKUP_FAILED
     }
   }

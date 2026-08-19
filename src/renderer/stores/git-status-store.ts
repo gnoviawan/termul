@@ -1,6 +1,7 @@
 import type { GitCommitContext, GitStashInfo, GitStatusDetail } from '@shared/types/ipc.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
+import { i18n } from '@/i18n'
 import { gitApi } from '@/lib/git-api'
 import { platform } from '@/lib/tauri-os'
 import { useProjectStore } from './project-store'
@@ -129,7 +130,13 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
       set((state) => ({
         diffs: { ...state.diffs, [key]: '' }
       }))
-      toast.error(`Failed to load diff: ${String(error)}`)
+      toast.error(
+        i18n.t('diff.errors.loadFailed', {
+          ns: 'git',
+          details: String(error),
+          defaultValue: 'Failed to load diff: {{details}}'
+        })
+      )
     }
   },
 

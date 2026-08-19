@@ -1,6 +1,7 @@
 import type { DirectoryEntry, FileSearchResult } from '@shared/types/filesystem.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { runtimeT } from '@/i18n/runtime'
 import { filesystemApi } from '@/lib/api'
 
 function normalizePath(p: string): string {
@@ -386,7 +387,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         }
       } catch (error) {
         if (isRootLoad) {
-          const message = error instanceof Error ? error.message : 'Failed to load project files'
+          const message =
+            error instanceof Error
+              ? error.message
+              : runtimeT(
+                  'projects',
+                  'filesystemErrors.loadProjectFiles',
+                  'Failed to load project files'
+                )
           set({
             rootLoadError: {
               message,
@@ -732,7 +740,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     if (!rootPath || !searchScopeRoot) {
       set({
         searchLoading: false,
-        searchError: 'No project selected',
+        searchError: runtimeT('projects', 'fileContext.noProjectSelected', 'No project selected'),
         searchErrorCode: null,
         searchResults: [],
         searchFileNameMatches: null,
@@ -884,7 +892,7 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         ? streamStart.error
         : !fileNameStreamStart.success
           ? fileNameStreamStart.error
-          : 'Search failed'
+          : runtimeT('projects', 'filesystemErrors.searchFailed', 'Search failed')
       set({
         searchLoading: false,
         searchError: error,

@@ -92,6 +92,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import { i18n } from '@/i18n'
 import type { PlanEntry } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
@@ -569,6 +570,27 @@ describe('acp-store', () => {
     const session = useAcpStore.getState().sessions['s1']
     expect(session.agentId).toBe('agent-1')
     expect(useAcpStore.getState().activeSessionId).toBe('s1')
+  })
+
+  it('localizes placeholder titles created after a language switch', async () => {
+    const previousLanguage = i18n.language
+    try {
+      await i18n.changeLanguage('en')
+      ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 's-en' })
+      await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+      expect(
+        useAcpStore.getState().sessionIndex.find((entry) => entry.id === 's-en')?.title
+      ).toMatch(/^Untitled Chat \d+$/)
+
+      await i18n.changeLanguage('zh-CN')
+      ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 's-zh' })
+      await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+      expect(
+        useAcpStore.getState().sessionIndex.find((entry) => entry.id === 's-zh')?.title
+      ).toMatch(/^未命名对话 \d+$/)
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('switchProject applies completed session context transactionally', async () => {
@@ -1295,6 +1317,32 @@ describe('acp-store', () => {
       stopReason: 'refusal'
     })
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/refused/i)
+  })
+
+  it('localizes newly produced stop notes and preserves protocol reasons', async () => {
+    const previousLanguage = i18n.language
+    try {
+      await i18n.changeLanguage('zh-CN')
+      seedSession('s-refusal', 'agent-1')
+      useAcpStore.getState()._onPromptComplete({
+        agentId: 'agent-1',
+        sessionId: 's-refusal',
+        stopReason: 'refusal'
+      })
+      expect(useAcpStore.getState().sessions['s-refusal'].lastError).toBe('代理拒绝继续。')
+
+      seedSession('s-other', 'agent-1')
+      useAcpStore.getState()._onPromptComplete({
+        agentId: 'agent-1',
+        sessionId: 's-other',
+        stopReason: 'insufficient_credit'
+      })
+      expect(useAcpStore.getState().sessions['s-other'].lastError).toBe(
+        '响应已停止：insufficient_credit'
+      )
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 
   it('prompt_complete keeps the transcript in the store projection (durable write is host-owned)', async () => {
@@ -3491,16 +3539,22 @@ describe('acp-store', () => {
       })
       throw new Error('load boom')
     })
-    await expect(useAcpStore.getState().openHistorySession('s-load')).rejects.toBeDefined()
-    // transcript was restored (not the partial replay) and the error surfaced
-    const messages = useAcpStore.getState().messages['s-load']
-    expect(messages).toHaveLength(1)
-    expect(messages[0].id).toBe('m1')
-    const session = useAcpStore.getState().sessions['s-load']
-    expect(session.lastError).toMatch(/Resume failed/)
-    expect(session.status).toBe('closed')
-    expect(session.replaying).toBeNull()
-    vi.mocked(invoke).mockReset()
+    const previousLanguage = i18n.language
+    try {
+      await i18n.changeLanguage('zh-CN')
+      await expect(useAcpStore.getState().openHistorySession('s-load')).rejects.toBeDefined()
+      // transcript was restored (not the partial replay) and the error surfaced
+      const messages = useAcpStore.getState().messages['s-load']
+      expect(messages).toHaveLength(1)
+      expect(messages[0].id).toBe('m1')
+      const session = useAcpStore.getState().sessions['s-load']
+      expect(session.lastError).toBe('恢复失败：Error: load boom')
+      expect(session.status).toBe('closed')
+      expect(session.replaying).toBeNull()
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+      vi.mocked(invoke).mockReset()
+    }
   })
 
   it('openHistorySession does not activate a chat deleted during load', async () => {

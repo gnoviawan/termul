@@ -40,9 +40,11 @@ vi.mock('@/lib/api', () => ({
   filesystemApi: mockApi.filesystem
 }))
 
+import { i18n } from '@/i18n'
 import { useFileExplorerStore } from './file-explorer-store'
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en')
   mockApi.filesystem.readDirectory
     .mockReset()
     .mockResolvedValue({ success: true, data: mockEntries })
@@ -191,6 +193,31 @@ describe('file-explorer-store', () => {
 
       expect(useFileExplorerStore.getState().rootLoadError).toEqual({
         message: 'boom',
+        code: 'UNKNOWN_ERROR'
+      })
+    })
+
+    it('uses the English root-load fallback when the thrown value has no message', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      mockApi.filesystem.readDirectory.mockRejectedValueOnce(null)
+
+      await useFileExplorerStore.getState().toggleDirectory('/project')
+
+      expect(useFileExplorerStore.getState().rootLoadError).toEqual({
+        message: 'Failed to load project files',
+        code: 'UNKNOWN_ERROR'
+      })
+    })
+
+    it('localizes the root-load fallback when the thrown value has no message', async () => {
+      await i18n.changeLanguage('zh-CN')
+      useFileExplorerStore.getState().setRootPath('/project')
+      mockApi.filesystem.readDirectory.mockRejectedValueOnce(null)
+
+      await useFileExplorerStore.getState().toggleDirectory('/project')
+
+      expect(useFileExplorerStore.getState().rootLoadError).toEqual({
+        message: '加载项目文件失败',
         code: 'UNKNOWN_ERROR'
       })
     })

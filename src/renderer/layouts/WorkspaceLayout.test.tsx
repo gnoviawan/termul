@@ -289,6 +289,8 @@ const { mockApi } = vi.hoisted(() => ({
       onFileChanged: vi.fn(() => vi.fn()),
       onFileCreated: vi.fn(() => vi.fn()),
       onFileDeleted: vi.fn(() => vi.fn()),
+      onSearchFileNamesBatch: vi.fn(() => vi.fn()),
+      onSearchFileNamesDone: vi.fn(() => vi.fn()),
       watchDirectory: vi.fn().mockResolvedValue({ success: true }),
       unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
       readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
