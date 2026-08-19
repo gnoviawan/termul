@@ -61,6 +61,7 @@ export const useFileExplorerVisibilitySetting = () =>
 export const useColorTheme = () => useAppSettingsStore((state) => state.settings.colorTheme)
 export const useAppearanceMode = () => useAppSettingsStore((state) => state.settings.appearanceMode)
 export const useUiZoomLevel = () => useAppSettingsStore((state) => state.settings.uiZoomLevel)
+export const useUiLanguage = () => useAppSettingsStore((state) => state.settings.uiLanguage)
 export const useAcpTurnTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpTurnTimeoutSecs)
 export const useEditorAutoSave = () => useAppSettingsStore((state) => state.settings.editorAutoSave)

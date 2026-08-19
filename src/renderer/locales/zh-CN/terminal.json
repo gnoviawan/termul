@@ -1,0 +1,89 @@
+{
+  "title": "终端",
+  "activity": "终端有活动",
+  "fileWatcher": {
+    "changedExternally": "文件已在外部更改",
+    "reload": "重新加载"
+  },
+  "terminalCount_one": "{{formattedCount}} 个终端",
+  "terminalCount_other": "{{formattedCount}} 个终端",
+  "defaultName": "终端 {{number}}",
+  "emptyPane": {
+    "title": "新建终端",
+    "shell": "Shell：",
+    "create": "创建终端",
+    "shells": {
+      "powerShell": "PowerShell",
+      "commandPrompt": "命令提示符",
+      "wslUbuntu": "WSL：Ubuntu",
+      "gitBash": "Git Bash"
+    }
+  },
+  "search": {
+    "label": "搜索终端",
+    "placeholder": "搜索...",
+    "matchFound": "已找到匹配项",
+    "noMatches": "没有匹配项",
+    "previous": "上一个匹配项（Shift+Enter）",
+    "next": "下一个匹配项（Enter）",
+    "close": "关闭（Escape）"
+  },
+  "contextMenu": {
+    "copy": "复制",
+    "paste": "粘贴",
+    "selectAll": "全选",
+    "restart": "重启终端"
+  },
+  "crash": {
+    "criticalError": "严重错误",
+    "paneException": "终端窗格异常",
+    "sessionInterrupted": "会话已中断",
+    "description": "终端进程意外退出。这通常是因为 Shell 崩溃或 PTY 被操作系统终止。",
+    "reconnect": "重新连接会话"
+  },
+  "links": {
+    "openFileFailed": "无法打开终端输出中的文件。",
+    "unsupportedUrl": "终端输出仅支持 http/https URL。",
+    "openUrlFailed": "无法打开终端输出中的 URL。",
+    "missingContext": "找不到项目或工作目录；请设置项目/当前工作目录后再打开路径：{{path}}",
+    "pathIsDirectory": "该路径是目录而不是文件：{{path}}",
+    "fileNotFound": "找不到文件：{{path}}",
+    "openFileFailedWithDetails": "无法打开文件：{{path}}（{{details}}）",
+    "openFileFailedForPath": "无法打开文件：{{path}}"
+  },
+  "restore": {
+    "partialNote": "恢复提示：备用屏幕或频繁重绘的输出可能只能通过转录重放进行部分还原"
+  },
+  "environment": {
+    "applied_one": "已应用 {{formattedCount}} 个项目环境变量",
+    "applied_other": "已应用 {{formattedCount}} 个项目环境变量"
+  },
+  "errors": {
+    "label": "错误",
+    "pasteWriteFailed": "写入粘贴内容失败",
+    "writeFailed": "写入失败",
+    "unknownSpawn": "未知的启动错误",
+    "spawnFailed": "启动失败",
+    "spawnProcessFailed": "无法启动终端进程",
+    "spawnException": "终端启动异常",
+    "createFailed": "无法创建终端",
+    "launchAgentFailed": "无法启动 Agent"
+  },
+  "tauri": {
+    "loading": "正在加载终端...",
+    "errorTitle": "终端错误",
+    "shellDetectionFailed": "Shell 检测失败：{{details}}",
+    "initializationFailed": "终端初始化失败：{{details}}",
+    "processExited": "进程已退出，退出代码为 {{exitCode}}"
+  },
+  "exitNotification": {
+    "done": "{{terminalName}} — 已完成",
+    "failed": "{{terminalName}} — 失败（退出代码 {{exitCode}}）"
+  },
+  "limits": {
+    "perProject_one": "每个项目最多允许 {{formattedCount}} 个终端",
+    "perProject_other": "每个项目最多允许 {{formattedCount}} 个终端",
+    "global_one": "所有项目最多允许 {{formattedCount}} 个终端",
+    "global_other": "所有项目最多允许 {{formattedCount}} 个终端"
+  }
+}

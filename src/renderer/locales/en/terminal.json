@@ -1,0 +1,89 @@
+{
+  "title": "Terminal",
+  "activity": "Terminal has activity",
+  "fileWatcher": {
+    "changedExternally": "File changed externally",
+    "reload": "Reload"
+  },
+  "terminalCount_one": "{{formattedCount}} terminal",
+  "terminalCount_other": "{{formattedCount}} terminals",
+  "defaultName": "Terminal {{number}}",
+  "emptyPane": {
+    "title": "Create New Terminal",
+    "shell": "Shell:",
+    "create": "Create Terminal",
+    "shells": {
+      "powerShell": "PowerShell",
+      "commandPrompt": "Command Prompt",
+      "wslUbuntu": "WSL: Ubuntu",
+      "gitBash": "Git Bash"
+    }
+  },
+  "search": {
+    "label": "Search terminal",
+    "placeholder": "Search...",
+    "matchFound": "Match found",
+    "noMatches": "No matches",
+    "previous": "Previous match (Shift+Enter)",
+    "next": "Next match (Enter)",
+    "close": "Close (Escape)"
+  },
+  "contextMenu": {
+    "copy": "Copy",
+    "paste": "Paste",
+    "selectAll": "Select All",
+    "restart": "Restart Terminal"
+  },
+  "crash": {
+    "criticalError": "CRITICAL ERROR",
+    "paneException": "Terminal Pane Exception",
+    "sessionInterrupted": "Session Interrupted",
+    "description": "The terminal process exited unexpectedly. This usually happens if the shell crashes or the PTY is killed by the OS.",
+    "reconnect": "Reconnect Session"
+  },
+  "links": {
+    "openFileFailed": "Failed to open file from terminal output.",
+    "unsupportedUrl": "Only http/https URLs are supported from terminal output.",
+    "openUrlFailed": "Failed to open URL from terminal output.",
+    "missingContext": "No project or working directory found; set a project/cwd to open paths: {{path}}",
+    "pathIsDirectory": "Path is a directory, not a file: {{path}}",
+    "fileNotFound": "File not found: {{path}}",
+    "openFileFailedWithDetails": "Failed to open file: {{path}} ({{details}})",
+    "openFileFailedForPath": "Failed to open file: {{path}}"
+  },
+  "restore": {
+    "partialNote": "Restore note: alternate-screen or redraw-heavy output may be partially reconstructed from transcript replay"
+  },
+  "environment": {
+    "applied_one": "Project env: {{formattedCount}} variable applied",
+    "applied_other": "Project env: {{formattedCount}} variables applied"
+  },
+  "errors": {
+    "label": "Error",
+    "pasteWriteFailed": "Paste write failed",
+    "writeFailed": "Write failed",
+    "unknownSpawn": "Unknown spawn error",
+    "spawnFailed": "Spawn failed",
+    "spawnProcessFailed": "Failed to spawn terminal process",
+    "spawnException": "Terminal spawn exception",
+    "createFailed": "Failed to create terminal",
+    "launchAgentFailed": "Failed to launch agent"
+  },
+  "tauri": {
+    "loading": "Loading terminal...",
+    "errorTitle": "Terminal Error",
+    "shellDetectionFailed": "Shell detection failed: {{details}}",
+    "initializationFailed": "Terminal initialization failed: {{details}}",
+    "processExited": "Process exited with code {{exitCode}}"
+  },
+  "exitNotification": {
+    "done": "{{terminalName}} — DONE",
+    "failed": "{{terminalName}} — Failed (exit {{exitCode}})"
+  },
+  "limits": {
+    "perProject_one": "Maximum {{formattedCount}} terminal per project",
+    "perProject_other": "Maximum {{formattedCount}} terminals per project",
+    "global_one": "Maximum {{formattedCount}} terminal allowed across all projects",
+    "global_other": "Maximum {{formattedCount}} terminals allowed across all projects"
+  }
+}

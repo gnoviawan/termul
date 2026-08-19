@@ -1,0 +1,101 @@
+{
+  "app": {
+    "name": "Termul Manager",
+    "documentTitle": "Termul Manager — Project-Aware Terminal"
+  },
+  "actions": {
+    "cancel": "Cancel",
+    "clear": "Clear",
+    "close": "Close",
+    "confirm": "Confirm",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "reset": "Reset",
+    "retry": "Try Again",
+    "save": "Save",
+    "selectAll": "Select All"
+  },
+  "a11y": {
+    "breadcrumb": "Breadcrumb",
+    "carousel": "Carousel",
+    "carouselNext": "Next slide",
+    "carouselPrevious": "Previous slide",
+    "more": "More",
+    "slide": "Slide"
+  },
+  "dialog": {
+    "loading": "Loading...",
+    "selectProjectFolder": "Select Project Folder",
+    "selectFile": "Select File",
+    "saveFile": "Save File",
+    "confirm": "Confirm",
+    "info": "Info",
+    "noDirectorySelected": "No directory selected",
+    "noFileSelected": "No file selected"
+  },
+  "error": {
+    "title": "Something went wrong{{details}}",
+    "context": " in {{location}}",
+    "unexpected": "An unexpected error occurred.",
+    "locations": {
+      "appRoot": "App Root",
+      "terminalPane": "Terminal Pane",
+      "editorPane": "Editor Pane"
+    }
+  },
+  "status": {
+    "never": "Never"
+  },
+  "persistence": {
+    "failedPanel": "Failed to persist {{panel}}"
+  },
+  "loading": "Loading",
+  "pagination": {
+    "label": "Pagination",
+    "previous": "Previous",
+    "previousAria": "Go to previous page",
+    "next": "Next",
+    "nextAria": "Go to next page",
+    "morePages": "More pages"
+  },
+  "lightbox": {
+    "open": "Open image: {{name}}",
+    "close": "Close image"
+  },
+  "sidebar": {
+    "toggle": "Toggle Sidebar"
+  },
+  "directoryPicker": {
+    "title": "Select Project Folder",
+    "cancelAria": "Cancel directory picker",
+    "goUpAria": "Go up one directory",
+    "up": "Up",
+    "listing": "Listing directory...",
+    "empty": "No subdirectories in this folder",
+    "selectCurrent": "Select Current Folder",
+    "listFailed": "Unable to list this directory",
+    "noSelection": "No directory selected",
+    "pickerClosed": "Picker closed"
+  },
+  "time": {
+    "justNow": "Just now",
+    "minutesAgo": "{{count}}m ago",
+    "hoursAgo": "{{count}}h ago",
+    "daysAgo": "{{count}}d ago"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "minimizeAria": "Minimize window",
+    "maximize": "Maximize",
+    "maximizeAria": "Maximize window",
+    "restore": "Restore",
+    "restoreAria": "Restore window",
+    "closeAria": "Close window"
+  },
+  "examples": {
+    "greeting": "Hello, {{name}}",
+    "itemCount_one": "{{formattedCount}} item",
+    "itemCount_other": "{{formattedCount}} items"
+  }
+}
