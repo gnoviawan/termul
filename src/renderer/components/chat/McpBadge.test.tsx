@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { McpBadge } from './McpBadge'
 
@@ -6,26 +6,16 @@ function openPopover(): void {
   fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
 }
 
-describe('McpBadge (Story 1.8 — read-only MCP badge in composer)', () => {
+describe('McpBadge (count-only fallback)', () => {
   it('is hidden when no MCP servers are attached (count <= 0) and no server list', () => {
     const { container } = render(<McpBadge count={0} />)
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('hides the compact composer icon when no servers are configured', () => {
-    const { container } = render(<McpBadge count={0} compact />)
-    expect(container).toBeEmptyDOMElement()
-  })
-
-  it('renders the count when MCP servers are attached (count-only fallback)', () => {
+  it('renders the count-only button when MCP servers are attached (no server list)', () => {
     render(<McpBadge count={3} />)
-    expect(screen.getByText('3')).toBeInTheDocument()
-    expect(screen.getByText(/MCP servers attached/i)).toBeInTheDocument()
-  })
-
-  it('renders 1+ (single server) without crashing', () => {
-    render(<McpBadge count={1} />)
-    expect(screen.getByText('1')).toBeInTheDocument()
+    const btn = screen.getByRole('button', { name: /MCP servers — 3 attached/i })
+    expect(btn).toBeInTheDocument()
   })
 })
 
@@ -40,12 +30,11 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     expect(screen.getByRole('button', { name: /mcp servers/i })).toBeInTheDocument()
   })
 
-  it('keeps the full management popover behind the compact composer trigger', () => {
-    render(<McpBadge count={2} servers={servers} onToggle={vi.fn()} compact />)
+  it('renders the full management popover behind the trigger', () => {
+    render(<McpBadge count={2} servers={servers} onToggle={vi.fn()} />)
 
     const trigger = screen.getByRole('button', { name: /mcp servers/i })
-    expect(trigger.className).toContain('size-7')
-    expect(within(trigger).getByText('2')).toHaveClass('sr-only')
+    expect(trigger.className).toContain('size-8')
 
     fireEvent.click(trigger)
     expect(screen.getByText('Files')).toBeInTheDocument()
@@ -72,8 +61,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     const onToggle = vi.fn()
     render(<McpBadge count={1} servers={servers} onToggle={onToggle} />)
     openPopover()
-    // "Files" (s1) is enabled → its Switch turns it off. Each row's Switch is
-    // labelled with the server name + Disable/Enable prefix.
     const filesSwitch = screen.getByRole('switch', { name: /Disable Files/i }) as HTMLInputElement
     fireEvent.click(filesSwitch)
     expect(onToggle).toHaveBeenCalledWith('s1', false)
@@ -107,11 +94,9 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
       />
     )
     openPopover()
-    // Expanding the s1 collapsible triggers onLoadTools (auto-probe on first expand).
     fireEvent.click(screen.getByText(/1 tool/))
     expect(onLoadTools).toHaveBeenCalledWith('s1')
     expect(screen.getByText('read_file')).toBeInTheDocument()
-    // Per-tool toggle UI must NOT be present (deferred — read-only).
     expect(screen.queryByRole('switch', { name: /read_file/i })).not.toBeInTheDocument()
   })
 
@@ -126,9 +111,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
       />
     )
     openPopover()
-    // s1 is connected but has 0 tools — expand its collapsible and confirm the
-    // "No tools available" branch (NOT "Probing…" — the probe completed).
-    // Two servers render "Show tools" triggers; pick the first (s1 = "Files").
     fireEvent.click(screen.getAllByText(/show tools/i)[0])
     expect(screen.getByText(/no tools available/i)).toBeInTheDocument()
     expect(screen.queryByText(/probing/i)).not.toBeInTheDocument()
@@ -160,7 +142,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
       />
     )
     openPopover()
-    // "Remote" (s2) is the second row — its collapsible is the second trigger.
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
     const failedLine = screen.getByText(/probe failed — check the server config/i)
     expect(failedLine).toHaveAttribute('title', 'Probe failed.')

@@ -1398,12 +1398,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onToggle={(id, enabled) => {
                     void setMcpServerEnabled(id, enabled)
                       .then(() => {
-                        // The launcher pre-warms a `session/new` keyed without
-                        // MCP servers; createSession resolved the MCP set from
-                        // the registry AT pre-warm time. A toggle changes that
-                        // registry, so the warm session now holds a stale MCP
-                        // selection. Cancel + re-prepare so the next launch
-                        // resolves MCP from the updated registry.
                         if (!preparedKey || !activeConfigId || !projectRoot) return
                         const store = useAcpStore.getState()
                         store.cancelPreparedChat(preparedKey)
@@ -1421,7 +1415,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onLoadTools={(id) => {
                     void loadMcpTools(id)
                   }}
-                  compact
                 />
               </div>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">

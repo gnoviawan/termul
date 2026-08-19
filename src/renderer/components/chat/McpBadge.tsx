@@ -1,4 +1,3 @@
-import { Plug, PlugZap } from 'lucide-react'
 import { useState } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -16,8 +15,6 @@ interface McpBadgeProps {
   /** Number of MCP servers attached to this session (badge summary count). */
   count: number
   className?: string
-  /** Compact ghost trigger used in composer footers; popover content is unchanged. */
-  compact?: boolean
   /**
    * Per-server enable/disable popover (chatbox). When omitted (or empty), the
    * badge degrades to the read-only count pill (backward-compat — no popover).
@@ -39,6 +36,29 @@ interface McpBadgeProps {
   tools?: Record<string, McpToolInfo[]>
   /** Auto-probe on first expand of a server's tool list. */
   onLoadTools?: (id: string) => void
+}
+
+function McpIcon({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="1em"
+      height="1em"
+      viewBox="0 0 24 24"
+      className={className}
+      aria-hidden="true"
+    >
+      <title>MCP</title>
+      <path
+        fill="currentColor"
+        d="M9.795 1.694a4.287 4.287 0 0 1 6.061 0a4.28 4.28 0 0 1 1.181 3.819a4.28 4.28 0 0 1 3.819 1.181a4.287 4.287 0 0 1 0 6.061l-6.793 6.793a.25.25 0 0 0 0 .353l2.617 2.618a.75.75 0 1 1-1.061 1.061l-2.617-2.618a1.75 1.75 0 0 1 0-2.475l6.793-6.793a2.785 2.785 0 1 0-3.939-3.939l-5.9 5.9a.7.7 0 0 1-.249.165a.749.749 0 0 1-.812-1.225l5.9-5.901a2.785 2.785 0 1 0-3.939-3.939L2.931 10.68A.75.75 0 1 1 1.87 9.619z"
+      />
+      <path
+        fill="currentColor"
+        d="M12.42 4.069a.75.75 0 0 1 1.061 0a.75.75 0 0 1 0 1.061L7.33 11.28a2.79 2.79 0 0 0 0 3.94a2.79 2.79 0 0 0 3.94 0l6.15-6.151a.75.75 0 0 1 1.061 0a.75.75 0 0 1 0 1.061l-6.151 6.15a4.285 4.285 0 1 1-6.06-6.06z"
+      />
+    </svg>
+  )
 }
 
 function statusColor(status: ProbeStatus | undefined): string {
@@ -70,7 +90,6 @@ function statusLabel(status: ProbeStatus | undefined): string {
 export function McpBadge({
   count,
   className,
-  compact = false,
   servers,
   onToggle,
   probeStatus,
@@ -84,19 +103,18 @@ export function McpBadge({
   // Count-only pill (backward-compat — no server list passed).
   if (!hasServerList) {
     return (
-      <span
+      <button
+        type="button"
         className={cn(
-          compact
-            ? 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70'
-            : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground',
+          'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
+          "after:absolute after:-inset-1.5 after:content-['']",
+          'hover:text-foreground',
           className
         )}
-        title={compact ? `${count} MCP servers attached` : undefined}
+        aria-label={`MCP servers — ${count} attached`}
       >
-        <Plug className="size-3" aria-hidden="true" />
-        <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
-        <span className="sr-only">MCP servers attached</span>
-      </span>
+        <McpIcon className="size-4" />
+      </button>
     )
   }
 
@@ -110,7 +128,6 @@ export function McpBadge({
       tools={tools}
       onLoadTools={onLoadTools}
       className={className}
-      compact={compact}
     />
   )
 }
@@ -124,7 +141,6 @@ interface PopoverProps {
   tools?: Record<string, McpToolInfo[]>
   onLoadTools?: (id: string) => void
   className?: string
-  compact: boolean
 }
 
 function McpPopover({
@@ -135,8 +151,7 @@ function McpPopover({
   probeError,
   tools,
   onLoadTools,
-  className,
-  compact
+  className
 }: PopoverProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
@@ -145,15 +160,14 @@ function McpPopover({
         <button
           type="button"
           className={cn(
-            compact
-              ? 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent/40 hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-              : 'inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-3xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
+            "after:absolute after:-inset-1.5 after:content-['']",
+            'hover:text-foreground',
             className
           )}
           aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
         >
-          <PlugZap className="size-3" aria-hidden="true" />
-          <span className={cn('tabular-nums', compact && 'sr-only')}>{count}</span>
+          <McpIcon className="size-4" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-3 text-xs">
@@ -161,7 +175,7 @@ function McpPopover({
         <p className="mt-0.5 text-muted-foreground">
           {count > 0 ? `${count} attached to this session.` : 'No servers attached yet.'}
         </p>
-        <ul className="mt-2 space-y-2">
+        <ul className="mt-2 max-h-[300px] space-y-1.5 overflow-y-auto pr-2">
           {servers.map((server) => (
             <McpServerRow
               key={server.id}
@@ -201,15 +215,15 @@ function McpServerRow({
 }: ServerRowProps): React.JSX.Element {
   const enabled = server.enabled !== false
   return (
-    <li className="space-y-1.5 rounded-md border border-border/50 p-2">
+    <li className="space-y-1 rounded-md border border-border/50 p-1.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             aria-hidden
-            className={cn('size-2 shrink-0 rounded-full', statusColor(probeStatus))}
+            className={cn('size-1.5 shrink-0 rounded-full', statusColor(probeStatus))}
           />
           <span className="min-w-0 truncate">
-            <span className="block truncate text-sm font-medium">{server.name}</span>
+            <span className="block truncate text-xs font-medium">{server.name}</span>
             <span className="block text-3xs text-muted-foreground" title={statusLabel(probeStatus)}>
               {statusShortLabel(probeStatus)}
             </span>
@@ -218,7 +232,7 @@ function McpServerRow({
         {onToggle && (
           <Switch
             checked={enabled}
-            className="h-4 w-7 border [&>span]:h-3 [&>span]:w-3 [&>span[data-state=checked]]:translate-x-3"
+            className="h-3.5 w-6 border [&>span]:h-2.5 [&>span]:w-2.5 [&>span[data-state=checked]]:translate-x-2.5"
             aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
             onCheckedChange={(checked) => {
               if (checked === enabled) return

@@ -574,7 +574,6 @@ export function ChatInputBar({
       onLoadTools={(id) => {
         void loadMcpTools(id)
       }}
-      compact
     />
   )
 
