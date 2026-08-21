@@ -10,6 +10,11 @@
     "file": "amp-acp.svg"
   },
   {
+    "id": "antigravity-acp",
+    "name": "Google Antigravity",
+    "file": "antigravity-acp.svg"
+  },
+  {
     "id": "auggie",
     "name": "Auggie CLI",
     "file": "auggie.svg"
