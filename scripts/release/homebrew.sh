@@ -121,7 +121,11 @@ generate_sha256sums() {
     return 1
   fi
 
-  mv -- "$tmp_output" "$output_file"
+  if ! mv -- "$tmp_output" "$output_file"; then
+    echo "Failed to move $tmp_output to $output_file" >&2
+    rm -f -- "$tmp_output"
+    return 1
+  fi
 }
 
 write_homebrew_cask() {
