@@ -62,6 +62,58 @@ resolve_dmg_checksums() {
   printf '%s\n%s\n' "$arm_sha256" "$intel_sha256"
 }
 
+# Generate SHA256SUMS.txt for downloaded release assets, validating that
+# every checksummed filename exactly matches a published release asset
+# name. `scripts/install.sh` resolves checksums by exact asset name, so a
+# silent name mismatch (e.g. a file named with the product display name
+# "Termul Manager" while the release asset is "Termul.Manager") makes the
+# install fail with "checksum not found" even though the asset itself
+# downloaded fine (#546).
+#
+#   generate_sha256sums <asset_dir> <expected_names_file> <output_file>
+#
+# <expected_names_file> lists the release's published asset names, one per
+# line (e.g. `gh release view --json assets --jq '.assets[].name'`).
+# Signatures and the updater manifest are not installable assets and are
+# skipped, mirroring the previous inline workflow logic.
+generate_sha256sums() {
+  local asset_dir="$1"
+  local expected_names_file="$2"
+  local output_file="$3"
+
+  if [[ ! -d "$asset_dir" ]]; then
+    echo "Asset directory not found: $asset_dir" >&2
+    return 1
+  fi
+  if [[ ! -s "$expected_names_file" ]]; then
+    echo "Expected release asset names file is missing or empty: $expected_names_file" >&2
+    return 1
+  fi
+
+  local asset name asset_count=0
+  : > "$output_file"
+  while IFS= read -r -d '' asset; do
+    name="$(basename "$asset")"
+    case "$name" in
+      *.sig|latest.json|SHA256SUMS.txt) continue ;;
+    esac
+    if ! grep -Fxq -- "$name" "$expected_names_file"; then
+      echo "Refusing to checksum '$name': it is not a published release asset name." >&2
+      echo "scripts/install.sh resolves checksums by exact asset name; a name mismatch breaks the install (#546)." >&2
+      return 1
+    fi
+    # Checksum from inside the directory so the entry carries the bare
+    # asset name, exactly like the installer looks it up.
+    (cd "$asset_dir" && sha256sum "$name") >> "$output_file"
+    asset_count=$((asset_count + 1))
+  done < <(find "$asset_dir" -maxdepth 1 -type f -print0 | sort -z)
+
+  if [[ "$asset_count" -eq 0 ]]; then
+    echo "No binary release assets found to checksum." >&2
+    return 1
+  fi
+}
+
 write_homebrew_cask() {
   local output_file="$1"
   local version="$2"
