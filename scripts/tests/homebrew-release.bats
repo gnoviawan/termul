@@ -185,6 +185,33 @@ NAMES
 
   # Nothing may be written when validation fails.
   [ ! -s "$out" ]
+  # The atomic-write temp file must be cleaned up too.
+  [ -z "$(find "$TERMUL_TEST_TMP_DIR" -maxdepth 1 -name 'SHA256SUMS.txt.tmp.*' -print -quit)" ]
+}
+
+@test "generate_sha256sums leaves no partial output when a valid asset sorts before a mismatched one" {
+  # CodeRabbit review: a valid asset processed before the failure must not
+  # leave partial checksum output behind, and a previously published
+  # checksum file must survive the failed regeneration.
+  local dir="$TERMUL_TEST_TMP_DIR/assets"
+  local names="$TERMUL_TEST_TMP_DIR/names.txt"
+  local out="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  mkdir -p "$dir"
+  # "AAA..." sorts before "Termul Manager...", so the valid asset is
+  # checksummed first and the mismatch then aborts the run.
+  printf 'deb-bytes' >"$dir/AAA_valid.deb"
+  printf 'app-image-bytes' >"$dir/Termul Manager_0.4.10_amd64.AppImage"
+  printf 'AAA_valid.deb' >"$names"
+
+  printf 'old-checksum-content\n' >"$out"
+
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a published release asset name"* ]]
+
+  # The prior checksum file is untouched — no partial write, no clobber.
+  [ "$(cat "$out")" = "old-checksum-content" ]
+  [ -z "$(find "$TERMUL_TEST_TMP_DIR" -maxdepth 1 -name 'SHA256SUMS.txt.tmp.*' -print -quit)" ]
 }
 
 @test "generate_sha256sums requires assets and a nonempty expected-names list" {

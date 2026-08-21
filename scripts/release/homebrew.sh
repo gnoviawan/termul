@@ -90,8 +90,11 @@ generate_sha256sums() {
     return 1
   fi
 
-  local asset name asset_count=0
-  : > "$output_file"
+  local asset name asset_count=0 tmp_output
+  # Write to a sibling temp file and move it into place only after every
+  # asset validates: a mid-loop failure must not leave partial output or
+  # clobber a previously published checksum file.
+  tmp_output="$(mktemp "${output_file}.tmp.XXXXXX")" || return 1
   while IFS= read -r -d '' asset; do
     name="$(basename "$asset")"
     case "$name" in
@@ -100,18 +103,25 @@ generate_sha256sums() {
     if ! grep -Fxq -- "$name" "$expected_names_file"; then
       echo "Refusing to checksum '$name': it is not a published release asset name." >&2
       echo "scripts/install.sh resolves checksums by exact asset name; a name mismatch breaks the install (#546)." >&2
+      rm -f -- "$tmp_output"
       return 1
     fi
     # Checksum from inside the directory so the entry carries the bare
     # asset name, exactly like the installer looks it up.
-    (cd "$asset_dir" && sha256sum "$name") >> "$output_file"
+    if ! (cd "$asset_dir" && sha256sum "$name") >> "$tmp_output"; then
+      rm -f -- "$tmp_output"
+      return 1
+    fi
     asset_count=$((asset_count + 1))
   done < <(find "$asset_dir" -maxdepth 1 -type f -print0 | sort -z)
 
   if [[ "$asset_count" -eq 0 ]]; then
     echo "No binary release assets found to checksum." >&2
+    rm -f -- "$tmp_output"
     return 1
   fi
+
+  mv -- "$tmp_output" "$output_file"
 }
 
 write_homebrew_cask() {
