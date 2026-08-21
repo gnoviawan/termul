@@ -3084,6 +3084,11 @@ impl Drop for PromptClaim {
     }
 }
 
+// clippy 1.98 (`result_large_err`): `WsReply` is ≥128 bytes, but it is the
+// error currency of every WS handler here and is consumed immediately by
+// the enclosing send path — boxing it would ripple through all call sites
+// for no functional gain. Allowed pending a dedicated WsReply refactor.
+#[allow(clippy::result_large_err)]
 async fn accept_send_prompt(
     id: String,
     payload: &Value,

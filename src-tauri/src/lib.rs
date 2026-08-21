@@ -656,13 +656,13 @@ fn build_app_menu<R: tauri::Runtime>(
             .quit()
             .build()?;
 
-        return MenuBuilder::new(app)
+        MenuBuilder::new(app)
             .item(&app_menu)
             .item(&edit_menu)
             .item(&view_menu)
             .item(&window_menu)
             .item(&help_menu)
-            .build();
+            .build()
     }
 
     #[cfg(not(target_os = "macos"))]
