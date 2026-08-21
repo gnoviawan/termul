@@ -438,18 +438,29 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
   it('renders the MCP badge with the count when MCP servers are configured', () => {
     mockMcpCount.current = 2
     renderInputBar()
-    // The badge is now a popover trigger (per-server enable/disable + status
-    // dot) showing the count. The old sr-only "MCP servers attached" text moved
-    // into the trigger's aria-label + the popover content (opened below).
-    expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /MCP servers/i })).toBeInTheDocument()
+    // The badge is now an icon-only popover trigger (#643): the count lives
+    // in the accessible name and inside the (closed) popover, no longer as
+    // a standalone text node.
+    expect(
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
   })
 
   it('prefers the switched session MCP count over the global registry', () => {
     mockMcpCount.current = 5
     renderInputBar({ session: { ...session(), mcpServerCount: 2 } })
-    expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.queryByText('5')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
+      })
+    ).not.toBeInTheDocument()
   })
 })
 
