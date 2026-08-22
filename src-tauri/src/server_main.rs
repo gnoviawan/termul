@@ -73,6 +73,29 @@ fn main() -> ExitCode {
 
     init_tracing();
 
+    // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
+    // standalone server enables `--allow-remote-writes`, any non-loopback peer
+    // gains write access to a broad set of mutation routes — surface it
+    // loudly at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
+    if cfg.allow_remote_writes {
+        let host = &cfg.host;
+        tracing::warn!(
+            "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
+             on {} gain: fs mkdir/write/delete/rename/copy CONFINED to project_root '{}'; \
+             git + worktree operations confined to project_root; AND host-state mutation via \
+             /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
+             keep ADR-007 breadth (any path). No web auth is enforced yet (Epic 2).",
+            host,
+            cfg.project_root.display()
+        );
+        if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
+            tracing::warn!(
+                "termul-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
+                 (no non-loopback peer can ever reach the server)"
+            );
+        }
+    }
+
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -468,18 +491,30 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--check-update]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--allow-remote-writes] [--check-update]\n\n\
      Options:\n\
         --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
         --port PORT                 Bind port (default: 8080)\n\
         --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
         --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
         --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
-        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
+        --project-root PATH         Project-root boundary for /git/*,/skills,/search (NOT /fs/* — ADR-007) (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
         --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
         --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
+        --allow-remote-writes       Admit non-loopback peers on ALL guarded write routes:\n\
+                                     fs (mkdir/write/delete/rename/copy) CONFINED to\n\
+                                     --project-root (remote-containment); git + worktree\n\
+                                     writes confined to --project-root; AND host-state writes\n\
+                                     (/projects/default, /acp/install, /log/frontend-error,\n\
+                                     /workspace/*). Loopback callers keep ADR-007 breadth\n\
+                                     (any path). Default: loopback-only (CWE-306 guard on).\n\
+                                     Desktop shared-live mode denies ALL writes regardless\n\
+                                     of peer (cloudflared-tunnel mitigation). Only enable on\n\
+                                     a trusted network — no web auth is enforced yet (Epic 2).\n\
+                                     No-op when bound to 127.0.0.1.\n\
+                                     (env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1)\n\
         --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
                                      verify the downloaded binary signature, atomically swap, and\n\
                                      reexec. Defaults to the stable channel when\n\

@@ -117,7 +117,7 @@ fn resolve_project_path<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer) {
+            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/worktree/*") {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -560,26 +560,24 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(
-                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-            )),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry: Arc::new(ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(
+            root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+        )),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -1033,6 +1031,8 @@ mod tests {
             None,
             None,
             None,
+            false,
+            false,
         )
     }
 

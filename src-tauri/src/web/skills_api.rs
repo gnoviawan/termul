@@ -182,28 +182,26 @@ mod tests {
 
     fn test_state() -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(
-                std::env::temp_dir()
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::env::temp_dir()),
-            )),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry: Arc::new(ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(
+            std::env::temp_dir()
+                .canonicalize()
+                .unwrap_or_else(|_| std::env::temp_dir()),
+        )),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {

@@ -204,7 +204,7 @@ fn resolve_cwd<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer) {
+            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/git/*") {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -1042,24 +1042,22 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry: Arc::new(ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -1270,6 +1268,37 @@ mod tests {
         let body: IpcBody<()> = body_as(resp.into_body()).await;
         assert!(!body.success);
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on `/git/stage`
+    /// (the shared `check_local_only` opt-in branch reached via
+    /// `resolve_cwd`). Mirrors `stage_refused_from_non_loopback_peer` with
+    /// the flag on.
+    #[tokio::test]
+    async fn stage_admitted_from_non_loopback_peer_when_opt_in() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("stage-opt-in");
+        std::fs::write(repo.join("a.txt"), "x").expect("write");
+        let mut state =
+            test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        state.allow_remote_writes = true;
+        let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
+        let resp = post_json_from(
+            state,
+            "/git/stage",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "path": "a.txt" }),
+            remote,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback stage: {:?}",
+            body.error
+        );
     }
 
     #[tokio::test]

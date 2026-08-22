@@ -76,11 +76,11 @@
   {
     "id": "auggie",
     "name": "Auggie CLI",
-    "version": "0.35.0",
+    "version": "0.36.0",
     "description": "Augment Code's powerful software agent, backed by industry-leading context engine",
     "distribution": {
       "npx": {
-        "package": "@augmentcode/auggie@0.35.0",
+        "package": "@augmentcode/auggie@0.36.0",
         "args": ["--acp"],
         "env": {
           "AUGMENT_DISABLE_AUTO_UPDATE": "1"
@@ -300,38 +300,38 @@
   {
     "id": "devin",
     "name": "Devin",
-    "version": "3000.4.25",
+    "version": "3000.5.20",
     "description": "Devin CLI coding agent by Cognition",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./bin/devin",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-aarch64-apple-darwin.tar.gz",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-aarch64-apple-darwin.tar.gz",
           "args": ["acp"]
         },
         "darwin-x86_64": {
           "cmd": "./bin/devin",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-x86_64-apple-darwin.tar.gz",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-x86_64-apple-darwin.tar.gz",
           "args": ["acp"]
         },
         "linux-aarch64": {
           "cmd": "./bin/devin",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-aarch64-unknown-linux.tar.gz",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-aarch64-unknown-linux.tar.gz",
           "args": ["acp"]
         },
         "linux-x86_64": {
           "cmd": "./bin/devin",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-x86_64-unknown-linux.tar.gz",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-x86_64-unknown-linux.tar.gz",
           "args": ["acp"]
         },
         "windows-aarch64": {
           "cmd": "./bin\\devin.exe",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-aarch64-pc-windows.zip",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-aarch64-pc-windows.zip",
           "args": ["acp"]
         },
         "windows-x86_64": {
           "cmd": "./bin\\devin.exe",
-          "archive": "https://static.devin.ai/cli/3000.4.25/devin-3000.4.25-x86_64-pc-windows.zip",
+          "archive": "https://static.devin.ai/cli/3000.5.20/devin-3000.5.20-x86_64-pc-windows.zip",
           "args": ["acp"]
         }
       }
@@ -364,11 +364,11 @@
   {
     "id": "factory-droid",
     "name": "Factory Droid",
-    "version": "0.200.0",
+    "version": "0.202.0",
     "description": "Factory Droid - AI coding agent powered by Factory AI",
     "distribution": {
       "npx": {
-        "package": "droid@0.200.0",
+        "package": "droid@0.202.0",
         "args": ["exec", "--output-format", "acp-daemon"],
         "env": {
           "DROID_DISABLE_AUTO_UPDATE": "true",
@@ -430,7 +430,7 @@
   {
     "id": "goose",
     "name": "goose",
-    "version": "1.46.0",
+    "version": "1.47.0",
     "description": "A local, extensible, open source AI agent that automates engineering tasks",
     "distribution": {
       "binary": {
@@ -452,7 +452,7 @@
         },
         "windows-x86_64": {
           "cmd": "./goose-package\\goose.exe",
-          "archive": "https://github.com/block/goose/releases/download/v1.46.0/goose-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/block/goose/releases/download/v1.47.0/goose-x86_64-pc-windows-msvc.zip",
           "args": ["acp"]
         }
       }
@@ -473,33 +473,33 @@
   {
     "id": "harn",
     "name": "Harn",
-    "version": "0.10.109",
+    "version": "0.10.111",
     "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.109/harn-aarch64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.111/harn-aarch64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "darwin-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.109/harn-x86_64-apple-darwin.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.111/harn-x86_64-apple-darwin.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-aarch64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.109/harn-aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.111/harn-aarch64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "linux-x86_64": {
           "cmd": "./harn",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.109/harn-x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.111/harn-x86_64-unknown-linux-gnu.tar.gz",
           "args": ["serve", "acp"]
         },
         "windows-x86_64": {
           "cmd": "harn.exe",
-          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.109/harn-x86_64-pc-windows-msvc.zip",
+          "archive": "https://github.com/burin-labs/harn/releases/download/v0.10.111/harn-x86_64-pc-windows-msvc.zip",
           "args": ["serve", "acp"]
         }
       }
@@ -664,11 +664,11 @@
   {
     "id": "nova",
     "name": "Nova",
-    "version": "1.1.35",
+    "version": "1.1.37",
     "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
     "distribution": {
       "npx": {
-        "package": "@compass-ai/nova@1.1.35",
+        "package": "@compass-ai/nova@1.1.37",
         "args": ["acp"]
       }
     }

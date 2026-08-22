@@ -130,7 +130,7 @@ pub async fn write(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer) {
+    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/write") {
         return (StatusCode::OK, Json(forbidden));
     }
     // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
@@ -201,7 +201,7 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/delete") {
         return (StatusCode::OK, Json(forbidden));
     }
     let Some(service) = state.workspace_manifest.as_ref() else {
@@ -230,13 +230,48 @@ pub async fn delete(
 
 /// Localhost-only guard for write/delete routes (mirrors
 /// `log_api::frontend_error` / `fs_api::check_local_only`). Returns `None`
-/// when the peer is loopback, or `Some(IpcBody::err(...))` with `code:
-/// "FORBIDDEN"` when remote. 200+IpcResult convention (200 with the error body)
-/// so the renderer maps it to a uniform failure body.
-fn check_local_only<T>(peer: SocketAddr) -> Option<IpcBody<T>> {
-    if peer.ip().is_loopback() {
+/// when the peer is loopback OR the standalone `termul-server` operator
+/// opt-in `allow_remote_writes` is set, or `Some(IpcBody::err(...))` with
+/// code `"FORBIDDEN"` when remote. 200+IpcResult convention (200 with the
+/// error body) so the renderer maps it to a uniform failure body. Emits a
+/// durable boundary log on admission-via-opt-in and on refusal (AGENTS.md).
+fn check_local_only<T>(
+    peer: SocketAddr,
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
+    route: &str,
+) -> Option<IpcBody<T>> {
+    // Deployment-mode deny FIRST (mirrors fs_api::check_local_only).
+    if shared_live_writes_denied {
+        tracing::warn!(
+            target: "termul::web::workspace_api",
+            route = route,
+            peer = %peer,
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+        );
+        return Some(IpcBody::<T>::err(
+            "shared-live deployment mode denies all remote writes".to_string(),
+            "FORBIDDEN",
+        ));
+    }
+    let is_loopback = peer.ip().is_loopback();
+    if is_loopback || allow_remote_writes {
+        if !is_loopback && allow_remote_writes {
+            tracing::warn!(
+                target: "termul::web::workspace_api",
+                route = route,
+                peer = %peer,
+                "remote-write guard ADMITTED (--allow-remote-writes)",
+            );
+        }
         None
     } else {
+        tracing::warn!(
+            target: "termul::web::workspace_api",
+            route = route,
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
         Some(IpcBody::<T>::err(
             format!("workspace manifest write/delete routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",
@@ -318,24 +353,22 @@ mod tests {
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: Some(store),
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: Some(store),
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Patch 7: degraded-mode (`None` store) test helper. Mirrors
@@ -344,24 +377,22 @@ mod tests {
     /// WORKSPACE_MANIFEST_UNAVAILABLE; delete → Ok(())).
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     // ---- Patch 7: degraded-mode (`None` store) responses ----
@@ -795,6 +826,61 @@ mod tests {
         let resp = get_manifest(state, "project-1").await;
         let body: IpcBody<Option<WorkspaceManifest>> = body_as_json(resp.into_body()).await;
         assert!(body.data.unwrap().is_some());
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/workspace/{id}/write` (the workspace_api-local guard copy honors
+    /// the opt-in — distinct from `fs_api::check_local_only`).
+    #[tokio::test]
+    async fn write_admitted_from_non_loopback_when_opt_in() {
+        let dir = TempDir::new("write-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        state.allow_remote_writes = true;
+        let manifest = serde_json::to_value(sample_manifest("project-1")).unwrap();
+        let body = serde_json::json!({
+            "basedRevision": null,
+            "manifest": manifest
+        });
+        let resp = post_write(state, "project-1", &body, remote_peer()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<WriteOutcome> = body_as_json(resp.into_body()).await;
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback write: {:?}",
+            body.error
+        );
+        assert!(matches!(
+            body.data.unwrap(),
+            WriteOutcome::Updated { .. }
+        ));
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/workspace/{id}/delete`.
+    #[tokio::test]
+    async fn delete_admitted_from_non_loopback_when_opt_in() {
+        let dir = TempDir::new("delete-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        // Seed a manifest from loopback first.
+        let manifest = serde_json::to_value(sample_manifest("project-1")).unwrap();
+        let body = serde_json::json!({
+            "basedRevision": null,
+            "manifest": manifest
+        });
+        let resp = post_write(state.clone(), "project-1", &body, loopback_peer()).await;
+        assert!(matches!(
+            body_as_json::<IpcBody<WriteOutcome>>(resp.into_body())
+                .await
+                .data
+                .unwrap(),
+            WriteOutcome::Updated { .. }
+        ));
+        // Opt-in + non-loopback delete → admitted (success).
+        state.allow_remote_writes = true;
+        let resp = post_delete(state, "project-1", remote_peer()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "opt-in must admit non-loopback delete: {:?}", body.error);
     }
 
     #[tokio::test]

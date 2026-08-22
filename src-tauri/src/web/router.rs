@@ -6,15 +6,19 @@
 //! explicitly AHEAD of the static fallback so it is not shadowed by the static
 //! mount (AC1).
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
+    Json,
     Router,
 };
+use serde::Serialize;
 
 use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
 use crate::pty::PtyManager;
@@ -77,6 +81,8 @@ pub fn router(
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
     store: Option<Arc<WebStore>>,
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -216,6 +222,8 @@ pub fn router(
         acp_catalog,
         acp_install,
         store,
+        allow_remote_writes,
+        shared_live_writes_denied,
         project_root: project_root_handle,
     })
 }
@@ -232,6 +240,7 @@ pub fn router(
 /// (the tests do not exercise the manifest routes); the doc comment
 /// surfaces the degraded behavior loudly enough that a production caller
 /// won't silently pick this variant.
+#[allow(clippy::too_many_arguments)]
 pub fn router_with_static(
     acp: Arc<AcpManager>,
     pty: Arc<PtyManager>,
@@ -239,6 +248,8 @@ pub fn router_with_static(
     registry: Arc<ProjectRegistry>,
     static_dir: &Path,
     project_root: PathBuf,
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
 ) -> Router {
     Router::new()
         .route("/health", get(health_check))
@@ -322,14 +333,52 @@ pub fn router_with_static(
                 acp_catalog: None,
                 acp_install: None,
                 store: None,
+                allow_remote_writes,
+                shared_live_writes_denied,
                 project_root: project_root_handle,
             }
         })
 }
 
-/// Liveness probe for the ACP web server.
-async fn health_check() -> impl IntoResponse {
-    (StatusCode::OK, "OK")
+/// Liveness + capability probe for the ACP web server. Returns JSON so the
+/// web client can discover the server's write-admission policy
+/// (`allowRemoteWrites`) instead of guessing from `window.location.hostname`
+/// (wrong for Cloudflare tunnel domains). The admission bool mirrors the
+/// EXACT per-request `check_local_only` admission for the requesting peer:
+/// `!shared_live_writes_denied && (peer.is_loopback() || allow_remote_writes)`.
+/// A loopback peer (e.g. a `localhost` browser on the standalone server, no
+/// opt-in) is admitted regardless of `allow_remote_writes`, so `/health`
+/// reports `true` for it — matching what its `/worktree/*` writes would face.
+/// Desktop shared-live sets `shared_live_writes_denied`, so it reports `false`
+/// for every peer (writes are genuinely denied there).
+async fn health_check(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
+    let allow = !state.shared_live_writes_denied
+        && (peer.ip().is_loopback() || state.allow_remote_writes);
+    // Durable boundary log (AGENTS.md): record the capability-admission
+    // decision. No peer address or credentials logged — only the decision
+    // + whether the deployment-mode deny or opt-in governed it.
+    tracing::debug!(
+        target: "termul::web::router",
+        allow_remote_writes = allow,
+        shared_live_denied = state.shared_live_writes_denied,
+        opt_in = state.allow_remote_writes,
+        "health capability probe",
+    );
+    (StatusCode::OK, Json(HealthBody {
+        status: "ok",
+        allow_remote_writes: allow,
+    }))
+}
+
+/// `GET /health` response body.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthBody {
+    status: &'static str,
+    allow_remote_writes: bool,
 }
 
 #[cfg(test)]
@@ -381,16 +430,23 @@ mod tests {
             Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             dir,
             std::env::temp_dir(),
+            false,
+            false,
         )
     }
 
     #[tokio::test]
-    async fn health_returns_ok() {
+    async fn health_returns_capability_json_for_loopback_peer() {
+        // Default fixture: `allow_remote_writes=false`,
+        // `shared_live_writes_denied=false`. A loopback peer (the default for
+        // a same-origin browser) is admitted by `check_local_only` regardless
+        // of the opt-in, so `/health` reports `allowRemoteWrites:true`.
         let dir = TempDir::new("health");
         let resp = test_router_with_fixture(dir.path())
             .oneshot(
                 Request::builder()
                     .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::empty())
                     .expect("build request"),
             )
@@ -400,8 +456,132 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        assert_eq!(&body[..], b"OK");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON");
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(
+            parsed["allowRemoteWrites"],
+            true,
+            "loopback peer must be admitted even without the opt-in (mirrors check_local_only)"
+        );
     }
+
+    /// Non-loopback peer WITHOUT the opt-in → `allowRemoteWrites:false`. This
+    /// is the tunnel/LAN client whose server denies writes; the client must
+    /// hide the picker so it never reaches a launch that `FORBIDDEN`s.
+    #[tokio::test]
+    async fn health_reports_denied_for_non_loopback_without_opt_in() {
+        let dir = TempDir::new("health-remote");
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            false, // allow_remote_writes (no opt-in)
+            false, // shared_live_writes_denied (standalone)
+        );
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([192, 168, 1, 50], 40000))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON");
+        assert_eq!(
+            parsed["allowRemoteWrites"],
+            false,
+            "non-loopback peer without opt-in must be denied"
+        );
+    }
+
+    /// Desktop shared-live (`shared_live_writes_denied=true`) reports `false`
+    /// for EVERY peer — even a loopback peer — because the deployment-mode
+    /// deny takes precedence. The client keeps the picker hidden on this path
+    /// (writes are genuinely denied server-side).
+    #[tokio::test]
+    async fn health_reports_denied_for_all_peers_when_shared_live() {
+        let dir = TempDir::new("health-shared-live");
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            true,  // allow_remote_writes (would admit non-loopback on standalone)
+            true,  // shared_live_writes_denied (desktop shared-live overrides)
+        );
+        // Even a loopback peer is denied on shared-live.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON");
+        assert_eq!(
+            parsed["allowRemoteWrites"],
+            false,
+            "shared-live deny must override loopback peer + allow_remote_writes"
+        );
+    }
+
+    /// `allow_remote_writes=true` + `shared_live_writes_denied=false` → a
+    /// non-loopback peer is ADMITTED (`allowRemoteWrites:true`). This is the
+    /// standalone `termul-server --allow-remote-writes` posture.
+    #[tokio::test]
+    async fn health_reports_admitted_for_non_loopback_with_opt_in() {
+        let dir = TempDir::new("health-opt-in");
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            true,  // allow_remote_writes (opt-in)
+            false, // shared_live_writes_denied (standalone, not shared-live)
+        );
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 50000))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON");
+        assert_eq!(
+            parsed["allowRemoteWrites"],
+            true,
+            "non-loopback peer with opt-in must be admitted"
+        );
+    }
+
 
     #[tokio::test]
     async fn ws_route_no_longer_returns_501_placeholder() {
@@ -549,6 +729,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::empty())
                     .expect("build request"),
             )
@@ -558,6 +739,10 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        assert_eq!(&body[..], b"OK");
+        // The probe now returns JSON (capability body), not the bare "OK"
+        // string — assert it's the handler's JSON, not the dropped static file.
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON, not the static file");
+        assert_eq!(parsed["status"], "ok");
     }
 }
