@@ -360,6 +360,10 @@ impl RemoteServerState {
             // Issue #613: `None` → resolve `<service_account_state_dir>/store.json`
             // at serve time (the shared-live host gets a durable store too).
             store_file: None,
+            // Desktop shared-live LAN clients stay view-only for mutations
+            // (CWE-306 guard stays on); only the standalone `termul-server`
+            // honors the `--allow-remote-writes` opt-in.
+            allow_remote_writes: false,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

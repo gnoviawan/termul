@@ -117,7 +117,7 @@ fn resolve_project_path<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer) {
+            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -579,6 +579,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -1033,6 +1034,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
     }
 

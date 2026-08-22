@@ -197,6 +197,17 @@ pub struct ServerConfig {
     /// `serve_router`, so the desktop shared-live path gets a durable store
     /// too (no per-browser localStorage fallback).
     pub store_file: Option<PathBuf>,
+    /// Operator opt-in: admit non-loopback peers on the loopback-guarded
+    /// write routes (`/fs/*` writes, `/git/*` writes, `/worktree/*` writes,
+    /// `/workspace/*` write+delete, `/log/frontend-error`,
+    /// `/projects/default`, `/acp/install`). Default `false` keeps the
+    /// CWE-306 loopback guard on for any `0.0.0.0` bind. Only the standalone
+    /// `termul-server` honors `--allow-remote-writes` /
+    /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
+    /// always sets this `false` (LAN clients remain view-only for
+    /// mutations). Gating on web auth is deliberately avoided — web auth is
+    /// a placeholder until Epic 2.
+    pub allow_remote_writes: bool,
 }
 
 impl ServerConfig {
@@ -301,6 +312,10 @@ impl ServerConfig {
         // `None` means resolve `<service_account_state_dir>/store.json` at
         // serve time (the desktop shared-live path never sets this).
         let mut store_file: Option<PathBuf> = None;
+        // Operator opt-in for non-loopback fs/git/workspace write peers
+        // (CWE-306 guard relaxation). CLI flag wins over env; an
+        // unset/invalid env var stays `false` (lenient — no fatal startup).
+        let mut allow_remote_writes = false;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -461,6 +476,11 @@ impl ServerConfig {
                     }
                     store_file = Some(PathBuf::from(trimmed));
                 }
+                "--allow-remote-writes" => {
+                    // Bare flag (no value). CLI wins over the env var; the
+                    // env is read below only when the flag is absent.
+                    allow_remote_writes = true;
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -533,6 +553,20 @@ impl ServerConfig {
             }),
         };
 
+        // Operator opt-in env fallback: only consulted when the CLI flag
+        // was absent (CLI sets `allow_remote_writes = true` and wins). Only
+        // `"true"`/`"1"` (case-insensitive) enable; any other value
+        // (including a typo) stays `false` — lenient, no fatal startup.
+        if !allow_remote_writes {
+            allow_remote_writes = matches!(
+                std::env::var("TERMUL_SERVER_ALLOW_REMOTE_WRITES")
+                    .ok()
+                    .map(|v| v.trim().to_ascii_lowercase())
+                    .as_deref(),
+                Some("true") | Some("1")
+            );
+        }
+
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
                 "could not determine sessions directory: set --sessions-dir or $TERMUL_SESSIONS_DIR"
@@ -558,6 +592,7 @@ impl ServerConfig {
             workspace_manifests_dir,
             acp_catalog_dir,
             store_file,
+            allow_remote_writes,
         })
     }
 }
@@ -684,6 +719,7 @@ mod tests {
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
+            allow_remote_writes: false,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -702,6 +738,7 @@ mod tests {
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
+            allow_remote_writes: false,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -943,6 +980,7 @@ mod tests {
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
+            allow_remote_writes: false,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved
@@ -954,6 +992,78 @@ mod tests {
             resolved.is_absolute(),
             "service_account_state_dir must resolve to an absolute path, got: {}",
             resolved.display()
+        );
+    }
+
+    // --- allow_remote_writes opt-in (CWE-306 guard relaxation) ---
+
+    // `from_args` reads `TERMUL_SERVER_ALLOW_REMOTE_WRITES` from the real
+    // process env. These env-mutating tests are NOT parallel-safe, so
+    // serialize them with a shared lock (mirrors `acp::host_mcp::child`'s
+    // `ENV_LOCK` pattern). The lock also protects `from_args_defaults_to_guarded`,
+    // which reads the same env var without mutating it — without the lock a
+    // sibling test's `set_var` can flip its assertion spuriously.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_remote_writes_env() {
+        std::env::remove_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES");
+    }
+
+    #[test]
+    fn from_args_defaults_to_guarded() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+        assert!(
+            !cfg.allow_remote_writes,
+            "default must keep the loopback write guard ON"
+        );
+    }
+
+    #[test]
+    fn from_args_flag_enables() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
+        assert!(cfg.allow_remote_writes, "--allow-remote-writes sets the flag");
+    }
+
+    #[test]
+    fn from_args_env_enables_true() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "true");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            cfg.allow_remote_writes,
+            "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true must enable"
+        );
+    }
+
+    #[test]
+    fn from_args_invalid_env_stays_guarded() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "yes");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            !cfg.allow_remote_writes,
+            "env value 'yes' must NOT enable (only 'true'/'1')"
+        );
+    }
+
+    #[test]
+    fn from_args_cli_wins_over_env_false() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "false");
+        let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            cfg.allow_remote_writes,
+            "CLI --allow-remote-writes must win over env=false"
         );
     }
 }

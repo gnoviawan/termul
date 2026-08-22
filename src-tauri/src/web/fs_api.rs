@@ -205,9 +205,18 @@ fn should_ignore(name: &str) -> bool {
 /// local, or `Some(IpcBody::err(...))` with `code: "FORBIDDEN"` when remote.
 /// Matches the existing 200+IpcResult convention (200 with the IpcResult error)
 /// so the renderer maps it to a uniform failure body.
-pub(super) fn check_local_only<T>(peer: SocketAddr) -> Option<IpcBody<T>> {
+///
+/// `allow_remote_writes` is the standalone `termul-server` operator opt-in
+/// (`--allow-remote-writes` / `TERMUL_SERVER_ALLOW_REMOTE_WRITES`). When
+/// `true` the guard admits non-loopback peers across every guarded write
+/// route; default `false` preserves the CWE-306 mitigation. The desktop
+/// shared-live host always passes `false`.
+pub(super) fn check_local_only<T>(
+    peer: SocketAddr,
+    allow_remote_writes: bool,
+) -> Option<IpcBody<T>> {
     let is_loopback = peer.ip().is_loopback();
-    if is_loopback {
+    if is_loopback || allow_remote_writes {
         None
     } else {
         Some(IpcBody::<T>::err(
@@ -432,11 +441,11 @@ fn entry_dto(parent: &Path, name: String, metadata: Option<&fs::Metadata>) -> Di
 /// so `ConnectInfo<SocketAddr>` is available.
 ///
 pub async fn mkdir(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<MkdirRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -464,11 +473,11 @@ pub async fn mkdir(
 /// **Localhost guard (Patch D):** same guard as `mkdir` — refused unless the
 /// peer is loopback.
 pub async fn write(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -637,11 +646,11 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
 /// `isBinaryFile` regex and the `/fs/read` sample scan — so the web path
 /// agrees with desktop on which files the editor should refuse to open.
 pub async fn info(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer) {
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let requested_path = q.path.clone();
@@ -711,11 +720,11 @@ pub async fn info(
 /// like `mkdir`/`write` — mutations stay localhost-only even when the server
 /// is bound to `0.0.0.0`.
 pub async fn delete(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<DeleteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -747,11 +756,11 @@ pub async fn delete(
 /// (explicit `..` components are rejected; paths outside `project_root` are
 /// allowed, matching `ls`/`mkdir`). Loopback-guarded (mutation).
 pub async fn rename(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {
@@ -784,11 +793,11 @@ pub async fn rename(
 /// outside `project_root` are allowed, matching `ls`/`mkdir`). Loopback-guarded
 /// (mutation).
 pub async fn copy(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {
@@ -970,6 +979,15 @@ mod tests {
         test_state_with_root(std::env::temp_dir().as_path())
     }
 
+    /// `AppState` with `allow_remote_writes: true` — the standalone
+    /// `termul-server` `--allow-remote-writes` opt-in. Used by the
+    /// guard-relaxation tests (non-loopback peer + flag on → succeeds).
+    fn test_state_remote_writes() -> AppState {
+        let mut state = test_state();
+        state.allow_remote_writes = true;
+        state
+    }
+
     /// PR-S4: build an `AppState` with the project-root boundary set to
     /// `root`. This is the containment boundary for the OPERATION routes
     /// (`/git/*`, `/skills`, `/search/content` — enforced by
@@ -998,6 +1016,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -1318,6 +1337,37 @@ mod tests {
         assert!(!body.success);
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
         assert!(!target.exists(), "guard must reject before mkdir");
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on `/fs/mkdir`
+    /// (the operator opt-in relaxes the CWE-306 loopback guard). Mirrors
+    /// `mkdir_refused_from_non_loopback_peer` with the flag flipped.
+    #[tokio::test]
+    async fn mkdir_admitted_from_non_loopback_peer_when_opt_in() {
+        let dir = TempDir::new("mkdir-opt-in");
+        let target = dir.path().join("newdir");
+        let req_body = serde_json::json!({ "path": target.to_string_lossy() });
+        let remote = SocketAddr::from(([10, 0, 0, 5], 50000));
+        let resp = post_json_from(test_state_remote_writes(), "/fs/mkdir", &req_body, remote).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "opt-in must admit non-loopback peer: {:?}", body.error);
+        assert!(target.is_dir(), "target dir must exist");
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on `/fs/write`
+    /// (covers the template-file write step of remote project scaffolding).
+    #[tokio::test]
+    async fn write_admitted_from_non_loopback_peer_when_opt_in() {
+        let dir = TempDir::new("write-opt-in");
+        let target = dir.path().join("README.md");
+        let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "ok" });
+        let remote = SocketAddr::from(([10, 0, 0, 5], 50000));
+        let resp = post_json_from(test_state_remote_writes(), "/fs/write", &req_body, remote).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "opt-in must admit non-loopback peer: {:?}", body.error);
+        assert!(target.exists(), "file written");
     }
 
     /// Patch D: loopback peers are still allowed (the happy path through the

@@ -203,6 +203,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 

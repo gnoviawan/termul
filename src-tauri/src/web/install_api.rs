@@ -54,7 +54,7 @@ pub async fn install(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer) {
+    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let req: InstallRequest = match serde_json::from_slice(&body) {
@@ -193,6 +193,7 @@ mod tests {
             acp_catalog: None,
             acp_install: Some(store),
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -215,6 +216,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -269,6 +271,45 @@ mod tests {
         let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
         assert!(!body.success);
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED past the
+    /// loopback guard on `/acp/install` (proven by the request reaching
+    /// validation, not `FORBIDDEN`). Mirrors the refusal test with the flag on.
+    #[tokio::test]
+    async fn install_admits_non_loopback_peer_when_opt_in() {
+        let dir = TempDir::new("install-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        state.allow_remote_writes = true;
+        // An over-serialized body carrying an excluded field surfaces as
+        // VALIDATION_ERROR ONLY if the guard admitted the peer — a refused
+        // peer would return FORBIDDEN before any validation.
+        let resp = test_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/acp/install")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
+                    .body(Body::from(
+                        br#"{"agentId":"opencode","extra":"junk"}"#.to_vec(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
+        assert!(
+            body.success || body.code.as_deref() != Some("FORBIDDEN"),
+            "opt-in must admit non-loopback peer past the guard (got code={:?})",
+            body.code
+        );
+        assert_eq!(
+            body.code.as_deref(),
+            Some(code::VALIDATION_ERROR),
+            "admitted peer reaches validation, not the guard"
+        );
     }
 
     // ---- deny_unknown_fields rejection ----

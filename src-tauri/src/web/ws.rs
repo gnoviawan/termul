@@ -351,6 +351,12 @@ pub struct AppState {
     /// `store_*` WS handlers return `STORE_UNAVAILABLE` (degraded mode). The
     /// standalone binary + desktop shared-live host both attach one.
     pub store: Option<Arc<WebStore>>,
+    /// Operator opt-in: admit non-loopback peers on the loopback-guarded
+    /// write routes (fs/git/workspace/projects/host-state). Default `false`
+    /// (the CWE-306 guard stays on); set `true` only by the standalone
+    /// `termul-server` `--allow-remote-writes` flag. The desktop shared-live
+    /// host leaves this `false` (LAN clients stay view-only for mutations).
+    pub allow_remote_writes: bool,
     /// PR-S4 / CAP-1: the project-root boundary for the fs_api / git / skills /
     /// search routes. Requests whose canonicalized target path resolves outside
     /// this root are refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL`

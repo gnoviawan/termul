@@ -143,6 +143,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         };
         axum::Router::new()
             .route("/mcp-servers", get(super::get).put(super::put))

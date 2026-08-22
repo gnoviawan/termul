@@ -47,11 +47,11 @@ pub struct FrontendErrorRequest {
 /// Loopback-only (refused from non-loopback peers). Returns `IpcBody::ok(())`
 /// on success; logging failures are swallowed (best-effort, no loop).
 pub async fn frontend_error(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<FrontendErrorRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
 
@@ -112,6 +112,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 

@@ -267,6 +267,7 @@ pub async fn serve_router(
         acp_catalog,
         acp_install,
         store,
+        cfg.allow_remote_writes,
     );
 
     let handle = tokio::spawn(async move {

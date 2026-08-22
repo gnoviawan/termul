@@ -106,7 +106,7 @@ pub async fn set_default_project(
     // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
     // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
     // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
-    if !peer.ip().is_loopback() {
+    if !peer.ip().is_loopback() && !state.allow_remote_writes {
         return Json(IpcBody::<()>::err(
             format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",
@@ -235,6 +235,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -264,6 +265,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -756,6 +758,57 @@ mod tests {
         assert_eq!(
             registry.snapshot().default_project_id.as_deref(),
             Some("p-1")
+        );
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/projects/default` (the inline guard honors the opt-in) and the host
+    /// default is actually mutated. Mirrors the refusal test with the flag on.
+    #[tokio::test]
+    async fn set_default_project_admits_non_loopback_peer_when_opt_in() {
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![
+                summary("p-1", Some("/a"), false, true),
+                summary("p-2", Some("/b"), false, false),
+            ],
+            Some("p-1".to_string()),
+        );
+        let mut state = state_with(Arc::clone(&registry));
+        state.allow_remote_writes = true;
+        let app = axum::Router::new()
+            .route("/projects/default", axum::routing::post(set_default_project))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects/default")
+                    .header("content-type", "application/json")
+                    // A LAN peer (10.0.0.5), not loopback.
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({ "projectId": "p-2" }).to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
+        assert!(
+            parsed.success,
+            "opt-in must admit non-loopback peer: {:?}",
+            parsed.error
+        );
+        // The host default flipped to p-2.
+        assert_eq!(
+            registry.snapshot().default_project_id.as_deref(),
+            Some("p-2")
         );
     }
 }

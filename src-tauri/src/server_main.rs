@@ -73,6 +73,26 @@ fn main() -> ExitCode {
 
     init_tracing();
 
+    // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
+    // standalone server enables `--allow-remote-writes`, any non-loopback peer
+    // can mutate the host filesystem under --project-root — surface it loudly
+    // at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
+    if cfg.allow_remote_writes {
+        let host = &cfg.host;
+        tracing::warn!(
+            "termul-server: remote fs/git/workspace writes ENABLED (--allow-remote-writes); \
+             non-loopback peers on {} can write under project_root '{}'",
+            host,
+            cfg.project_root.display()
+        );
+        if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
+            tracing::warn!(
+                "termul-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
+                 (no non-loopback peer can ever reach the server)"
+            );
+        }
+    }
+
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -468,7 +488,7 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--check-update]\n\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--allow-remote-writes] [--check-update]\n\n\
      Options:\n\
         --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
         --port PORT                 Bind port (default: 8080)\n\
@@ -480,6 +500,11 @@ fn usage() -> &'static str {
         --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
+        --allow-remote-writes       Admit non-loopback peers on the fs/git/workspace\n\
+                                     write routes (default: loopback-only, CWE-306 guard\n\
+                                     on). Only enable on a trusted network — any LAN peer\n\
+                                     can then write under --project-root. No-op when bound\n\
+                                     to 127.0.0.1. (env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1)\n\
         --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
                                      verify the downloaded binary signature, atomically swap, and\n\
                                      reexec. Defaults to the stable channel when\n\

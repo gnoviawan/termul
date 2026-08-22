@@ -130,7 +130,7 @@ pub async fn write(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer) {
+    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
@@ -201,7 +201,7 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
         return (StatusCode::OK, Json(forbidden));
     }
     let Some(service) = state.workspace_manifest.as_ref() else {
@@ -230,11 +230,15 @@ pub async fn delete(
 
 /// Localhost-only guard for write/delete routes (mirrors
 /// `log_api::frontend_error` / `fs_api::check_local_only`). Returns `None`
-/// when the peer is loopback, or `Some(IpcBody::err(...))` with `code:
-/// "FORBIDDEN"` when remote. 200+IpcResult convention (200 with the error body)
-/// so the renderer maps it to a uniform failure body.
-fn check_local_only<T>(peer: SocketAddr) -> Option<IpcBody<T>> {
-    if peer.ip().is_loopback() {
+/// when the peer is loopback OR the standalone `termul-server` operator
+/// opt-in `allow_remote_writes` is set, or `Some(IpcBody::err(...))` with
+/// code `"FORBIDDEN"` when remote. 200+IpcResult convention (200 with the
+/// error body) so the renderer maps it to a uniform failure body.
+fn check_local_only<T>(
+    peer: SocketAddr,
+    allow_remote_writes: bool,
+) -> Option<IpcBody<T>> {
+    if peer.ip().is_loopback() || allow_remote_writes {
         None
     } else {
         Some(IpcBody::<T>::err(
@@ -335,6 +339,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -361,6 +366,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            allow_remote_writes: false,
         }
     }
 
@@ -795,6 +801,61 @@ mod tests {
         let resp = get_manifest(state, "project-1").await;
         let body: IpcBody<Option<WorkspaceManifest>> = body_as_json(resp.into_body()).await;
         assert!(body.data.unwrap().is_some());
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/workspace/{id}/write` (the workspace_api-local guard copy honors
+    /// the opt-in — distinct from `fs_api::check_local_only`).
+    #[tokio::test]
+    async fn write_admitted_from_non_loopback_when_opt_in() {
+        let dir = TempDir::new("write-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        state.allow_remote_writes = true;
+        let manifest = serde_json::to_value(sample_manifest("project-1")).unwrap();
+        let body = serde_json::json!({
+            "basedRevision": null,
+            "manifest": manifest
+        });
+        let resp = post_write(state, "project-1", &body, remote_peer()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<WriteOutcome> = body_as_json(resp.into_body()).await;
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback write: {:?}",
+            body.error
+        );
+        assert!(matches!(
+            body.data.unwrap(),
+            WriteOutcome::Updated { .. }
+        ));
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/workspace/{id}/delete`.
+    #[tokio::test]
+    async fn delete_admitted_from_non_loopback_when_opt_in() {
+        let dir = TempDir::new("delete-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        // Seed a manifest from loopback first.
+        let manifest = serde_json::to_value(sample_manifest("project-1")).unwrap();
+        let body = serde_json::json!({
+            "basedRevision": null,
+            "manifest": manifest
+        });
+        let resp = post_write(state.clone(), "project-1", &body, loopback_peer()).await;
+        assert!(matches!(
+            body_as_json::<IpcBody<WriteOutcome>>(resp.into_body())
+                .await
+                .data
+                .unwrap(),
+            WriteOutcome::Updated { .. }
+        ));
+        // Opt-in + non-loopback delete → admitted (success).
+        state.allow_remote_writes = true;
+        let resp = post_delete(state, "project-1", remote_peer()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "opt-in must admit non-loopback delete: {:?}", body.error);
     }
 
     #[tokio::test]
