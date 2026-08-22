@@ -11,7 +11,15 @@ import {
   GitBranch,
   Loader2
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { toast } from 'sonner'
 import {
   emptyPendingLauncherOptions,
@@ -83,7 +91,11 @@ import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import { isLoopbackWebClient } from '@/lib/tauri-runtime'
+import {
+  getServerCapabilitySnapshot,
+  serverAdmitsRemoteWrites,
+  subscribeServerCapability
+} from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
@@ -121,6 +133,18 @@ export function __resetLauncherSelectionCache(): void {
   cachedConfigId = null
 }
 
+/** React hook over the server write-admission capability cache so the
+ * launcher re-renders when the boot `/health` fetch resolves (the cache flips
+ * `false`→`true`). Desktop short-circuits to `true` via `primeServerCapability`
+ * (no fetch fires, cache seeded admitted). */
+function useServerAdmitsRemoteWrites(): boolean {
+  const { admitted } = useSyncExternalStore(
+    subscribeServerCapability,
+    getServerCapabilitySnapshot()
+  )
+  return admitted
+}
+
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
@@ -155,13 +179,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const projectGitBranch = activeProject?.gitBranch ?? null
   // CAP-2: isolation mode + base-branch picker. Worktree mode requires a git
   // repo; the selector is hidden on non-repo projects. CAP — Web worktree
-  // parity: the worktree mutation routes now ship over HTTP (`web/worktree_api.rs`)
+  // parity: the worktree mutation routes ship over HTTP (`web/worktree_api.rs`)
   // so the launcher's worktree mode picker is no longer gated on `isTauriContext()`
   // alone. The write routes (`/worktree/create` etc.) are loopback-guarded
-  // (`check_local_only`), so the picker is gated on `isLoopbackWebClient()` —
-  // the desktop (always local) and a loopback web client see it; a non-loopback
-  // LAN client does not, avoiding a picker that would fail `FORBIDDEN` at launch.
-  const canUseWorktree = projectIsGitRepo && isLoopbackWebClient()
+  // (`check_local_only`), so the picker is gated on the server's advertised
+  // write-admission (`useServerAdmitsRemoteWrites`, primed from `GET /health`)
+  // — the desktop (always local) and a web client whose server admits its
+  // writes (e.g. standalone `termul-server --allow-remote-writes` behind a
+  // Cloudflare tunnel, or a loopback browser) see it; a web client whose
+  // server denies writes (desktop shared-live, or a non-loopback peer without
+  // the opt-in) does not, avoiding a picker that would fail `FORBIDDEN` at
+  // launch. The hook subscribes to the cache so the picker re-renders when the
+  // boot fetch resolves.
+  const serverAdmitsWrites = useServerAdmitsRemoteWrites()
+  const canUseWorktree = projectIsGitRepo && serverAdmitsWrites
   const [isolationMode, setIsolationMode] = useState<'current' | 'worktree'>('current')
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [baseBranchInfo, setBaseBranchInfo] = useState<BaseBranchInfo | null>(null)

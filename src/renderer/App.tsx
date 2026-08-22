@@ -45,7 +45,7 @@ function RouteFallback(): React.JSX.Element {
 // See _bmad-output/implementation-artifacts/spec-gh133-xterm-6-1-upgrade-memory-leak-fix.md.
 
 import { isWindows } from '@/lib/platform'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTauriContext, primeServerCapability } from '@/lib/tauri-runtime'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
@@ -110,6 +110,16 @@ const queryClient = new QueryClient()
 // usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
+  // One-shot: prime the server write-admission capability cache from
+  // `GET /health` so write-gated web surfaces (e.g. the worktree picker) reflect
+  // the server's actual admission policy instead of a hostname guess. No-op on
+  // desktop (`isTauriContext()` → cache seeded admitted, no fetch). Runs once
+  // on web mount; a failed fetch leaves the cache fail-closed (false) and a
+  // later re-prime can retry.
+  useEffect(() => {
+    primeServerCapability()
+  }, [])
+
   useTerminalAutoSave()
   useTerminalRestore()
   useCrashRecovery()

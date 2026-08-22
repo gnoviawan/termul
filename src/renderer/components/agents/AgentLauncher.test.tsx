@@ -21,7 +21,7 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { skillToken } from '@/lib/skill-tokens'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
@@ -243,9 +243,23 @@ vi.mock('@/lib/worktree-context', () => ({
   getProjectRootPath: () => '/work'
 }))
 
+// Mock the server-capability cache the launcher's `useServerAdmitsRemoteWrites`
+// hook reads. `mockServerCapability` flips the admitted state; the launcher
+// re-renders because `subscribeServerCapability` is wired through.
+let mockServerCapability: ServerCapabilityState = {
+  admitted: true,
+  inFlight: false,
+  resolved: true
+}
+const serverCapabilityListeners = new Set<() => void>()
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: vi.fn(() => false),
-  isLoopbackWebClient: vi.fn(() => true)
+  serverAdmitsRemoteWrites: vi.fn(() => mockServerCapability.admitted),
+  subscribeServerCapability: (listener: () => void) => {
+    serverCapabilityListeners.add(listener)
+    return () => serverCapabilityListeners.delete(listener)
+  },
+  getServerCapabilitySnapshot: () => () => mockServerCapability
 }))
 
 // Radix Select portals don't render reliably under jsdom; shim with a native
@@ -610,6 +624,9 @@ beforeEach(() => {
   // Worktree-mode defaults: web context, no git repo, no worktree calls.
   vi.mocked(isTauriContext).mockReturnValue(false)
   mockProjectOverride.current = null
+  // Default: server admits writes (web client on a loopback/admitted server).
+  mockServerCapability = { admitted: true, inFlight: false, resolved: true }
+  serverCapabilityListeners.clear()
   mockWorktreeCreate.mockReset()
   mockWorktreeCopyInclude.mockReset()
   mockWorktreeResolveBaseBranch.mockReset()
@@ -1634,6 +1651,21 @@ describe('AgentLauncher worktree isolation', () => {
     mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
     renderLauncher()
     expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
+  })
+
+  // CAP — tunnel capability gate: when the server does NOT admit remote writes
+  // (desktop shared-live cloudflared, or a non-loopback peer without
+  // --allow-remote-writes), the picker stays hidden on a git project so the
+  // user never reaches a launch that would fail `FORBIDDEN`. Covers the
+  // previously-untested hide path. (The real cache fetch/parse path is covered
+  // by tauri-runtime.test.ts; here the mock flips the snapshot.)
+  it('hides the isolation selector when the server does not admit remote writes', () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    mockServerCapability = { admitted: false, inFlight: false, resolved: true }
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
+    renderLauncher()
+    expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
   })
 
   /**
