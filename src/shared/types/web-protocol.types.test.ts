@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 33 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(33)
+  it('exports exactly 36 request types including discovered-session promotion', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(36)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -73,23 +73,22 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'resume_session',
       'close_session',
       'dispose_ephemeral_session',
-      'list_sessions',
-      'register_discovered_session',
-      'spawn_agent',
-      'kill_agent',
-      'list_agents',
+
       'switch_project',
-      'authenticate',
-      // ACP agent `authenticate` method (agent-advertised auth, e.g.
-      // `pi_terminal_login`) — distinct from the `authenticate` token gate.
-      'authenticate_agent',
       'subscribe',
       'ping',
       'list_persisted_sessions',
       'open_persisted_session',
       'get_session_payload',
+      'recover_session_snapshot',
       'get_session_cursor',
-      // CAP-6 / Story 8: host-owned ACP catalog resolution.
+      'register_discovered_session',
+      'list_sessions',
+      'spawn_agent',
+      'kill_agent',
+      'list_agents',
+      'authenticate',
+      'authenticate_agent',
       'list_acp_catalog',
       'set_catalog_opt_in',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.
@@ -97,7 +96,11 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       // Issue #613: server-side generic key-value store.
       'store_read',
       'store_write',
-      'store_delete'
+      'store_delete',
+      // Option B: project-list mutations.
+      'add_project',
+      'update_project',
+      'remove_project'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
