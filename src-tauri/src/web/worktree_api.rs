@@ -117,7 +117,7 @@ fn resolve_project_path<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes) {
+            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, "/worktree/*") {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }

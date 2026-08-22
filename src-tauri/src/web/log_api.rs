@@ -51,7 +51,7 @@ pub async fn frontend_error(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<FrontendErrorRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/log/frontend-error") {
         return (StatusCode::OK, Json(forbidden));
     }
 

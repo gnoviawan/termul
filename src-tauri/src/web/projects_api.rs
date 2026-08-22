@@ -106,11 +106,26 @@ pub async fn set_default_project(
     // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
     // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
     // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
-    if !peer.ip().is_loopback() && !state.allow_remote_writes {
+    let is_loopback = peer.ip().is_loopback();
+    if !is_loopback && !state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
         return Json(IpcBody::<()>::err(
             format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",
         ));
+    }
+    if !is_loopback && state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard ADMITTED (--allow-remote-writes)",
+        );
     }
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).

@@ -54,7 +54,7 @@ pub async fn install(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer, state.allow_remote_writes, "/acp/install") {
         return (StatusCode::OK, Json(forbidden));
     }
     let req: InstallRequest = match serde_json::from_slice(&body) {

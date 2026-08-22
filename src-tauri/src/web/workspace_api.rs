@@ -130,7 +130,7 @@ pub async fn write(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes, "/workspace/{id}/write") {
         return (StatusCode::OK, Json(forbidden));
     }
     // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
@@ -201,7 +201,7 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/workspace/{id}/delete") {
         return (StatusCode::OK, Json(forbidden));
     }
     let Some(service) = state.workspace_manifest.as_ref() else {
@@ -233,14 +233,31 @@ pub async fn delete(
 /// when the peer is loopback OR the standalone `termul-server` operator
 /// opt-in `allow_remote_writes` is set, or `Some(IpcBody::err(...))` with
 /// code `"FORBIDDEN"` when remote. 200+IpcResult convention (200 with the
-/// error body) so the renderer maps it to a uniform failure body.
+/// error body) so the renderer maps it to a uniform failure body. Emits a
+/// durable boundary log on admission-via-opt-in and on refusal (AGENTS.md).
 fn check_local_only<T>(
     peer: SocketAddr,
     allow_remote_writes: bool,
+    route: &str,
 ) -> Option<IpcBody<T>> {
-    if peer.ip().is_loopback() || allow_remote_writes {
+    let is_loopback = peer.ip().is_loopback();
+    if is_loopback || allow_remote_writes {
+        if !is_loopback && allow_remote_writes {
+            tracing::warn!(
+                target: "termul::web::workspace_api",
+                route = route,
+                peer = %peer,
+                "remote-write guard ADMITTED (--allow-remote-writes)",
+            );
+        }
         None
     } else {
+        tracing::warn!(
+            target: "termul::web::workspace_api",
+            route = route,
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
         Some(IpcBody::<T>::err(
             format!("workspace manifest write/delete routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",

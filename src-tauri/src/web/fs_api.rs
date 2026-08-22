@@ -206,19 +206,40 @@ fn should_ignore(name: &str) -> bool {
 /// Matches the existing 200+IpcResult convention (200 with the IpcResult error)
 /// so the renderer maps it to a uniform failure body.
 ///
-/// `allow_remote_writes` is the standalone `termul-server` operator opt-in
-/// (`--allow-remote-writes` / `TERMUL_SERVER_ALLOW_REMOTE_WRITES`). When
-/// `true` the guard admits non-loopback peers across every guarded write
-/// route; default `false` preserves the CWE-306 mitigation. The desktop
-/// shared-live host always passes `false`.
+/// Known limitation (deferred): the desktop shared-live host binds localhost
+/// and the cloudflared quick-tunnel forwards public traffic to it from a
+/// loopback source. `is_loopback()` therefore trusts cloudflared's connection,
+/// so a browser request through the public tunnel reaches these write routes
+/// even with `allow_remote_writes: false`. This predates the opt-in flag and
+/// needs a deployment-mode guard (deny writes on shared-live regardless of
+/// peer); tracked in deferred-work, not closed here.
 pub(super) fn check_local_only<T>(
     peer: SocketAddr,
     allow_remote_writes: bool,
+    route: &str,
 ) -> Option<IpcBody<T>> {
     let is_loopback = peer.ip().is_loopback();
     if is_loopback || allow_remote_writes {
+        // Durable boundary log (AGENTS.md): record when a non-loopback peer
+        // is ADMITTED by the operator opt-in — the security-relevant event.
+        // Loopback admissions are routine and not logged (high volume). No
+        // request bodies or secrets are logged — only peer, route, decision.
+        if !is_loopback && allow_remote_writes {
+            tracing::warn!(
+                target: "termul::web::fs_api",
+                route = route,
+                peer = %peer,
+                "remote-write guard ADMITTED (--allow-remote-writes)",
+            );
+        }
         None
     } else {
+        tracing::warn!(
+            target: "termul::web::fs_api",
+            route = route,
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
         Some(IpcBody::<T>::err(
             format!("fs write routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",
@@ -445,7 +466,7 @@ pub async fn mkdir(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<MkdirRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/fs/mkdir") {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -477,7 +498,7 @@ pub async fn write(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/fs/write") {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -650,7 +671,7 @@ pub async fn info(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes, "/fs/info") {
         return (StatusCode::OK, Json(forbidden));
     }
     let requested_path = q.path.clone();
@@ -724,7 +745,7 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<DeleteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/fs/delete") {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -760,7 +781,7 @@ pub async fn rename(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/fs/rename") {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {
@@ -797,7 +818,7 @@ pub async fn copy(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/fs/copy") {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {

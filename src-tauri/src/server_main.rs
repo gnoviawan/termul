@@ -75,13 +75,15 @@ fn main() -> ExitCode {
 
     // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
     // standalone server enables `--allow-remote-writes`, any non-loopback peer
-    // can mutate the host filesystem under --project-root — surface it loudly
-    // at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
+    // gains write access to a broad set of mutation routes — surface it
+    // loudly at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
     if cfg.allow_remote_writes {
         let host = &cfg.host;
         tracing::warn!(
-            "termul-server: remote fs/git/workspace writes ENABLED (--allow-remote-writes); \
-             non-loopback peers on {} can write under project_root '{}'",
+            "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
+             on {} can: write/delete/rename/copy files + git + worktrees under project_root '{}'; \
+             AND mutate host state via /projects/default, /acp/install, /log/frontend-error, \
+             /workspace/* (outside project_root). No web auth is enforced yet (Epic 2).",
             host,
             cfg.project_root.display()
         );
@@ -500,10 +502,13 @@ fn usage() -> &'static str {
         --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
-        --allow-remote-writes       Admit non-loopback peers on the fs/git/workspace\n\
-                                     write routes (default: loopback-only, CWE-306 guard\n\
-                                     on). Only enable on a trusted network — any LAN peer\n\
-                                     can then write under --project-root. No-op when bound\n\
+        --allow-remote-writes       Admit non-loopback peers on ALL guarded write routes:\n\
+                                     fs (mkdir/write/delete/rename/copy/info) + git writes\n\
+                                     under --project-root; AND host-state writes outside it\n\
+                                     (/projects/default, /acp/install, /log/frontend-error,\n\
+                                     /workspace/*, /worktree/*). Default: loopback-only\n\
+                                     (CWE-306 guard on). Only enable on a trusted network —\n\
+                                     no web auth is enforced yet (Epic 2). No-op when bound\n\
                                      to 127.0.0.1. (env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1)\n\
         --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
                                      verify the downloaded binary signature, atomically swap, and\n\
