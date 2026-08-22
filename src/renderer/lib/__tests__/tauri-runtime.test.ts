@@ -135,18 +135,41 @@ describe('server write-admission capability cache (web branch)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
-  it('retries after a failed fetch (resolved-false allows re-prime)', async () => {
+  it('schedules a bounded backoff retry after a failed fetch', async () => {
+    vi.useFakeTimers()
     // First attempt fails.
     mockFetch.mockRejectedValueOnce(new Error('tunnel not up'))
     primeServerCapability()
     await flushMicrotasks()
     expect(serverAdmitsRemoteWrites()).toBe(false)
-    // Second attempt succeeds (tunnel came up).
+    // A retry timer is scheduled (not resolved-true, not in-flight).
+    const snapshotAfterFail = getServerCapabilitySnapshot()()
+    expect(snapshotAfterFail.retryTimer).not.toBeNull()
+    expect(snapshotAfterFail.resolved).toBe(false)
+    // Second attempt succeeds (tunnel came up) — the auto-retry fires.
+    mockFetch.mockResolvedValue(jsonResponse({ status: 'ok', allowRemoteWrites: true }))
+    vi.advanceTimersByTime(2000) // first backoff delay
+    await flushMicrotasks()
+    expect(serverAdmitsRemoteWrites()).toBe(true)
+    expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(2)
+    vi.useRealTimers()
+  })
+
+  it('retries after a failed fetch (manual re-prime)', async () => {
+    vi.useFakeTimers()
+    mockFetch.mockRejectedValueOnce(new Error('tunnel not up'))
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(serverAdmitsRemoteWrites()).toBe(false)
+    // Clear the auto-retry timer so it doesn't interfere with the manual
+    // re-prime below.
+    __resetServerCapabilityCache()
     mockFetch.mockResolvedValue(jsonResponse({ status: 'ok', allowRemoteWrites: true }))
     primeServerCapability()
     await flushMicrotasks()
     expect(serverAdmitsRemoteWrites()).toBe(true)
-    expect(mockFetch).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+    vi.useRealTimers()
   })
 
   it('is fail-closed (denies) before the fetch resolves', () => {
@@ -173,7 +196,13 @@ describe('server write-admission capability cache (web branch)', () => {
     primeServerCapability()
     await flushMicrotasks()
     const snapshot = getServerCapabilitySnapshot()()
-    expect(snapshot).toEqual({ admitted: true, inFlight: false, resolved: true })
+    expect(snapshot).toEqual({
+      admitted: true,
+      inFlight: false,
+      resolved: true,
+      retryTimer: null,
+      retryCount: 0
+    })
   })
 })
 
@@ -198,6 +227,12 @@ describe('server write-admission capability cache (desktop branch)', () => {
   it('seeds the snapshot admitted=true', () => {
     primeServerCapability()
     const snapshot = getServerCapabilitySnapshot()()
-    expect(snapshot).toEqual({ admitted: true, inFlight: false, resolved: true })
+    expect(snapshot).toEqual({
+      admitted: true,
+      inFlight: false,
+      resolved: true,
+      retryTimer: null,
+      retryCount: 0
+    })
   })
 })
