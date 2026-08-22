@@ -737,6 +737,26 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/setDefaultProject\b/)
       expect(content).toMatch(/\/projects\/default/)
     })
+    it('web-server-api.ts exposes addProject hitting POST /projects', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/addProject\b/)
+      expect(content).toMatch(/postJson.*\/projects'/)
+    })
+
+    it('web-server-api.ts exposes updateProject hitting PUT /projects/{id}', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/updateProject\b/)
+      expect(content).toMatch(/\/projects\/\$\{encodeURIComponent\(projectId\)\}/)
+    })
+
+    it('web-server-api.ts exposes removeProject hitting DELETE /projects/{id}', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/removeProject\b/)
+      expect(content).toMatch(/method:\s*'DELETE'/)
+    })
   })
 
   // CAP-1/CAP-2: ACP history parity. The host owns the session transcript (the

@@ -160,7 +160,15 @@ export const WS_REQUEST_TYPES = [
   // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`.
   'store_read',
   'store_write',
-  'store_delete'
+  'store_delete',
+  // Option B: project-list mutations (the standalone server is a first-class
+  // project-list authority). Mirrors `POST /projects`, `PUT /projects/{id}`,
+  // `DELETE /projects/{id}` HTTP routes (transport parity). The WS variants
+  // persist to `FileProjectRegistry` (VPS) with rollback + broadcast
+  // `projects_changed`.
+  'add_project',
+  'update_project',
+  'remove_project'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -184,6 +192,32 @@ export interface StoreWritePayload {
 /** `store_delete` request payload. Reply: `{ existed: boolean }`. */
 export interface StoreDeletePayload {
   key: string
+}
+
+// ============================================================================
+// Project-list mutations (Option B) — request payloads + replies
+// ============================================================================
+
+/** `add_project` request payload. Reply: `{ project: ProjectSummary }`. */
+export interface AddProjectPayload {
+  id: string
+  name: string
+  path: string
+  color: string
+  isArchived?: boolean
+}
+
+/** `update_project` request payload. All fields optional. Reply: `{}`. */
+export interface UpdateProjectPayload {
+  projectId: string
+  name?: string
+  color?: string
+  isArchived?: boolean
+}
+
+/** `remove_project` request payload. Reply: `{}`. */
+export interface RemoveProjectPayload {
+  projectId: string
 }
 
 // ============================================================================

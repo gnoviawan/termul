@@ -28,7 +28,7 @@ import type {
   IpcResult,
   WorktreeInfo
 } from '@shared/types/ipc.types'
-import type { ProjectListPayload } from '@shared/types/web-projects.types'
+import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
@@ -334,6 +334,45 @@ export const webServerProjects = {
    */
   async setDefaultProject(projectId: string): Promise<IpcResult<void>> {
     return postJson<void>('/projects/default', { projectId })
+  },
+
+  /**
+   * Create / upsert a project (Option B: the standalone server is a first-class
+   * project-list authority). Canonicalizes + validates the path on the server,
+   * persists to `FileProjectRegistry` (VPS), and broadcasts `projects_changed`.
+   * Mirrors the `add_project` WS request.
+   */
+  async addProject(params: {
+    id: string
+    name: string
+    path: string
+    color: string
+    isArchived?: boolean
+  }): Promise<IpcResult<ProjectSummary>> {
+    return postJson<ProjectSummary>('/projects', params)
+  },
+
+  /**
+   * Patch a project's display fields (name, color, archived). All fields
+   * optional (partial update). Mirrors the `update_project` WS request +
+   * `PUT /projects/{id}`.
+   */
+  async updateProject(
+    projectId: string,
+    patch: { name?: string; color?: string; isArchived?: boolean }
+  ): Promise<IpcResult<void>> {
+    return putJson<void>(`/projects/${encodeURIComponent(projectId)}`, patch)
+  },
+
+  /**
+   * Remove a project. Mirrors the `remove_project` WS request +
+   * `DELETE /projects/{id}`.
+   */
+  async removeProject(projectId: string): Promise<IpcResult<void>> {
+    const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
+      method: 'DELETE'
+    })
+    return parseBody<void>(res)
   }
 }
 

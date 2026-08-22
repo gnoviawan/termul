@@ -544,10 +544,88 @@ export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
 
   useEffect(() => {
-    // Web/remote mode: the project list is a read-only mirror of the desktop's
-    // store; never persist from the browser (the stubbed plugin-store would
-    // silently drop writes, and edits belong on the desktop anyway).
-    if (!isTauriContext()) return
+    // Web/remote mode: the project list is persisted server-side (Option B:
+    // the standalone server is a first-class project-list authority, so
+    // web-client-created projects survive refresh). Diff the store and push
+    // individual add/update/remove mutations to the server — the server is
+    // the source of truth in VPS mode, and `projects_changed` broadcasts
+    // refetch `GET /projects` on all connected clients.
+    if (!isTauriContext()) {
+      const unsubscribe = useProjectStore.subscribe((state, prevState) => {
+        if (!state.isLoaded || !prevState.isLoaded) return
+        if (state.projects === prevState.projects) return
+
+        const prevById = new Map(prevState.projects.map((p) => [p.id, p]))
+        const nextById = new Map(state.projects.map((p) => [p.id, p]))
+
+        // New projects → addProject.
+        for (const project of state.projects) {
+          if (!prevById.has(project.id)) {
+            void webServerProjects
+              .addProject({
+                id: project.id,
+                name: project.name,
+                path: project.path ?? '',
+                color: project.color,
+                isArchived: project.isArchived ?? false
+              })
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server addProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server addProject error', err)
+              })
+          }
+        }
+
+        // Removed projects → removeProject.
+        for (const project of prevState.projects) {
+          if (!nextById.has(project.id)) {
+            void webServerProjects
+              .removeProject(project.id)
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server removeProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server removeProject error', err)
+              })
+          }
+        }
+
+        // Changed projects → updateProject (name/color/archived only).
+        for (const project of state.projects) {
+          const prev = prevById.get(project.id)
+          if (!prev) continue
+          if (
+            prev.name !== project.name ||
+            prev.color !== project.color ||
+            (prev.isArchived ?? false) !== (project.isArchived ?? false)
+          ) {
+            void webServerProjects
+              .updateProject(project.id, {
+                name: project.name,
+                color: project.color,
+                isArchived: project.isArchived ?? false
+              })
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server updateProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server updateProject error', err)
+              })
+          }
+        }
+      })
+      return () => {
+        unsubscribe()
+      }
+    }
 
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {

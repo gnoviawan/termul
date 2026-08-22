@@ -1197,6 +1197,45 @@ async fn handle_request(
             )
             .await
         }
+        // Option B: project-list mutations. The standalone server is a
+        // first-class project-list authority; these persist to
+        // `FileProjectRegistry` (VPS, with rollback) + broadcast
+        // `projects_changed`. Mirrors the `POST /projects`,
+        // `PUT /projects/{id}`, `DELETE /projects/{id}` HTTP routes
+        // (transport parity). Any authenticated client for now (Epic 2).
+        "add_project" => {
+            handle_add_project(
+                id,
+                &req.payload,
+                relay,
+                registry,
+                registry_persistence,
+                projects_file,
+            )
+            .await
+        }
+        "update_project" => {
+            handle_update_project(
+                id,
+                &req.payload,
+                relay,
+                registry,
+                registry_persistence,
+                projects_file,
+            )
+            .await
+        }
+        "remove_project" => {
+            handle_remove_project(
+                id,
+                &req.payload,
+                relay,
+                registry,
+                registry_persistence,
+                projects_file,
+            )
+            .await
+        }
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
@@ -2266,6 +2305,329 @@ async fn handle_set_default_project(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
         "set_default_project: host default updated + broadcast"
+    );
+    WsReply::ok(id, Some(json!({})))
+}
+/// `add_project` WS request payload (Option B). Mirrors the
+/// `POST /projects` body + the desktop `addProject` renderer store action.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AddProjectPayload {
+    id: String,
+    name: String,
+    path: String,
+    color: String,
+    #[serde(default)]
+    is_archived: bool,
+}
+
+/// `update_project` WS request payload (Option B). All fields optional (partial
+/// update). Mirrors `PUT /projects/{id}`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateProjectPayload {
+    project_id: String,
+    name: Option<String>,
+    color: Option<String>,
+    is_archived: Option<bool>,
+}
+
+/// `remove_project` WS request payload (Option B). Mirrors
+/// `DELETE /projects/{id}`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RemoveProjectPayload {
+    project_id: String,
+}
+
+/// `add_project` WS handler — create / upsert a VFS root (Option B).
+///
+/// Validates + canonicalizes the path, upserts into `FileProjectRegistry`
+/// (VPS, with rollback) + the in-memory `ProjectRegistry`, and broadcasts
+/// `projects_changed`. Desktop-hosted mode has no file registry — it upserts
+/// the in-memory mirror + broadcasts only.
+#[allow(clippy::too_many_arguments)]
+async fn handle_add_project(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+) -> WsReply {
+    let parsed: AddProjectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "add_project: malformed payload (want id + name + path + color)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed add_project payload: {e}"),
+            );
+        }
+    };
+    let root = crate::acp::VfsRoot {
+        id: parsed.id.clone(),
+        name: parsed.name.clone(),
+        path: std::path::PathBuf::from(parsed.path.clone()),
+        color: parsed.color.clone(),
+        is_archived: parsed.is_archived,
+        mcp_servers: Vec::new(),
+    };
+    // VPS persistence (with rollback). Desktop-hosted mode skips this.
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == parsed.id)
+                .cloned();
+            match file_registry.upsert_root(root.clone()) {
+                Ok(()) => match file_registry.save_atomic(path) {
+                    Ok(()) => Ok(old_root),
+                    Err(error) => {
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        } else {
+                            let _ = file_registry.remove_root(&parsed.id);
+                        }
+                        Err(error)
+                    }
+                },
+                Err(error) => Err(error),
+            }
+        };
+        if let Err(error) = persistence_result {
+            error!(
+                target: "termul::web::ws",
+                project_id = %parsed.id,
+                error = %error,
+                "add_project: persistence failed (rolled back)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("failed to persist project: {error}"),
+            );
+        }
+    }
+    // Mirror into the in-memory registry.
+    let summary = crate::web::project_registry::ProjectSummary {
+        id: parsed.id.clone(),
+        name: parsed.name,
+        color: parsed.color,
+        path: Some(parsed.path),
+        is_archived: parsed.is_archived,
+        is_default: false,
+    };
+    registry.upsert(summary.clone());
+    broadcast_projects_changed(relay, None);
+    info!(
+        target: "termul::web::ws",
+        project_id = %summary.id,
+        "add_project: project upserted + broadcast"
+    );
+    WsReply::ok(id, Some(json!({ "project": summary })))
+}
+
+/// `update_project` WS handler — patch a project's display fields (Option B).
+#[allow(clippy::too_many_arguments)]
+async fn handle_update_project(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+) -> WsReply {
+    let parsed: UpdateProjectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "update_project: malformed payload (want projectId)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed update_project payload: {e}"),
+            );
+        }
+    };
+    // VPS persistence (with rollback).
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == parsed.project_id)
+                .cloned();
+            if !file_registry.update_root(
+                &parsed.project_id,
+                parsed.name.clone(),
+                parsed.color.clone(),
+                parsed.is_archived,
+            ) {
+                None
+            } else {
+                match file_registry.save_atomic(path) {
+                    Ok(()) => Some(Ok(old_root)),
+                    Err(error) => {
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        }
+                        Some(Err(error))
+                    }
+                }
+            }
+        };
+        match persistence_result {
+            None => {
+                warn!(
+                    target: "termul::web::ws",
+                    project_id = %parsed.project_id,
+                    "update_project: project not found"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    format!("project '{}' not found", parsed.project_id),
+                );
+            }
+            Some(Err(error)) => {
+                error!(
+                    target: "termul::web::ws",
+                    project_id = %parsed.project_id,
+                    error = %error,
+                    "update_project: persistence failed (rolled back)"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::Unsupported,
+                    format!("failed to persist project: {error}"),
+                );
+            }
+            Some(_) => {}
+        }
+    }
+    // Mirror into the in-memory registry.
+    if !registry.update(
+        &parsed.project_id,
+        parsed.name,
+        parsed.color,
+        parsed.is_archived,
+    ) {
+        warn!(
+            target: "termul::web::ws",
+            project_id = %parsed.project_id,
+            "update_project: project not found in in-memory registry"
+        );
+        return WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            format!("project '{}' not found", parsed.project_id),
+        );
+    }
+    broadcast_projects_changed(relay, None);
+    info!(
+        target: "termul::web::ws",
+        project_id = %parsed.project_id,
+        "update_project: project updated + broadcast"
+    );
+    WsReply::ok(id, Some(json!({})))
+}
+
+/// `remove_project` WS handler — remove a VFS root (Option B).
+#[allow(clippy::too_many_arguments)]
+async fn handle_remove_project(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    registry: &Arc<ProjectRegistry>,
+    registry_persistence: Option<&Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    projects_file: Option<&PathBuf>,
+) -> WsReply {
+    let parsed: RemoveProjectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "remove_project: malformed payload (want projectId)"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed remove_project payload: {e}"),
+            );
+        }
+    };
+    // VPS persistence (with rollback).
+    if let (Some(file_registry), Some(path)) = (registry_persistence, projects_file) {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == parsed.project_id)
+                .cloned();
+            if !file_registry.remove_root(&parsed.project_id) {
+                None
+            } else {
+                match file_registry.save_atomic(path) {
+                    Ok(()) => Some(Ok(old_root)),
+                    Err(error) => {
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        }
+                        Some(Err(error))
+                    }
+                }
+            }
+        };
+        match persistence_result {
+            None => {
+                warn!(
+                    target: "termul::web::ws",
+                    project_id = %parsed.project_id,
+                    "remove_project: project not found"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    format!("project '{}' not found", parsed.project_id),
+                );
+            }
+            Some(Err(error)) => {
+                error!(
+                    target: "termul::web::ws",
+                    project_id = %parsed.project_id,
+                    error = %error,
+                    "remove_project: persistence failed (rolled back)"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::Unsupported,
+                    format!("failed to persist project removal: {error}"),
+                );
+            }
+            Some(_) => {}
+        }
+    }
+    // Mirror into the in-memory registry.
+    registry.remove(&parsed.project_id);
+    broadcast_projects_changed(relay, None);
+    info!(
+        target: "termul::web::ws",
+        project_id = %parsed.project_id,
+        "remove_project: project removed + broadcast"
     );
     WsReply::ok(id, Some(json!({})))
 }

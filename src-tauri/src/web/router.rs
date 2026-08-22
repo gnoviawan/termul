@@ -14,7 +14,7 @@ use axum::{
     extract::{ConnectInfo, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
     Json,
     Router,
 };
@@ -91,11 +91,21 @@ pub fn router(
         // Project list mirror (Epic-4 bridge): the web client reads the
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
-        .route("/projects", get(projects_api::list))
+        .route("/projects", get(projects_api::list).post(projects_api::create_project))
         // Explicit host-default change (Epic 7 — cross-client workspace
         // continuity). Mirrors the `set_default_project` WS request + the
         // `set_host_default_project` Tauri command (transport parity).
         .route("/projects/default", post(projects_api::set_default_project))
+        // Option B: project-list mutations (the standalone server is a
+        // first-class project-list authority, not just a read-only mirror).
+        // `PUT /projects/{id}` patches display fields; `DELETE /projects/{id}`
+        // removes the root. Both persist to `FileProjectRegistry` (VPS) with
+        // rollback + broadcast `projects_changed`. Mirrors the
+        // `add_project`/`update_project`/`remove_project` WS requests.
+        .route(
+            "/projects/{projectId}",
+            put(projects_api::update_project).delete(projects_api::remove_project),
+        )
         .route(
             "/mcp-servers",
             get(mcp_servers_api::get).put(mcp_servers_api::put),
