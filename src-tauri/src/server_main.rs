@@ -81,9 +81,10 @@ fn main() -> ExitCode {
         let host = &cfg.host;
         tracing::warn!(
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
-             on {} can: write/delete/rename/copy files + git + worktrees under project_root '{}'; \
-             AND mutate host state via /projects/default, /acp/install, /log/frontend-error, \
-             /workspace/* (outside project_root). No web auth is enforced yet (Epic 2).",
+             on {} gain: fs mkdir/write/delete/rename/copy to ANY path writable by the server \
+             account (ADR-007 /fs/* breadth — NOT confined to project_root '{}'); git + worktree \
+             operations confined to project_root; AND host-state mutation via /projects/default, \
+             /acp/install, /log/frontend-error, /workspace/*. No web auth is enforced yet (Epic 2).",
             host,
             cfg.project_root.display()
         );
@@ -503,13 +504,15 @@ fn usage() -> &'static str {
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
         --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
         --allow-remote-writes       Admit non-loopback peers on ALL guarded write routes:\n\
-                                     fs (mkdir/write/delete/rename/copy/info) + git writes\n\
-                                     under --project-root; AND host-state writes outside it\n\
+                                     fs (mkdir/write/delete/rename/copy/info) to ANY path\n\
+                                     writable by the server account (ADR-007 /fs/* breadth,\n\
+                                     NOT confined to --project-root); git + worktree writes\n\
+                                     confined to --project-root; AND host-state writes\n\
                                      (/projects/default, /acp/install, /log/frontend-error,\n\
-                                     /workspace/*, /worktree/*). Default: loopback-only\n\
-                                     (CWE-306 guard on). Only enable on a trusted network —\n\
-                                     no web auth is enforced yet (Epic 2). No-op when bound\n\
-                                     to 127.0.0.1. (env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1)\n\
+                                     /workspace/*). Default: loopback-only (CWE-306 guard\n\
+                                     on). Only enable on a trusted network — no web auth\n\
+                                     is enforced yet (Epic 2). No-op when bound to 127.0.0.1.\n\
+                                     (env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1)\n\
         --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
                                      verify the downloaded binary signature, atomically swap, and\n\
                                      reexec. Defaults to the stable channel when\n\

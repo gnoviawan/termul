@@ -213,6 +213,16 @@ fn should_ignore(name: &str) -> bool {
 /// even with `allow_remote_writes: false`. This predates the opt-in flag and
 /// needs a deployment-mode guard (deny writes on shared-live regardless of
 /// peer); tracked in deferred-work, not closed here.
+///
+/// Scope note (ADR-007): `/fs/*` write routes are intentionally NOT confined
+/// to `project_root` — they resolve any absolute path (only `..` traversal is
+/// rejected), so a peer admitted via `allow_remote_writes` can write to ANY
+/// path the server account can access, not just under `project_root`. This is
+/// the same `/fs/*` breadth policy as the read/browse routes (the directory
+/// picker + editor navigate outside the project). Confining remote-peer writes
+/// to `project_root` would be a behavioral hardening over ADR-007; tracked as
+/// a follow-up, not applied here (it changes tested breadth behavior). The
+/// `termul-server` startup warn documents this scope accurately.
 pub(super) fn check_local_only<T>(
     peer: SocketAddr,
     allow_remote_writes: bool,
