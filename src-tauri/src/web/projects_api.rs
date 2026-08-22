@@ -111,11 +111,14 @@ pub async fn set_default_project(
     // distinguish forwarded public traffic from genuine local callers, so
     // refuse all host-state writes on this path before peer/flag evaluation.
     if state.shared_live_writes_denied {
-        tracing::warn!(
+        // `log` (not `tracing`) — the desktop shared-live path uses the
+        // `log`-backed tauri-plugin-log sink; tracing has no subscriber on
+        // desktop, so a tracing! event would be silently dropped (AGENTS.md
+        // durable-log policy).
+        log::warn!(
             target: "termul::web::projects_api",
-            route = "/projects/default",
-            peer = %peer,
-            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes) route=/projects/default peer={}",
+            peer
         );
         return Json(IpcBody::<()>::err(
             "shared-live deployment mode denies all remote writes".to_string(),

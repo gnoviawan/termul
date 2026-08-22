@@ -724,7 +724,10 @@ pub async fn info(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/info") {
+    // `/fs/info` is a metadata READ route — exclude it from the shared-live
+    // write-deny (the deployment-mode deny targets mutations only). Passing
+    // `false` keeps the existing loopback peer policy for this read route.
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes, false, "/fs/info") {
         return (StatusCode::OK, Json(forbidden));
     }
     let requested_path = q.path.clone();

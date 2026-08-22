@@ -5,13 +5,15 @@ import { ChevronDown, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
+import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
-import type { EnvVariable, ProjectColor } from '@/types/project'
+import { useProjectStore } from '@/stores/project-store'
+import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 
 interface NewProjectModalProps {
   isOpen: boolean
@@ -22,7 +24,7 @@ interface NewProjectModalProps {
     path?: string,
     defaultShell?: string,
     envVars?: EnvVariable[]
-  ) => void
+  ) => Project | undefined
 }
 
 export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProjectModalProps) {
@@ -169,8 +171,55 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             throw new Error(res.error || 'Failed to scaffold template files')
           }
         }
-
-        onCreateProject(trimmedName, selectedColor, trimmedPath, shellToUse, envVarsToPass)
+        const created = onCreateProject(
+          trimmedName,
+          selectedColor,
+          trimmedPath,
+          shellToUse,
+          envVarsToPass
+        )
+        // Detect whether the project path is a git repo (covers BOTH paths:
+        // git-init'd projects AND existing git repos pointed at without init).
+        // The worktree reconciler calls `worktreeApi.list(path)` — on success
+        // it sets `isGitRepo: true`; on NOT_A_GIT_REPO it sets `false`. This
+        // is the same path the persistence loader uses for persisted projects,
+        // so session-only projects get the same detection.
+        if (created?.id) {
+          // Set the immediate result first (git init success → true now).
+          useProjectStore.getState().updateProject(created.id, {
+            isGitRepo: gitInitSucceeded
+          })
+          // Then detect existing .git for the non-init path. On desktop, the
+          // worktree reconciler (`reconcileProjectWorktreesNow`) does this via
+          // `worktreeApi.list` (Tauri command). On web, the reconciler is
+          // desktop-only (AGENTS.md: gate platform-only capabilities with
+          // isTauriContext()), so probe `.git` via the fs read route instead —
+          // the `/fs/info` route is unguarded (read, not mutation) and works
+          // for non-loopback web clients.
+          if (!gitInitSucceeded && trimmedPath) {
+            // `.git` can be a directory (standard repo) or a file (worktree
+            // / submodule pointer containing `gitdir:`). Probe both: list the
+            // directory first (covers the standard case), then try reading it
+            // as a text file and checking for `gitdir:` (covers pointer files
+            // where /fs/ls returns READ_ERROR on a file).
+            try {
+              const dirResult = await filesystemApi.readDirectory(`${trimmedPath}/.git`)
+              if (dirResult.success) {
+                useProjectStore.getState().updateProject(created.id, { isGitRepo: true })
+              } else {
+                const fileResult = await filesystemApi.readFile(`${trimmedPath}/.git`)
+                if (fileResult.success && fileResult.data?.content?.startsWith('gitdir:')) {
+                  useProjectStore.getState().updateProject(created.id, { isGitRepo: true })
+                }
+              }
+            } catch {
+              // Not a git repo or unreadable — isGitRepo stays false.
+            }
+          }
+          if (isTauriContext() && created.id) {
+            void reconcileProjectWorktreesNow(created.id).catch(() => {})
+          }
+        }
 
         return { gitInitSucceeded }
       }
