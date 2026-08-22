@@ -3090,6 +3090,11 @@ impl Drop for PromptClaim {
     }
 }
 
+// `WsReply` is large (carries the full reply envelope); clippy 1.98's
+// `result_large_err` flags this. Suppress rather than box: `WsReply` is the
+// hot-path return type, boxing would add an allocation per WS reply. The
+// Err-variant size is acceptable here.
+#[allow(clippy::result_large_err)]
 async fn accept_send_prompt(
     id: String,
     payload: &Value,
