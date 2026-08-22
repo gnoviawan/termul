@@ -189,11 +189,28 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           useProjectStore.getState().updateProject(created.id, {
             isGitRepo: gitInitSucceeded
           })
-          // Then reconcile (detects existing .git for the non-init path,
-          // and confirms the init'd path).
-          reconcileProjectWorktreesNow(created.id).catch(() => {
-            // Reconcile is best-effort; the immediate set above is the fallback.
-          })
+          // Then detect existing .git for the non-init path. On desktop, the
+          // worktree reconciler (`reconcileProjectWorktreesNow`) does this via
+          // `worktreeApi.list` (Tauri command). On web, the reconciler is
+          // desktop-only (AGENTS.md: gate platform-only capabilities with
+          // isTauriContext()), so probe `.git` via the fs read route instead —
+          // the `/fs/info` route is unguarded (read, not mutation) and works
+          // for non-loopback web clients.
+          if (!gitInitSucceeded && trimmedPath) {
+            try {
+              const result = await filesystemApi.readDirectory(`${trimmedPath}/.git`)
+              if (result.success) {
+                useProjectStore.getState().updateProject(created.id, {
+                  isGitRepo: true
+                })
+              }
+            } catch {
+              // Not a git repo or unreadable — isGitRepo stays false.
+            }
+          }
+          if (isTauriContext() && created.id) {
+            void reconcileProjectWorktreesNow(created.id).catch(() => {})
+          }
         }
 
         return { gitInitSucceeded }
