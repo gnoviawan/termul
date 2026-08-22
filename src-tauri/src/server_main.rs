@@ -498,7 +498,7 @@ fn usage() -> &'static str {
         --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
         --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
         --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
-        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
+        --project-root PATH         Project-root boundary for /git/*,/skills,/search (NOT /fs/* — ADR-007) (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
         --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
         --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
         --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\

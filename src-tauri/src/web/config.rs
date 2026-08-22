@@ -8,7 +8,10 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-/// Resolve the default project-root boundary for the fs_api routes (PR-S4).
+/// Resolve the default project-root boundary for the routes that enforce it
+/// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
+/// intentionally unconfined (ADR-007); this boundary applies to the
+/// operation routes via `git_api::ensure_within_project_boundary`.
 ///
 /// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
 /// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
@@ -94,10 +97,10 @@ pub fn resolve_and_validate_project_root(raw: &Path) -> Result<PathBuf, String> 
     let canonical = raw
         .canonicalize()
         .map_err(|e| format!("project root '{}' is not accessible: {e}", raw.display()))?;
-    // 2) Must be a directory. A file is a valid fs target for the
-    //    boundary check, but it would make the fs_api routes useless
-    //    (`mkdir` cannot create children inside a file, `ls`/`browse`
-    //    cannot list a file), so fail fast at startup instead.
+    // 2) Must be a directory. The `/fs/*` routes default-navigation and the
+    //    `/git/*` containment both expect a directory root; a file would make
+    //    `mkdir` unable to create children, `ls`/`browse` unable to list, so
+    //    fail fast at startup instead.
     if !canonical.is_dir() {
         return Err(format!(
             "project root '{}' is not a directory",
@@ -159,11 +162,15 @@ pub struct ServerConfig {
     /// Last-subscriber disconnect grace before pending permissions are denied.
     /// The original per-ticket timeout continues running during this grace.
     pub permission_reconnect_grace_secs: u64,
-    /// PR-S4: project-root boundary enforced by the fs_api routes. Requests
-    /// whose canonicalized target path resolves outside this root are
-    /// refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit
-    /// `..` components). Defaults to the user's home directory when unset
-    /// (see [`default_project_root`]).
+    /// Project-root boundary for the routes that explicitly enforce it
+    /// (`/git/*`, `/skills`, `/search/content` via
+    /// `git_api::ensure_within_project_boundary` — refuses paths outside this
+    /// root with `code: "OUTSIDE_ROOT"`, or `PATH_TRAVERSAL` for explicit `..`
+    /// components). The `/fs/*` routes are intentionally NOT confined to this
+    /// root (ADR-007 breadth policy: the directory picker + editor navigate
+    /// outside the project); `/fs/*` writes reject only `..` traversal.
+    /// Defaults to the user's home directory when unset (see
+    /// [`default_project_root`]).
     pub project_root: PathBuf,
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
     /// standalone `termul-server` binary loads this at startup and seeds the
@@ -417,8 +424,10 @@ impl ServerConfig {
                     // the path exists, is accessible, and is a directory at
                     // parse time so the server doesn't start successfully
                     // and only surface the error as a per-request
-                    // `OUTSIDE_ROOT` on every /fs/* call (hard to diagnose
-                    // post-mortem). The canonical absolute form is stored
+                    // `OUTSIDE_ROOT` on the containment-enforcing routes
+                    // (`/git/*`, `/skills`, `/search/content` — NOT `/fs/*`,
+                    // which is unconfined per ADR-007). Hard to diagnose
+                    // post-mortem. The canonical absolute form is stored
                     // so the boundary check is stable.
                     let validated = resolve_and_validate_project_root(Path::new(trimmed))
                         .map_err(ParseCliError::Message)?;

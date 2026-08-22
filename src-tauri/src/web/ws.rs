@@ -357,10 +357,12 @@ pub struct AppState {
     /// `termul-server` `--allow-remote-writes` flag. The desktop shared-live
     /// host leaves this `false` (LAN clients stay view-only for mutations).
     pub allow_remote_writes: bool,
-    /// PR-S4 / CAP-1: the project-root boundary for the fs_api / git / skills /
-    /// search routes. Requests whose canonicalized target path resolves outside
-    /// this root are refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL`
-    /// for explicit `..` components). On the desktop shared-live path it is
+    /// PR-S4 / CAP-1: the project-root boundary for the routes that enforce it
+    /// (`/git/*`, `/skills`, `/search/content` via
+    /// `git_api::ensure_within_project_boundary`). The `/fs/*` routes are
+    /// intentionally NOT confined to this root (ADR-007 breadth); they reject
+    /// only `..` traversal (`PATH_TRAVERSAL`), not paths outside the root.
+    /// On the desktop shared-live path it is
     /// derived from the `ProjectRegistry`'s default (active) project at start,
     /// falling back to the user home dir when the registry is empty or its
     /// default project path is invalid (fails canonicalization); on the
