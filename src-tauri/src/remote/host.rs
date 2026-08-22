@@ -388,6 +388,10 @@ impl RemoteServerState {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            // Desktop shared-live: the cloudflared tunnel forwards public
+            // traffic to a loopback source, so the guard denies ALL writes
+            // before peer evaluation regardless of allow_remote_writes.
+            true,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;

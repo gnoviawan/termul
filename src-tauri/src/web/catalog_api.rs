@@ -213,48 +213,42 @@ mod tests {
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: Some(store),
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: None,
+        acp_catalog: Some(store),
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {

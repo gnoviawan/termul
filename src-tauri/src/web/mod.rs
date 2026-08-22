@@ -142,6 +142,9 @@ pub async fn serve(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        // Standalone binary is NOT shared-live — its admission path is the
+        // `--allow-remote-writes` opt-in, not a deployment-mode deny.
+        false,
     )
     .await?;
 
@@ -211,6 +214,7 @@ pub async fn serve_router(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    shared_live_writes_denied: bool,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -268,6 +272,7 @@ pub async fn serve_router(
         acp_install,
         store,
         cfg.allow_remote_writes,
+        shared_live_writes_denied,
     );
 
     let handle = tokio::spawn(async move {

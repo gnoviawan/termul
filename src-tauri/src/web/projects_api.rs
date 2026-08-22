@@ -107,6 +107,21 @@ pub async fn set_default_project(
     // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
     // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
     let is_loopback = peer.ip().is_loopback();
+    // Deployment-mode deny FIRST: shared-live (cloudflared tunnel) cannot
+    // distinguish forwarded public traffic from genuine local callers, so
+    // refuse all host-state writes on this path before peer/flag evaluation.
+    if state.shared_live_writes_denied {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+        );
+        return Json(IpcBody::<()>::err(
+            "shared-live deployment mode denies all remote writes".to_string(),
+            "FORBIDDEN",
+        ));
+    }
     if !is_loopback && !state.allow_remote_writes {
         tracing::warn!(
             target: "termul::web::projects_api",
@@ -233,25 +248,22 @@ mod tests {
 
     fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry,
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry,
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Same as `state_with` but wires a VPS-mode `FileProjectRegistry` + path
@@ -263,25 +275,22 @@ mod tests {
         projects_file: std::path::PathBuf,
     ) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay,
-            registry,
-            registry_persistence: Some(file_registry),
-            projects_file: Some(Arc::new(projects_file)),
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay,
+        registry,
+        registry_persistence: Some(file_registry),
+        projects_file: Some(Arc::new(projects_file)),
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {

@@ -130,7 +130,7 @@ pub async fn write(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes, "/workspace/{id}/write") {
+    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/write") {
         return (StatusCode::OK, Json(forbidden));
     }
     // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
@@ -201,7 +201,7 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, "/workspace/{id}/delete") {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/delete") {
         return (StatusCode::OK, Json(forbidden));
     }
     let Some(service) = state.workspace_manifest.as_ref() else {
@@ -238,8 +238,22 @@ pub async fn delete(
 fn check_local_only<T>(
     peer: SocketAddr,
     allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
     route: &str,
 ) -> Option<IpcBody<T>> {
+    // Deployment-mode deny FIRST (mirrors fs_api::check_local_only).
+    if shared_live_writes_denied {
+        tracing::warn!(
+            target: "termul::web::workspace_api",
+            route = route,
+            peer = %peer,
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+        );
+        return Some(IpcBody::<T>::err(
+            "shared-live deployment mode denies all remote writes".to_string(),
+            "FORBIDDEN",
+        ));
+    }
     let is_loopback = peer.ip().is_loopback();
     if is_loopback || allow_remote_writes {
         if !is_loopback && allow_remote_writes {
@@ -339,25 +353,22 @@ mod tests {
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: Some(store),
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: Some(store),
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Patch 7: degraded-mode (`None` store) test helper. Mirrors
@@ -366,25 +377,22 @@ mod tests {
     /// WORKSPACE_MANIFEST_UNAVAILABLE; delete → Ok(())).
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-            store: None,
-            allow_remote_writes: false,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     // ---- Patch 7: degraded-mode (`None` store) responses ----
