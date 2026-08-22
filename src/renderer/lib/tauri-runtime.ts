@@ -1,4 +1,5 @@
 import type { UnlistenFn } from '@tauri-apps/api/event'
+import { logFrontendError } from '@/lib/log-api'
 
 type MaybeUnlisten = Promise<UnlistenFn> | UnlistenFn | null | undefined
 
@@ -26,8 +27,24 @@ export function isTauriContext(): boolean {
  * A subscriber set lets the launcher re-render when the cache flips
  * `false`→`true` (the boot fetch resolves after the first render).
  */
-type ServerCapabilityState = { admitted: boolean; inFlight: boolean; resolved: boolean }
-let serverCapability: ServerCapabilityState = { admitted: false, inFlight: false, resolved: false }
+type ServerCapabilityState = {
+  admitted: boolean
+  inFlight: boolean
+  resolved: boolean
+  /** Bounded backoff retry timer (cleared on success/reset). `null` when no
+   * retry is pending. Tracks the `setTimeout` handle so a reset or a
+   * successful resolution can clear it. */
+  retryTimer: number | null
+  /** Retry attempt count (bounded — caps the backoff). */
+  retryCount: number
+}
+let serverCapability: ServerCapabilityState = {
+  admitted: false,
+  inFlight: false,
+  resolved: false,
+  retryTimer: null,
+  retryCount: 0
+}
 const serverCapabilitySubscribers = new Set<() => void>()
 
 function notifyServerCapabilitySubscribers(): void {
@@ -66,7 +83,14 @@ export function serverAdmitsRemoteWrites(): boolean {
 export function primeServerCapability(): void {
   // Desktop: no server to query; writes are always local-admitted.
   if (isTauriContext()) {
-    serverCapability = { admitted: true, inFlight: false, resolved: true }
+    clearRetryTimer()
+    serverCapability = {
+      admitted: true,
+      inFlight: false,
+      resolved: true,
+      retryTimer: null,
+      retryCount: 0
+    }
     notifyServerCapabilitySubscribers()
     return
   }
@@ -76,7 +100,12 @@ export function primeServerCapability(): void {
   if (serverCapability.resolved && serverCapability.admitted) return
   // Mark in-flight (fail-closed admitted stays false until resolution) so a
   // concurrent prime call is a no-op and the launcher can render `false` now.
-  serverCapability = { admitted: false, inFlight: true, resolved: false }
+  serverCapability = {
+    ...serverCapability,
+    admitted: false,
+    inFlight: true,
+    resolved: false
+  }
   notifyServerCapabilitySubscribers()
   void fetch(`${window.location.origin}/health`, { method: 'GET' })
     .then((res): Promise<{ status?: unknown; allowRemoteWrites?: unknown } | null> => {
@@ -84,27 +113,107 @@ export function primeServerCapability(): void {
       // gateway returning 200 with a JSON-shaped error body must not be
       // treated as admitting writes. Return null on rejection paths; the
       // next `.then` maps null → denied.
-      if (!res.ok) return Promise.resolve(null)
+      if (!res.ok) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'tauri-runtime.primeServerCapability',
+          message: `/health returned non-2xx status ${res.status}`
+        })
+        return Promise.resolve(null)
+      }
       return res.json() as Promise<{ status?: unknown; allowRemoteWrites?: unknown }>
     })
     .then((body) => {
-      const admitted = body?.status === 'ok' && body.allowRemoteWrites === true
-      serverCapability = { admitted, inFlight: false, resolved: true }
+      const statusOk = body?.status === 'ok'
+      const admitted = statusOk && body?.allowRemoteWrites === true
+      if (admitted) {
+        clearRetryTimer()
+        serverCapability = {
+          admitted: true,
+          inFlight: false,
+          resolved: true,
+          retryTimer: null,
+          retryCount: 0
+        }
+      } else if (statusOk && body?.allowRemoteWrites === false) {
+        // Valid `allowRemoteWrites:false` — a valid policy result, NOT a
+        // failure. Stay fail-closed; no retry (policy is static per boot).
+        clearRetryTimer()
+        serverCapability = {
+          admitted: false,
+          inFlight: false,
+          resolved: true,
+          retryTimer: null,
+          retryCount: 0
+        }
+      } else {
+        // Invalid payload (status !== "ok", or allowRemoteWrites missing/
+        // wrong type) — log it; this is a failure, not a valid denial.
+        void logFrontendError({
+          level: 'warn',
+          source: 'tauri-runtime.primeServerCapability',
+          message: `/health returned invalid payload: status=${String(body?.status)} allowRemoteWrites=${String(body?.allowRemoteWrites)}`
+        })
+        clearRetryTimer()
+        serverCapability = {
+          admitted: false,
+          inFlight: false,
+          resolved: true,
+          retryTimer: null,
+          retryCount: 0
+        }
+      }
       notifyServerCapabilitySubscribers()
     })
-    .catch(() => {
-      // Network/parse failure: stay fail-closed, but mark resolved so a later
-      // primeServerCapability() call can retry (resolved=false would block
-      // retry only if combined with admitted=true; here admitted=false so
-      // retry is allowed).
-      serverCapability = { admitted: false, inFlight: false, resolved: true }
+    .catch((err) => {
+      // Network/parse failure: stay fail-closed and schedule a bounded
+      // backoff retry so a transient boot failure (network blip, tunnel not
+      // yet up) recovers without a page reload.
+      void logFrontendError({
+        level: 'warn',
+        source: 'tauri-runtime.primeServerCapability',
+        message: `/health fetch failed: ${err instanceof Error ? err.message : String(err)}`
+      })
+      const nextCount = serverCapability.retryCount + 1
+      serverCapability = {
+        admitted: false,
+        inFlight: false,
+        resolved: false,
+        retryTimer: scheduleRetry(nextCount),
+        retryCount: nextCount
+      }
       notifyServerCapabilitySubscribers()
     })
 }
 
-/** Test-only: clear the capability cache and subscribers. */
+/** Maximum retry attempts before giving up (fail-closed permanently). */
+const MAX_RETRY_ATTEMPTS = 5
+
+/** Clear any pending retry timer. */
+function clearRetryTimer(): void {
+  clearTimeout(serverCapability.retryTimer ?? undefined)
+}
+
+/** Schedule a bounded backoff retry. Returns the timer handle (cleared on
+ * success/reset). Exponential backoff: 2s, 4s, 8s, 16s, 32s — capped at
+ * MAX_RETRY_ATTEMPTS (then fail-closed permanently). */
+function scheduleRetry(count: number): number | null {
+  if (count > MAX_RETRY_ATTEMPTS) return null
+  const delayMs = Math.min(2000 * 2 ** (count - 1), 32000)
+  return setTimeout(() => {
+    primeServerCapability()
+  }, delayMs)
+}
+
 export function __resetServerCapabilityCache(): void {
-  serverCapability = { admitted: false, inFlight: false, resolved: false }
+  clearRetryTimer()
+  serverCapability = {
+    admitted: false,
+    inFlight: false,
+    resolved: false,
+    retryTimer: null,
+    retryCount: 0
+  }
   serverCapabilitySubscribers.clear()
 }
 

@@ -355,10 +355,21 @@ async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
+    let allow = !state.shared_live_writes_denied
+        && (peer.ip().is_loopback() || state.allow_remote_writes);
+    // Durable boundary log (AGENTS.md): record the capability-admission
+    // decision. No peer address or credentials logged — only the decision
+    // + whether the deployment-mode deny or opt-in governed it.
+    tracing::debug!(
+        target: "termul::web::router",
+        allow_remote_writes = allow,
+        shared_live_denied = state.shared_live_writes_denied,
+        opt_in = state.allow_remote_writes,
+        "health capability probe",
+    );
     (StatusCode::OK, Json(HealthBody {
         status: "ok",
-        allow_remote_writes: !state.shared_live_writes_denied
-            && (peer.ip().is_loopback() || state.allow_remote_writes),
+        allow_remote_writes: allow,
     }))
 }
 
@@ -530,6 +541,44 @@ mod tests {
             parsed["allowRemoteWrites"],
             false,
             "shared-live deny must override loopback peer + allow_remote_writes"
+        );
+    }
+
+    /// `allow_remote_writes=true` + `shared_live_writes_denied=false` → a
+    /// non-loopback peer is ADMITTED (`allowRemoteWrites:true`). This is the
+    /// standalone `termul-server --allow-remote-writes` posture.
+    #[tokio::test]
+    async fn health_reports_admitted_for_non_loopback_with_opt_in() {
+        let dir = TempDir::new("health-opt-in");
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            true,  // allow_remote_writes (opt-in)
+            false, // shared_live_writes_denied (standalone, not shared-live)
+        );
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 50000))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("health body is JSON");
+        assert_eq!(
+            parsed["allowRemoteWrites"],
+            true,
+            "non-loopback peer with opt-in must be admitted"
         );
     }
 

@@ -10,6 +10,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
+import { primeServerCapability } from '@/lib/tauri-runtime'
 import { getCurrentWindow } from '@/lib/tauri-window'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { WhatsNewModal } from './components/WhatsNewModal'
@@ -93,6 +94,13 @@ function AppEffects(): null {
   // so the OS permission prompt appears early, not on first terminal exit
   useEffect(() => {
     initNotificationPermissions()
+  }, [])
+
+  // AGENTS.md parity: seed the server-capability cache at boot (desktop
+  // short-circuits to admitted=true via `isTauriContext()`, no fetch). Web
+  // root (App.tsx) calls this too — both roots stay consistent.
+  useEffect(() => {
+    primeServerCapability()
   }, [])
 
   return null
