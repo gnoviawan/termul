@@ -197,12 +197,20 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           // the `/fs/info` route is unguarded (read, not mutation) and works
           // for non-loopback web clients.
           if (!gitInitSucceeded && trimmedPath) {
+            // `.git` can be a directory (standard repo) or a file (worktree
+            // / submodule pointer containing `gitdir:`). Probe both: list the
+            // directory first (covers the standard case), then try reading it
+            // as a text file and checking for `gitdir:` (covers pointer files
+            // where /fs/ls returns READ_ERROR on a file).
             try {
-              const result = await filesystemApi.readDirectory(`${trimmedPath}/.git`)
-              if (result.success) {
-                useProjectStore.getState().updateProject(created.id, {
-                  isGitRepo: true
-                })
+              const dirResult = await filesystemApi.readDirectory(`${trimmedPath}/.git`)
+              if (dirResult.success) {
+                useProjectStore.getState().updateProject(created.id, { isGitRepo: true })
+              } else {
+                const fileResult = await filesystemApi.readFile(`${trimmedPath}/.git`)
+                if (fileResult.success && fileResult.data?.content?.startsWith('gitdir:')) {
+                  useProjectStore.getState().updateProject(created.id, { isGitRepo: true })
+                }
               }
             } catch {
               // Not a git repo or unreadable — isGitRepo stays false.
