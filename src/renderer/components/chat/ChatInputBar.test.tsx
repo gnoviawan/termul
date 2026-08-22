@@ -438,22 +438,29 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
   it('renders the MCP badge with the count when MCP servers are configured', () => {
     mockMcpCount.current = 2
     renderInputBar()
-    // The badge is now a popover trigger (per-server enable/disable + status
-    // dot). The count is exposed via the trigger's aria-label (not as bare
-    // text — the compact badge shows only the MCP icon when closed).
-    const trigger = screen.getByRole('button', { name: /MCP servers — 2 attached/i })
-    expect(trigger).toBeInTheDocument()
+    // The badge is now an icon-only popover trigger (#643): the count lives
+    // only in the trigger's aria-label — no bare text node.
+    expect(
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
   })
 
   it('prefers the switched session MCP count over the global registry', () => {
     mockMcpCount.current = 5
     renderInputBar({ session: { ...session(), mcpServerCount: 2 } })
     // The session-scoped count (2) wins over the global registry (5); the
-    // trigger's aria-label carries the session count (not bare text).
-    const trigger = screen.getByRole('button', { name: /MCP servers — 2 attached/i })
-    expect(trigger).toBeInTheDocument()
+    // trigger's aria-label carries the session count.
     expect(
-      screen.queryByRole('button', { name: /MCP servers — 5 attached/i })
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
+      })
     ).not.toBeInTheDocument()
   })
 })

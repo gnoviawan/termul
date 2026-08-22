@@ -133,3 +133,100 @@ EOF
   [ -n "$macos_verification_section" ]
   ! grep -q 'mapfile' <<<"$macos_verification_section"
 }
+
+@test "generate_sha256sums writes bare-name entries and skips signatures and manifests" {
+  local dir="$TERMUL_TEST_TMP_DIR/assets"
+  local names="$TERMUL_TEST_TMP_DIR/names.txt"
+  local out="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  mkdir -p "$dir"
+  printf 'app-image-bytes' >"$dir/Termul.Manager_0.4.11_amd64.AppImage"
+  printf 'sig-bytes' >"$dir/Termul.Manager_0.4.11_amd64.AppImage.sig"
+  printf '{}' >"$dir/latest.json"
+  printf 'server-bytes' >"$dir/termul-server"
+  cat >"$names" <<NAMES
+Termul.Manager_0.4.11_amd64.AppImage
+Termul.Manager_0.4.11_amd64.AppImage.sig
+latest.json
+termul-server
+NAMES
+
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -eq 0 ]
+
+  # Entries carry the bare asset name (two-space separator), not a path.
+  local expected_appimage_sha expected_server_sha
+  expected_appimage_sha="$(printf 'app-image-bytes' | shasum -a 256 | awk '{print $1}')"
+  expected_server_sha="$(printf 'server-bytes' | shasum -a 256 | awk '{print $1}')"
+  grep -Fq "$expected_appimage_sha  Termul.Manager_0.4.11_amd64.AppImage" "$out"
+  grep -Fq "$expected_server_sha  termul-server" "$out"
+
+  # Signatures and updater manifests are not checksummed.
+  [ "$(grep -c '' "$out")" -eq 2 ]
+  ! grep -Fq '.sig' "$out"
+  ! grep -Fq 'latest.json' "$out"
+}
+
+@test "generate_sha256sums refuses filenames that do not match published asset names" {
+  # Regression for #546: v0.4.10 shipped SHA256SUMS entries named
+  # "Termul Manager_..." (product display name with a space) while the
+  # published assets are "Termul.Manager_..." — the installer's exact-match
+  # lookup then fails with "checksum not found".
+  local dir="$TERMUL_TEST_TMP_DIR/assets"
+  local names="$TERMUL_TEST_TMP_DIR/names.txt"
+  local out="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  mkdir -p "$dir"
+  printf 'app-image-bytes' >"$dir/Termul Manager_0.4.10_amd64.AppImage"
+  printf 'Termul.Manager_0.4.10_amd64.AppImage' >"$names"
+
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a published release asset name"* ]]
+  [[ "$output" == *"Termul Manager_0.4.10_amd64.AppImage"* ]]
+
+  # Nothing may be written when validation fails.
+  [ ! -s "$out" ]
+  # The atomic-write temp file must be cleaned up too.
+  [ -z "$(find "$TERMUL_TEST_TMP_DIR" -maxdepth 1 -name 'SHA256SUMS.txt.tmp.*' -print -quit)" ]
+}
+
+@test "generate_sha256sums leaves no partial output when a valid asset sorts before a mismatched one" {
+  # CodeRabbit review: a valid asset processed before the failure must not
+  # leave partial checksum output behind, and a previously published
+  # checksum file must survive the failed regeneration.
+  local dir="$TERMUL_TEST_TMP_DIR/assets"
+  local names="$TERMUL_TEST_TMP_DIR/names.txt"
+  local out="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  mkdir -p "$dir"
+  # "AAA..." sorts before "Termul Manager...", so the valid asset is
+  # checksummed first and the mismatch then aborts the run.
+  printf 'deb-bytes' >"$dir/AAA_valid.deb"
+  printf 'app-image-bytes' >"$dir/Termul Manager_0.4.10_amd64.AppImage"
+  printf 'AAA_valid.deb' >"$names"
+
+  printf 'old-checksum-content\n' >"$out"
+
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a published release asset name"* ]]
+
+  # The prior checksum file is untouched — no partial write, no clobber.
+  [ "$(cat "$out")" = "old-checksum-content" ]
+  [ -z "$(find "$TERMUL_TEST_TMP_DIR" -maxdepth 1 -name 'SHA256SUMS.txt.tmp.*' -print -quit)" ]
+}
+
+@test "generate_sha256sums requires assets and a nonempty expected-names list" {
+  local dir="$TERMUL_TEST_TMP_DIR/empty-assets"
+  local names="$TERMUL_TEST_TMP_DIR/names.txt"
+  local out="$TERMUL_TEST_TMP_DIR/SHA256SUMS.txt"
+  mkdir -p "$dir"
+  : >"$names"
+
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"missing or empty"* ]]
+
+  printf 'Termul.Manager_0.4.11_amd64.AppImage' >"$names"
+  run generate_sha256sums "$dir" "$names" "$out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No binary release assets"* ]]
+}
