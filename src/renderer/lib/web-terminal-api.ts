@@ -11,7 +11,8 @@ import type {
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
-  TerminalSpawnOptions
+  TerminalSpawnOptions,
+  TerminalStateSnapshot
 } from '@shared/types/ipc.types'
 import type {
   WebTerminalEventPayload,
@@ -415,6 +416,10 @@ export class WebTerminalClient {
         ])
         for (const callback of this.dataCallbacks) callback(frame.terminalId, marker)
       }
+      // Seed the terminal's lifecycle/metadata state from the attach snapshot
+      // so a client that reattaches after the single change-only event emit
+      // still learns branch/status/cwd/exit (closes the "detached" display gap).
+      this.dispatchSnapshot(frame.terminalId, frame.snapshot)
       return
     }
     if (frame.type === 'gap') {
@@ -456,6 +461,29 @@ export class WebTerminalClient {
       case 'exit_code_changed':
         for (const callback of this.exitCodeCallbacks) callback(event.terminal_id, event.exit_code)
         break
+    }
+  }
+
+  /**
+   * Fan out an attach/replay snapshot through the same callbacks live events
+   * use, so the store updaters (useGitBranch/useGitStatus/useCwd/useExitCode)
+   * seed initial state on attach — not only on a change they might have missed.
+   * `null` branch/status are meaningful (detached/unknown) and dispatched
+   * verbatim; `null` cwd/exitCode are absent values and skipped.
+   */
+  private dispatchSnapshot(terminalId: string, snapshot: TerminalStateSnapshot): void {
+    if (snapshot.cwd !== null) {
+      for (const callback of this.cwdCallbacks) callback(terminalId, snapshot.cwd)
+    }
+    for (const callback of this.branchCallbacks) callback(terminalId, snapshot.gitBranch)
+    for (const callback of this.statusCallbacks) callback(terminalId, snapshot.gitStatus)
+    if (snapshot.exitCode !== null) {
+      for (const callback of this.exitCodeCallbacks) callback(terminalId, snapshot.exitCode)
+    }
+    if (snapshot.exited) {
+      this.markExited(terminalId)
+      const exitCode = snapshot.exitCode ?? -1
+      for (const callback of this.exitCallbacks) callback(terminalId, exitCode, undefined)
     }
   }
 

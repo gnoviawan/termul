@@ -81,8 +81,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       color,
       path,
       defaultShell,
-      envVars,
-      gitBranch: 'main'
+      envVars
+      // gitBranch intentionally omitted: a stale hardcoded 'main' here was
+      // shown in the status bar before the real branch was detected.
+      // `useProjectGitBranch` auto-detects the actual HEAD branch on project
+      // activation; the manual GitBranchPicker switch still updates it.
     }
     set((state) => ({
       projects: [...state.projects, newProject],

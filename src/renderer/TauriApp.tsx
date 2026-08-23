@@ -30,6 +30,7 @@ import { useGitStatus } from './hooks/use-git-status'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
+import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
@@ -56,8 +57,8 @@ function AppEffects(): null {
   useTerminalRestore()
   useCrashRecovery()
   useTerminalDetachedOutput()
-  useCwd()
   useGitBranch()
+  useProjectGitBranch()
   useGitStatus()
   useExitCode()
   useContextBarSettings()

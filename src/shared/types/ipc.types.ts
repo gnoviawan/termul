@@ -57,12 +57,24 @@ export interface SpawnedTerminal extends TerminalInfo {
    * the spawn/rotate responses — never echoed by any other operation. */
   claim: string
 }
+/** Latest terminal lifecycle/metadata state. Serialized on the attach/replay
+ * frames so a client that attaches after the single change-only event emit
+ * can seed its store (closing the "detached for a branch that isn't" gap).
+ * Runtime-neutral contract shared by both transports. */
+export interface TerminalStateSnapshot {
+  cwd: string | null
+  gitBranch: string | null
+  gitStatus: GitStatus | null
+  exitCode: number | null
+  exited: boolean
+}
 
 /**
  * CAP-3 attach response — byte-identical camelCase shape on both transports
  * (desktop `terminal_attach` IpcResult data; web `attach` reply data).
- * Carries the replay cursor (`latestSeq`) + `gap` flag. NEVER carries a
- * claim: attach consumes the credential, it never issues one.
+ * Carries the replay cursor (`latestSeq`) + `gap` flag + the terminal's
+ * last-known state `snapshot`. NEVER carries a claim: attach consumes the
+ * credential, it never issues one.
  */
 export interface TerminalAttachResult {
   id: string
@@ -73,6 +85,7 @@ export interface TerminalAttachResult {
   rows: number
   latestSeq: number
   gap: boolean
+  snapshot: TerminalStateSnapshot
 }
 
 /** CAP-3 rotate response: the fresh credential. */

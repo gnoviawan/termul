@@ -3,7 +3,8 @@ import type {
   RotatedClaim,
   SpawnedTerminal,
   TerminalAttachResult,
-  TerminalSpawnOptions
+  TerminalSpawnOptions,
+  TerminalStateSnapshot
 } from './ipc.types'
 
 export type WebTerminalRequestType =
@@ -49,7 +50,7 @@ export interface WebTerminalReplayFrame {
   chunks: Array<{ seq: number; data: number[] }>
   gap: boolean
   latestSeq: number
-  snapshot: WebTerminalStateSnapshot
+  snapshot: TerminalStateSnapshot
 }
 
 /** Gap marker frame: broadcast receiver lagged, some output was lost. */
@@ -57,15 +58,6 @@ export interface WebTerminalGapFrame {
   type: 'gap'
   terminalId: string
   lastSeq: number
-}
-
-/** Latest lifecycle/metadata state (sent with replay). */
-export interface WebTerminalStateSnapshot {
-  cwd: string | null
-  gitBranch: string | null
-  gitStatus: GitStatus | null
-  exitCode: number | null
-  exited: boolean
 }
 
 export type WebTerminalEventPayload =

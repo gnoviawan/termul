@@ -4,7 +4,7 @@
 //! ported from the Electron implementation.
 
 use crate::pty::claims::ClaimError;
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub};
+use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub, TerminalStateSnapshot};
 use parking_lot::RwLock;
 use portable_pty::{Child, MasterPty, PtySize};
 
@@ -495,6 +495,13 @@ pub struct SpawnedTerminal {
 /// Carries the live terminal metadata plus the replay cursor (`latestSeq`) and
 /// `gap` flag. It NEVER carries a claim key: attach is credential-consuming,
 /// never credential-issuing.
+///
+/// `snapshot` carries the terminal's last-known lifecycle/metadata state
+/// (cwd, git branch/status, exit code, exited). The web transport sends the
+/// same snapshot on the `replay` frame; the renderer uses it to seed store
+/// state on attach/reattach — closing the gap where a client that connects
+/// after the single change-only `git_branch_changed` emit would otherwise
+/// never learn the branch (rendered as "detached" for a branch that isn't).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalAttachResult {
@@ -506,6 +513,7 @@ pub struct TerminalAttachResult {
     pub rows: u16,
     pub latest_seq: u64,
     pub gap: bool,
+    pub snapshot: TerminalStateSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1853,6 +1861,7 @@ impl PtyManager {
             rows: *instance.rows.read(),
             latest_seq: replay.latest_seq,
             gap: replay.gap,
+            snapshot: self.terminal_events.snapshot(&instance.id),
         }
     }
 
@@ -3133,6 +3142,7 @@ mod tests {
             rows: 32,
             latest_seq: 87,
             gap: false,
+            snapshot: TerminalStateSnapshot::default(),
         };
 
         let value: serde_json::Value = serde_json::to_value(&result).unwrap();
@@ -3153,7 +3163,7 @@ mod tests {
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["id", "shell", "cwd", "pid", "cols", "rows", "latestSeq", "gap"]
+            ["id", "shell", "cwd", "pid", "cols", "rows", "latestSeq", "gap", "snapshot"]
                 .into_iter()
                 .collect::<std::collections::BTreeSet<&str>>()
         );

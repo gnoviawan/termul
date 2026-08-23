@@ -18,6 +18,7 @@ import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
+import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
@@ -126,6 +127,7 @@ function AppEffects(): null {
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
+  useProjectGitBranch()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
