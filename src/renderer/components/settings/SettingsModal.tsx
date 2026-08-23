@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useRef } from 'react'
 
 interface SettingsModalProps {
   /** Whether the modal is visible. */
@@ -38,19 +38,35 @@ export function SettingsModal({
   children,
   footer
 }: SettingsModalProps): React.JSX.Element {
-  // Handle Escape key. Defer to any open child dialog (ConfirmDialog) or
+  const cardRef = useRef<HTMLDivElement>(null)
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null)
+
+  // Focus management: move focus into the dialog on open, trap Tab within
+  // its focusable controls, and restore focus to the trigger on close.
+  useEffect(() => {
+    if (!isOpen) return
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Defer one tick so the motion.div has mounted.
+    const id = requestAnimationFrame(() => cardRef.current?.focus())
+    return () => {
+      cancelAnimationFrame(id)
+      previouslyFocusedRef.current?.focus()
+    }
+  }, [isOpen])
+
+  // Handle Escape key. Defer to any open sibling dialog (ConfirmDialog) or
   // ShortcutRecorder: if one is active, let it handle Escape and skip closing
   // the settings modal — otherwise both listeners fire and the confirm is
-  // dismissed without the user choosing (BlindHunter #5), or the modal closes
-  // mid-recording (EdgeCaseHunter #2).
+  // dismissed without the user choosing, or the modal closes mid-recording.
   useEffect(() => {
     if (!isOpen) return
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
-      // A nested dialog (ConfirmDialog, McpServersSettings editor, etc.) is
+      // A sibling dialog (ConfirmDialog reset/unsaved-confirm, etc.) is
       // open — let its own Escape handler run and don't close the modal.
-      if (document.querySelector('[role="dialog"] [role="dialog"]')) return
+      if (document.querySelector('[data-sibling-dialog]')) return
       // ShortcutRecorder is capturing — don't close the modal mid-recording.
       if (document.querySelector('[data-shortcut-recorder]')) return
       e.preventDefault()
@@ -59,6 +75,30 @@ export function SettingsModal({
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
+
+  // Trap Tab within the dialog card so focus doesn't leak into the workspace
+  // behind the backdrop.
+  useEffect(() => {
+    if (!isOpen) return
+    const handleTab = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Tab' || !cardRef.current) return
+      const focusables = cardRef.current.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+      )
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      } else if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      }
+    }
+    window.addEventListener('keydown', handleTab)
+    return () => window.removeEventListener('keydown', handleTab)
+  }, [isOpen])
 
   return (
     <AnimatePresence>
@@ -71,11 +111,13 @@ export function SettingsModal({
           onClick={onClose}
         >
           <motion.div
+            ref={cardRef}
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.15 }}
-            className="flex h-[90vh] max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:h-[85vh] md:max-h-[85vh] md:w-[90vw] md:max-w-5xl"
+            className="flex h-[90vh] max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl focus:outline-none md:h-[85vh] md:max-h-[85vh] md:w-[90vw] md:max-w-5xl"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"

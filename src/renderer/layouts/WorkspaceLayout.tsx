@@ -87,7 +87,7 @@ import {
   useProjects,
   useProjectsLoaded
 } from '@/stores/project-store'
-import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import {
   useActiveSSHProfile,
@@ -220,6 +220,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
+  const settingsModalView = useSettingsModalView()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
 
   useEffect(() => {
@@ -1734,13 +1735,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
         </Suspense>
       )}
 
-      <Suspense fallback={null}>
-        <ProjectSettingsModal />
-      </Suspense>
+      {settingsModalView === 'project' && (
+        <Suspense fallback={null}>
+          <ProjectSettingsModal />
+        </Suspense>
+      )}
 
-      <Suspense fallback={null}>
-        <AppPreferencesModal />
-      </Suspense>
+      {settingsModalView === 'app' && (
+        <Suspense fallback={null}>
+          <AppPreferencesModal />
+        </Suspense>
+      )}
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
