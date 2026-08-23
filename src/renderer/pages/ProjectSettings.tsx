@@ -431,14 +431,14 @@ export function ProjectSettingsModal() {
         >
           {/* General Section */}
           <SettingsSection id="general">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">General</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Basic project identification and location.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
                     Project Name
@@ -518,8 +518,8 @@ export function ProjectSettingsModal() {
 
           {/* Environment Variables Section */}
           <SettingsSection id="env-vars">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Secrets and config injected into your shell session. Secret values are cleared on
@@ -544,7 +544,7 @@ export function ProjectSettingsModal() {
                   </p>
                 )}
               </div>
-              <div className="w-2/3">
+              <div className="w-full md:w-2/3">
                 <div className="bg-secondary/30 rounded-lg border border-border overflow-hidden">
                   <div className="grid grid-cols-[1fr_1.5fr_auto] gap-px bg-border">
                     <div className="label-section bg-secondary/80 px-4 py-2 text-muted-foreground">
@@ -606,14 +606,14 @@ export function ProjectSettingsModal() {
 
           {/* Shell Settings Section */}
           <SettingsSection id="shell">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Customize the terminal experience for this workspace.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
                     Default Shell
@@ -652,8 +652,8 @@ export function ProjectSettingsModal() {
 
           {/* Worktree Symlink Directories Section */}
           <SettingsSection id="symlinks">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Directories to symlink from the project root into worktrees. This allows shared
@@ -681,7 +681,7 @@ export function ProjectSettingsModal() {
                   </button>
                 </div>
               </div>
-              <div className="w-2/3">
+              <div className="w-full md:w-2/3">
                 <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
                   {symlinkDirs.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-4">
@@ -715,14 +715,14 @@ export function ProjectSettingsModal() {
 
           {/* Emergency Mode & Expert Workflows Section */}
           <SettingsSection id="emergency">
-            <div className="flex items-start gap-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Power-user workflow settings for incident response and rapid worktree operations.
                 </p>
               </div>
-              <div className="w-2/3">
+              <div className="w-full md:w-2/3">
                 <div className="bg-secondary/30 rounded-lg border border-border p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
