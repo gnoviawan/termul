@@ -193,6 +193,7 @@ export function ConfigChip({
                 }, 500)
               }}
               onPointerDown={(event) => {
+                if (event.pointerType === 'touch') return
                 if ((event.button ?? 0) !== 0) return
                 event.preventDefault()
                 if (lastInputType.current === 'touch') return
@@ -316,6 +317,7 @@ export function ModeChip({
             }, 500)
           }}
           onPointerDown={(event) => {
+            if (event.pointerType === 'touch') return
             if ((event.button ?? 0) !== 0) return
             event.preventDefault()
             if (lastInputType.current === 'touch') return

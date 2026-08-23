@@ -2054,6 +2054,10 @@ function AcpModelPicker({
                     }, 500)
                   }}
                   onPointerDown={(event) => {
+                    // Skip on real touch — onTouchEnd handles tap vs drag-scroll.
+                    // pointerdown fires at touch-start, before touchend, so it
+                    // would select immediately on contact without this guard.
+                    if (event.pointerType === 'touch') return
                     if ((event.button ?? 0) !== 0) return
                     event.preventDefault()
                     if (lastInputType.current === 'touch') return
