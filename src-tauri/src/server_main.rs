@@ -45,6 +45,16 @@ fn main() -> ExitCode {
         return run_one_shot_update_check();
     }
 
+    // `onboard`: guided interactive setup + background launch. Handled before
+    // `ServerConfig::from_args` so the `--onboard` flag (unknown to the shared
+    // parser) does not trip it. The wizard performs the background launch
+    // itself (systemd unit or setsid detach); it does NOT fall through to the
+    // foreground bootstrap. Only the binary wiring here is gated by
+    // `standalone-server`; the `onboard` lib module is unconditionally compiled.
+    if raw_args.first().is_some_and(|arg| arg == "onboard" || arg == "--onboard") {
+        init_tracing();
+        return termul_manager_lib::onboard::run();
+    }
     // `--internal-mcp-plan-server`: self-spawned child of the host-injected
     // `plan` MCP tool. The agent spawns `current_exe()` with this flag
     // (the injected `McpServer::Stdio`); the child runs an rmcp MCP server over
@@ -491,8 +501,7 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--allow-remote-writes] [--check-update]\n\n\
-     Options:\n\
+    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--allow-remote-writes] [--check-update] [onboard]\n\n\
         --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
         --port PORT                 Bind port (default: 8080)\n\
         --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
@@ -521,5 +530,9 @@ fn usage() -> &'static str {
                                      TERMUL_SERVER_UPDATE_CHANNEL is unset; the env wins when set.\n\
                                      (env: TERMUL_SERVER_UPDATE_ENABLED + TERMUL_SERVER_UPDATE_CHANNEL\n\
                                      gate the periodic loop; TERMUL_SERVER_UPDATE_INTERVAL_SECS default 21600)\n\
+        onboard                    Guided interactive setup + background launch: auto-detects\n\
+                                     the service manager (systemd unit or setsid detach) so the\n\
+                                     server survives SSH logout. Non-TTY stdin prints the resolved\n\
+                                     default command + mechanism tip and exits 0 without launching.\n\
         -h, --help                  Show this help"
 }
