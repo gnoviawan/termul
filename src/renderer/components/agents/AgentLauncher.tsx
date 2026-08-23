@@ -121,6 +121,9 @@ interface AgentLauncherProps {
 
 const EMPTY_COMMANDS: [] = []
 const EMPTY_AUTH_METHODS: AuthMethod[] = []
+
+/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
+const TOUCH_SELECT_THRESHOLD_PX = 10
 const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
 const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
 const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
@@ -1944,6 +1947,11 @@ function AcpModelPicker({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
+  // Touch-safe selection (parity with ComposerMenu): record touchstart coords
+  // so touchend can distinguish a tap (select) from a drag-scroll (skip). The
+  // lastInputType ref guards against touch→mouse synthesis double-fire.
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
   const { displayValue, pending, select } = useOptimisticSelect(
     modelOption?.currentValue,
     onSelectModel
@@ -2024,9 +2032,31 @@ function AcpModelPicker({
                 <button
                   key={value.value}
                   type="button"
+                  onTouchStart={(event) => {
+                    const t = event.touches[0]
+                    if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+                  }}
+                  onTouchEnd={(event) => {
+                    event.preventDefault()
+                    const start = touchStartRef.current
+                    touchStartRef.current = null
+                    const t = event.changedTouches[0]
+                    const isTap =
+                      start && t
+                        ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+                          TOUCH_SELECT_THRESHOLD_PX ** 2
+                        : true
+                    if (!isTap) return
+                    lastInputType.current = 'touch'
+                    handleSelectModel(value.value)
+                    window.setTimeout(() => {
+                      if (lastInputType.current === 'touch') lastInputType.current = null
+                    }, 500)
+                  }}
                   onPointerDown={(event) => {
                     if ((event.button ?? 0) !== 0) return
                     event.preventDefault()
+                    if (lastInputType.current === 'touch') return
                     handleSelectModel(value.value)
                   }}
                   onClick={() => handleSelectModel(value.value)}

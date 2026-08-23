@@ -1,5 +1,5 @@
 import { Bot, Brain } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -27,6 +27,9 @@ const SELECTOR_OPTION_ROW =
 const SELECTOR_OPTION_SELECTED = 'bg-accent text-accent-foreground'
 const SELECTOR_OPTION_DESCRIPTION = 'text-xs opacity-70'
 const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
+
+/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
+const TOUCH_SELECT_THRESHOLD_PX = 10
 
 /**
  * Resolve the display label for a config chip. Promoted chips (e.g.
@@ -117,6 +120,10 @@ export function ConfigChip({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
+  // Touch-safe selection (parity with ComposerMenu): record touchstart coords
+  // so touchend can distinguish a tap (select) from a drag-scroll (skip).
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
   const { displayValue, pending, select } = useOptimisticSelect(option.currentValue, onSelect)
   const current = option.options.find((o) => o.value === displayValue)
   const fallbackLabel = getLabelForConfigChip(option, promoted)
@@ -164,16 +171,33 @@ export function ConfigChip({
             <button
               key={v.value}
               type="button"
-              onPointerDown={(event) => {
-                // Primary only; treat missing button as primary (jsdom/synthetic).
-                if ((event.button ?? 0) !== 0) return
-                // Prefer pointerdown so the choice lands before Radix closes the
-                // controlled popover (click can lose the race and drop onSelect).
+              onTouchStart={(event) => {
+                const t = event.touches[0]
+                if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+              }}
+              onTouchEnd={(event) => {
                 event.preventDefault()
+                const start = touchStartRef.current
+                touchStartRef.current = null
+                const t = event.changedTouches[0]
+                const isTap =
+                  start && t
+                    ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+                      TOUCH_SELECT_THRESHOLD_PX ** 2
+                    : true
+                if (!isTap) return
+                lastInputType.current = 'touch'
+                handleSelect(v.value)
+                window.setTimeout(() => {
+                  if (lastInputType.current === 'touch') lastInputType.current = null
+                }, 500)
+              }}
+              onPointerDown={(event) => {
+                if ((event.button ?? 0) !== 0) return
+                event.preventDefault()
+                if (lastInputType.current === 'touch') return
                 handleSelect(v.value)
               }}
-              // Keyboard activation (Enter/Space) fires click, not pointerdown;
-              // useOptimisticSelect ignores the repeat when both fire on mouse.
               onClick={() => handleSelect(v.value)}
               className={cn(
                 SELECTOR_OPTION_ROW,
@@ -241,6 +265,8 @@ export function ModeChip({
   const modes = session.modes
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
   const { displayValue, pending, select } = useOptimisticSelect(modes?.currentModeId, onSelect)
 
   if (!modes || modes.availableModes.length === 0) return null
@@ -268,13 +294,34 @@ export function ModeChip({
         <button
           key={m.id}
           type="button"
+          onTouchStart={(event) => {
+            const t = event.touches[0]
+            if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+          }}
+          onTouchEnd={(event) => {
+            event.preventDefault()
+            const start = touchStartRef.current
+            touchStartRef.current = null
+            const t = event.changedTouches[0]
+            const isTap =
+              start && t
+                ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+                  TOUCH_SELECT_THRESHOLD_PX ** 2
+                : true
+            if (!isTap) return
+            lastInputType.current = 'touch'
+            handleSelect(m.id)
+            window.setTimeout(() => {
+              if (lastInputType.current === 'touch') lastInputType.current = null
+            }, 500)
+          }}
           onPointerDown={(event) => {
             if ((event.button ?? 0) !== 0) return
             event.preventDefault()
+            if (lastInputType.current === 'touch') return
             handleSelect(m.id)
           }}
           onClick={() => handleSelect(m.id)}
-          className={cn(SELECTOR_OPTION_ROW, m.id === displayValue && SELECTOR_OPTION_SELECTED)}
         >
           <span className="font-medium">{m.name}</span>
           {m.description && <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>}
