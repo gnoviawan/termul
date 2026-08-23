@@ -2618,6 +2618,7 @@ impl portable_pty::Child for WindowsConPtyChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trackers::GitStatus;
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -3142,7 +3143,20 @@ mod tests {
             rows: 32,
             latest_seq: 87,
             gap: false,
-            snapshot: TerminalStateSnapshot::default(),
+            snapshot: TerminalStateSnapshot {
+                cwd: Some("/repo".to_string()),
+                git_branch: Some("dev".to_string()),
+                git_status: Some(GitStatus {
+                    modified: 1,
+                    staged: 2,
+                    untracked: 3,
+                    ahead: 4,
+                    behind: 5,
+                    has_changes: true,
+                }),
+                exit_code: Some(0),
+                exited: false,
+            },
         };
 
         let value: serde_json::Value = serde_json::to_value(&result).unwrap();
@@ -3159,6 +3173,26 @@ mod tests {
             !obj.contains_key("claim"),
             "TerminalAttachResult must never carry a claim key"
         );
+
+        // snapshot is a nested object with camelCase lifecycle fields.
+        let snap = obj
+            .get("snapshot")
+            .and_then(|v| v.as_object())
+            .expect("snapshot is a nested object");
+        assert_eq!(snap.get("cwd").and_then(|v| v.as_str()), Some("/repo"));
+        assert_eq!(snap.get("gitBranch").and_then(|v| v.as_str()), Some("dev"));
+        assert_eq!(snap.get("exitCode").and_then(|v| v.as_i64()), Some(0));
+        assert_eq!(snap.get("exited").and_then(|v| v.as_bool()), Some(false));
+        let status = snap
+            .get("gitStatus")
+            .and_then(|v| v.as_object())
+            .expect("gitStatus is a nested object");
+        assert_eq!(status.get("modified").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(status.get("staged").and_then(|v| v.as_i64()), Some(2));
+        assert_eq!(status.get("untracked").and_then(|v| v.as_i64()), Some(3));
+        assert_eq!(status.get("ahead").and_then(|v| v.as_i64()), Some(4));
+        assert_eq!(status.get("behind").and_then(|v| v.as_i64()), Some(5));
+        assert_eq!(status.get("hasChanges").and_then(|v| v.as_bool()), Some(true));
 
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         assert_eq!(

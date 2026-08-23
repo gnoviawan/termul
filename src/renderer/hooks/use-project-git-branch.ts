@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { gitApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 
@@ -11,10 +12,12 @@ import type { Project } from '@/types/project'
  *
  * Runs on active-project change. Skips projects that are not git repos or have
  * no path. Transport-neutral: `gitApi.getCommitContext` branches on
- * `isTauriContext()` (desktop invoke / same-origin server HTTP), so the
- * status bar reflects the real branch on both desktop and the termul-server
- * web/remote client.
+ * `isTauriContext()` (desktop invoke / same-origin server HTTP), so the status
+ * bar reflects the real branch on both desktop and the termul-server web/remote
+ * client.
  *
+ * A detached HEAD (`branch: null`) clears the stored `project.gitBranch` so the
+ * status bar shows 'detached' truthfully rather than a stale prior branch.
  * Best-effort: a fetch failure leaves the existing (or absent) value alone;
  * the manual GitBranchPicker switch path still updates `gitBranch`, and the
  * per-terminal git branch events (useGitBranch) take precedence in the status
@@ -23,9 +26,10 @@ import type { Project } from '@/types/project'
 export function useProjectGitBranch(): void {
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
   const updateProject = useProjectStore((state) => state.updateProject)
-  // Track the in-flight project id so a fast switch does not let a slow
-  // earlier fetch stampede over the newer project's branch.
-  const inflightRef = useRef<string | null>(null)
+  // Monotonic request token so a fast A→B→A switch cannot let a slow earlier
+  // fetch stampede over a newer result: a stale token is superseded even when
+  // the project id repeats.
+  const tokenRef = useRef(0)
 
   useEffect(() => {
     if (!activeProjectId) return
@@ -39,27 +43,30 @@ export function useProjectGitBranch(): void {
     // reconciler flips the flag.
     if (!project?.path || project.isGitRepo === false) return
 
-    inflightRef.current = activeProjectId
+    const token = ++tokenRef.current
     const path = project.path
     let cancelled = false
 
     gitApi
       .getCommitContext(path)
       .then((context) => {
-        if (cancelled || inflightRef.current !== activeProjectId) return
-        // branch is null on a detached HEAD / no-branch state — leave the
-        // project value untouched in that case (the status bar renders
-        // 'detached' from the null terminal branch anyway).
-        if (context.branch) {
-          updateProject(activeProjectId, { gitBranch: context.branch })
-        }
+        if (cancelled || token !== tokenRef.current) return
+        // branch is null on a detached HEAD / no-branch state — clear the
+        // stored value so the status bar renders 'detached' truthfully
+        // instead of a stale prior branch.
+        updateProject(activeProjectId, { gitBranch: context.branch ?? undefined })
       })
-      .catch(() => {
+      .catch((error) => {
+        if (cancelled || token !== tokenRef.current) return
         // Not a git repo, git missing, or fetch failed — leave the existing
         // value alone. The worktree reconciler handles isGitRepo separately.
-      })
-      .finally(() => {
-        if (inflightRef.current === activeProjectId) inflightRef.current = null
+        // Durable boundary log (no credentials/secrets): AGENTS.md requires
+        // renderer flows log to the backend via log-api.
+        logFrontendError({
+          level: 'warn',
+          message: `useProjectGitBranch: getCommitContext failed for project ${activeProjectId}: ${error instanceof Error ? error.message : String(error)}`,
+          source: 'useProjectGitBranch'
+        })
       })
 
     return () => {

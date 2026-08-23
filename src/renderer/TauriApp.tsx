@@ -57,6 +57,7 @@ function AppEffects(): null {
   useTerminalRestore()
   useCrashRecovery()
   useTerminalDetachedOutput()
+  useCwd()
   useGitBranch()
   useProjectGitBranch()
   useGitStatus()
