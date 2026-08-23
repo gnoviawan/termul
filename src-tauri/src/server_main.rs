@@ -540,14 +540,15 @@ OPTIONS:
 
   Security & updates:
     --allow-remote-writes         Admit non-loopback peers on all guarded write
-                                  routes. fs writes (mkdir/write/delete/rename/
-                                  copy) confined to --project-root; git + worktree
-                                  writes confined to --project-root; AND host-state
-                                  writes (/projects/default, /acp/install,
-                                  /log/frontend-error, /workspace/*). Loopback
-                                  callers keep ADR-007 breadth (any path). No-op
-                                  when bound to 127.0.0.1. No web auth is enforced
-                                  yet (Epic 2). Only enable on a trusted network.
+                                  routes. /fs/* writes reject only .. traversal
+                                  (ADR-007 breadth, any path); /git/* and
+                                  /worktree/* writes confined to --project-root;
+                                  AND host-state writes (/projects/default,
+                                  /acp/install, /log/frontend-error,
+                                  /workspace/*). Loopback callers keep ADR-007
+                                  breadth (any path). No-op when bound to
+                                  127.0.0.1. No web auth is enforced yet
+                                  (Epic 2). Only enable on a trusted network.
                                   [env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1]
     --check-update                Run one opt-in self-update now: fetch the channel
                                   manifest, verify the downloaded binary signature,
@@ -561,6 +562,7 @@ OPTIONS:
 
     -h, --help                    Show this help
 
+ENVIRONMENT:
     <state dir>                   Unix: $XDG_STATE_HOME/termul or
                                   $HOME/.local/state/termul
                                   Windows: %LOCALAPPDATA%\Termul
