@@ -1994,17 +1994,24 @@ function AcpModelPicker({
     </ComposerPill>
   )
 
+  const modelStatusSuffix =
+    connecting && !setupError
+      ? ' · Connecting…'
+      : stale && !connecting && !setupError
+        ? ' · Cached'
+        : ''
+
+  const modelHeading = (
+    <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+      Model
+      {modelStatusSuffix && (
+        <span className="ml-1 font-normal normal-case tracking-normal">{modelStatusSuffix}</span>
+      )}
+    </div>
+  )
+
   const contentBody = (
     <>
-      <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-        Model
-        {connecting && !setupError && (
-          <span className="ml-1 font-normal normal-case tracking-normal">· Connecting…</span>
-        )}
-        {stale && !connecting && !setupError && (
-          <span className="ml-1 font-normal normal-case tracking-normal">· Cached</span>
-        )}
-      </div>
       {selectedEntry?.status !== 'ready' ? (
         <div className="px-2 py-1.5 text-xs text-muted-foreground">
           {selectedEntry?.status === 'install-required'
@@ -2054,16 +2061,15 @@ function AcpModelPicker({
                     }, 500)
                   }}
                   onPointerDown={(event) => {
-                    // Skip on real touch — onTouchEnd handles tap vs drag-scroll.
-                    // pointerdown fires at touch-start, before touchend, so it
-                    // would select immediately on contact without this guard.
                     if (event.pointerType === 'touch') return
                     if ((event.button ?? 0) !== 0) return
                     event.preventDefault()
+                  }}
+                  onClick={(event) => {
                     if (lastInputType.current === 'touch') return
+                    event.preventDefault()
                     handleSelectModel(value.value)
                   }}
-                  onClick={() => handleSelectModel(value.value)}
                   className={cn(
                     'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
                     value.value === displayValue && 'bg-accent text-accent-foreground'
@@ -2125,7 +2131,7 @@ function AcpModelPicker({
       <SelectorModal
         open={open}
         onOpenChange={setOpen}
-        title="Model"
+        title={`Model${modelStatusSuffix}`}
         trigger={trigger}
         disabled={disabled}
       >
@@ -2140,6 +2146,7 @@ function AcpModelPicker({
         {trigger}
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
+        {modelHeading}
         {contentBody}
       </PopoverContent>
     </Popover>

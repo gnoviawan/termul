@@ -36,7 +36,7 @@ const PT = (name: string): string => skillToken(name, SKILL_PAD_DEFAULT)
 
 function clickMenuOption(name: string | RegExp): void {
   const dialog = screen.getByRole('dialog')
-  fireEvent.pointerDown(within(dialog).getByText(name))
+  fireEvent.click(within(dialog).getByText(name))
 }
 
 const {

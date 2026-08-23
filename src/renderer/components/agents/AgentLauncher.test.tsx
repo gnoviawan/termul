@@ -39,7 +39,7 @@ if (typeof document.elementFromPoint !== 'function') {
 
 function clickMenuOption(name: string | RegExp): void {
   const dialog = screen.getByRole('dialog')
-  fireEvent.pointerDown(within(dialog).getByText(name))
+  fireEvent.click(within(dialog).getByText(name))
 }
 
 function defaultReadyAgent(): SupportedAcpAgentEntry {

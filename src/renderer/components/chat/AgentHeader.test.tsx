@@ -11,7 +11,7 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
 
 function clickMenuOption(name: string): void {
   const dialog = screen.getByRole('dialog')
-  fireEvent.pointerDown(within(dialog).getByText(name))
+  fireEvent.click(within(dialog).getByText(name))
 }
 
 vi.mock('framer-motion', async () => {

@@ -196,10 +196,12 @@ export function ConfigChip({
                 if (event.pointerType === 'touch') return
                 if ((event.button ?? 0) !== 0) return
                 event.preventDefault()
+              }}
+              onClick={(event) => {
                 if (lastInputType.current === 'touch') return
+                event.preventDefault()
                 handleSelect(v.value)
               }}
-              onClick={() => handleSelect(v.value)}
               className={cn(
                 SELECTOR_OPTION_ROW,
                 v.value === displayValue && SELECTOR_OPTION_SELECTED
@@ -320,10 +322,12 @@ export function ModeChip({
             if (event.pointerType === 'touch') return
             if ((event.button ?? 0) !== 0) return
             event.preventDefault()
+          }}
+          onClick={(event) => {
             if (lastInputType.current === 'touch') return
+            event.preventDefault()
             handleSelect(m.id)
           }}
-          onClick={() => handleSelect(m.id)}
         >
           <span className="font-medium">{m.name}</span>
           {m.description && <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>}
