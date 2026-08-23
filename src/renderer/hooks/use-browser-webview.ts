@@ -88,19 +88,51 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
         }
         if (result.success) {
           createdRef.current = true
-          if (visibilityRef.current) {
-            browserTabShow(browserTabId)
-              .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
-              })
-              .catch(console.error)
-          } else {
-            browserTabHide(browserTabId)
-              .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
-              })
-              .catch(console.error)
+          // Resync bounds after creation. The container was measured once at
+          // call time (before browserTabCreate above), but the pane layout can
+          // still be mid-transition — pane wrappers use `transition-all
+          // duration-150` (PaneContent) — or otherwise unsettled when the
+          // async create resolves. Without a re-measure the native webview
+          // keeps stale creation bounds and overflows into the adjacent pane
+          // (issue #644). Poll across frames until the rect stops changing
+          // (or a frame budget elapses) so we adopt *settled*, not transient,
+          // bounds — then reveal. Mirrors ConnectedTerminal's
+          // waitForStableLayout approach for the same class of race.
+          const MAX_RESYNC_WAIT_FRAMES = 30 // ~0.5s at 60fps; covers the 150ms transition
+          let prev: BrowserBounds | null = null
+          let frames = 0
+          const resyncAndShow = (): void => {
+            if (!mountedRef.current || mountToken !== mountTokenRef.current) return
+            const elNow = containerRef.current
+            if (!elNow) return
+            const next = getElementBounds(elNow)
+            // Wait until the rect is stable across two consecutive frames so a
+            // still-animating transition doesn't leave us at an intermediate size.
+            const stable = prev !== null && prev.width === next.width && prev.height === next.height
+            prev = next
+            frames += 1
+            if (!stable && frames < MAX_RESYNC_WAIT_FRAMES) {
+              requestAnimationFrame(resyncAndShow)
+              return
+            }
+            // Settled (or budget exhausted): resync via the shared helper so the
+            // result.success branch is inspected (no silent failure), then show.
+            updateBounds()
+            if (visibilityRef.current) {
+              browserTabShow(browserTabId)
+                .then((r) => {
+                  if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+                })
+                .catch(console.error)
+            } else {
+              browserTabHide(browserTabId)
+                .then((r) => {
+                  if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+                })
+                .catch(console.error)
+            }
           }
+          requestAnimationFrame(resyncAndShow)
         } else {
           console.error('[BrowserWebview] create failed:', result.error)
           clearLoadingTimeout()
@@ -126,7 +158,7 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
         .catch(console.error)
       createdRef.current = false
     }
-  }, [browserTabId, clearLoadingTimeout, armLoadingTimeout])
+  }, [browserTabId, clearLoadingTimeout, armLoadingTimeout, updateBounds])
 
   // Show / hide on visibility change
   useEffect(() => {
