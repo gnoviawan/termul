@@ -42,9 +42,7 @@ import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
-import AppPreferences from './pages/AppPreferences'
 import NotFound from './pages/NotFound'
-import ProjectSettings from './pages/ProjectSettings'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
@@ -114,9 +112,7 @@ const router = createHashRouter(
       children: [
         { index: true, element: <WorkspaceDashboard /> },
         { path: 'c/:sessionId', element: <ChatRoute /> },
-        { path: 'snapshots', element: <WorkspaceSnapshots /> },
-        { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> }
+        { path: 'snapshots', element: <WorkspaceSnapshots /> }
       ]
     },
     { path: '*', element: <NotFound /> }

@@ -230,8 +230,10 @@ vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
 }))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
-vi.mock('@/pages/AppPreferences', () => ({ default: () => <div>preferences</div> }))
-vi.mock('@/pages/ProjectSettings', () => ({ default: () => <div>project-settings</div> }))
+vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))
+vi.mock('@/pages/ProjectSettings', () => ({
+  ProjectSettingsModal: () => <div>project-settings</div>
+}))
 vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> }))
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>

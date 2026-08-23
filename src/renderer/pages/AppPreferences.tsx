@@ -14,11 +14,9 @@ import {
   Palette,
   RotateCcw,
   Sliders,
-  Terminal,
-  X
+  Terminal
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
@@ -28,6 +26,7 @@ import {
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
+import { SettingsModal } from '@/components/settings/SettingsModal'
 import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
 import {
   useResetAllShortcuts,
@@ -63,6 +62,7 @@ import {
   useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
@@ -234,8 +234,9 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   }
 ]
 
-export default function AppPreferences(): React.JSX.Element {
-  const navigate = useNavigate()
+export function AppPreferencesModal(): React.JSX.Element {
+  const isOpen = useSettingsModalStore((state) => state.view === 'app')
+  const close = useSettingsModalStore((state) => state.close)
   const isAurUpdater = isAurUpdateMode()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
@@ -460,27 +461,12 @@ export default function AppPreferences(): React.JSX.Element {
 
   return (
     <>
-      <main className="flex-1 flex flex-col min-w-0 h-full relative">
-        {/* Header */}
-        <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
-          <div>
-            <h1 className="text-xl font-semibold text-foreground leading-tight">
-              Application Preferences
-            </h1>
-            <p className="text-xs text-muted-foreground">Configure global application settings</p>
-          </div>
-          <button
-            onClick={() => {
-              navigate('/')
-            }}
-            className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="Close"
-            aria-label="Close preferences"
-          >
-            <X size={18} className="text-muted-foreground group-hover:text-foreground" />
-          </button>
-        </div>
-
+      <SettingsModal
+        isOpen={isOpen}
+        onClose={close}
+        title="Application Preferences"
+        subtitle="Configure global application settings"
+      >
         {/* Content */}
         <SettingsLayout categories={APP_PREF_CATEGORIES} searchIndex={APP_PREF_SEARCH_INDEX}>
           {/* Terminal Appearance Section */}
@@ -1467,7 +1453,7 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </SettingsSection>
         </SettingsLayout>
-      </main>
+      </SettingsModal>
 
       {/* Reset Confirmation Dialog */}
       <ConfirmDialog

@@ -28,8 +28,6 @@ import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
 
 const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
-const ProjectSettings = lazy(() => import('./pages/ProjectSettings'))
-const AppPreferences = lazy(() => import('./pages/AppPreferences'))
 const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 
@@ -186,22 +184,6 @@ const router = createHashRouter(
           element: (
             <Suspense fallback={<RouteFallback />}>
               <WorkspaceSnapshots />
-            </Suspense>
-          )
-        },
-        {
-          path: 'settings',
-          element: (
-            <Suspense fallback={<RouteFallback />}>
-              <ProjectSettings />
-            </Suspense>
-          )
-        },
-        {
-          path: 'preferences',
-          element: (
-            <Suspense fallback={<RouteFallback />}>
-              <AppPreferences />
             </Suspense>
           )
         }

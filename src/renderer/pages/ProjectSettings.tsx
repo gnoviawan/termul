@@ -14,7 +14,6 @@ import {
   X
 } from 'lucide-react'
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
@@ -22,6 +21,7 @@ import {
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
+import { SettingsModal } from '@/components/settings/SettingsModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -34,6 +34,7 @@ import {
   useProjectActions,
   useProjectStore
 } from '@/stores/project-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
 
 const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
@@ -107,8 +108,9 @@ const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   }
 ]
 
-export default function ProjectSettings() {
-  const navigate = useNavigate()
+export function ProjectSettingsModal() {
+  const isOpen = useSettingsModalStore((state) => state.view === 'project')
+  const close = useSettingsModalStore((state) => state.close)
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
   const activeProject = useActiveProject()
@@ -382,43 +384,46 @@ export default function ProjectSettings() {
     }
   }
 
+  const handleClose = () => {
+    if (hasChanges) {
+      setIsCloseConfirmOpen(true)
+    } else {
+      close()
+    }
+  }
+
   return (
     <>
-      <main className="flex-1 flex flex-col min-w-0 h-full relative">
-        {/* Header */}
-        <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary/10 rounded text-primary">
-              <Settings size={20} />
+      <SettingsModal
+        isOpen={isOpen}
+        onClose={handleClose}
+        title="Project Settings"
+        subtitle={activeProject?.name ? `Configuration for ${activeProject.name}` : undefined}
+        icon={<Settings size={20} />}
+        footer={
+          hasChanges ? (
+            <div className="p-4 flex justify-end items-center gap-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+              <span className="text-sm text-muted-foreground mr-auto flex items-center">
+                <Info size={14} className="mr-2 text-yellow-500" />
+                <span className="opacity-80">You have unsaved changes</span>
+              </span>
+              <button
+                onClick={() => setHasChanges(false)}
+                className="px-4 py-2 text-sm font-medium text-secondary-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleSave}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+              >
+                <Save size={14} className="mr-2" />
+                Save Changes
+              </button>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold text-foreground leading-tight">
-                Project Settings
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                Configuration for{' '}
-                <span className="font-semibold text-secondary-foreground">
-                  {activeProject?.name}
-                </span>
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              if (hasChanges) {
-                setIsCloseConfirmOpen(true)
-              } else {
-                navigate('/')
-              }
-            }}
-            className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="Close"
-            aria-label="Close project settings"
-          >
-            <X size={18} className="text-muted-foreground group-hover:text-foreground" />
-          </button>
-        </div>
-
+          ) : undefined
+        }
+      >
         {/* Content */}
         <SettingsLayout
           categories={PROJECT_SETTINGS_CATEGORIES}
@@ -784,29 +789,8 @@ export default function ProjectSettings() {
           </SettingsSection>
         </SettingsLayout>
 
-        {/* Save Bar */}
-        {hasChanges && (
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-card border-t border-border flex justify-end items-center gap-4 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-            <span className="text-sm text-muted-foreground mr-auto flex items-center">
-              <Info size={14} className="mr-2 text-yellow-500" />
-              <span className="opacity-80">You have unsaved changes</span>
-            </span>
-            <button
-              onClick={() => setHasChanges(false)}
-              className="px-4 py-2 text-sm font-medium text-secondary-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
-            >
-              Discard
-            </button>
-            <button
-              onClick={handleSave}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
-            >
-              <Save size={14} className="mr-2" />
-              Save Changes
-            </button>
-          </div>
-        )}
-      </main>
+        {/* Save bar is rendered in the modal footer above */}
+      </SettingsModal>
 
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
@@ -823,7 +807,7 @@ export default function ProjectSettings() {
         variant="danger"
         onConfirm={() => {
           setIsCloseConfirmOpen(false)
-          navigate('/')
+          close()
         }}
         onCancel={() => setIsCloseConfirmOpen(false)}
       />
