@@ -113,11 +113,11 @@
   {
     "id": "cline",
     "name": "Cline",
-    "version": "3.0.56",
+    "version": "3.0.57",
     "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
     "distribution": {
       "npx": {
-        "package": "cline@3.0.56",
+        "package": "cline@3.0.57",
         "args": ["--acp"]
       }
     }
@@ -779,11 +779,11 @@
   {
     "id": "qwen-code",
     "name": "Qwen Code",
-    "version": "0.21.15",
+    "version": "0.22.0",
     "description": "Alibaba's Qwen coding assistant",
     "distribution": {
       "npx": {
-        "package": "@qwen-code/qwen-code@0.21.15",
+        "package": "@qwen-code/qwen-code@0.22.0",
         "args": ["--acp", "--experimental-skills"]
       }
     }
