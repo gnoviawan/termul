@@ -101,8 +101,10 @@ export function SettingsModal({
               </button>
             </div>
 
-            {/* Body */}
-            <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+            {/* Body — flex column so SettingsLayout's `flex-1` fills the
+                bounded height and the sidebar scrolls independently of the
+                content area. */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
 
             {/* Footer */}
             {footer && <div className="border-t border-border bg-card">{footer}</div>}
