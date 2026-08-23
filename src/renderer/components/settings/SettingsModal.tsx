@@ -75,7 +75,7 @@ export function SettingsModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.15 }}
-            className="flex max-h-[85vh] w-[90vw] max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+            className="flex h-[90vh] max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:h-[85vh] md:max-h-[85vh] md:w-[90vw] md:max-w-5xl"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
