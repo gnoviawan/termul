@@ -50,7 +50,7 @@ function getLabelForConfigChip(option: SessionConfigOption, promoted: boolean): 
  * option rows are passed as children (the children own their own scroll
  * container); only the outer shell differs from the desktop `Popover`.
  */
-function SelectorModal({
+export function SelectorModal({
   open,
   onOpenChange,
   title,

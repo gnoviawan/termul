@@ -27,7 +27,7 @@ import {
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
-import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
+import { ConfigChip, ModeChip, SelectorModal } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { ComposerPill } from '@/components/chat/ComposerPill'
@@ -65,6 +65,7 @@ import {
 } from '@/components/ui/select'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
@@ -1802,84 +1803,114 @@ function AcpAgentPicker({
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const isMobile = useMobileWebShell()
   const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
   const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
+
+  const trigger = (
+    <ComposerPill
+      disabled={disabled}
+      aria-label={`Select ACP agent: ${label}`}
+      className="max-w-[260px]"
+      chevron
+    >
+      <EntryGlyph
+        config={selectedConfig}
+        templateId={selectedEntry?.agent.id}
+        name={selectedEntry?.agent.name}
+      />
+      <span className="truncate">{label}</span>
+    </ComposerPill>
+  )
+
+  const contentBody = (
+    <>
+      <div className="px-2 pb-1">
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search agents…"
+          aria-label="Search ACP agents"
+          className="h-7 text-xs"
+        />
+      </div>
+      <div className="max-h-64 overflow-y-auto pr-1">
+        {visibleAgents.length === 0 ? (
+          <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
+        ) : (
+          visibleAgents.map((entry) => (
+            <button
+              key={entry.configId}
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onSelectAgent(entry)
+              }}
+              className={cn(
+                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
+                entry.configId === selectedEntry?.configId && 'bg-accent/50'
+              )}
+            >
+              <EntryGlyph
+                config={entry.config}
+                templateId={entry.agent.id}
+                name={entry.agent.name}
+              />
+              <span className="min-w-0 flex-1 truncate">
+                {entry.config?.name ?? entry.agent.name}
+              </span>
+              {entry.status === 'install-required' && (
+                <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
+                  {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+                </span>
+              )}
+              {entry.status === 'needs-runtime' && (
+                <span className="text-3xs text-muted-foreground">
+                  {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+                </span>
+              )}
+              {entry.status === 'manual-install' && (
+                <span className="text-3xs text-muted-foreground">Manual install</span>
+              )}
+              {entry.status === 'unavailable' && (
+                <span className="text-3xs text-muted-foreground">Unavailable</span>
+              )}
+              {entry.configId === selectedEntry?.configId && (
+                <Check size={14} className="text-muted-foreground" />
+              )}
+            </button>
+          ))
+        )}
+      </div>
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <SelectorModal
+        open={open}
+        onOpenChange={setOpen}
+        title="ACP Agent"
+        trigger={trigger}
+        disabled={disabled}
+      >
+        {contentBody}
+      </SelectorModal>
+    )
+  }
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
-        <ComposerPill
-          disabled={disabled}
-          aria-label={`Select ACP agent: ${label}`}
-          className="max-w-[260px]"
-          chevron
-        >
-          <EntryGlyph
-            config={selectedConfig}
-            templateId={selectedEntry?.agent.id}
-            name={selectedEntry?.agent.name}
-          />
-          <span className="truncate">{label}</span>
-        </ComposerPill>
+        {trigger}
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
         <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
           ACP Agent
         </div>
-        <div className="px-2 pb-1">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search agents…"
-            aria-label="Search ACP agents"
-            className="h-7 text-xs"
-          />
-        </div>
-        <div className="max-h-64 overflow-y-auto pr-1">
-          {visibleAgents.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
-          ) : (
-            visibleAgents.map((entry) => (
-              <button
-                key={entry.configId}
-                type="button"
-                onClick={() => onSelectAgent(entry)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                  entry.configId === selectedEntry?.configId && 'bg-accent/50'
-                )}
-              >
-                <EntryGlyph
-                  config={entry.config}
-                  templateId={entry.agent.id}
-                  name={entry.agent.name}
-                />
-                <span className="min-w-0 flex-1 truncate">
-                  {entry.config?.name ?? entry.agent.name}
-                </span>
-                {entry.status === 'install-required' && (
-                  <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                    {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
-                  </span>
-                )}
-                {entry.status === 'needs-runtime' && (
-                  <span className="text-3xs text-muted-foreground">
-                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
-                  </span>
-                )}
-                {entry.status === 'manual-install' && (
-                  <span className="text-3xs text-muted-foreground">Manual install</span>
-                )}
-                {entry.status === 'unavailable' && (
-                  <span className="text-3xs text-muted-foreground">Unavailable</span>
-                )}
-                {entry.configId === selectedEntry?.configId && (
-                  <Check size={14} className="text-muted-foreground" />
-                )}
-              </button>
-            ))
-          )}
-        </div>
+        {contentBody}
       </PopoverContent>
     </Popover>
   )
@@ -1912,6 +1943,7 @@ function AcpModelPicker({
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const isMobile = useMobileWebShell()
   const { displayValue, pending, select } = useOptimisticSelect(
     modelOption?.currentValue,
     onSelectModel
@@ -1942,117 +1974,139 @@ function AcpModelPicker({
     select(valueId)
   }
 
+  const trigger = (
+    <ComposerPill
+      disabled={disabled}
+      aria-label={`Select model: ${label}`}
+      className={cn('max-w-[220px]', (connecting || stale) && !setupError && 'opacity-80')}
+      chevron
+      pending={pending || (connecting && !setupError)}
+    >
+      <span className="truncate">{label}</span>
+    </ComposerPill>
+  )
+
+  const contentBody = (
+    <>
+      <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+        Model
+        {connecting && !setupError && (
+          <span className="ml-1 font-normal normal-case tracking-normal">· Connecting…</span>
+        )}
+        {stale && !connecting && !setupError && (
+          <span className="ml-1 font-normal normal-case tracking-normal">· Cached</span>
+        )}
+      </div>
+      {selectedEntry?.status !== 'ready' ? (
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+          {selectedEntry?.status === 'install-required'
+            ? 'Install this ACP agent to load model options.'
+            : selectedEntry?.status === 'needs-runtime'
+              ? 'Install the required runtime before loading model options.'
+              : selectedEntry?.status === 'manual-install'
+                ? 'Install this agent manually before loading model options.'
+                : 'This ACP agent is not available on this platform.'}
+        </div>
+      ) : !setupError && modelOption ? (
+        <>
+          {showSearch && (
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search models..."
+              aria-label="Search models"
+              className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+            />
+          )}
+          <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
+            {filteredModels.length > 0 ? (
+              filteredModels.map((value) => (
+                <button
+                  key={value.value}
+                  type="button"
+                  onPointerDown={(event) => {
+                    if ((event.button ?? 0) !== 0) return
+                    event.preventDefault()
+                    handleSelectModel(value.value)
+                  }}
+                  onClick={() => handleSelectModel(value.value)}
+                  className={cn(
+                    'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                    value.value === displayValue && 'bg-accent text-accent-foreground'
+                  )}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{value.name}</span>
+                    {value.description && (
+                      <span className="block text-xs opacity-70">{value.description}</span>
+                    )}
+                  </span>
+                  {value.value === displayValue && (
+                    <Check size={14} className="mt-0.5 text-muted-foreground" />
+                  )}
+                </button>
+              ))
+            ) : (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+            )}
+          </div>
+        </>
+      ) : setupError ? (
+        <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
+          <div>
+            <div className="font-medium text-foreground/85">
+              {setupError.category === 'auth' || setupError.category === 'multi-auth'
+                ? setupError.label
+                : 'Could not load model options.'}
+            </div>
+            <div className="mt-1 line-clamp-3 break-words">{setupError.detail}</div>
+          </div>
+          {setupError.category === 'multi-auth' ? null : setupError.category === 'auth' &&
+            signInMethod ? (
+            <Button type="button" size="sm" className="h-7 text-xs" onClick={onSignIn}>
+              {`Sign in with ${signInMethod.name}`}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+          {loading ? 'Loading model options…' : 'This ACP agent has not advertised model options.'}
+        </div>
+      )}
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <SelectorModal
+        open={open}
+        onOpenChange={setOpen}
+        title="Model"
+        trigger={trigger}
+        disabled={disabled}
+      >
+        {contentBody}
+      </SelectorModal>
+    )
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
-        <ComposerPill
-          disabled={disabled}
-          aria-label={`Select model: ${label}`}
-          className={cn('max-w-[220px]', (connecting || stale) && !setupError && 'opacity-80')}
-          chevron
-          pending={pending || (connecting && !setupError)}
-        >
-          <span className="truncate">{label}</span>
-        </ComposerPill>
+        {trigger}
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          Model
-          {connecting && !setupError && (
-            <span className="ml-1 font-normal normal-case tracking-normal">· Connecting…</span>
-          )}
-          {stale && !connecting && !setupError && (
-            <span className="ml-1 font-normal normal-case tracking-normal">· Cached</span>
-          )}
-        </div>
-        {selectedEntry?.status !== 'ready' ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {selectedEntry?.status === 'install-required'
-              ? 'Install this ACP agent to load model options.'
-              : selectedEntry?.status === 'needs-runtime'
-                ? 'Install the required runtime before loading model options.'
-                : selectedEntry?.status === 'manual-install'
-                  ? 'Install this agent manually before loading model options.'
-                  : 'This ACP agent is not available on this platform.'}
-          </div>
-        ) : !setupError && modelOption ? (
-          <>
-            {showSearch && (
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search models..."
-                aria-label="Search models"
-                className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
-              />
-            )}
-            <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
-              {filteredModels.length > 0 ? (
-                filteredModels.map((value) => (
-                  <button
-                    key={value.value}
-                    type="button"
-                    onPointerDown={(event) => {
-                      if ((event.button ?? 0) !== 0) return
-                      event.preventDefault()
-                      handleSelectModel(value.value)
-                    }}
-                    onClick={() => handleSelectModel(value.value)}
-                    className={cn(
-                      'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                      value.value === displayValue && 'bg-accent text-accent-foreground'
-                    )}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{value.name}</span>
-                      {value.description && (
-                        <span className="block text-xs opacity-70">{value.description}</span>
-                      )}
-                    </span>
-                    {value.value === displayValue && (
-                      <Check size={14} className="mt-0.5 text-muted-foreground" />
-                    )}
-                  </button>
-                ))
-              ) : (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
-              )}
-            </div>
-          </>
-        ) : setupError ? (
-          <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
-            <div>
-              <div className="font-medium text-foreground/85">
-                {setupError.category === 'auth' || setupError.category === 'multi-auth'
-                  ? setupError.label
-                  : 'Could not load model options.'}
-              </div>
-              <div className="mt-1 line-clamp-3 break-words">{setupError.detail}</div>
-            </div>
-            {setupError.category === 'multi-auth' ? null : setupError.category === 'auth' &&
-              signInMethod ? (
-              <Button type="button" size="sm" className="h-7 text-xs" onClick={onSignIn}>
-                {`Sign in with ${signInMethod.name}`}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={onRetry}
-              >
-                Retry
-              </Button>
-            )}
-          </div>
-        ) : (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {loading
-              ? 'Loading model options…'
-              : 'This ACP agent has not advertised model options.'}
-          </div>
-        )}
+        {contentBody}
       </PopoverContent>
     </Popover>
   )
