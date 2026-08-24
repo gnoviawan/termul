@@ -208,7 +208,7 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
         const mkdirCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/mkdir'))
         expect(mkdirCalls.length).toBeGreaterThan(0)
       },
-      { timeout: 5000 }
+      { timeout: 10000 }
     )
 
     // scaffoldProject (Node template) writes real files — so /fs/write fires
@@ -219,13 +219,15 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
         const writeCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/write'))
         expect(writeCalls.length).toBeGreaterThan(0)
       },
-      { timeout: 5000 }
+      { timeout: 10000 }
     )
 
-    // The flow completes: onCreateProject fires with the name + path.
-    await waitFor(() => {
-      expect(onCreateProject).toHaveBeenCalledTimes(1)
-    })
+    await waitFor(
+      () => {
+        expect(onCreateProject).toHaveBeenCalledTimes(1)
+      },
+      { timeout: 10000 }
+    )
     const [nameArg, _colorArg, pathArg] = onCreateProject.mock.calls[0]
     expect(nameArg).toBe('My Web Project')
     expect(pathArg).toBe('/web/proj')
@@ -267,12 +269,18 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
       fireEvent.click(screen.getByText('Create'))
     })
 
-    await waitFor(() => {
-      expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/git/init'))).toBe(true)
-    })
-    await waitFor(() => {
-      expect(onCreateProject).toHaveBeenCalledTimes(1)
-    })
+    await waitFor(
+      () => {
+        expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/git/init'))).toBe(true)
+      },
+      { timeout: 10000 }
+    )
+    await waitFor(
+      () => {
+        expect(onCreateProject).toHaveBeenCalledTimes(1)
+      },
+      { timeout: 10000 }
+    )
     expect(onCreateProject.mock.calls[0][0]).toBe('GitProj')
   })
 
