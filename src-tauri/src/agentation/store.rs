@@ -344,7 +344,7 @@ impl AnnotationStore for SqliteStore {
                     computed_styles,full_path,accessibility,is_multi_select,is_fixed,
                     react_components,url,intent,severity,status,thread,
                     created_at,updated_at,resolved_at,resolved_by,author_id,kind,extra
-                ) VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?,?) "#,
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "#,
                 params![
                     ann.id, ann.session_id, ann.x, ann.y, ann.comment, ann.element, ann.element_path, ann.timestamp,
                     ann.selected_text, bbox_str, ann.nearby_text, ann.css_classes, ann.nearby_elements,
@@ -356,7 +356,7 @@ impl AnnotationStore for SqliteStore {
                     ann.created_at, ann.updated_at, ann.resolved_at, ann.resolved_by, ann.author_id,
                     kind_str, extra,
                 ],
-            ).ok()?;
+            ).map_err(|e| { log::error!("[Agentation] INSERT annotation failed: {e}"); e.to_string() }).ok()?;
         }
 
         let ev = self.bus.emit(AFSEventType::AnnotationCreated, session_id, serde_json::to_value(&ann).unwrap());
