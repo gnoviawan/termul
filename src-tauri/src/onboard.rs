@@ -327,13 +327,22 @@ impl ServiceManager {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("create {}: {e}", parent.display()))?;
                 }
-                // Quote the exe path so paths with spaces survive systemd's
-                // whitespace-tokenizing ExecStart parser. Args are already
-                // individual tokens; leave them unquoted (CLI values that
-                // legitimately contain spaces are rare for these flags, and
-                // systemd's own quoting rules make per-arg escaping fragile
-                // to get right — the exe is the common space-bearing case).
-                let exec_start = format!("\"{}\" {}", exe.display(), args.join(" "));
+                // Quote every ExecStart token so paths with spaces survive
+                // systemd's whitespace-tokenizing ExecStart parser. The
+                // operator's project-root / sessions-dir can legitimately
+                // contain spaces (e.g. /home/me/My Projects); an unquoted
+                // token would split into multiple args and the server would
+                // start with a wrong/missing path. Escape embedded quotes +
+                // backslashes per systemd's quoting rules.
+                let quote = |s: &str| {
+                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{escaped}\"")
+                };
+                let mut exec_start = quote(&exe.display().to_string());
+                for arg in args {
+                    exec_start.push(' ');
+                    exec_start.push_str(&quote(arg));
+                }
                 let env_file_str = env_path.map(|p| p.display().to_string());
                 let unit_text =
                     build_systemd_unit_text(&exec_start, env_file_str.as_deref(), *scope);
@@ -824,6 +833,12 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
             ExitCode::SUCCESS
         }
         Err(e) => {
+            tracing::error!(
+                target: "termul::onboard",
+                mechanism = ?mechanism,
+                error = %e,
+                "onboard failed: background launch did not start"
+            );
             writeln!(stdout, "error: {e}").ok();
             writeln!(
                 stdout,
