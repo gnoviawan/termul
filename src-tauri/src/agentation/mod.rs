@@ -84,6 +84,7 @@ pub async fn agentation_create_session(
     project_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let svc = get_service(&app)?;
+    log::info!("[Agentation] create_session: url={}", url);
     let session = svc.store.create_session(&url, project_id.as_deref());
     serde_json::to_value(&session).map_err(|e| e.to_string())
 }

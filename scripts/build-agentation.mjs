@@ -38,13 +38,11 @@ function scssLoader() {
           const cssModuleJs = `
             const styles = {};
             const css = ${JSON.stringify(scopedCss)};
-            // Inject CSS into the document
             if (typeof document !== 'undefined') {
               const style = document.createElement('style');
               style.textContent = css;
               document.head.appendChild(style);
-              // Extract class names
-              ${scopedCss}.replace(/.([a-zA-Z_][w-]*)/g, (m, cls) => { styles[cls] = cls; return ''; });
+              css.replace(/\\.([a-zA-Z_][\\w-]*)/g, (m, cls) => { styles[cls] = cls; return ''; });
             }
             export default styles;
           `
@@ -110,8 +108,9 @@ try {
   const sizeKB = Math.round(stats.size / 1024)
   console.log(`✓ Agentation toolbar built: ${outfile} (${sizeKB}KB)`)
 
-  if (sizeKB > 400) {
-    console.warn(`⚠ Bundle size ${sizeKB}KB exceeds 400KB target`)
+  if (sizeKB > 600) {
+    console.error(`✗ Bundle size ${sizeKB}KB exceeds 600KB limit`)
+    process.exit(1)
   }
 } catch (error) {
   console.error('✗ Build failed:', error)

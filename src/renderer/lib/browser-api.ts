@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-
+import { isTauriContext } from '@/lib/tauri-runtime'
 export interface BrowserBounds {
   x: number
   y: number
@@ -84,6 +84,13 @@ export async function browserTabOpenDevtools(tabId: string): Promise<IpcResult<v
 }
 
 export async function browserTabInjectAgentation(tabId: string): Promise<IpcResult<void>> {
+  if (!isTauriContext()) {
+    return {
+      success: false,
+      error: 'Agentation injection requires Tauri desktop',
+      code: 'NOT_TAURI'
+    }
+  }
   return invoke('browser_tab_inject_agentation', { tabId })
 }
 

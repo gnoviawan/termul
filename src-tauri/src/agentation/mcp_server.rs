@@ -277,28 +277,26 @@ impl AgentationMcpServer {
 
         // Block on broadcast channel for new annotation.created events
         let mut rx = self.store.event_bus().subscribe();
-        let timeout = tokio::time::timeout(
+        let mut collected: Vec<AFSEvent> = Vec::new();
+        let mut first = true;
+        let mut batch_deadline: Option<tokio::time::Instant> = None;
+
+        let timeout_result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             async {
-                let mut collected: Vec<AFSEvent> = Vec::new();
-                let mut first = true;
-                let mut batch_deadline: Option<tokio::time::Instant> = None;
-
                 loop {
                     let remaining = batch_deadline.map(|d| d.saturating_duration_since(tokio::time::Instant::now()));
 
                     let ev = if let Some(rem) = remaining {
-                        // Batch window active — wait with remaining time
                         match tokio::time::timeout(rem, rx.recv()).await {
                             Ok(Ok(ev)) => Some(ev),
-                            Ok(Err(_)) => break, // channel closed
-                            Err(_) => break,     // batch window expired
+                            Ok(Err(_)) => break,
+                            Err(_) => break,
                         }
                     } else {
-                        // No batch deadline yet — wait for first event (bounded by outer timeout)
                         match rx.recv().await {
                             Ok(ev) => Some(ev),
-                            Err(_) => break, // channel closed
+                            Err(_) => break,
                         }
                     };
 
@@ -317,29 +315,28 @@ impl AgentationMcpServer {
                         batch_deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(batch_window));
                     }
                 }
-                collected
             },
         ).await;
 
-        match timeout {
-            Ok(events) if !events.is_empty() => {
-                let sessions: std::collections::HashSet<_> = events.iter().map(|e| e.session_id.clone()).collect();
-                let mapped: Vec<_> = events.iter().map(|e| e.payload.clone()).collect();
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "timeout": false,
-                    "count": mapped.len(),
-                    "sessions": sessions,
-                    "annotations": mapped,
-                })).unwrap()
-            }
-            Ok(_) => serde_json::to_string_pretty(&serde_json::json!({
+        // Return partial events if any were collected (even on timeout)
+        if !collected.is_empty() {
+            let sessions: std::collections::HashSet<_> = collected.iter().map(|e| e.session_id.clone()).collect();
+            let mapped: Vec<_> = collected.iter()
+                .filter_map(|e| serde_json::from_value::<Annotation>(e.payload.clone()).ok())
+                .map(|a| Self::map_annotation_for_mcp(&a))
+                .collect();
+            serde_json::to_string_pretty(&serde_json::json!({
+                "timeout": false,
+                "count": mapped.len(),
+                "sessions": sessions,
+                "annotations": mapped,
+            })).unwrap()
+        } else {
+            let _ = timeout_result; // consume to avoid unused warning
+            serde_json::to_string_pretty(&serde_json::json!({
                 "timeout": true,
                 "message": format!("No new annotations within {timeout_secs} seconds"),
-            })).unwrap(),
-            Err(_) => serde_json::to_string_pretty(&serde_json::json!({
-                "timeout": true,
-                "message": format!("No new annotations within {timeout_secs} seconds"),
-            })).unwrap(),
+            })).unwrap()
         }
     }
 }

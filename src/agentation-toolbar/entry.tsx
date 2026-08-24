@@ -73,9 +73,10 @@ function mountToolbar() {
   style.textContent = SHADOW_STYLES
   shadow.appendChild(style)
 
-  // Create mount point for React
+  // Create mount point for React — pointer-events: auto immediately
+  // so the toolbar is interactive before onAnnotationAdd fires
   const mountPoint = document.createElement('div')
-  mountPoint.style.cssText = 'all: initial;'
+  mountPoint.style.cssText = 'all: initial; pointer-events: auto;'
   shadow.appendChild(mountPoint)
 
   // Mount the agentation toolbar
@@ -126,11 +127,9 @@ function start() {
   // __TERMUL_ANNOTATION_MODE__ may not be set. Mount unconditionally —
   // the user clicked the button, so they want the toolbar.
 
-  if (isReactPage()) {
-    console.log('[Agentation] React page detected — falling back to vanilla overlay')
-    ;(window as any).__TERMUL_USE_VANILLA_OVERLAY__ = true
-    return
-  }
+  // React page detection removed — the toolbar uses its own bundled React
+  // instance in shadow DOM, so version collision is not a concern.
+  // Mount on all pages including React apps.
 
   mountToolbar()
 }
