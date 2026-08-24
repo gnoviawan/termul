@@ -11,7 +11,6 @@ const mockCloseTab = vi.fn()
 const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
 const mockRemoveBrowserTab = vi.fn()
-const mockClearAnnotationsForTab = vi.fn()
 
 const mockWorkspaceStoreState = {
   fullscreenPaneId: null as string | null,
@@ -90,14 +89,6 @@ vi.mock('@/stores/browser-session-store', () => ({
       })
     }
   )
-}))
-
-vi.mock('@/stores/annotation-store', () => ({
-  useAnnotationStore: {
-    getState: () => ({
-      clearAnnotationsForTab: mockClearAnnotationsForTab
-    })
-  }
 }))
 
 const mockStartTabDrag = vi.hoisted(() => vi.fn())
@@ -251,7 +242,6 @@ beforeEach(() => {
   mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockClearAnnotationsForTab.mockReset()
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
@@ -569,7 +559,6 @@ describe('WorkspaceTabBar', () => {
     fireEvent(tabEl, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
 
     expect(mockRemoveBrowserTab).toHaveBeenCalledWith('btab-1')
-    expect(mockClearAnnotationsForTab).toHaveBeenCalledWith('btab-1')
     expect(mockCloseTab).toHaveBeenCalledWith('pane-a', 'browser-1')
   })
 

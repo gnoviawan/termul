@@ -1005,6 +1005,7 @@ export function WorkspaceTabBar({
                       }}
                       onClose={() => {
                         useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+                        useWorkspaceStore.getState().closeTab(paneId, tab.id)
                       }}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
