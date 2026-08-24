@@ -13,6 +13,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
+    // CI runners (GitHub Actions) are slower than local dev, and the full
+    // suite (3800+ tests) adds event-loop/import contention that can push
+    // multi-step async tests (waitFor + act chains) past vitest's 5s default.
+    // 15s gives headroom without masking real hangs.
+    testTimeout: 15000,
     typecheck: {
       tsconfig: 'tsconfig.test.json'
     }
