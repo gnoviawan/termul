@@ -355,6 +355,7 @@ impl BrowserTabManager {
         webview
             .navigate(parsed_url)
             .map_err(|e| format!("Navigation failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -469,6 +470,24 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    /// Schedule a delayed agentation toolbar re-injection after navigation.
+    /// The page needs time to load before the toolbar bundle can run
+    /// (it accesses document.head at module top-level).
+    fn schedule_agentation_reinject(&self, tab_id: &str) {
+        let app_handle = self.app_handle.clone();
+        let tab_id = tab_id.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            if let Some(bt) = app_handle.try_state::<Arc<BrowserTabManager>>() {
+                if bt.is_agentation_enabled() {
+                    if let Err(e) = bt.inject_agentation_toolbar(&tab_id) {
+                        log::warn!("[BrowserTab] Agentation re-inject failed for tab={}: {}", tab_id, e);
+                    }
+                }
+            }
+        });
+    }
+
     pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
         #[cfg(target_os = "linux")]
         {
@@ -499,6 +518,7 @@ impl BrowserTabManager {
         webview
             .eval("window.history.back()")
             .map_err(|e| format!("Go back failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -507,6 +527,7 @@ impl BrowserTabManager {
         webview
             .eval("window.history.forward()")
             .map_err(|e| format!("Go forward failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -515,8 +536,10 @@ impl BrowserTabManager {
         webview
             .eval("window.location.reload()")
             .map_err(|e| format!("Reload failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
+
 
     /// Open DevTools for the webview backing this browser tab.
     ///
