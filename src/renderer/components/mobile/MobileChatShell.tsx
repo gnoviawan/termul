@@ -30,6 +30,7 @@ import {
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { MobileFileExplorer } from './MobileFileExplorer'
@@ -311,7 +312,7 @@ export function MobileChatShell({
               aria-label="Settings"
               onClick={() => {
                 closeDrawer()
-                navigate('/preferences')
+                useSettingsModalStore.getState().openApp()
               }}
             >
               <Settings size={16} />

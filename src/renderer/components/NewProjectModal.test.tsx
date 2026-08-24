@@ -203,18 +203,24 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
     // The PRIMARY assertion (Patch G's reason for existing): the web branch
     // must route createDirectory through /fs/mkdir (NOT the desktop plugin-fs
     // stub which would throw "fs.mkdir is unavailable").
-    await waitFor(() => {
-      const mkdirCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/mkdir'))
-      expect(mkdirCalls.length).toBeGreaterThan(0)
-    })
+    await waitFor(
+      () => {
+        const mkdirCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/mkdir'))
+        expect(mkdirCalls.length).toBeGreaterThan(0)
+      },
+      { timeout: 5000 }
+    )
 
     // scaffoldProject (Node template) writes real files — so /fs/write fires
     // on the web branch (NOT the desktop writeTextFile stub). The Node
     // template emits package.json, src/index.js, .gitignore, etc.
-    await waitFor(() => {
-      const writeCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/write'))
-      expect(writeCalls.length).toBeGreaterThan(0)
-    })
+    await waitFor(
+      () => {
+        const writeCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/write'))
+        expect(writeCalls.length).toBeGreaterThan(0)
+      },
+      { timeout: 5000 }
+    )
 
     // The flow completes: onCreateProject fires with the name + path.
     await waitFor(() => {

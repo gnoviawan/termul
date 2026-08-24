@@ -366,6 +366,7 @@ vi.mock('@/lib/api', () => ({
   removeRendererRef: mockApi.removeRendererRef,
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
+  gitApi: { getCommitContext: vi.fn().mockResolvedValue({ branch: null }) },
   tauriUpdaterApi: {},
   tauriVersionSkipService: {}
 }))

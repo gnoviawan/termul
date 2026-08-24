@@ -2,8 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project } from '@/types/project'
-import ProjectSettings from './ProjectSettings'
+import { ProjectSettingsModal } from './ProjectSettings'
 
 const apiMocks = vi.hoisted(() => ({
   selectFile: vi.fn(),
@@ -60,10 +61,11 @@ function renderSettings(projects: Project[] = [firstProject], activeProjectId = 
     isLoaded: true,
     isWorktreeOperationLocked: false
   })
+  useSettingsModalStore.setState({ view: 'project' })
 
   return render(
     <MemoryRouter>
-      <ProjectSettings />
+      <ProjectSettingsModal />
     </MemoryRouter>
   )
 }
@@ -224,7 +226,7 @@ describe('ProjectSettings .env import', () => {
     act(() => {
       useProjectStore.getState().selectProject(secondProject.id)
     })
-    await screen.findByText('Second Project')
+    await screen.findByDisplayValue('Second Project')
 
     await act(async () => {
       resolveRead?.({

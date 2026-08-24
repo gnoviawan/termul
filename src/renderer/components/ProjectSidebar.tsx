@@ -45,6 +45,7 @@ import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
 import type { Project, ProjectColor } from '@/types/project'
@@ -562,7 +563,7 @@ export function ProjectSidebar({
           <ContextMenuItem
             onSelect={() => {
               selectProject(project.id)
-              navigate('/settings')
+              useSettingsModalStore.getState().openProject()
             }}
           >
             <Settings className="mr-2 h-4 w-4" /> Settings
@@ -667,7 +668,6 @@ export function ProjectSidebar({
       onArchiveProject,
       handleConfirmDelete,
       selectProject,
-      navigate,
       groups,
       moveProjectToGroup
     ]
@@ -1068,7 +1068,7 @@ export function ProjectSidebar({
                                     onCancelRename={handleCancelRename}
                                     onSettingsClick={() => {
                                       selectProject(project.id)
-                                      navigate('/settings')
+                                      useSettingsModalStore.getState().openProject()
                                     }}
                                   />
                                 </Reorder.Item>
@@ -1163,7 +1163,7 @@ export function ProjectSidebar({
                           onCancelRename={handleCancelRename}
                           onSettingsClick={() => {
                             selectProject(project.id)
-                            navigate('/settings')
+                            useSettingsModalStore.getState().openProject()
                           }}
                         />
                       </Reorder.Item>

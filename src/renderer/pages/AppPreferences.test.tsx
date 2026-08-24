@@ -2,8 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
-import AppPreferences from './AppPreferences'
+import { AppPreferencesModal } from './AppPreferences'
 
 /**
  * GH-539: the App Preferences switch/select are the ONLY write path for the
@@ -81,9 +82,10 @@ vi.mock('@/components/settings/McpServersSettings', () => ({
 }))
 
 function renderPage(): ReturnType<typeof render> {
+  useSettingsModalStore.setState({ view: 'app' })
   return render(
     <MemoryRouter>
-      <AppPreferences />
+      <AppPreferencesModal />
     </MemoryRouter>
   )
 }

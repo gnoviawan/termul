@@ -87,6 +87,7 @@ import {
   useProjects,
   useProjectsLoaded
 } from '@/stores/project-store'
+import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import {
   useActiveSSHProfile,
@@ -141,6 +142,12 @@ const MobileChatShell = lazy(() =>
 )
 const SSHFileExplorer = lazy(() =>
   import('@/components/ssh/SSHFileExplorer').then((m) => ({ default: m.SSHFileExplorer }))
+)
+const ProjectSettingsModal = lazy(() =>
+  import('@/pages/ProjectSettings').then((m) => ({ default: m.ProjectSettingsModal }))
+)
+const AppPreferencesModal = lazy(() =>
+  import('@/pages/AppPreferences').then((m) => ({ default: m.AppPreferencesModal }))
 )
 
 /** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
@@ -213,6 +220,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
+  const settingsModalView = useSettingsModalView()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
 
   useEffect(() => {
@@ -811,16 +819,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const handleOpenProjectSettings = useCallback(() => {
     setIsCommandPaletteOpen(false)
-    navigate('/settings')
-  }, [navigate])
+    useSettingsModalStore.getState().openProject()
+  }, [])
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
     if (useThemePickerStore.getState().isOpen) {
       useThemePickerStore.getState().cancel()
     }
-    navigate('/preferences')
-  }, [navigate])
+    useSettingsModalStore.getState().openApp()
+  }, [])
 
   const handleOpenCommandHistory = useCallback(() => {
     setIsCommandPaletteOpen(false)
@@ -888,32 +896,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandPaletteOpen(false)
     setIsShortcutMenuOpen(false)
     setIsCommandHistoryOpen(false)
+    // Close the settings modal too — the old code closed the /preferences
+    // route via navigate('/') before opening the theme picker. The route is
+    // gone, so close the modal via the store (EdgeCaseHunter #3).
+    useSettingsModalStore.getState().close()
   }, [])
 
   const handleToggleThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
-    if (location.pathname === '/preferences') {
-      navigate('/')
-    }
     closeThemePickerPeerOverlays()
     useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
-    }
-    if (location.pathname === '/preferences') {
-      navigate('/')
     }
     closeThemePickerPeerOverlays()
     const store = useThemePickerStore.getState()
     if (!store.isOpen) {
       store.open(getEffectiveThemeId(colorTheme, appearanceMode))
     }
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
@@ -1726,6 +1732,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onSelectCommand={handleInsertCommand}
             onClearHistory={handleClearCommandHistory}
           />
+        </Suspense>
+      )}
+
+      {settingsModalView === 'project' && (
+        <Suspense fallback={null}>
+          <ProjectSettingsModal />
+        </Suspense>
+      )}
+
+      {settingsModalView === 'app' && (
+        <Suspense fallback={null}>
+          <AppPreferencesModal />
         </Suspense>
       )}
 
