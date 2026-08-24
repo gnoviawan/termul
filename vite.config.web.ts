@@ -13,8 +13,45 @@ const materialIconsDir = path.join(
   path.dirname(require.resolve('material-icon-theme/package.json')),
   'icons'
 )
-
 const stub = (name: string) => path.resolve(__dirname, `src/renderer/lib/tauri-stubs/${name}.ts`)
+
+/**
+ * Dev-only tunnel access. When `TERMUL_DEV_TUNNEL` is set to a
+ * comma-separated list of hostnames (e.g. `ubuntu-box.bunny.vpn`), the
+ * Vite dev server accepts only those Host headers and proxies same-origin
+ * API/WS routes to a standalone termul-server on 0.0.0.0:8080.
+ *
+ * This is an opt-in convenience for tunnel-based dev testing. The proxy
+ * forwards loopback-mutation routes (/fs, /git, /mcp-servers, …) to the
+ * server, which sees them as loopback — the operator who sets this env var
+ * explicitly accepts that remote callers behind the tunnel can reach those
+ * routes. Never set in CI or production.
+ */
+const devTunnel = process.env.TERMUL_DEV_TUNNEL
+const devAllowedHosts: string[] | undefined = devTunnel
+  ? String(devTunnel)
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+  : undefined
+const devProxy = devTunnel
+  ? {
+      '/ws': { target: 'ws://localhost:8080', ws: true },
+      '/terminal/ws': { target: 'ws://localhost:8080', ws: true },
+      '/health': 'http://localhost:8080',
+      '/projects': 'http://localhost:8080',
+      '/fs': 'http://localhost:8080',
+      '/git': 'http://localhost:8080',
+      '/search': 'http://localhost:8080',
+      '/skills': 'http://localhost:8080',
+      '/log': 'http://localhost:8080',
+      '/shells': 'http://localhost:8080',
+      '/workspace': 'http://localhost:8080',
+      '/worktree': 'http://localhost:8080',
+      '/acp': 'http://localhost:8080',
+      '/mcp-servers': 'http://localhost:8080'
+    }
+  : undefined
 
 /** Explicit `@tauri-apps/*` → stub map for the App import graph (Story 1.5 AC3). */
 const TAURI_STUB_ALIASES: Record<string, string> = {
@@ -86,26 +123,8 @@ export default defineConfig({
   },
 
   server: {
-    // Allow tunnel hosts (e.g. bunny.vpn) for remote dev testing.
-    allowedHosts: true,
-    // Proxy same-origin API/WS routes to the standalone termul-server
-    // (run on 0.0.0.0:8080). The web client talks same-origin.
-    proxy: {
-      '/ws': { target: 'ws://localhost:8080', ws: true },
-      '/terminal/ws': { target: 'ws://localhost:8080', ws: true },
-      '/health': 'http://localhost:8080',
-      '/projects': 'http://localhost:8080',
-      '/fs': 'http://localhost:8080',
-      '/git': 'http://localhost:8080',
-      '/search': 'http://localhost:8080',
-      '/skills': 'http://localhost:8080',
-      '/log': 'http://localhost:8080',
-      '/shells': 'http://localhost:8080',
-      '/workspace': 'http://localhost:8080',
-      '/worktree': 'http://localhost:8080',
-      '/acp': 'http://localhost:8080',
-      '/mcp-servers': 'http://localhost:8080'
-    }
+    allowedHosts: devAllowedHosts,
+    proxy: devProxy
   },
 
   optimizeDeps: {
