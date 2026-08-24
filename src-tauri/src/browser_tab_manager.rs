@@ -33,7 +33,7 @@ impl BrowserTabManager {
             tabs: Arc::new(Mutex::new(HashMap::new())),
 
             agentation_endpoint: Arc::new(Mutex::new(None)),
-            agentation_enabled: Arc::new(Mutex::new(false)),
+            agentation_enabled: Arc::new(Mutex::new(true)),
         }
     }
 

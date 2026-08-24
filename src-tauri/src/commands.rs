@@ -1212,9 +1212,6 @@ pub async fn browser_tab_inject_agentation(
     tab_id: String,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
-    if !browser_manager.is_agentation_enabled() {
-        return Ok(IpcResult::error("Agentation not enabled", "AGENTATION_DISABLED"));
-    }
     match browser_manager.inject_agentation_toolbar(&tab_id) {
         Ok(()) => Ok(IpcResult::success(())),
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_AGENTATION_FAILED")),
