@@ -74,6 +74,7 @@ const mockStoreGetState = {
 
 vi.mock('@/stores/file-explorer-store', () => ({
   useFileExplorer: () => mockExplorerState,
+  useFileExplorerVisible: () => true,
   useFileExplorerActions: () => ({
     toggleDirectory: (...args: unknown[]) => mockToggleDirectory(...args),
     selectPath: mockSelectPath,
@@ -621,6 +622,8 @@ describe('FileExplorer header toolbar (GH-540)', () => {
       expect(button).toBeEnabled()
       expect(button).toHaveAttribute('title', name)
     }
+    // Web (jsdom has no Tauri internals) also shows the file-explorer toggle.
+    expect(screen.getByRole('button', { name: 'Hide file explorer' })).toBeInTheDocument()
   })
 
   it('disables every action when no project is open', () => {

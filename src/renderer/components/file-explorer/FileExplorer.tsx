@@ -10,7 +10,9 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import {
@@ -1055,6 +1057,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Explorer</span>
         <div className="flex items-center gap-1">
+          {!isTauriContext() && (
+            <FileExplorerToggleButton className="[&_svg]:size-3.5 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary cursor-pointer" />
+          )}
           <button
             type="button"
             onClick={() => void startHeaderCreate('file')}

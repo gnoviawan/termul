@@ -61,6 +61,7 @@ import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
@@ -184,7 +185,9 @@ const macOsTrafficLightClearance = 'w-[80px] shrink-0'
 function MacOsTitlebarStrip(): React.JSX.Element | null {
   const activeProject = useActiveProject()
 
-  if (!isMac) return null
+  // macOS desktop only — native traffic lights + drag region. Web (even on
+  // a Mac browser) falls through to the web TitleBar path instead.
+  if (!isMac || !isTauriContext()) return null
 
   return (
     <div
@@ -1937,7 +1940,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
             <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
               {/* Sidebar */}
-              {isSidebarVisible && (
+              {isSidebarVisible ? (
                 <div className="mr-2">
                   <ProjectSidebar
                     projects={projects}
@@ -1954,6 +1957,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     activeSSHProfileId={activeSSHProfileId}
                   />
                 </div>
+              ) : (
+                // Web-only slim edge toggle so a hidden sidebar stays
+                // re-openable. Desktop re-opens via the TitleBar toggle.
+                !isTauriContext() && (
+                  <div className="mr-2 flex items-center">
+                    <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                  </div>
+                )
               )}
 
               {/* Main Content and File Explorer Container */}
@@ -2006,6 +2017,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
                           </Suspense>
                         </div>
                       )}
+                    </div>
+                  ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
+                    // Web-only slim edge toggle so a hidden file explorer
+                    // stays re-openable. Desktop re-opens via the TitleBar.
+                    <div className="flex-shrink-0 ml-2 flex items-center">
+                      <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </div>
                   ) : null}
                 </div>
