@@ -90,7 +90,16 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
 
   ensureTab: (id: string, url: string) => {
     const existing = get().tabs.get(id)
-    if (existing) return existing
+    if (existing) {
+      if (existing.url !== url) {
+        set((state) => {
+          const next = new Map(state.tabs)
+          next.set(id, { ...existing, url })
+          return { tabs: next }
+        })
+      }
+      return { ...existing, url }
+    }
     return get().createTab(id, url)
   },
 
