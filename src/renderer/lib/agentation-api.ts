@@ -63,16 +63,20 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+function getEndpoint(): string {
+  const w = window as unknown as Record<string, unknown>
+  const ep = w.__TERMUL_AGENTATION_ENDPOINT__
+  return typeof ep === 'string' ? ep : 'http://127.0.0.1:0'
+}
+
 async function httpGet<T>(path: string): Promise<T> {
-  const port = (window as any).__TERMUL_AGENTATION_PORT__ ?? 0
-  const res = await fetch(`http://127.0.0.1:${port}${path}`)
+  const res = await fetch(`${getEndpoint()}${path}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 
 async function httpPost<T>(path: string, body: unknown): Promise<T> {
-  const port = (window as any).__TERMUL_AGENTATION_PORT__ ?? 0
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+  const res = await fetch(`${getEndpoint()}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -82,8 +86,7 @@ async function httpPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function httpPatch<T>(path: string, body: unknown): Promise<T> {
-  const port = (window as any).__TERMUL_AGENTATION_PORT__ ?? 0
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+  const res = await fetch(`${getEndpoint()}${path}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

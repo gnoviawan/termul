@@ -106,6 +106,7 @@ pub struct ThreadMessage {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Placement {
     pub component_type: String,
     pub width: f64,
@@ -118,8 +119,8 @@ pub struct Placement {
 // -----------------------------------------------------------------------------
 // Rearrange data (for section reorder/resize annotations)
 // -----------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Rearrange {
     pub selector: String,
     pub label: String,
@@ -130,9 +131,8 @@ pub struct Rearrange {
 
 // -----------------------------------------------------------------------------
 // Annotation
-// -----------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Annotation {
     pub id: String,
     pub session_id: String,
@@ -197,6 +197,7 @@ pub struct Annotation {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub url: String,
@@ -209,6 +210,7 @@ pub struct Session {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionWithAnnotations {
     #[serde(flatten)]
     pub session: Session,
@@ -248,6 +250,7 @@ impl AFSEventType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AFSEvent {
     #[serde(rename = "type")]
     pub event_type: AFSEventType,
@@ -262,6 +265,7 @@ pub struct AFSEvent {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionRequest {
     pub session_id: String,
     pub annotations: Vec<Annotation>,
@@ -322,6 +326,7 @@ pub trait AnnotationStore: Send + Sync {
 
 /// Input for creating a new annotation (server generates id/session_id/status/created_at).
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnnotationInput {
     pub x: f64,
     pub y: f64,

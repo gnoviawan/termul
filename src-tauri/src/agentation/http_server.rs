@@ -246,7 +246,11 @@ async fn session_sse(
                 let data = serde_json::to_string(&ev).unwrap_or_default();
                 Some(Ok(SseEvent::default().data(data)))
             }
-            _ => None,
+            Ok(_) => None,
+            Err(lag) => {
+                log::warn!("[Agentation] SSE lagged for session={id}: {lag}");
+                Some(Ok(SseEvent::default().event("lagged").data("{}")))
+            }
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
@@ -264,7 +268,10 @@ async fn global_sse(
                 let data = serde_json::to_string(&ev).unwrap_or_default();
                 Some(Ok(SseEvent::default().data(data)))
             }
-            Err(_) => None,
+            Err(lag) => {
+                log::warn!("[Agentation] SSE lagged (global): {lag}");
+                Some(Ok(SseEvent::default().event("lagged").data("{}")))
+            }
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
