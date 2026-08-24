@@ -42,7 +42,10 @@ function scssLoader() {
               const style = document.createElement('style');
               style.textContent = css;
               document.head.appendChild(style);
-              css.replace(/\\.([a-zA-Z_][\\w-]*)/g, (m, cls) => { styles[cls] = cls; return ''; });
+              css.replace(/\\.([a-zA-Z_][\\w-]*)/g, (m, cls) => {
+                styles[cls] = cls;
+                return '';
+              });
             }
             export default styles;
           `

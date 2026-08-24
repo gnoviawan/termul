@@ -290,13 +290,21 @@ impl AgentationMcpServer {
                     let ev = if let Some(rem) = remaining {
                         match tokio::time::timeout(rem, rx.recv()).await {
                             Ok(Ok(ev)) => Some(ev),
-                            Ok(Err(_)) => break,
+                            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                                log::warn!("[Agentation] watch_annotations lagged by {n}");
+                                continue;
+                            }
+                            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
                             Err(_) => break,
                         }
                     } else {
                         match rx.recv().await {
                             Ok(ev) => Some(ev),
-                            Err(_) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                log::warn!("[Agentation] watch_annotations lagged by {n}");
+                                continue;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     };
 

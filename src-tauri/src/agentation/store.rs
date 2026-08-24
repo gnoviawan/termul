@@ -112,12 +112,16 @@ impl SqliteStore {
     }
 
     fn persist_event(&self, ev: &AFSEvent) {
-        if let Ok(db) = self.db.lock() {
-            let payload = serde_json::to_string(&ev.payload).unwrap_or_default();
-            let _ = db.execute(
-                "INSERT INTO events (type,timestamp,session_id,sequence,payload) VALUES (?,?,?,?,?)",
-                params![ev.event_type.as_str(), ev.timestamp, ev.session_id, ev.sequence, payload],
-            );
+        let db = match self.db.lock() {
+            Ok(d) => d,
+            Err(e) => { log::error!("[Agentation] persist_event lock failed: {e}"); return; }
+        };
+        let payload = serde_json::to_string(&ev.payload).unwrap_or_default();
+        if let Err(e) = db.execute(
+            "INSERT INTO events (type,timestamp,session_id,sequence,payload) VALUES (?,?,?,?,?)",
+            params![ev.event_type.as_str(), ev.timestamp, ev.session_id, ev.sequence, payload],
+        ) {
+            log::error!("[Agentation] persist_event insert failed: {e}");
         }
     }
 
@@ -248,24 +252,27 @@ impl AnnotationStore for SqliteStore {
             project_id: project_id.map(String::from),
         };
         {
-            let db = self.db.lock().unwrap();
-            db.execute(
+            let db = match self.db.lock() {
+                Ok(d) => d,
+                Err(e) => {
+                    log::error!("[Agentation] create_session lock failed: {e}");
+                    return session;
+                }
+            };
+            if let Err(e) = db.execute(
                 "INSERT INTO sessions (id,url,status,created_at,project_id,metadata) VALUES (?,?,?,?,?,NULL)",
                 params![session.id, session.url, "active", session.created_at, session.project_id],
-            ).unwrap();
+            ) {
+                log::error!("[Agentation] create_session insert failed: {e}");
+            }
         }
         let ev = self.bus.emit(AFSEventType::SessionCreated, &session.id, serde_json::to_value(&session).unwrap());
         self.persist_event(&ev);
         session
     }
 
-    fn get_session(&self, id: &str) -> Option<Session> {
-        let db = self.db.lock().unwrap();
-        db.query_row("SELECT * FROM sessions WHERE id=?", params![id], Self::row_session).ok()
-    }
-
     fn get_session_with_annotations(&self, id: &str) -> Option<SessionWithAnnotations> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let session = db.query_row("SELECT * FROM sessions WHERE id=?", params![id], Self::row_session).ok()?;
         let mut stmt = db.prepare("SELECT * FROM annotations WHERE session_id=? ORDER BY timestamp").ok()?;
         let annotations = stmt.query_map(params![id], Self::row_annotation).ok()?
@@ -273,11 +280,16 @@ impl AnnotationStore for SqliteStore {
         Some(SessionWithAnnotations { session, annotations })
     }
 
+    fn get_session(&self, id: &str) -> Option<Session> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.query_row("SELECT * FROM sessions WHERE id=?", params![id], Self::row_session).ok()
+    }
+
     fn update_session_status(&self, id: &str, status: SessionStatus) -> Option<Session> {
         let now = chrono::Utc::now().to_rfc3339();
         let status_str = match status { SessionStatus::Active => "active", SessionStatus::Approved => "approved", SessionStatus::Closed => "closed" };
         {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
             let n = db.execute("UPDATE sessions SET status=?, updated_at=? WHERE id=?", params![status_str, now, id]).ok()?;
             if n == 0 { return None; }
         }
@@ -336,7 +348,7 @@ impl AnnotationStore for SqliteStore {
         };
 
         {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
             db.execute(
                 r#"INSERT INTO annotations (
                     id,session_id,x,y,comment,element,element_path,timestamp,
@@ -365,7 +377,7 @@ impl AnnotationStore for SqliteStore {
     }
 
     fn get_annotation(&self, id: &str) -> Option<Annotation> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.query_row("SELECT * FROM annotations WHERE id=?", params![id], Self::row_annotation).ok()
     }
 
@@ -381,7 +393,7 @@ impl AnnotationStore for SqliteStore {
         let severity_str = data.severity.as_ref().map(|s| format!("{:?}", s).to_lowercase());
 
         {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
             db.execute(
                 r#"UPDATE annotations SET
                     comment=COALESCE(?,comment), status=COALESCE(?,status),
@@ -454,7 +466,7 @@ impl AnnotationStore for SqliteStore {
 
     fn delete_annotation(&self, id: &str) -> Option<Annotation> {
         let existing = self.get_annotation(id)?;
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.execute("DELETE FROM annotations WHERE id=?", params![id]).ok()?;
         let ev = self.bus.emit(AFSEventType::AnnotationDeleted, &existing.session_id, serde_json::to_value(&existing).unwrap());
         self.persist_event(&ev);
@@ -462,7 +474,7 @@ impl AnnotationStore for SqliteStore {
     }
 
     fn get_events_since(&self, session_id: &str, sequence: i64) -> Vec<AFSEvent> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match db.prepare("SELECT * FROM events WHERE session_id=? AND sequence>? ORDER BY sequence") {
             Ok(s) => s,
             Err(_) => return vec![],

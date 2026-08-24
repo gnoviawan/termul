@@ -48,7 +48,15 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
   )
 
   const handleInjectAgentation = useCallback(() => {
-    browserTabInjectAgentation(browserTabId).catch(console.error)
+    browserTabInjectAgentation(browserTabId)
+      .then((result) => {
+        if (!result.success) {
+          console.error('[Agentation] Toolbar injection failed:', result.error, result.code)
+        }
+      })
+      .catch((e) => {
+        console.error('[Agentation] Toolbar injection error:', e)
+      })
   }, [browserTabId])
 
   if (!tabUrl) return <></>
