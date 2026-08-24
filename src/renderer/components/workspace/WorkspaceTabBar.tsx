@@ -21,7 +21,6 @@ import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
-import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
@@ -1006,8 +1005,6 @@ export function WorkspaceTabBar({
                       }}
                       onClose={() => {
                         useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-                        useAnnotationStore.getState().clearAnnotationsForTab(tab.browserTabId)
-                        useWorkspaceStore.getState().closeTab(paneId, tab.id)
                       }}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}

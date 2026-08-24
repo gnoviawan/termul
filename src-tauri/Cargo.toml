@@ -181,6 +181,13 @@ minisign-verify = "0.2"
 # the minisign `.pub` file text, base64-encoded) so `PublicKey::decode` can
 # parse the raw key the updater verifies against.
 base64 = "0.22"
+# SQLite for the agentation annotation service (issue #451, Epic 1).
+# `bundled` compiles SQLite from source so the binary has no system-SQLite
+# dependency — matches the single-binary invariant.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# tokio utilities for agentation SSE broadcast + graceful shutdown (issue #451).
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 tauri = { version = "2.0", features = ["test"] }

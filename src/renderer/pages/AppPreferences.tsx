@@ -34,6 +34,7 @@ import {
   useResetShortcut,
   useUpdateShortcut
 } from '@/hooks/use-keyboard-shortcuts'
+import { agentationApi } from '@/lib/agentation-api'
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
@@ -92,6 +93,7 @@ const APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'behavior', label: 'Behavior', icon: <Sliders size={16} /> },
   { id: 'project-defaults', label: 'New Project Defaults', icon: <Monitor size={16} /> },
   { id: 'ai-agents', label: 'AI Agents', icon: <Bot size={16} /> },
+  { id: 'agentation', label: 'Annotation Toolbar', icon: <Monitor size={16} /> },
   { id: 'mcp-servers', label: 'MCP Servers', icon: <Network size={16} /> },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', icon: <Keyboard size={16} /> },
   { id: 'updates', label: 'Updates', icon: <Download size={16} /> },
@@ -231,6 +233,13 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Reset Settings',
     description: 'Restore all settings to their default values.',
     keywords: ['restore', 'defaults', 'clear']
+  },
+
+  {
+    categoryId: 'agentation',
+    label: 'Agentation Toolbar',
+    description: 'Enable agentation visual annotation toolbar in browser tabs.',
+    keywords: ['agentation', 'annotation', 'toolbar', 'feedback', 'visual']
   }
 ]
 
@@ -262,6 +271,7 @@ export default function AppPreferences(): React.JSX.Element {
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [isResetShortcutsDialogOpen, setIsResetShortcutsDialogOpen] = useState(false)
+  const [agentationEnabled, setAgentationEnabledState] = useState(false)
 
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
@@ -298,6 +308,33 @@ export default function AppPreferences(): React.JSX.Element {
     }
     void loadShells()
   }, [])
+
+  // Load agentation enabled state
+  useEffect(() => {
+    async function loadAgentationEnabled(): Promise<void> {
+      try {
+        const enabled = await agentationApi.isEnabled()
+        setAgentationEnabledState(enabled)
+      } catch {
+        // Silently fail — defaults to disabled
+      }
+    }
+    void loadAgentationEnabled()
+  }, [])
+
+  const setAgentationEnabled = async (enabled: boolean): Promise<void> => {
+    console.log('[Agentation] Toggle clicked:', enabled)
+    setAgentationEnabledState(enabled)
+    try {
+      console.log('[Agentation] Calling agentationApi.setEnabled...')
+      await agentationApi.setEnabled(enabled)
+      console.log('[Agentation] setEnabled succeeded')
+    } catch (e) {
+      console.error('[Agentation] setEnabled failed:', e)
+      // Revert on error
+      setAgentationEnabledState(!enabled)
+    }
+  }
 
   const handleFontFamilyChange = (value: string) => {
     updateSetting('terminalFontFamily', value)
@@ -1090,6 +1127,53 @@ export default function AppPreferences(): React.JSX.Element {
                     standalone server uses the env var.
                   </p>
                 </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          {/* Agentation Annotation Toolbar Section */}
+          <SettingsSection id="agentation">
+            <div className="flex flex-col gap-6 border-b border-border pb-6 lg:flex-row lg:items-start">
+              <div className="w-full pt-1 lg:w-1/3">
+                <div className="flex items-center gap-2">
+                  <Monitor size={18} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">Annotation Toolbar</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Enable the agentation visual annotation toolbar in browser tabs. When enabled, you
+                  can annotate web pages and send structured feedback to any MCP-aware agent (Claude
+                  Code, Cursor, Codex, Windsurf) — no copy-paste needed.
+                </p>
+              </div>
+              <div className="flex-1 space-y-4">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-border"
+                    checked={agentationEnabled}
+                    onChange={(e) => {
+                      setAgentationEnabled(e.target.checked)
+                    }}
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-foreground">
+                      Enable Agentation Toolbar
+                    </span>
+                    <p className="text-xs text-muted-foreground">
+                      Injects the agentation toolbar into browser tabs via initialization script.
+                      Both overlays coexist — the vanilla overlay remains available.
+                    </p>
+                  </div>
+                </label>
+                {agentationEnabled && (
+                  <div className="rounded-md border border-border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      The toolbar connects to termul's built-in MCP server. Any MCP-aware agent can
+                      call <code className="text-foreground">agentation_watch_annotations</code> to
+                      receive annotations in a hands-free loop.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </SettingsSection>
