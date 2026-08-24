@@ -1961,7 +1961,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 // Web-only slim edge toggle so a hidden sidebar stays
                 // re-openable. Desktop re-opens via the TitleBar toggle.
                 !isTauriContext() && (
-                  <div className="mr-2 flex items-center">
+                  <div className="mr-2 flex items-start pt-0">
                     <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                   </div>
                 )
@@ -2021,7 +2021,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
                     // Web-only slim edge toggle so a hidden file explorer
                     // stays re-openable. Desktop re-opens via the TitleBar.
-                    <div className="flex-shrink-0 ml-2 flex items-center">
+                    <div className="flex-shrink-0 ml-2 flex items-start">
                       <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </div>
                   ) : null}

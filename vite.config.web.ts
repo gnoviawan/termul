@@ -85,6 +85,29 @@ export default defineConfig({
     }
   },
 
+  server: {
+    // Allow tunnel hosts (e.g. bunny.vpn) for remote dev testing.
+    allowedHosts: true,
+    // Proxy same-origin API/WS routes to the standalone termul-server
+    // (run on 0.0.0.0:8080). The web client talks same-origin.
+    proxy: {
+      '/ws': { target: 'ws://localhost:8080', ws: true },
+      '/terminal/ws': { target: 'ws://localhost:8080', ws: true },
+      '/health': 'http://localhost:8080',
+      '/projects': 'http://localhost:8080',
+      '/fs': 'http://localhost:8080',
+      '/git': 'http://localhost:8080',
+      '/search': 'http://localhost:8080',
+      '/skills': 'http://localhost:8080',
+      '/log': 'http://localhost:8080',
+      '/shells': 'http://localhost:8080',
+      '/workspace': 'http://localhost:8080',
+      '/worktree': 'http://localhost:8080',
+      '/acp': 'http://localhost:8080',
+      '/mcp-servers': 'http://localhost:8080'
+    }
+  },
+
   optimizeDeps: {
     // Avoid prebundling real Tauri packages into the web dep graph.
     exclude: [
