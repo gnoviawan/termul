@@ -1136,15 +1136,11 @@ impl AcpManager {
         };
 
         let outcome = async {
-        // Inject OAuth Bearer tokens into HTTP/SSE MCP server configs so
-        // authenticated servers (e.g., Mobbin) work in agent sessions.
-        let combined_mcp_servers = inject_oauth_tokens(combined_mcp_servers);
+            // Inject OAuth Bearer tokens into HTTP/SSE MCP server configs so
+            // authenticated servers (e.g., Mobbin) work in agent sessions.
+            let combined_mcp_servers = inject_oauth_tokens(combined_mcp_servers);
 
             gate_mcp_servers(&caps, &combined_mcp_servers)?;
-        // Inject OAuth Bearer tokens into HTTP/SSE MCP server configs so
-        // authenticated servers (e.g., Mobbin) work in agent sessions.
-        let combined_mcp_servers = inject_oauth_tokens(combined_mcp_servers);
-
             let tx = self.command_tx(agent_id)?;
             send_command(&tx, |reply| AcpCommand::NewSession {
                 cwd,

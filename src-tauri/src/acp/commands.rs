@@ -673,37 +673,27 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     // After handle_callback, oauth_state is now Authorized(manager).
     // Call get_access_token on the MANAGER (not on OAuthState, which returns
     // "Already authorized" for the Authorized variant).
-    let (access_token, client_id) = match &oauth_state {
-        OAuthState::Authorized(manager) => {
-            let token = manager
-                .get_access_token()
-                .await
+    let (access_token, client_id, refresh_token, expires_at) = match &oauth_state {
+        OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => {
+            use oauth2::TokenResponse;
+            let token = manager.get_access_token().await
                 .map_err(|e| format!("failed to get access token: {e}"))?;
-            let creds = manager
-                .get_credentials()
-                .await
+            let creds = manager.get_credentials().await
                 .map_err(|e| format!("failed to get credentials: {e}"))?;
-            (token, creds.0)
-        }
-        OAuthState::Unauthorized(manager) => {
-            let token = manager
-                .get_access_token()
-                .await
-                .map_err(|e| format!("failed to get access token: {e}"))?;
-            let creds = manager
-                .get_credentials()
-                .await
-                .map_err(|e| format!("failed to get credentials: {e}"))?;
-            (token, creds.0)
+            let refresh = creds.1.as_ref().and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
+            let exp = creds.1.as_ref().and_then(|tr| tr.expires_in()).map(|d| {
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)
+            });
+            (token, creds.0, refresh, exp)
         }
         _ => return Err("unexpected OAuth state after callback".to_string()),
     };
 
-    // 6. Store the token in the OS keychain.
+    // 6. Store the token in the file store.
     let stored = crate::acp::mcp_oauth::StoredToken {
         access_token,
-        refresh_token: None,
-        expires_at: None,
+        refresh_token,
+        expires_at,
         client_id,
         issuer: server_url.clone(),
         server_url: server_url.clone(),

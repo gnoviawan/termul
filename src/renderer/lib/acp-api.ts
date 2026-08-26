@@ -576,7 +576,10 @@ export async function disconnectMcpOAuth(serverUrl: string): Promise<void> {
   if (isTauriContext()) {
     await invoke('acp_mcp_oauth_disconnect', { serverUrl })
   } else {
-    await webServerMcpOAuth.disconnect(serverUrl)
+    const result = await webServerMcpOAuth.disconnect(serverUrl)
+    if (!result.success) {
+      throw new Error(result.error ?? 'OAuth disconnect failed')
+    }
   }
 }
 
