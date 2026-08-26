@@ -1682,18 +1682,20 @@ mod tests {
             metadata.cwd
         );
         // `recover()` must heal a verbatim cwd persisted by an older build.
-        // Manually corrupt the metadata on disk, then reopen.
+        // Manually corrupt the metadata on disk AFTER shutdown (which
+        // persists the in-memory stripped metadata), so the reopen step
+        // actually tests recover() healing a legacy verbatim prefix.
+        persistence.shutdown().await.unwrap();
         {
-            let dir = persistence
+            let metadata_path = persistence
                 .session_dir(&metadata.storage_key)
-                .unwrap();
-            let metadata_path = dir.join(METADATA_FILE);
+                .unwrap()
+                .join(METADATA_FILE);
             let mut corrupt = metadata.clone();
             corrupt.cwd = format!(r"\\?\{}", corrupt.cwd);
             let bytes = serde_json::to_vec_pretty(&corrupt).unwrap();
             std::fs::write(&metadata_path, &bytes).unwrap();
         }
-        persistence.shutdown().await.unwrap();
         let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
         let healed = reopened.metadata("session-verbatim").unwrap();
         assert!(
