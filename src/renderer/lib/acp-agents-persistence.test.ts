@@ -167,6 +167,39 @@ describe('load/save agent configs', () => {
     expect(loaded[0].configId).toBe('custom-honored')
   })
 
+  it('preserves a string icon on load and drops non-string icon to undefined', async () => {
+    const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/></svg>'
+    const stored = [
+      {
+        id: 'custom-1',
+        configId: 'custom-1',
+        name: 'A',
+        command: 'node',
+        args: [],
+        env: {},
+        icon: svg
+      },
+      {
+        id: 'custom-2',
+        configId: 'custom-2',
+        name: 'B',
+        command: 'node',
+        args: [],
+        env: {},
+        icon: 123
+      },
+      { id: 'custom-3', configId: 'custom-3', name: 'C', command: 'node', args: [], env: {} }
+    ]
+    ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      data: stored
+    })
+    const loaded = await loadAgentConfigs()
+    expect(loaded[0].icon).toBe(svg)
+    expect(loaded[1].icon).toBeUndefined()
+    expect(loaded[2].icon).toBeUndefined()
+  })
+
   it('writes under the dedicated key and throws on failure', async () => {
     ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
     await saveAgentConfigs([])

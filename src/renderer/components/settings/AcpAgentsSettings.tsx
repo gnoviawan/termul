@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
-import { findBundledIconByKey, normalizeIconSvg } from '@/lib/agents/agent-icon-catalog'
+import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   filterSupportedAcpAgents,
   isCustomAgentEntry,
@@ -18,16 +19,22 @@ import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
 
-/** Render a bundled SVG icon string inline (theme-aware via currentColor). */
+/** Render a sanitized SVG icon string inline (theme-aware via currentColor). */
 function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
+  const sanitized = useMemo(() => sanitizeInlineAgentSvg(svg), [svg])
   return (
     <span
       aria-hidden="true"
       className="inline-flex h-5 w-5 shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via normalizeIconSvg (DOMPurify)
-      dangerouslySetInnerHTML={{ __html: normalizeIconSvg(svg) }}
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
+      dangerouslySetInnerHTML={{ __html: sanitized ?? '' }}
     />
   )
+}
+
+/** True when the SVG sanitizes to a non-null value (safe to render). */
+function iconSanitizesOk(svg: string): boolean {
+  return sanitizeInlineAgentSvg(svg) !== null
 }
 
 function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element | null {
@@ -143,6 +150,8 @@ interface AgentRowProps {
 function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   const warmState = useConfigWarmState(entry.configId)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
+  // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
+  const customIcon = entry.config?.icon
 
   const statusBadge: { label: string; tone: 'ready' | 'muted' | 'warn' } = warmState.sessionReady
     ? { label: 'Session ready', tone: 'ready' }
@@ -189,7 +198,9 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
   return (
     <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-2.5">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-        {iconEntry ? (
+        {customIcon && iconSanitizesOk(customIcon) ? (
+          <InlineIcon svg={customIcon} />
+        ) : iconEntry ? (
           <InlineIcon svg={iconEntry.svg} />
         ) : (
           <span className="text-xs font-semibold uppercase text-muted-foreground">

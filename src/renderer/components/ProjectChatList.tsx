@@ -14,7 +14,7 @@ import {
 import { clipboardApi, openerApi } from '@/lib/api'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
-import { useAcpStore, useAgentTemplateId } from '@/stores/acp-store'
+import { useAcpStore, useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Hard cap of rendered chat rows per project before lazy pagination kicks in. */
@@ -377,5 +377,8 @@ function ChatRowIcon({
   agentConfigId?: string
 }): React.JSX.Element {
   const templateId = useAgentTemplateId(agentId ?? null, agentConfigId)
-  return <AgentGlyph templateId={templateId} size={12} className="text-muted-foreground" />
+  const icon = useAgentIcon(agentId ?? null, agentConfigId)
+  return (
+    <AgentGlyph templateId={templateId} icon={icon} size={12} className="text-muted-foreground" />
+  )
 }

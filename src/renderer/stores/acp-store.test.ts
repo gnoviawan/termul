@@ -5195,7 +5195,7 @@ describe('acp-store multi-project isolation', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/b')]: 'agent-b' }
     }))
     const identity = selectAgentIdentity(useAcpStore.getState(), 'agent-b')
-    expect(identity).toEqual({ name: 'Claude', templateId: 'claude-acp' })
+    expect(identity).toEqual({ name: 'Claude', templateId: 'claude-acp', icon: null })
   })
 
   it('selectAgentIdentity falls back to sessionIndex agentConfigId when live map is cold', async () => {
@@ -5225,7 +5225,7 @@ describe('acp-store multi-project isolation', () => {
       ]
     })
     const identity = selectAgentIdentity(useAcpStore.getState(), 'agent-hist')
-    expect(identity).toEqual({ name: 'Cursor', templateId: 'cursor' })
+    expect(identity).toEqual({ name: 'Cursor', templateId: 'cursor', icon: null })
   })
 
   it('agent_error with session_id sets lastError on that session', () => {

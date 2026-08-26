@@ -17,6 +17,8 @@ export interface StoredAgentConfig extends AgentConfig {
   id: string
   /** The template id this agent was created from (used to resolve an icon). */
   templateId?: string
+  /** Inline SVG markup for a custom (bundled or uploaded) agent icon. */
+  icon?: string
 }
 
 export interface AgentConfigValidation {
@@ -109,6 +111,7 @@ export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
         Object.values(cfg.env).every((v) => typeof v === 'string')
           ? (cfg.env as Record<string, string>)
           : {}
+      const icon = typeof cfg.icon === 'string' ? cfg.icon : undefined
       return {
         ...cfg,
         id,
@@ -117,6 +120,7 @@ export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
         configId,
         args,
         env,
+        icon,
         allowTerminal: typeof cfg.allowTerminal === 'boolean' ? cfg.allowTerminal : false
       }
     })

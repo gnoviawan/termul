@@ -2163,11 +2163,16 @@ const EntryGlyph = memo(function EntryGlyph({
   name?: string
 }): React.JSX.Element {
   const normalized = useMemo(() => {
+    // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
+    if (config?.icon) {
+      const sanitized = sanitizeInlineAgentSvg(config.icon)
+      if (sanitized) return sanitized
+    }
     const key = config?.templateId ?? templateId
     if (!key) return null
     const icon = findBundledIconByKey(`acp:${key}`)?.svg
     return icon ? sanitizeInlineAgentSvg(icon) : null
-  }, [config?.templateId, templateId])
+  }, [config?.icon, config?.templateId, templateId])
   const className = 'h-4 w-4 rounded-sm text-4xs'
 
   if (normalized) {

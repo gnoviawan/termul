@@ -123,7 +123,7 @@ vi.mock('@/hooks/use-agent-skills', async () => {
 })
 
 vi.mock('@/stores/acp-store', () => ({
-  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' }),
+  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
   useSessionUsage: () => null,
   useAcpMessages: () => [],
   // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
