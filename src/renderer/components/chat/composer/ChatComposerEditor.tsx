@@ -465,7 +465,12 @@ export function ChatComposerEditor({
     <div className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}>
       <div
         className="w-full overflow-y-auto overscroll-contain"
-        style={{ maxHeight: `${maxHeight}px`, '--composer-min-h': `${minHeight}px` } as React.CSSProperties}
+        style={
+          {
+            maxHeight: `${maxHeight}px`,
+            '--composer-min-h': `${minHeight}px`
+          } as React.CSSProperties
+        }
       >
         <EditorContent editor={editor} innerRef={editorContentRef} />
       </div>
