@@ -1,16 +1,17 @@
 /**
- * Format an ISO 8601 timestamp as a compact relative time for commit rows,
- * e.g. "now", "5m", "3h", "2d", "5w". Falls back to a short localized date for
- * anything older than ~8 weeks. Invalid input yields an empty string so the UI
- * can render nothing rather than "Invalid Date".
+ * Format an epoch-millisecond timestamp as a compact relative time, e.g.
+ * "now", "5m", "3h", "2d", "5w". Falls back to a short localized date for
+ * anything older than ~8 weeks. A non-finite timestamp yields an empty string
+ * so the UI can render nothing rather than "Invalid Date".
  *
- * `now` is injectable for deterministic tests.
+ * `now` is injectable for deterministic tests. This is the number-based core
+ * shared by commit rows (ISO via `formatRelativeTime`) and chat-history rows
+ * (epoch-ms `lastActivityAt`).
  */
-export function formatRelativeTime(iso: string, now: number = Date.now()): string {
-  const then = Date.parse(iso)
-  if (Number.isNaN(then)) return ''
+export function formatRelativeTimeFromMs(ms: number, now: number = Date.now()): string {
+  if (!Number.isFinite(ms)) return ''
 
-  const diffMs = now - then
+  const diffMs = now - ms
   // Future timestamps (clock skew) clamp to "now" rather than negative values.
   const seconds = Math.max(0, Math.floor(diffMs / 1000))
 
@@ -24,9 +25,20 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
   const weeks = Math.floor(days / 7)
   if (weeks < 8) return `${weeks}w`
 
-  return new Date(then).toLocaleDateString(undefined, {
+  return new Date(ms).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric'
   })
+}
+
+/**
+ * Format an ISO 8601 timestamp as a compact relative time for commit rows.
+ * Delegates to `formatRelativeTimeFromMs` after parsing; invalid input yields
+ * an empty string. `now` is injectable for deterministic tests.
+ */
+export function formatRelativeTime(iso: string, now: number = Date.now()): string {
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return ''
+  return formatRelativeTimeFromMs(then, now)
 }

@@ -1,4 +1,5 @@
 import { Trash2 } from 'lucide-react'
+import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { cn } from '@/lib/utils'
 import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'
@@ -71,7 +72,9 @@ export function ChatHistoryEntryRow({
             <span className="text-3xs text-muted-foreground/70 shrink-0">{entry.agentName}</span>
           ) : null
         ) : (
-          <span className="text-3xs text-muted-foreground">{entry.messageCount}</span>
+          <span className="text-3xs text-muted-foreground">
+            {formatRelativeTimeFromMs(entry.lastActivityAt)}
+          </span>
         )}
       </button>
       {!entry.discovered && (
