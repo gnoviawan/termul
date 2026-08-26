@@ -473,13 +473,22 @@
   }
 }
 
-/* Chat composer (Tiptap) empty-state placeholder.
+/* Chat composer (Tiptap) editable surface + empty-state placeholder.
    `@tiptap/extension-placeholder` sets `data-placeholder` + the `is-empty`
    class on the empty `<p>` node, but ships no CSS — the app must render the
    hint via `::before { content: attr(data-placeholder) }`. Applies to both
    the agent launcher and the existing-chat ChatInputBar (both share
-   ChatComposerEditor). */
+   ChatComposerEditor).
+
+   The min-height is applied to the ProseMirror element itself (not a wrapper)
+   via the `--composer-min-h` CSS variable set inline by ChatComposerEditor.
+   This makes the full area clickable — the caret appears wherever the user
+   clicks, eliminating the dead space below short/empty text that occurred
+   when min-height was on the outer wrapper. */
 @layer components {
+  [data-composer-editor="true"] {
+    min-height: var(--composer-min-h, auto);
+  }
   [data-composer-editor="true"] p.is-empty:first-child::before {
     content: attr(data-placeholder);
     color: hsl(var(--muted-foreground));

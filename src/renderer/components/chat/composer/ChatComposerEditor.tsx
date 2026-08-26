@@ -62,9 +62,12 @@ export interface ChatComposerEditorProps {
   placeholder?: string
   ariaLabel?: string
   autoFocus?: boolean
-  /** Min/max heights (CSS px). The editor grows with content up to `maxHeight`,
-   * then scrolls — replaces the old textarea `clampHeight`/`resetHeight`. */
+  /** Min height (CSS px) applied to the editable surface so the full area is
+   *  clickable — the ProseMirror element itself stretches to this height, so
+   *  clicks anywhere inside place the caret (no dead space below short text). */
   minHeight?: number
+  /** Max height (CSS px). The editor grows with content up to this height,
+   *  then the scroll area engages. */
   maxHeight?: number
   className?: string
   editorClassName?: string
@@ -201,7 +204,10 @@ export function ChatComposerEditor({
   placeholder,
   ariaLabel,
   autoFocus = false,
-  minHeight = 52,
+  // 26px = 1 line: text-base (16px) × leading-relaxed (1.625). Applied to the
+  // ProseMirror element via the `--composer-min-h` CSS var (index.css) so the
+  // full area is clickable — no dead space below short/empty text.
+  minHeight = 26,
   maxHeight = 160,
   className,
   editorClassName
@@ -456,11 +462,11 @@ export function ChatComposerEditor({
   }, [editor, disabled])
 
   return (
-    <div
-      className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}
-      style={{ minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` }}
-    >
-      <div className="h-full w-full overflow-y-auto">
+    <div className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}>
+      <div
+        className="w-full overflow-y-auto overscroll-contain"
+        style={{ maxHeight: `${maxHeight}px`, '--composer-min-h': `${minHeight}px` } as React.CSSProperties}
+      >
         <EditorContent editor={editor} innerRef={editorContentRef} />
       </div>
     </div>

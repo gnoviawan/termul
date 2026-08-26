@@ -653,8 +653,8 @@ export function ChatInputBar({
                 editorRef={editorRef}
                 inputRef={composerInputRef}
                 disabled={disabled || sending}
-                minHeight={52}
-                maxHeight={160}
+                minHeight={26} /* 1 line: 16px × 1.625 */
+                maxHeight={78} /* 3 lines: 3 × 26px, then scroll */
                 placeholder={
                   disabled
                     ? 'Composer unavailable'
