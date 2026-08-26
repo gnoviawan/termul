@@ -2255,8 +2255,14 @@ async function openHistorySessionInner(
   // Tail-first: fetch only the recent messages so the pane shows the
   // conversation immediately. The full payload loads lazily on scroll-up
   // via `loadOlderMessages`. Falls back to the full `loadSessionPayload`
-  // on tail-fetch failure (no regression vs. the previous behavior).
-  let payload = await loadSessionPayloadTail(id).catch(() => null)
+  let payload = await loadSessionPayloadTail(id).catch((err) => {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.openHistorySession.tailFetch',
+      message: `Tail fetch failed for session ${id}, falling back to full load: ${String(err)}`
+    })
+    return null
+  })
   if (!payload) payload = await loadSessionPayload(id)
   if (!isCurrentSessionReopen(id, reopenGeneration)) return
   if (!payload) throw new Error(`no persisted history for ${id}`)
@@ -4026,8 +4032,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // can record `acp-resume-skipped` and keep the transcript read-only.
     // Tail-first: fetch only the recent messages for fast resume. The full
     // payload loads lazily on scroll-up via `loadOlderMessages`. Falls back
-    // to the full `loadSessionPayload` on tail-fetch failure.
-    let payload = await loadSessionPayloadTail(id).catch(() => null)
+    let payload = await loadSessionPayloadTail(id).catch((err) => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.resumeLiveSession.tailFetch',
+        message: `Tail fetch failed for session ${id}, falling back to full load: ${String(err)}`
+      })
+      return null
+    })
     if (!payload) payload = await loadSessionPayload(id)
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata

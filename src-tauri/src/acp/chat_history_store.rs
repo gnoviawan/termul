@@ -201,6 +201,7 @@ impl ChatHistoryStore {
             return Ok(payload);
         }
         let tail = messages.split_off(messages.len() - limit);
+        let tail_len = tail.len();
         let oldest_tail_seq = tail
             .iter()
             .filter_map(|m| m.get("seq").and_then(|s| s.as_u64()))
@@ -211,9 +212,7 @@ impl ChatHistoryStore {
         if let Some(metadata) = result.get_mut("metadata").and_then(|m| m.as_object_mut()) {
             metadata.insert(
                 "messageCount".to_string(),
-                serde_json::Value::Number(
-                    serde_json::Number::from(messages.len().min(limit)),
-                ),
+                serde_json::Value::Number(serde_json::Number::from(tail_len)),
             );
         }
         if let Some(tool_calls) = result
