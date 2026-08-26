@@ -637,7 +637,21 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
                 let reader = BufReader::new(&mut stream);
                 let mut lines = reader.lines();
                 if let Some(Ok(first_line)) = lines.next() {
-                    let full_url = format!("http://127.0.0.1:{port}{}", first_line.split(' ').nth(1).unwrap_or("/"));
+                    // Parse the request target. Stray browser requests
+                    // (preconnect, favicon, malformed) must not break the
+                    // loop — only the callback path with a `code` param
+                    // completes the flow. Respond to non-callback requests
+                    // with a 404 and continue waiting.
+                    let target = first_line.split(' ').nth(1).unwrap_or("/").to_string();
+                    let path = target.split('?').next().unwrap_or("/");
+                    let is_callback = path == crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH
+                        && target.contains("code=");
+                    if !is_callback {
+                        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        let _ = stream.flush();
+                        continue;
+                    }
+                    let full_url = format!("http://127.0.0.1:{port}{target}");
                     let body = "<!DOCTYPE html><html><body><h2>Authorization complete</h2><p>You can close this tab and return to Termul.</p><script>window.close();</script></body></html>";
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -648,7 +662,7 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
                     break full_url;
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
             Err(e) => {
@@ -677,9 +691,15 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => {
             use oauth2::TokenResponse;
             let token = manager.get_access_token().await
-                .map_err(|e| format!("failed to get access token: {e}"))?;
+                .map_err(|e| {
+                    log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
+                    format!("failed to get access token: {e}")
+                })?;
             let creds = manager.get_credentials().await
-                .map_err(|e| format!("failed to get credentials: {e}"))?;
+                .map_err(|e| {
+                    log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
+                    format!("failed to get credentials: {e}")
+                })?;
             let refresh = creds.1.as_ref().and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
             let exp = creds.1.as_ref().and_then(|tr| tr.expires_in()).map(|d| {
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)

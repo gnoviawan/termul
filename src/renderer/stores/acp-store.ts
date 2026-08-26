@@ -4657,12 +4657,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
     if (!url) return
     set((s) => ({ mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: true } }))
+    void logFrontendError({
+      source: 'acp-store.connectMcpOAuth',
+      message: `OAuth flow started for server '${server.name}'`
+    })
     try {
       await acpApi.startMcpOAuth(url)
+      // startMcpOAuth now blocks until the token is stored (desktop: the
+      // Tauri command blocks; web: polls the status endpoint). Setting
+      // connected state here is correct — the token is confirmed.
       set((s) => ({
         mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: true },
         mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false }
       }))
+      void logFrontendError({
+        source: 'acp-store.connectMcpOAuth',
+        message: `OAuth token confirmed for server '${server.name}'`
+      })
       // Re-probe now that we have a token — should succeed.
       await get().probeMcpServer(id)
     } catch (err) {
@@ -4696,6 +4707,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     try {
       await acpApi.disconnectMcpOAuth(url)
       set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: false } }))
+      void logFrontendError({
+        source: 'acp-store.disconnectMcpOAuth',
+        message: `OAuth disconnect completed for server '${server.name}'`
+      })
       // Re-probe — should return authRequired again.
       await get().probeMcpServer(id)
     } catch (err) {

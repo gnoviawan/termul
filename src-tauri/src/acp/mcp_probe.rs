@@ -398,7 +398,17 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     // header so the probe succeeds without re-prompting. This is the
     // "connect once, use forever" path — after the OAuth flow completes and
     // the token is persisted, every subsequent probe loads and uses it.
-    let stored_token = crate::acp::mcp_oauth::get_valid_token(url).await.ok().flatten();
+    let stored_token = match crate::acp::mcp_oauth::get_valid_token(url).await {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::warn!(
+                server = %server.name,
+                transport,
+                "MCP probe: token lookup failed (url redacted): {e}"
+            );
+            None
+        }
+    };
     if let Some(ref token) = stored_token {
         config = config.auth_header(crate::acp::mcp_oauth::bearer_header(token));
     }
@@ -407,7 +417,10 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     // stored token. If we have a token, skip the pre-flight (it would send
     // an unauthenticated request, get 401, and wrongly return authRequired).
     if stored_token.is_none() {
-        if let Some(www_auth_header) = check_oauth_required(url).await {
+        // Forward the server's configured headers so a server that requires
+        // an API-key or tenant header (and returns a Bearer challenge when
+        // it is absent) is not misdetected as needing OAuth.
+        if let Some(www_auth_header) = check_oauth_required(url, &server.headers).await {
             if crate::acp::mcp_oauth::is_auth_required(&www_auth_header) {
                 tracing::info!(
                     server = %server.name,
@@ -453,7 +466,7 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
 /// reachable without auth (or unreachable for non-auth reasons). This avoids
 /// the rmcp worker swallowing the `AuthRequired` error into a generic
 /// "Transport channel closed".
-async fn check_oauth_required(url: &str) -> Option<String> {
+async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -470,7 +483,20 @@ async fn check_oauth_required(url: &str) -> Option<String> {
             "clientInfo": { "name": "termul-probe", "version": "0.1" }
         }
     });
-    let response = client.post(url).json(&body).send().await.ok()?;
+    let mut request = client.post(url).json(&body);
+    // Forward configured headers so the pre-flight matches what the real
+    // rmcp client would send (a server may return a Bearer challenge only
+    // when an API-key header is absent — sending it avoids a false
+    // authRequired).
+    for pair in headers {
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(pair.name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(&pair.value),
+        ) {
+            request = request.header(name, value);
+        }
+    }
+    let response = request.send().await.ok()?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         if let Some(header) = response.headers().get(reqwest::header::WWW_AUTHENTICATE) {
             if let Ok(value) = header.to_str() {

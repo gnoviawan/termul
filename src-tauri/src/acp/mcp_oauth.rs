@@ -94,8 +94,29 @@ pub fn store_token(server_url: &str, token: &StoredToken) -> Result<(), McpOAuth
         std::fs::create_dir_all(parent)
             .map_err(|e| McpOAuthError::Keychain(format!("create dir: {e}")))?;
     }
-    std::fs::write(&path, json)
-        .map_err(|e| McpOAuthError::Keychain(format!("write: {e}")))
+    // Create the token file with owner-only permissions (0600) on Unix so
+    // no other local account can read the bearer token. On non-Unix the
+    // default ACL still restricts to the creating user under a typical
+    // profile dir.
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| McpOAuthError::Keychain(format!("open: {e}")))?;
+        file.write_all(json.as_bytes())
+            .map_err(|e| McpOAuthError::Keychain(format!("write: {e}")))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, json)
+            .map_err(|e| McpOAuthError::Keychain(format!("write: {e}")))
+    }
 }
 
 pub fn delete_stored_token(server_url: &str) -> Result<(), McpOAuthError> {
@@ -122,12 +143,13 @@ fn token_file_path(server_url: &str) -> Result<std::path::PathBuf, McpOAuthError
         .map(std::path::PathBuf::from)
         .ok_or_else(|| McpOAuthError::Keychain("no data dir env var".to_string()))?;
     let dir = base.join("com.termul-manager.app").join("mcp-oauth");
-    // Hash the URL for a stable filename (avoids path-unsafe chars in URLs).
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    server_url.hash(&mut hasher);
-    let hash = format!("{:016x}", hasher.finish());
+    // Hash the normalized URL with a version-stable digest so filenames do
+    // not change across Rust releases (DefaultHasher has no stability
+    // guarantee) and trailing-slash variants (`https://x/mcp` vs
+    // `https://x/mcp/`) map to one file.
+    use sha2::{Digest, Sha256};
+    let normalized = server_url.trim_end_matches('/');
+    let hash = format!("{:x}", Sha256::digest(normalized.as_bytes()));
     Ok(dir.join(format!("{hash}.json")))
 }
 
@@ -208,7 +230,7 @@ async fn refresh_token(stored: &StoredToken) -> Result<StoredToken, McpOAuthErro
     Ok(StoredToken {
         access_token: tr.access_token().secret().to_string(),
         refresh_token: tr.refresh_token().map(|t| t.secret().to_string()).or_else(|| stored.refresh_token.clone()),
-        expires_at: tr.expires_in().map(|d| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)),
+        expires_at: tr.expires_in().map(|d| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)).or(stored.expires_at),
         client_id: stored.client_id.clone(),
         issuer: stored.issuer.clone(),
         server_url: stored.server_url.clone(),
@@ -232,25 +254,51 @@ pub async fn run_full_flow(server_url: &str, redirect_uri: &str, callback_url: S
         .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
     let access_token = state.get_access_token().await
         .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
-    let (client_id, issuer) = match &state {
+    let (client_id, refresh_token, expires_at) = match &state {
         OAuthState::Session(s) => {
             let c = s.auth_manager.get_credentials().await
                 .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
-            (c.0, server_url.to_string())
+            let refresh = c.1.as_ref().and_then(|tr| {
+                use oauth2::TokenResponse;
+                tr.refresh_token().map(|t| t.secret().to_string())
+            });
+            let exp = c.1.as_ref().and_then(|tr| {
+                use oauth2::TokenResponse;
+                tr.expires_in().map(|d| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|n| n.as_secs() + d.as_secs())
+                        .unwrap_or(0)
+                })
+            });
+            (c.0, refresh, exp)
         }
         OAuthState::Unauthorized(m) | OAuthState::Authorized(m) => {
             let c = m.get_credentials().await
                 .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
-            (c.0, server_url.to_string())
+            let refresh = c.1.as_ref().and_then(|tr| {
+                use oauth2::TokenResponse;
+                tr.refresh_token().map(|t| t.secret().to_string())
+            });
+            let exp = c.1.as_ref().and_then(|tr| {
+                use oauth2::TokenResponse;
+                tr.expires_in().map(|d| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|n| n.as_secs() + d.as_secs())
+                        .unwrap_or(0)
+                })
+            });
+            (c.0, refresh, exp)
         }
-        _ => (String::new(), server_url.to_string()),
+        _ => (String::new(), None, None),
     };
     let stored = StoredToken {
         access_token,
-        refresh_token: None,
-        expires_at: None,
+        refresh_token,
+        expires_at,
         client_id,
-        issuer,
+        issuer: server_url.to_string(),
         server_url: server_url.to_string(),
     };
     store_token(server_url, &stored)?;
@@ -353,5 +401,35 @@ mod tests {
         assert!(is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: Some(now - 1), client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
         assert!(!is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: Some(now + 3600), client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
         assert!(!is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: None, client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
+    }
+
+    #[test]
+    fn token_file_path_normalizes_trailing_slash() {
+        // Equivalent URLs (differing only by a trailing slash) MUST produce
+        // the same token file path so a probe and a connect that differ only
+        // by the trailing slash reuse the same stored token.
+        let a = token_file_path("https://x/mcp").unwrap();
+        let b = token_file_path("https://x/mcp/").unwrap();
+        assert_eq!(a, b, "trailing slash must normalize to the same file");
+    }
+
+    #[test]
+    fn expired_token_with_refresh_is_treatable_as_expired() {
+        // A token that is already expired and has a refresh_token must be
+        // reported as expired so `get_valid_token` attempts a refresh. This
+        // is the precondition for the refresh path being reachable at all.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = StoredToken {
+            access_token: "x".into(),
+            refresh_token: Some("r".into()),
+            expires_at: Some(now - 1),
+            client_id: "c".into(),
+            issuer: "i".into(),
+            server_url: "u".into(),
+        };
+        assert!(is_token_expired(&expired));
     }
 }

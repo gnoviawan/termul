@@ -1777,22 +1777,38 @@ fn inject_oauth_tokens(mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
         .map(|server| match server {
             McpServer::Http(mut http) => {
                 if !http.headers.iter().any(|h| h.name.eq_ignore_ascii_case("Authorization")) {
-                    if let Ok(Some(token)) = crate::acp::mcp_oauth::get_valid_token_blocking(&http.url) {
-                        http.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
-                            "Authorization",
-                            format!("Bearer {token}"),
-                        ));
+                    match crate::acp::mcp_oauth::get_valid_token_blocking(&http.url) {
+                        Ok(Some(token)) => {
+                            http.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
+                                "Authorization",
+                                format!("Bearer {token}"),
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!(
+                                "[mcp-oauth] token lookup failed for MCP server (url redacted): {e}"
+                            );
+                        }
                     }
                 }
                 McpServer::Http(http)
             }
             McpServer::Sse(mut sse) => {
                 if !sse.headers.iter().any(|h| h.name.eq_ignore_ascii_case("Authorization")) {
-                    if let Ok(Some(token)) = crate::acp::mcp_oauth::get_valid_token_blocking(&sse.url) {
-                        sse.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
-                            "Authorization",
-                            format!("Bearer {token}"),
-                        ));
+                    match crate::acp::mcp_oauth::get_valid_token_blocking(&sse.url) {
+                        Ok(Some(token)) => {
+                            sse.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
+                                "Authorization",
+                                format!("Bearer {token}"),
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!(
+                                "[mcp-oauth] token lookup failed for MCP server (url redacted): {e}"
+                            );
+                        }
                     }
                 }
                 McpServer::Sse(sse)

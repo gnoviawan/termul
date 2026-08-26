@@ -1035,6 +1035,7 @@ mod tests {
             None,
             false,
             false,
+            "http://127.0.0.1".to_string(),
         )
     }
 

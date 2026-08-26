@@ -84,6 +84,7 @@ pub fn router(
     store: Option<Arc<WebStore>>,
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
+    oauth_base_url: String,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -247,7 +248,7 @@ pub fn router(
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        oauth_base_url: format!("http://{}", "127.0.0.1"), // Updated at serve time
+        oauth_base_url,
     })
 }
 

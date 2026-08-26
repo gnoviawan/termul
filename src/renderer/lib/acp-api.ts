@@ -547,19 +547,49 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
 // --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
 
 /** Start the OAuth flow for an MCP server URL. On desktop, opens the system
- * browser and waits for the callback. On web, returns the auth URL to redirect
- * the browser to. Throws on failure (discovery, registration, timeout). */
+ * browser and waits for the callback (the Tauri command blocks until the
+ * token is stored). On web, opens a blank window first (preserves transient
+ * user activation for the popup), navigates it to the auth URL once returned,
+ * then polls the status endpoint until the token is stored. Throws on
+ * failure (discovery, registration, timeout). */
 export async function startMcpOAuth(serverUrl: string): Promise<void> {
   if (isTauriContext()) {
     await invoke('acp_mcp_oauth_start', { serverUrl })
-  } else {
-    // Web path: the server returns the auth URL; the caller redirects.
+    return
+  }
+  // Web path: open a blank window BEFORE the async request so the browser
+  // does not block the popup (transient user activation window). Navigate it
+  // once the auth URL is returned.
+  const popup = window.open('about:blank', '_blank', 'noopener')
+  if (!popup) {
+    throw new Error('Popup blocked — allow popups for this site to start OAuth')
+  }
+  let authUrl: string
+  try {
     const result = await webServerMcpOAuth.start(serverUrl)
     if (!result.success) {
       throw new Error(result.error ?? 'OAuth start failed')
     }
-    window.open(result.data.authUrl, '_blank', 'noopener')
+    authUrl = result.data.authUrl
+  } catch (err) {
+    popup.close()
+    throw err
   }
+  popup.location.href = authUrl
+  // Wait for OAuth completion by polling the status endpoint until the token
+  // is stored. The OAuth callback redirect processes on the server side; once
+  // `hasToken` is true, the flow is complete.
+  const POLL_INTERVAL_MS = 1000
+  const POLL_TIMEOUT_MS = 300_000 // 5 min — matches OAUTH_FLOW_TIMEOUT_SECS
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    const status = await webServerMcpOAuth.status(serverUrl)
+    if (status.success && status.data?.hasToken) {
+      return
+    }
+  }
+  throw new Error('OAuth flow timed out — user did not complete authorization in time')
 }
 
 /** Check whether a stored OAuth token exists for a server URL. */
@@ -571,15 +601,17 @@ export async function hasMcpOAuthToken(serverUrl: string): Promise<boolean> {
   return result.success && result.data ? result.data.hasToken : false
 }
 
-/** Delete the stored OAuth token for a server URL (the "Disconnect" action). */
+/** Delete the stored OAuth token for a server URL (the "Disconnect" action).
+ * On web, inspects the IpcResult and throws when `success: false`. On desktop,
+ * the Tauri invoke path propagates failures as before. */
 export async function disconnectMcpOAuth(serverUrl: string): Promise<void> {
   if (isTauriContext()) {
     await invoke('acp_mcp_oauth_disconnect', { serverUrl })
-  } else {
-    const result = await webServerMcpOAuth.disconnect(serverUrl)
-    if (!result.success) {
-      throw new Error(result.error ?? 'OAuth disconnect failed')
-    }
+    return
+  }
+  const result = await webServerMcpOAuth.disconnect(serverUrl)
+  if (!result.success) {
+    throw new Error(result.error ?? 'OAuth disconnect failed')
   }
 }
 
