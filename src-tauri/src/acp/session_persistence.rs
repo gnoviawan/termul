@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::acp::atomic_file;
-
+use crate::path_validation::strip_verbatim_prefix;
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 const INDEX_FILE: &str = "sessions.json";
 const METADATA_FILE: &str = "metadata.json";
@@ -326,15 +326,24 @@ impl SessionPersistence {
         &self,
         registration: SessionRegistration,
     ) -> Result<SessionMetadata> {
-        let cwd = registration
+        let canonical = registration
             .cwd
             .canonicalize()
             .map_err(SessionPersistenceError::Io)?;
-        if !cwd.is_dir() {
+        if !canonical.is_dir() {
             return Err(SessionPersistenceError::Io(io::Error::other(
                 "session cwd is not a directory",
             )));
         }
+        // `canonicalize()` prepends the `\\?\` verbatim prefix on Windows.
+        // Strip it so the persisted `cwd` stays tool-friendly (matches every
+        // other canonicalize call site via `strip_verbatim_prefix`). Without
+        // this, `session/resume` passes `\\?\E:\…` to the agent, whose cwd→dir
+        // sanitizer keeps the `?` → an illegal Windows folder name → `mkdir`
+        // fails with ENOENT and the resume is skipped (read-only transcript).
+        let cwd = strip_verbatim_prefix(&canonical.to_string_lossy()).into_owned();
+        // `canonical.is_dir()` already verified above; the stripped string
+        // refers to the same directory, so no second check is needed.
         let _guard = self.inner.registration_lock.lock().await;
         if self
             .inner
@@ -353,7 +362,7 @@ impl SessionPersistence {
             stable_agent_namespace: registration.stable_agent_namespace,
             runtime_agent_id: registration.runtime_agent_id,
             project_id: registration.project_id,
-            cwd: cwd.to_string_lossy().into_owned(),
+            cwd: cwd.clone(),
             title: None,
             title_source: None,
             created_at: now,
@@ -387,7 +396,7 @@ impl SessionPersistence {
         updated_at: Option<u64>,
     ) -> Result<SessionMetadata> {
         let session_id = registration.session_id.trim();
-        let cwd = registration.cwd.to_string_lossy();
+        let cwd = strip_verbatim_prefix(&registration.cwd.to_string_lossy()).into_owned();
         if session_id.is_empty() || cwd.trim().is_empty() {
             return Err(SessionPersistenceError::Io(io::Error::other(
                 "discovered session id and cwd are required",
@@ -437,9 +446,9 @@ impl SessionPersistence {
             storage_key,
             session_id: session_id.to_string(),
             stable_agent_namespace: registration.stable_agent_namespace,
-            runtime_agent_id: registration.runtime_agent_id,
             project_id: registration.project_id,
-            cwd: cwd.into_owned(),
+            runtime_agent_id: registration.runtime_agent_id,
+            cwd: cwd.clone(),
             title: normalized_title,
             title_source,
             created_at: now,
@@ -498,7 +507,7 @@ impl SessionPersistence {
             stable_agent_namespace: registration.stable_agent_namespace,
             runtime_agent_id: registration.runtime_agent_id,
             project_id: registration.project_id,
-            cwd: registration.cwd.to_string_lossy().into_owned(),
+            cwd: strip_verbatim_prefix(&registration.cwd.to_string_lossy()).into_owned(),
             title,
             title_source: None,
             created_at,
@@ -946,6 +955,16 @@ impl SessionPersistence {
                 .filter(|record| is_tool_event(&record.type_))
                 .count() as u64;
             metadata.last_seq = records.last().map_or(0, |record| record.seq);
+            // Repair a verbatim (`\\?\`) cwd persisted by an older build that
+            // did not strip the prefix after `canonicalize()`. The prefix
+            // breaks agent-side cwd→dir sanitization (`?` is illegal in
+            // Windows folder names), so `session/resume` fails with ENOENT.
+            // Stripping here + re-persisting below heals the entire index on
+            // the next startup without a dedicated migration.
+            let stripped = strip_verbatim_prefix(&metadata.cwd).into_owned();
+            if stripped != metadata.cwd {
+                metadata.cwd = stripped;
+            }
             // Agent subprocesses cannot survive a host restart. A session that
             // was still `Active` at shutdown has no live agent or writer to
             // restore, so mark it `Closed` before persisting: resume hooks
@@ -1623,6 +1642,64 @@ mod tests {
         assert_eq!(
             reopened.metadata("session-1").unwrap().storage_key,
             metadata.storage_key
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn register_session_strips_verbatim_cwd_prefix_on_windows() {
+        // `canonicalize()` prepends `\\?\` on Windows. The persisted `cwd`
+        // must be stripped so `session/resume` passes a tool-friendly path
+        // to the agent (whose cwd→dir sanitizer keeps `?` → illegal folder
+        // name → `mkdir` ENOENT → resume skipped). This test creates a real
+        // temp dir, canonicalizes it (so the verbatim prefix is present in
+        // the `PathBuf`), and asserts the persisted `cwd` has no prefix.
+        let root = temp_dir("verbatim-strip");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+        // `canonicalize()` yields `\\?\C:\…\cwd` on Windows.
+        let canonical_cwd = cwd.canonicalize().unwrap();
+        assert!(
+            canonical_cwd.to_string_lossy().starts_with(r"\\?\"),
+            "sanity: canonicalize should produce a verbatim prefix on Windows"
+        );
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+        let metadata = persistence
+            .register_session(SessionRegistration {
+                session_id: "session-verbatim".to_string(),
+                stable_agent_namespace: Some("config:test".to_string()),
+                runtime_agent_id: Some("runtime-1".to_string()),
+                project_id: Some("project-1".to_string()),
+                cwd: canonical_cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            !metadata.cwd.starts_with(r"\\?\"),
+            "persisted cwd must not carry the verbatim prefix, got: {}",
+            metadata.cwd
+        );
+        // `recover()` must heal a verbatim cwd persisted by an older build.
+        // Manually corrupt the metadata on disk, then reopen.
+        {
+            let dir = persistence
+                .session_dir(&metadata.storage_key)
+                .unwrap();
+            let metadata_path = dir.join(METADATA_FILE);
+            let mut corrupt = metadata.clone();
+            corrupt.cwd = format!(r"\\?\{}", corrupt.cwd);
+            let bytes = serde_json::to_vec_pretty(&corrupt).unwrap();
+            std::fs::write(&metadata_path, &bytes).unwrap();
+        }
+        persistence.shutdown().await.unwrap();
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        let healed = reopened.metadata("session-verbatim").unwrap();
+        assert!(
+            !healed.cwd.starts_with(r"\\?\"),
+            "recover() must strip a verbatim prefix from a legacy persisted cwd, got: {}",
+            healed.cwd
         );
         let _ = fs::remove_dir_all(root);
     }
