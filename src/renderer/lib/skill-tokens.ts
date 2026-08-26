@@ -423,3 +423,179 @@ export function removeCommandTokenBeforeCaret(
   const after = value.slice(caret)
   return { removed: true, value: `${before}${after}`, caret: start }
 }
+
+// ============================================================================
+// Inline file-mention pill token model
+// ============================================================================
+
+/**
+ * Inline file-mention pill sentinels. Distinct from the skill
+ * (`\uE000/\uE001`) and command (`\uE004/\uE005`) sentinels so the skill wire
+ * framer (`parseSkillSegments`), the skill timeline renderer, and
+ * `extractSkillNames` never see file tokens. The file pill is a real inline
+ * DOM node (a Tiptap `NodeView`), so — like the skill/command pills — there is
+ * no caret-alignment deficit to compensate: no padding block.
+ *
+ * A file token carries BOTH a display string (the filename/relPath shown in
+ * the pill) AND the absolute OS path (needed for the `resource_link` wire
+ * block), split by the unit separator `\u001F`:
+ * `\uE006<display>\u001F<absPath>\uE007`. The display string is the segment
+ * before the separator; the path is after. `parseFileSegments` splits on
+ * `\u001F` inside the token. The separator is non-whitespace, non-`@`/`/`, and
+ * invisible in raw text — it won't trip the mention/slash scanners.
+ */
+export const FILE_TOKEN_START = '\uE006'
+export const FILE_TOKEN_END = '\uE007'
+/**
+ * Unit separator (U+001F) splitting the display string from the absolute path
+ * inside a file token. Non-whitespace, non-printing, and not a sentinel used by
+ * any other pill system.
+ */
+export const FILE_TOKEN_SEP = '\u001F'
+
+/** A run of plain text or a single file token extracted from the value. */
+export type FileSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'file'; display: string; absPath: string; raw: string }
+
+/**
+ * Build a file token string for the given display name + absolute path. The
+ * display string is shown in the pill; the absolute path is resolved to a
+ * `file://` URI for the wire `resource_link` block at send time. No padding
+ * block — the file pill is a real DOM node.
+ */
+export function fileToken(display: string, absPath: string): string {
+  return `${FILE_TOKEN_START}${display}${FILE_TOKEN_SEP}${absPath}${FILE_TOKEN_END}`
+}
+
+/**
+ * Split a composer value into ordered text/file segments. Token boundaries are
+ * `\uE006<display>\u001F<absPath>\uE007`. Walks the RAW value independently of
+ * `parseSkillSegments` — file sentinels (`\uE006`) are not skill sentinels
+ * (`\uE000`), so the skill walk treats them as plain text (correct); this walk
+ * extracts the file tokens the skill walk leaves behind. Malformed tokens (no
+ * closing sentinel, no separator, empty display/path) are treated as plain
+ * text so a corrupted value never crashes the timeline renderer or wire framer.
+ */
+export function parseFileSegments(value: string): FileSegment[] {
+  const segments: FileSegment[] = []
+  let i = 0
+  let text = ''
+  while (i < value.length) {
+    if (value[i] === FILE_TOKEN_START) {
+      const end = value.indexOf(FILE_TOKEN_END, i + 1)
+      if (end === -1) {
+        // No closing sentinel — treat the rest as plain text.
+        text += value.slice(i)
+        break
+      }
+      const inner = value.slice(i + 1, end)
+      const sep = inner.indexOf(FILE_TOKEN_SEP)
+      if (sep === -1) {
+        // No separator — malformed token, treat as plain text.
+        text += value.slice(i, end + 1)
+        i = end + 1
+        continue
+      }
+      const display = inner.slice(0, sep)
+      const absPath = inner.slice(sep + 1)
+      if (display.length === 0 || absPath.length === 0) {
+        // Empty display or path — treat as plain text.
+        text += value.slice(i, end + 1)
+        i = end + 1
+        continue
+      }
+      if (text.length > 0) {
+        segments.push({ kind: 'text', text })
+        text = ''
+      }
+      segments.push({
+        kind: 'file',
+        display,
+        absPath,
+        raw: value.slice(i, end + 1)
+      })
+      i = end + 1
+    } else {
+      text += value[i]
+      i += 1
+    }
+  }
+  if (text.length > 0) segments.push({ kind: 'text', text })
+  return segments
+}
+
+/**
+ * Splice a file token into the value at `caret`, removing the `deleteBefore`
+ * chars immediately preceding the caret (the `@filter` text the mention menu
+ * clears). A trailing space is appended so the caret lands in plain text and
+ * the user can keep typing. No padding block — the file pill is a real DOM
+ * node. Returns the new value and the caret position to apply.
+ */
+export function insertFileToken(
+  value: string,
+  caret: number,
+  display: string,
+  absPath: string,
+  deleteBefore = 0
+): InsertTokenResult {
+  const start = Math.max(0, Math.min(caret - deleteBefore, value.length))
+  const end = Math.max(start, Math.min(caret, value.length))
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const token = fileToken(display, absPath)
+  const next = `${before}${token} ${after}`
+  // Caret lands right after the trailing space.
+  return { value: next, caret: before.length + token.length + 1 }
+}
+
+export type RemoveFileTokenResult =
+  | { removed: true; value: string; caret: number }
+  | { removed: false }
+
+/**
+ * Backspace semantics for the composer: when the caret is *immediately* after a
+ * file token (no selection), remove the whole token plus the trailing space
+ * the splicer appended, and place the caret where the token started. Tolerates
+ * the splicer's trailing space (caret may sit one char after the token end).
+ * Returns `removed:false` for the caller to fall back to the default one-char
+ * backspace. Parallel to `removeSkillTokenBeforeCaret`/`removeCommandTokenBeforeCaret`
+ * but without a padding block (files carry none).
+ */
+export function removeFileTokenBeforeCaret(
+  value: string,
+  caret: number
+): RemoveFileTokenResult {
+  if (caret <= 0 || caret > value.length) return { removed: false }
+  // Walk back from the caret over the optional trailing space to reach the
+  // token-end \uE007.
+  let end = caret
+  if (end - 1 >= 0 && value[end - 1] === ' ') {
+    end -= 1
+  }
+  if (end - 1 < 0 || value[end - 1] !== FILE_TOKEN_END) return { removed: false }
+  const tokenEnd = end - 1
+  const start = value.lastIndexOf(FILE_TOKEN_START, tokenEnd - 1)
+  if (start === -1) return { removed: false }
+  const inner = value.slice(start + 1, tokenEnd)
+  const sep = inner.indexOf(FILE_TOKEN_SEP)
+  if (sep === -1) return { removed: false }
+  const display = inner.slice(0, sep)
+  const absPath = inner.slice(sep + 1)
+  if (display.length === 0 || absPath.length === 0) return { removed: false }
+  const before = value.slice(0, start)
+  const after = value.slice(caret)
+  return { removed: true, value: `${before}${after}`, caret: start }
+}
+
+/**
+ * Replace each file token with `(<display>)` for the wire prompt's user-text
+ * portion. Inline duplicates are preserved (the same file may appear at
+ * multiple positions). Non-token text is passed through verbatim. Mirrors
+ * `replaceSkillTokensInline` for skills.
+ */
+export function replaceFileTokensInline(value: string): string {
+  return parseFileSegments(value)
+    .map((s) => (s.kind === 'file' ? `(${s.display})` : s.text))
+    .join('')
+}

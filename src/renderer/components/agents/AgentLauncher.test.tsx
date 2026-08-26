@@ -20,7 +20,7 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { skillToken } from '@/lib/skill-tokens'
+import { fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
@@ -1435,6 +1435,50 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
     expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('missing a path'))
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
     expect(mockHideAgentLauncher).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentLauncher file pills (inline tokens)', () => {
+  it('renders an inline file chip and sends a resource_link block on launch', async () => {
+    renderLauncher()
+    await screen.findByLabelText('Agent prompt')
+
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`fix this ${ft} `)
+
+    // The file pill renders inline (the FileChip name span shows "auth.ts").
+    await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The optimistic syncBlocks carry the DISPLAY (token) text so the chat
+    // timeline renders inline file pills.
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [{ type: 'text', text: `fix this ${ft} ` }]
+        })
+      )
+    )
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    // The real send (finalize) carries the WIRE text (tokens → `(display)`)
+    // PLUS a `resource_link` block for the file's path.
+    await waitFor(() => {
+      const blocks = mockFinalizeChatLaunch.mock.calls[0]?.[0]?.initialBlocks as
+        | Array<{ type: string; text?: string; uri?: string; name?: string; mimeType?: string }>
+        | undefined
+      expect(blocks).toBeDefined()
+      expect(blocks!).toEqual([
+        { type: 'text', text: 'fix this (auth.ts)' },
+        {
+          type: 'resource_link',
+          uri: 'file:///work/src/auth.ts',
+          name: 'auth.ts',
+          mimeType: 'text/typescript'
+        }
+      ])
+    })
   })
 })
 

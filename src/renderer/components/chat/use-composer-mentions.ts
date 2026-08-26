@@ -2,6 +2,7 @@ import type { SearchFileHit } from '@shared/types/ipc.types'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
+import { insertFileToken } from '@/lib/skill-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
@@ -11,8 +12,7 @@ import {
   activeMentionToken,
   buildMentionSections,
   type MentionMatch,
-  type MentionSection,
-  spliceMentionToken
+  type MentionSection
 } from './mention-menu-model'
 
 const MAX_RESULTS = 100
@@ -273,12 +273,24 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     ): { value: string; caret: number } | null => {
       const token = activeMentionToken(value, caret)
       if (!token) return null
-      const nextValue = spliceMentionToken(value, token)
+      // Splice a file token IN at the caret (instead of hoisting to the
+      // attachment bar). Removes the `@filter` text, inserts the token, and
+      // appends a trailing space so the caret lands in plain text. The token
+      // IS the staging — the wire builder extracts file paths from tokens at
+      // send time. `onStageRef` still fires so the host wrapper can record the
+      // mention in recents (the host wrapper no longer calls `addFileRef`).
+      const { value: nextValue, caret: nextCaret } = insertFileToken(
+        value,
+        token.end,
+        match.name,
+        match.absPath,
+        token.end - token.at
+      )
       setMenuOpen(false)
       setFilter('')
       setMatches([])
       onStageRef.current(match)
-      return { value: nextValue, caret: token.at }
+      return { value: nextValue, caret: nextCaret }
     },
     []
   )

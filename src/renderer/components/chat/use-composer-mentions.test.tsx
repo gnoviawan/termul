@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fileToken } from '@/lib/skill-tokens'
 import type { MentionMatch } from './mention-menu-model'
 import { useComposerMentions } from './use-composer-mentions'
 
@@ -332,7 +332,7 @@ describe('useComposerMentions', () => {
     )
   })
 
-  it('select splices the @token, stages the file-ref, and closes the menu', async () => {
+  it('select splices a file token IN at the caret (no hoist), records the recent, and closes the menu', async () => {
     const { result, onStageFileRef } = renderMentions()
     act(() => result.current.update('@rea', 4))
     await advance(90)
@@ -345,7 +345,15 @@ describe('useComposerMentions', () => {
     act(() => {
       outcome = result.current.select('@rea', 4, picked)
     })
-    expect(outcome).toEqual({ value: '', caret: 0 })
+    // The @rea filter text is removed and a file token is spliced IN at the
+    // caret (the token carries display + absPath split by the unit separator).
+    // The caret lands after the token + trailing space.
+    const expectedToken = fileToken('auth.ts', '/work/src/auth.ts')
+    expect(outcome).toEqual({
+      value: `${expectedToken} `,
+      caret: expectedToken.length + 1
+    })
+    // onStageFileRef still fires (for recents), but the host no longer hoists.
     expect(onStageFileRef).toHaveBeenCalledWith(picked)
     expect(result.current.menuOpen).toBe(false)
   })

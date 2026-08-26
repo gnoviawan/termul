@@ -31,7 +31,7 @@ import { ConfigChip, ModeChip, SelectorModal } from '@/components/chat/AgentHead
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { ComposerPill } from '@/components/chat/ComposerPill'
-import { attachmentToBlock } from '@/components/chat/chat-attachments'
+import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -265,7 +265,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     attachments,
     addFiles,
     pickFiles,
-    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,
@@ -282,7 +281,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     disabled: composerDisabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
-      addFileRef(m)
       pushMentionRecent(m)
     }
   })
@@ -926,7 +924,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       launchInFlightRef.current = false
       return
     }
-    const { wireWithCommand, displayWithCommand } = parts
+    const { wireWithCommand, displayWithCommand, fileBlocks } = parts
 
     // CAP-3: when worktree mode is selected, create the isolated worktree
     // BEFORE opening the chat placeholder so the agent's cwd is the worktree
@@ -1155,6 +1153,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         } else if (wireTrimmed.length > 0) {
           blocks.push({ type: 'text', text: wireWithCommand })
         }
+        // File-mention `resource_link` blocks append to the wire only — the
+        // display keeps the raw token text so the timeline renders inline
+        // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
+        blocks.push(...fileBlocks)
+        const wireBlocks = dedupeAttachmentBlocks(blocks)
 
         const liveStore = useAcpStore.getState()
         let realId = sessionId
@@ -1167,7 +1170,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             mcpServers: undefined,
             pending: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null,
             initialText: null,
-            initialBlocks: blocks.length > 0 ? blocks : null,
+            initialBlocks: wireBlocks.length > 0 ? wireBlocks : null,
             adoptSession: (from, to) => {
               useWorkspaceStore.getState().remapAgentChatSession(from, to, paneSnapshot)
             },
@@ -1179,8 +1182,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             realId,
             hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
           )
-          if (blocks.length > 0) {
-            await liveStore.sendPromptBlocks(realId, blocks, {
+          if (wireBlocks.length > 0) {
+            await liveStore.sendPromptBlocks(realId, wireBlocks, {
               skipUserAppend: seededOptimistic
             })
           }

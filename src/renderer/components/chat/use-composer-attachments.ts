@@ -20,7 +20,6 @@ import {
   type PendingAttachment,
   uint8ToBase64
 } from './chat-attachments'
-import type { MentionMatch } from './mention-menu-model'
 
 function attachmentId(): string {
   return `att-${randomUUID()}`
@@ -222,8 +221,6 @@ export interface ComposerAttachments {
   addFiles: (files: FileList | File[]) => Promise<void>
   /** Picker channel (OS file dialog): real filesystem paths. */
   pickFiles: () => Promise<void>
-  /** Mention channel (@-picker): stage a `file-ref` by absolute path. */
-  addFileRef: (match: MentionMatch) => void
   /** Paste handler for the composer — images from clipboard, incl. screenshots.
    *  Accepts the DOM `ClipboardEvent` the Tiptap editor's `handlePaste` editorProp
    *  passes (the pre-refactor textarea's React event was structurally compatible;
@@ -377,32 +374,6 @@ export function useComposerAttachments(opts: {
     if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
   }, [disabled, imageCapable, addFiles])
 
-  /**
-   * Stage a `file-ref` attachment from an @-mention pick (ADR 0003). The
-   * attachment is staged synchronously so it is send-safe immediately; for
-   * images a thumbnail is read in the background and patched onto the card.
-   */
-  const addFileRef = useCallback(
-    (match: MentionMatch) => {
-      if (disabled) return
-      const id = attachmentId()
-      const name = match.name
-      const mimeType = guessMimeType(name)
-      setAttachments((prev) => [
-        ...prev,
-        { kind: 'file-ref', id, name, mimeType, path: match.absPath }
-      ])
-      if (isImageMime(mimeType)) {
-        void (async () => {
-          const previewUrl = await readThumbnail(match.absPath, mimeType)
-          if (previewUrl) {
-            setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, previewUrl } : a)))
-          }
-        })()
-      }
-    },
-    [disabled]
-  )
 
   const handlePaste = useCallback(
     (e: ClipboardEvent) => {
@@ -486,7 +457,6 @@ export function useComposerAttachments(opts: {
     attachments,
     addFiles,
     pickFiles,
-    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,

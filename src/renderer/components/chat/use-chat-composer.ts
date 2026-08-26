@@ -2,17 +2,25 @@ import type { Editor } from '@tiptap/core'
 import type { MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef } from 'react'
 import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
-import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type {
+  AvailableCommand,
+  ContentBlock,
+  SessionConfigOption,
+  SessionModeState
+} from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import {
   extractCommandNames,
   extractSkillNames,
   insertCommandToken,
   insertSkillToken,
+  parseFileSegments,
+  replaceFileTokensInline,
   SKILL_TOKEN_START,
   stripAllCommandTokens
 } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
+import { attachmentToBlock, guessMimeType } from './chat-attachments'
 import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { SlashMenuHandle } from './SlashCommandMenu'
 import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
@@ -111,7 +119,8 @@ export interface ChatPromptParts {
   /** Resolved skills with their SKILL.md paths (for the wire header). */
   skills: Array<{ name: string; path: string }>
   hasSkills: boolean
-  /** Wire text dispatched to the agent (skills framed by path, tokens → `(name)`). */
+  /** Wire text dispatched to the agent (skills framed by path, tokens → `(name)`,
+   * file tokens → `(display)`). */
   wireText: string
   /** Display text stored in the optimistic user message (raw token value). */
   displayText: string
@@ -121,6 +130,12 @@ export interface ChatPromptParts {
   displayWithCommand: string
   wireTrimmed: string
   displayTrimmed: string
+  /**
+   * `resource_link` content blocks for each unique file mention (by absPath).
+   * Hosts append these to the wire blocks (display keeps the token text so
+   * the timeline renders inline file pills). Deduped by path.
+   */
+  fileBlocks: ContentBlock[]
 }
 
 export interface UseChatComposerResult {
@@ -361,7 +376,33 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       throw new Error(`Skill '${missingPath.name}' is missing a path`)
     }
     const hasSkills = resolvedSkills.length > 0
-    const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDecommanded)
+    // Extract inline file-mention tokens and build a `resource_link` block for
+    // each unique file (by absPath). The display text keeps the raw tokens so
+    // the timeline renders inline file pills; the wire text replaces each
+    // token with `(display)` so the agent sees a readable reference alongside
+    // the `resource_link` block carrying the real path.
+    const fileSegments = parseFileSegments(valueDecommanded)
+    const fileBlocks: ContentBlock[] = []
+    const seenPaths = new Set<string>()
+    for (const seg of fileSegments) {
+      if (seg.kind === 'file' && !seenPaths.has(seg.absPath)) {
+        seenPaths.add(seg.absPath)
+        fileBlocks.push(
+          attachmentToBlock({
+            kind: 'file-ref',
+            id: seg.absPath,
+            name: seg.display,
+            mimeType: guessMimeType(seg.display),
+            path: seg.absPath
+          })
+        )
+      }
+    }
+    // Replace file tokens with `(display)` for the wire user-text portion
+    // (mirrors `replaceSkillTokensInline` for skills). Applied BEFORE the
+    // skill framer so the skill framing header wraps the de-filed text.
+    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
     const displayText = valueDecommanded
     const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
     const displayWithCommand = commandName ? `/${commandName} ${displayText}` : displayText
@@ -373,7 +414,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       wireWithCommand,
       displayWithCommand,
       wireTrimmed: wireWithCommand.trim(),
-      displayTrimmed: displayWithCommand.trim()
+      displayTrimmed: displayWithCommand.trim(),
+      fileBlocks
     }
   }, [value, skills])
 

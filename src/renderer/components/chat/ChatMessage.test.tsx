@@ -3,11 +3,13 @@ import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { skillToken } from '@/lib/skill-tokens'
+import { fileToken, skillToken } from '@/lib/skill-tokens'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
 
 const T = skillToken
+
+const FT = fileToken
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
 const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
@@ -383,6 +385,59 @@ describe('ChatMessage', () => {
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No chip rendered: the chip's Sparkles icon is absent.
       expect(container.querySelector('.lucide-sparkles')).toBeNull()
+    })
+  })
+
+  describe('user message with inline file chips', () => {
+    function userMessage(text: string): ChatMessageType {
+      return {
+        id: 'user-1',
+        role: 'user',
+        blocks: [{ type: 'text', text }],
+        streaming: false,
+        timestamp: 0
+      }
+    }
+
+    it('renders inline file chips for token text in a user bubble', () => {
+      const text = `fix this ${FT('auth.ts', '/work/src/auth.ts')} bug`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      // The file chip name renders as a visible inline pill; the File icon
+      // (lucide-file) is the chip-specific marker.
+      expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      // The plain text segments render too.
+      expect(screen.getByText(/fix this/)).toBeInTheDocument()
+      expect(screen.getByText(/bug/)).toBeInTheDocument()
+    })
+
+    it('renders plain user text verbatim (no chip parsing) when there are no tokens', () => {
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage('just plain text')} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('just plain text')).toBeInTheDocument()
+      // No file chip rendered: the File icon is absent.
+      expect(container.querySelector('.lucide-file')).toBeNull()
+    })
+
+    it('renders file + skill chips together (both inline, visually distinct)', () => {
+      const text = `use ${T('git-worktree')} on ${FT('auth.ts', '/work/src/auth.ts')}`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('git-worktree')).toBeInTheDocument()
+      expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      // Both icons present — skill (Sparkles) + file (File).
+      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
+      expect(container.querySelector('.lucide-file')).not.toBeNull()
     })
   })
 })

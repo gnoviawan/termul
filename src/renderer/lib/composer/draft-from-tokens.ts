@@ -13,8 +13,15 @@
  * crashes the editor. Unparseable segments become plain text (the spec's
  * "Resume draft" fallback: a draft always loads, even if partially garbled).
  */
-import { CMD_TOKEN_END, CMD_TOKEN_START, parseSkillSegments } from '@/lib/skill-tokens'
-import { CMD_PILL_NODE, SKILL_PILL_NODE } from './doc-to-prompt'
+import {
+  CMD_TOKEN_END,
+  CMD_TOKEN_START,
+  FILE_TOKEN_END,
+  FILE_TOKEN_SEP,
+  FILE_TOKEN_START,
+  parseSkillSegments
+} from '@/lib/skill-tokens'
+import { CMD_PILL_NODE, FILE_PILL_NODE, SKILL_PILL_NODE } from './doc-to-prompt'
 
 interface PmDocJSON {
   type: 'doc'
@@ -40,6 +47,7 @@ type ComposerSegment =
   | { kind: 'text'; text: string }
   | { kind: 'skill'; name: string }
   | { kind: 'command'; name: string }
+  | { kind: 'file'; display: string; absPath: string }
 
 /**
  * Split a composer value into ordered text/skill/command segments. Delegates
@@ -64,8 +72,11 @@ function parseComposerSegments(value: string): ComposerSegment[] {
       segments.push({ kind: 'skill', name: seg.name })
       continue
     }
-    // Text segment: walk for command tokens (\uE004<name>\uE005). Command
-    // tokens carry no padding block (the command pill is a real DOM node).
+    // Text segment: walk for command tokens (\uE004<name>\uE005) and file
+    // tokens (\uE006<display>\u001F<absPath>\uE007). Both carry no padding
+    // block (the pills are real DOM nodes). File tokens are not skill
+    // sentinels, so `parseSkillSegments` leaves them in the text segments
+    // alongside command tokens — we walk for both here.
     let i = 0
     let text = ''
     while (i < seg.text.length) {
@@ -88,6 +99,35 @@ function parseComposerSegments(value: string): ComposerSegment[] {
           text = ''
         }
         segments.push({ kind: 'command', name })
+        i = end + 1
+      } else if (seg.text[i] === FILE_TOKEN_START) {
+        const end = seg.text.indexOf(FILE_TOKEN_END, i + 1)
+        if (end === -1) {
+          // No closing sentinel — treat the rest as plain text.
+          text += seg.text.slice(i)
+          break
+        }
+        const inner = seg.text.slice(i + 1, end)
+        const sep = inner.indexOf(FILE_TOKEN_SEP)
+        if (sep === -1) {
+          // No separator — malformed, treat as plain text.
+          text += seg.text.slice(i, end + 1)
+          i = end + 1
+          continue
+        }
+        const display = inner.slice(0, sep)
+        const absPath = inner.slice(sep + 1)
+        if (display.length === 0 || absPath.length === 0) {
+          // Empty display/path — treat as plain text.
+          text += seg.text.slice(i, end + 1)
+          i = end + 1
+          continue
+        }
+        if (text.length > 0) {
+          segments.push({ kind: 'text', text })
+          text = ''
+        }
+        segments.push({ kind: 'file', display, absPath })
         i = end + 1
       } else {
         text += seg.text[i]
@@ -130,6 +170,13 @@ export function draftFromTokens(
       paragraphs.at(-1)!.push({
         type: CMD_PILL_NODE,
         attrs: { name: seg.name }
+      })
+      continue
+    }
+    if (seg.kind === 'file') {
+      paragraphs.at(-1)!.push({
+        type: FILE_PILL_NODE,
+        attrs: { display: seg.display, absPath: seg.absPath }
       })
       continue
     }

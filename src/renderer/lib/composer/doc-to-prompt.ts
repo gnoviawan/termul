@@ -33,6 +33,9 @@ import type { Node as PmNode } from '@tiptap/pm/model'
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
+  FILE_TOKEN_END,
+  FILE_TOKEN_SEP,
+  FILE_TOKEN_START,
   SKILL_PAD_CHAR,
   SKILL_PAD_END,
   SKILL_PAD_START,
@@ -55,6 +58,15 @@ export const SKILL_PILL_NODE = 'skillPill'
 export const CMD_PILL_NODE = 'commandPill'
 
 /**
+ * The file-mention pill node type name. Kept in one place so the
+ * (de)serializers and the `FilePill` extension agree. Distinct from
+ * `SKILL_PILL_NODE`/`CMD_PILL_NODE` so the serializer emits the file sentinel
+ * pair (`\uE006/\uE007`) — invisible to `parseSkillSegments` (skill-only) and
+ * the command walk.
+ */
+export const FILE_PILL_NODE = 'filePill'
+
+/**
  * The fixed padding run re-emitted after every pill token to preserve the
  * on-disk draft schema (`\uE002..\uE003`). A single FIGURE SPACE (U+2007) — the
  * content is not load-bearing (the pill is a real DOM node, so the padding no
@@ -65,7 +77,7 @@ export const CMD_PILL_NODE = 'commandPill'
 export const SKILL_PAD_DEFAULT = SKILL_PAD_CHAR
 
 export interface DocSegment {
-  kind: 'text' | 'pill' | 'commandPill'
+  kind: 'text' | 'pill' | 'commandPill' | 'filePill'
   /** Visible text for a `text` segment; the padded token (`\uE000<name>\uE001\uE002<pad>\uE003`)
    * for a `pill` segment; the command token (`\uE004<name>\uE005`) for a
    * `commandPill` segment. */
@@ -106,7 +118,7 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
       block.forEach((node, offset) => {
         const docFrom = blockOffset + 1 + offset
         let displayText = ''
-        let kind: 'text' | 'pill' | 'commandPill' = 'text'
+        let kind: 'text' | 'pill' | 'commandPill' | 'filePill' = 'text'
         if (node.isText) {
           displayText = node.text ?? ''
           blockEndedInHardBreak = false
@@ -126,6 +138,18 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
           // / timeline renderer never see command tokens.
           displayText = `${CMD_TOKEN_START}${name}${CMD_TOKEN_END}`
           kind = 'commandPill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === FILE_PILL_NODE) {
+          const display = String(node.attrs.display ?? '')
+          const absPath = String(node.attrs.absPath ?? '')
+          // File pill: no padding block (the pill is a real DOM node). The
+          // sentinel pair is distinct from skill/command sentinels so the
+          // skill wire framer / timeline renderer / command walk never see
+          // file tokens. The token carries display + absPath split by the
+          // unit separator `\u001F` so the wire builder can resolve the path
+          // at send time without an external lookup map.
+          displayText = `${FILE_TOKEN_START}${display}${FILE_TOKEN_SEP}${absPath}${FILE_TOKEN_END}`
+          kind = 'filePill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'
@@ -198,7 +222,8 @@ export function docOffsetToDisplayOffset(doc: PmNode, docOffset: number): number
   for (const seg of segments) {
     if (docOffset < seg.docTo) {
       if (docOffset <= seg.docFrom) return seg.displayFrom
-      if (seg.kind === 'pill' || seg.kind === 'commandPill') return seg.displayFrom
+      if (seg.kind === 'pill' || seg.kind === 'commandPill' || seg.kind === 'filePill')
+        return seg.displayFrom
       return seg.displayFrom + (docOffset - seg.docFrom)
     }
   }
@@ -227,7 +252,8 @@ export function displayOffsetToDocOffset(doc: PmNode, displayOffset: number): nu
       // the display newline belongs at the end of the preceding paragraph.
       if (seg.docFrom === seg.docTo) return Math.max(0, seg.docFrom - 1)
       if (displayOffset <= seg.displayFrom) return seg.docFrom
-      if (seg.kind === 'pill' || seg.kind === 'commandPill') return seg.docTo
+      if (seg.kind === 'pill' || seg.kind === 'commandPill' || seg.kind === 'filePill')
+        return seg.docTo
       return seg.docFrom + (displayOffset - seg.displayFrom)
     }
   }

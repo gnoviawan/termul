@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { commandToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -519,17 +519,11 @@ describe('ChatInputBar file mentions', () => {
     mockIsTauri.mockReturnValue(false)
   })
 
-  it('stages a selected @ file and sends it as a resource link block', async () => {
-    const onSendBlocks = vi.fn()
-    renderInputBar({ onSendBlocks })
-
-    setComposerValue('fix @auth')
-
-    // Debounce (90ms for >=3-char query) then the ripgrep stream starts.
+  /** Drive the ripgrep stream: advance the debounce, emit a batch + done. */
+  async function driveStream(files: Array<{ path: string; ignored: boolean }>): Promise<void> {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(90)
     })
-
     const batch = batchCb.current as unknown as
       | ((e: {
           searchId: string
@@ -538,10 +532,7 @@ describe('ChatInputBar file mentions', () => {
         }) => void)
       | null
     const sid = mockStreamApi.searchFileNamesStreamStart.mock.calls[0]?.[0] as string
-    batch?.({
-      searchId: sid,
-      files: [{ path: 'src/auth.ts', ignored: false }]
-    })
+    batch?.({ searchId: sid, files })
     const done = doneCb.current as unknown as
       | ((e: {
           searchId: string
@@ -551,32 +542,123 @@ describe('ChatInputBar file mentions', () => {
           error?: string
         }) => void)
       | null
-    done?.({ searchId: sid, truncated: false, totalFiles: 1 })
-
-    // Switch back to real timers so `waitFor` can poll for the post-select /
-    // send async effects.
+    done?.({ searchId: sid, truncated: false, totalFiles: files.length })
     vi.useRealTimers()
     await act(async () => {})
+  }
 
-    const option = screen.getByRole('option', { name: /auth\.ts/ })
-    fireEvent.mouseDown(option)
+  it('renders an inline FileChip on @ file pick (not in the attachment bar)', async () => {
+    renderInputBar()
 
-    await waitFor(() => expect(getComposerValue()).toBe('fix '))
-    expect(screen.getByText('auth.ts')).toBeInTheDocument()
+    setComposerValue('fix @auth')
+    await driveStream([{ path: 'src/auth.ts', ignored: false }])
+
+    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+
+    // The @filter text is removed and a file token is spliced IN at the caret.
+    // The FileChip renders inline (the file pill's name span shows "auth.ts").
+    await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
+    const value = getComposerValue()
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    expect(value).toBe(`fix ${ft} `)
+
+    // NO entry in the attachment bar (the mention did not hoist to
+    // AttachmentPreviewGroup — only drag/drop/paste/OS-picker files appear
+    // there). The file exists only as an inline pill in the editor.
+    const removeButtons = screen.queryAllByRole('button', { name: /Remove / })
+    expect(removeButtons).toHaveLength(0)
+  })
+
+  it('sends the wire text + resource_link block on submit (display keeps tokens)', async () => {
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    setComposerValue('fix @auth')
+    await driveStream([{ path: 'src/auth.ts', ignored: false }])
+    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    await waitFor(() => {
+      // Wire: text with tokens replaced by (display) + resource_link block.
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [
+          { type: 'text', text: 'fix (auth.ts)' },
+          {
+            type: 'resource_link',
+            uri: 'file:///work/src/auth.ts',
+            name: 'auth.ts',
+            mimeType: 'text/typescript'
+          }
+        ],
+        // Display: raw token text so the timeline renders an inline FileChip.
+        [{ type: 'text', text: `fix ${ft} ` }]
+      )
+    })
+    // The composer value is cleared after send.
+    expect(getComposerValue()).toBe('')
+  })
+
+  it('dedupes the same file mentioned twice into one resource_link block', async () => {
+    vi.useRealTimers()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    // Splice two file tokens for the same path directly into the editor value.
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`${ft} and again ${ft} `)
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
-      expect(onSendBlocks).toHaveBeenCalledWith([
-        { type: 'text', text: 'fix' },
-        {
-          type: 'resource_link',
-          uri: 'file:///work/src/auth.ts',
-          name: 'auth.ts',
-          mimeType: 'text/typescript'
-        }
-      ])
+      const blocks = onSendBlocks.mock.calls[0]?.[0] as Array<{
+        type: string
+        uri?: string
+      }> | undefined
+      expect(blocks).toBeDefined()
+      const resourceLinks = blocks!.filter(
+        (b) => b.type === 'resource_link' && b.uri === 'file:///work/src/auth.ts'
+      )
+      expect(resourceLinks).toHaveLength(1)
     })
+  })
+
+  it('renders a file pill + skill pill together (visually distinct)', async () => {
+    vi.useRealTimers()
+    mockSkills.current = [
+      { name: 'git-worktree', description: 'Isolated worktree', scope: 'project', path: '/home/u/.agents/skills/git-worktree/SKILL.md' }
+    ]
+    renderInputBar()
+
+    const st = skillToken('git-worktree', SKILL_PAD_DEFAULT)
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`use ${st} on ${ft} `)
+
+    // Both pills render inline with their respective chip names.
+    await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
+    expect(screen.getByText('auth.ts')).toBeInTheDocument()
+    // The skill chip's Sparkles icon + the file chip's File icon both present.
+    expect(document.querySelector('.lucide-sparkles')).not.toBeNull()
+    expect(document.querySelector('.lucide-file')).not.toBeNull()
+  })
+
+  it('backspace removes a whole file pill + trailing space', async () => {
+    vi.useRealTimers()
+    renderInputBar()
+    // Wait for the Tiptap editor to mount (useEditor initializes in an effect).
+    await waitFor(() => expect(document.querySelector('[data-composer-editor="true"]')).not.toBeNull())
+
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`fix ${ft} `)
+    // Place the caret right after the trailing space.
+    setComposerCaret(`fix ${ft} `.length)
+
+    pressComposerKey('Backspace')
+
+    // The whole file token + trailing space is removed; the value is "fix ".
+    await waitFor(() => expect(getComposerValue()).toBe('fix '))
   })
 })
 
