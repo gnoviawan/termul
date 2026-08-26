@@ -85,6 +85,21 @@ pub async fn oauth_start(
     ) {
         return Json(err);
     }
+    // Restrict OAuth discovery to a configured MCP server URL so a web
+    // client cannot make the host probe an attacker-selected internal
+    // service. Resolve the URL against the persisted MCP server registry
+    // (`.termul/mcp-servers.json`) — reject if no enabled HTTP/SSE entry
+    // matches.
+    let project_root = state.project_root.read().clone();
+    if !is_authorized_mcp_server_url(&project_root, &request.server_url).await {
+        log::warn!(
+            "[mcp-oauth] web flow start rejected: server URL not in authorized registry (url redacted)"
+        );
+        return Json(IpcBody::err(
+            "server URL is not a configured MCP server".to_string(),
+            "UNAUTHORIZED_SERVER_URL".to_string(),
+        ));
+    }
     let redirect_uri = format!(
         "{}/oauth/callback",
         state.oauth_base_url.trim_end_matches('/')
@@ -245,6 +260,33 @@ pub async fn oauth_disconnect(
             Json(IpcBody::err(e.to_string(), "OAUTH_DISCONNECT_FAILED".to_string()))
         }
     }
+}
+
+/// Check whether the given `server_url` matches an enabled HTTP/SSE entry in
+/// the persisted MCP server registry (`{project_root}/.termul/mcp-servers.json`).
+/// This prevents a web client from using the OAuth start endpoint to make the
+/// host discover OAuth metadata for an attacker-selected URL.
+async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url: &str) -> bool {
+    let path =
+        crate::web::mcp_servers_api::registry_path(project_root);
+    let Ok(bytes) = tokio::fs::read(&path).await else {
+        return false;
+    };
+    let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes) else {
+        return false;
+    };
+    let normalized = server_url.trim_end_matches('/');
+    entries.iter().any(|entry| {
+        let r#type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let enabled = entry
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        enabled
+            && (r#type == "http" || r#type == "sse")
+            && url.trim_end_matches('/') == normalized
+    })
 }
 
 /// Discover metadata, register a client (PKCE), and build the authorization URL.
