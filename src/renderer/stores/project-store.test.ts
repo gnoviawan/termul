@@ -84,11 +84,14 @@ describe('project-store', () => {
       expect(newProject.id).toBeTruthy()
     })
 
-    it('should set default gitBranch to main', () => {
+    it('should omit gitBranch on creation (auto-detected on activation)', () => {
       const { addProject } = useProjectStore.getState()
       const newProject = addProject('Test', 'blue')
 
-      expect(newProject.gitBranch).toBe('main')
+      // No stale hardcoded 'main' default — the status bar used to show 'main'
+      // before the real branch was detected. `useProjectGitBranch` now seeds
+      // the actual HEAD branch on project activation.
+      expect(newProject.gitBranch).toBeUndefined()
     })
 
     it('should auto-select the new project as active', () => {

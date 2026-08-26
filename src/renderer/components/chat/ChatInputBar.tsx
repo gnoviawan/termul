@@ -154,7 +154,7 @@ export function ChatInputBar({
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
-  const { templateId: agentTemplateId } = useAgentIdentity(session.agentId)
+  const { templateId: agentTemplateId, icon: agentIcon } = useAgentIdentity(session.agentId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -516,7 +516,12 @@ export function ChatInputBar({
       searchable
       maxVisibleOptions={5}
       leading={
-        <AgentGlyph templateId={agentTemplateId} size={13} className="text-muted-foreground" />
+        <AgentGlyph
+          templateId={agentTemplateId}
+          icon={agentIcon}
+          size={13}
+          className="text-muted-foreground"
+        />
       }
       onSelect={(valueId) =>
         modelSource === 'models' ? onSetModel(valueId) : onSetConfig(modelOption.id, valueId)

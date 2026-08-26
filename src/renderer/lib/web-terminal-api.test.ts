@@ -59,7 +59,8 @@ class FakeWebSocket {
           cols: 80,
           rows: 24,
           latestSeq: (req.payload.lastSeq as number) ?? 0,
-          gap: false
+          gap: false,
+          snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
         }
       })
       return
@@ -800,6 +801,109 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
       clearTimeout(internals.reconnectTimer)
       internals.reconnectTimer = null
     }
+    client.dispose()
+  })
+})
+
+describe('WebTerminalClient attach/replay snapshot dispatch', () => {
+  // Closes the "detached for a branch that isn't" gap: a client that reattaches
+  // after the single change-only git_branch_changed emit must still learn the
+  // branch from the replay frame's snapshot. The snapshot fans out through the
+  // same callbacks live events use, so the store updaters seed initial state.
+  it('dispatches a replay snapshot through the branch/status/cwd/exit callbacks', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+
+    const branchCb = vi.fn()
+    const statusCb = vi.fn()
+    const cwdCb = vi.fn()
+    const exitCb = vi.fn()
+    const exitCodeCb = vi.fn()
+    client.onBranch(branchCb)
+    client.onStatus(statusCb)
+    client.onCwd(cwdCb)
+    client.onExit(exitCb)
+    client.onExitCode(exitCodeCb)
+
+    const internals = client as unknown as ClientInternals
+    internals.socket.emit({
+      type: 'replay',
+      terminalId: 't1',
+      chunks: [],
+      gap: false,
+      latestSeq: 5,
+      snapshot: {
+        cwd: '/home/pawbytes/termul',
+        gitBranch: 'chore/prettify-server-help',
+        gitStatus: { modified: 0, staged: 0, untracked: 0, ahead: 0, behind: 0, hasChanges: false },
+        exitCode: null,
+        exited: false
+      }
+    })
+
+    expect(branchCb).toHaveBeenCalledWith('t1', 'chore/prettify-server-help')
+    expect(statusCb).toHaveBeenCalledWith('t1', expect.objectContaining({ hasChanges: false }))
+    expect(cwdCb).toHaveBeenCalledWith('t1', '/home/pawbytes/termul')
+    expect(exitCodeCb).not.toHaveBeenCalled()
+    expect(exitCb).not.toHaveBeenCalled()
+
+    client.dispose()
+  })
+
+  it('marks the terminal exited + dispatches exit when the snapshot says so', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+
+    const exitCb = vi.fn()
+    const exitCodeCb = vi.fn()
+    client.onExit(exitCb)
+    client.onExitCode(exitCodeCb)
+
+    const internals = client as unknown as ClientInternals
+    internals.socket.emit({
+      type: 'replay',
+      terminalId: 't2',
+      chunks: [],
+      gap: false,
+      latestSeq: 0,
+      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: 0, exited: true }
+    })
+
+    expect(internals.trackers.get('t2')?.exited).toBe(true)
+    expect(exitCodeCb).toHaveBeenCalledWith('t2', 0)
+    expect(exitCb).toHaveBeenCalledWith('t2', 0, undefined)
+
+    client.dispose()
+  })
+
+  it('dispatches a null gitBranch verbatim (detached/unknown, not swallowed)', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+
+    const branchCb = vi.fn()
+    client.onBranch(branchCb)
+
+    const internals = client as unknown as ClientInternals
+    internals.socket.emit({
+      type: 'replay',
+      terminalId: 't3',
+      chunks: [],
+      gap: false,
+      latestSeq: 0,
+      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
+    })
+
+    expect(branchCb).toHaveBeenCalledWith('t3', null)
+
     client.dispose()
   })
 })

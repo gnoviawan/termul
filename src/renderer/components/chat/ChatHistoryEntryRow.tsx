@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useAgentTemplateId } from '@/stores/acp-store'
+import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'
 
 export interface ChatHistorySidebarEntry {
@@ -26,7 +26,10 @@ function ChatEntryIcon({
   agentConfigId?: string
 }): React.JSX.Element {
   const templateId = useAgentTemplateId(agentId ?? null, agentConfigId)
-  return <AgentGlyph templateId={templateId} size={12} className="text-muted-foreground" />
+  const icon = useAgentIcon(agentId ?? null, agentConfigId)
+  return (
+    <AgentGlyph templateId={templateId} icon={icon} size={12} className="text-muted-foreground" />
+  )
 }
 
 interface ChatHistoryEntryRowProps {

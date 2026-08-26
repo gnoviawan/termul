@@ -538,6 +538,13 @@ describe('ProjectSidebar', () => {
     expect(screen.getByText('Project Two')).toBeInTheDocument()
   })
 
+  it('renders the sidebar visibility toggle in the Projects header on web', () => {
+    // jsdom has no __TAURI_INTERNALS__, so isTauriContext() is false (web).
+    renderWithRouter()
+
+    expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument()
+  })
+
   it('should call onSelectProject when project is clicked', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })

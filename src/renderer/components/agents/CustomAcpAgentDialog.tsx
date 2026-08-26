@@ -2,9 +2,12 @@
  * Custom ACP Agent dialog (outside the registry) — paste-JSON import + export.
  *
  * A user pastes an `AgentConfig`-shaped JSON (`{ configId?, name, command,
- * args, env, allowTerminal }`, camelCase). The dialog:
- *   1. parses the JSON and rejects unknown fields (only the 6 AgentConfig
- *      fields are allowed);
+ * args, env, allowTerminal, icon? }`, camelCase) — or a Zed-style
+ * `agent_servers` / `acp.agents` / `agents` map-wrapped config, which is
+ * unwrapped (name taken from the map key, `type`/`default_mode`/etc. dropped).
+ * The dialog:
+ *   1. parses + unwraps the JSON and rejects unknown fields (only the 7
+ *      AgentConfig fields incl. `icon` are allowed);
  *   2. runs `validateAgentConfig` (shape, incl. args/env element types) +
  *      `looksLikeSecretValue` per env value (no raw secrets on disk);
  *   3. assigns `id`=`custom-<uuid8>` (or reuses an existing config's `id` when
@@ -15,13 +18,14 @@
  *   5. saves via `useAcpStore.saveAgentConfig`.
  *
  * Export (`Copy JSON`) serializes a `StoredAgentConfig` back to pretty
- * camelCase JSON of just the 6 `AgentConfig` fields (strips `id`/`templateId`)
- * so it round-trips through this import validator.
+ * camelCase JSON of just the `AgentConfig` fields incl. `icon` when present
+ * (strips `id`/`templateId`) so it round-trips through this import validator.
  */
 
 import { ClipboardPaste, Plus } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { IconPicker } from '@/components/agents/IconPicker'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -38,6 +42,7 @@ import {
   validateAgentConfig
 } from '@/lib/acp-agents-persistence'
 import type { AgentConfig } from '@/lib/acp-api'
+import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
 
@@ -46,15 +51,30 @@ interface CustomAcpAgentDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-/** Fields allowed in a pasted AgentConfig JSON (camelCase). */
-const ALLOWED_AGENT_CONFIG_FIELDS = new Set<keyof AgentConfig>([
+/** Fields allowed in a pasted AgentConfig JSON (camelCase), incl. `icon`. */
+const ALLOWED_AGENT_CONFIG_FIELDS = new Set<string>([
   'configId',
   'name',
   'command',
   'args',
   'env',
-  'allowTerminal'
+  'allowTerminal',
+  'icon'
 ])
+
+/** Zed session-preference fields silently dropped on import (no Termul equivalent). */
+const DROPPED_ZED_FIELDS = new Set([
+  'type',
+  'default_mode',
+  'default_config_options',
+  'favorite_config_option_values'
+])
+
+/** Max icon SVG string size (64KB) — matches the IconPicker upload cap. */
+const MAX_ICON_BYTES = 64 * 1024
+
+/** Top-level map wrapper keys accepted for paste normalization. */
+const MAP_WRAPPER_KEYS = new Set(['agent_servers', 'agents'])
 
 const ARBITRARY_COMMAND_PROMPT =
   'This will execute an arbitrary command on your machine. Are you sure you want to persist this agent?'
@@ -70,9 +90,10 @@ function freshCustomId(): string {
 
 /**
  * Serialize a stored custom agent to exportable AgentConfig JSON (no
- * id/templateId). Throws if `configId` is missing/empty — a saved custom agent
- * always carries one after the load-time backfill, but guard defensively so a
- * corrupt store never emits a non-round-trippable export.
+ * id/templateId). Includes `icon` when present. Throws if `configId` is
+ * missing/empty — a saved custom agent always carries one after the load-time
+ * backfill, but guard defensively so a corrupt store never emits a
+ * non-round-trippable export.
  */
 export function exportAgentConfig(stored: StoredAgentConfig): string {
   if (!stored.configId || stored.configId.trim().length === 0) {
@@ -80,7 +101,7 @@ export function exportAgentConfig(stored: StoredAgentConfig): string {
       `cannot export agent "${stored.name}": configId missing; the saved config is corrupt`
     )
   }
-  const exported: AgentConfig = {
+  const exported: AgentConfig & { icon?: string } = {
     configId: stored.configId,
     name: stored.name,
     command: stored.command,
@@ -88,21 +109,90 @@ export function exportAgentConfig(stored: StoredAgentConfig): string {
     env: stored.env,
     allowTerminal: stored.allowTerminal
   }
+  if (typeof stored.icon === 'string' && stored.icon.length > 0) {
+    exported.icon = stored.icon
+  }
   return JSON.stringify(exported, null, 2)
 }
 
 type ParsedConfig = {
-  config: AgentConfig
+  config: AgentConfig & { icon?: string }
   /** True when the paste carried a non-empty (post-trim) configId. */
   hadConfigId: boolean
+  /** The pasted icon SVG (undefined when absent). */
+  icon: string | undefined
+}
+
+/**
+ * Unwrap a Zed-style map wrapper (`agent_servers` / `acp.agents` / `agents`).
+ * Takes `name` from the map key. Returns the unwrapped entry object, or an
+ * error string. When no wrapper is present, returns the original object.
+ */
+type UnwrapResult = { ok: true; value: Record<string, unknown> } | { ok: false; error: string }
+
+/**
+ * Unwrap a Zed-style map wrapper (`agent_servers` / `acp.agents` / `agents`).
+ * Takes `name` from the map key. Returns the unwrapped entry object, or an
+ * error string. When no wrapper is present, returns the original object.
+ */
+function unwrapMapWrapper(obj: Record<string, unknown>): UnwrapResult {
+  // `acp.agents` dotted-key wrapper (flat VS Code form): { "acp.agents": { Name: { ... } } }
+  if ('acp.agents' in obj) {
+    const inner = obj['acp.agents']
+    if (inner !== null && typeof inner === 'object' && !Array.isArray(inner)) {
+      return unwrapSingleEntry(inner as Record<string, unknown>)
+    }
+  }
+
+  // `acp.agents` two-level wrapper: { acp: { agents: { Name: { ... } } } }
+  if ('acp' in obj && obj.acp !== null && typeof obj.acp === 'object' && !Array.isArray(obj.acp)) {
+    const acpObj = obj.acp as Record<string, unknown>
+    if (
+      acpObj.agents !== null &&
+      typeof acpObj.agents === 'object' &&
+      !Array.isArray(acpObj.agents)
+    ) {
+      return unwrapSingleEntry(acpObj.agents as Record<string, unknown>)
+    }
+  }
+
+  // `agent_servers` / `agents` single-level wrapper. A real Zed settings
+  // file carries sibling keys (session, theme, etc.) alongside `agent_servers`,
+  // so locate the wrapper by name regardless of sibling keys.
+  for (const wrapperKey of MAP_WRAPPER_KEYS) {
+    if (wrapperKey in obj) {
+      const inner = obj[wrapperKey]
+      if (inner !== null && typeof inner === 'object' && !Array.isArray(inner)) {
+        return unwrapSingleEntry(inner as Record<string, unknown>)
+      }
+    }
+  }
+
+  // No wrapper — bare object
+  return { ok: true, value: obj }
+}
+
+function unwrapSingleEntry(inner: Record<string, unknown>): UnwrapResult {
+  const entries = Object.entries(inner)
+  if (entries.length === 0) return { ok: false, error: 'The agent map is empty.' }
+  if (entries.length > 1) {
+    return { ok: false, error: `Found ${entries.length} agent entries; paste one at a time.` }
+  }
+  const [name, entryObj] = entries[0]
+  if (entryObj === null || typeof entryObj !== 'object' || Array.isArray(entryObj)) {
+    return { ok: false, error: `Agent entry "${name}" must be a JSON object.` }
+  }
+  return { ok: true, value: { ...(entryObj as Record<string, unknown>), name } }
 }
 
 /**
  * Parse + validate the pasted JSON. Returns an error string on failure, or the
- * promoted `AgentConfig` on success. Only the 6 AgentConfig fields are
- * permitted; unknown fields (incl. `id`/`templateId`) are rejected loudly so
- * the export shape round-trips. A whitespace-only `configId` is rejected
- * (rather than silently trimmed to a fresh identity).
+ * promoted `AgentConfig` on success. Unwraps Zed-style map wrappers first,
+ * then only the 7 allowed fields (incl. `icon`) are permitted; unknown fields
+ * (incl. `id`/`templateId`) are rejected loudly so the export shape
+ * round-trips. A whitespace-only `configId` is rejected (rather than silently
+ * trimmed to a fresh identity). Zed session-preference fields (`type`,
+ * `default_mode`, etc.) are silently dropped before the allowed-fields check.
  */
 function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   const trimmed = raw.trim()
@@ -117,11 +207,35 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   if (json === null || typeof json !== 'object' || Array.isArray(json)) {
     return { error: 'Agent config must be a JSON object.' }
   }
-  const obj = json as Record<string, unknown>
+
+  // Unwrap Zed-style map wrappers (agent_servers / acp.agents / agents).
+  const unwrapped = unwrapMapWrapper(json as Record<string, unknown>)
+  if (!unwrapped.ok) return { error: unwrapped.error }
+  let obj: Record<string, unknown> = unwrapped.value
+
+  // Reject registry/extension entries (they use the registry install flow,
+  // not the custom-agent paste path).
+  if (obj.type === 'registry' || obj.type === 'extension') {
+    return {
+      error:
+        'registry/extension agent entries are not supported in the custom-agent dialog; use the registry install flow.'
+    }
+  }
+
+  // Silently drop Zed session-preference fields before the allowed-fields
+  // check so they don't trigger "Unknown field" errors. Single-pass filter.
+  const filtered: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if (!DROPPED_ZED_FIELDS.has(key)) {
+      filtered[key] = value
+    }
+  }
+  obj = filtered
+
   for (const key of Object.keys(obj)) {
-    if (!ALLOWED_AGENT_CONFIG_FIELDS.has(key as keyof AgentConfig)) {
+    if (!ALLOWED_AGENT_CONFIG_FIELDS.has(key)) {
       return {
-        error: `Unknown field "${key}". Only configId, name, command, args, env, allowTerminal are allowed.`
+        error: `Unknown field "${key}". Only configId, name, command, args, env, allowTerminal, icon are allowed.`
       }
     }
   }
@@ -160,8 +274,22 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
   if (allowTerminal !== undefined && typeof allowTerminal !== 'boolean') {
     return { error: 'allowTerminal must be a boolean.' }
   }
+  if (obj.icon !== undefined && typeof obj.icon !== 'string') {
+    return { error: 'icon must be a string.' }
+  }
+  // Size cap + sanitize at ingress: a pasted icon bypasses the upload path's
+  // 64KB guard, so enforce it here. Sanitize so no malformed/malicious SVG
+  // is persisted to disk (symmetry with the upload path).
+  let sanitizedIcon: string | undefined
+  if (typeof obj.icon === 'string') {
+    if (obj.icon.length > MAX_ICON_BYTES) {
+      return { error: 'icon is too large (max 64KB).' }
+    }
+    const sanitized = sanitizeInlineAgentSvg(obj.icon)
+    sanitizedIcon = sanitized ?? undefined
+  }
 
-  const cfg: AgentConfig = {
+  const cfg: AgentConfig & { icon?: string } = {
     configId: rawConfigId?.trim() || undefined,
     name: typeof obj.name === 'string' ? obj.name : '',
     command: typeof obj.command === 'string' ? obj.command : '',
@@ -170,7 +298,8 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
       env !== undefined && typeof env === 'object' && env !== null
         ? (env as Record<string, string>)
         : {},
-    allowTerminal: typeof allowTerminal === 'boolean' ? allowTerminal : false
+    allowTerminal: typeof allowTerminal === 'boolean' ? allowTerminal : false,
+    icon: sanitizedIcon
   }
 
   // Shape validation (non-empty name/command + element/value types) — reuse
@@ -191,7 +320,11 @@ function parsePastedAgentConfig(raw: string): ParsedConfig | { error: string } {
     }
   }
 
-  return { config: cfg, hadConfigId: Boolean(cfg.configId && cfg.configId.length > 0) }
+  return {
+    config: cfg,
+    hadConfigId: Boolean(cfg.configId && cfg.configId.length > 0),
+    icon: cfg.icon
+  }
 }
 
 export function CustomAcpAgentDialog({
@@ -203,6 +336,8 @@ export function CustomAcpAgentDialog({
   const [saving, setSaving] = useState(false)
   const [step, setStep] = useState<ConfirmStep>('idle')
   const [pendingConfig, setPendingConfig] = useState<StoredAgentConfig | null>(null)
+  const [icon, setIcon] = useState('')
+  const [iconTouched, setIconTouched] = useState(false)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
 
   const reset = useCallback(() => {
@@ -211,6 +346,8 @@ export function CustomAcpAgentDialog({
     setSaving(false)
     setStep('idle')
     setPendingConfig(null)
+    setIcon('')
+    setIconTouched(false)
   }, [])
 
   const handleOpenChange = useCallback(
@@ -220,7 +357,7 @@ export function CustomAcpAgentDialog({
       if (saving) return
       if (!next) {
         // Closing cancels any in-flight confirmation (no persistence). The
-        // pasted JSON is cleared so a fresh open starts clean.
+        // pasted JSON + icon are cleared so a fresh open starts clean.
         reset()
       }
       onOpenChange(next)
@@ -262,7 +399,7 @@ export function CustomAcpAgentDialog({
       setError(parsed.error)
       return
     }
-    const { config, hadConfigId } = parsed
+    const { config, hadConfigId, icon: parsedIcon } = parsed
 
     // PATCH 3: re-paste of an exported config updates the existing agent
     // instead of creating a duplicate. If a config with this configId is
@@ -277,18 +414,29 @@ export function CustomAcpAgentDialog({
     //   - configId pasted, no existing → fresh `custom-<uuid8>` id (configId honored)
     //   - no configId pasted, no existing → id == configId (one fresh identity)
     const id = existing ? existing.id : hadConfigId ? freshCustomId() : configId
+    // Icon precedence: if the user interacted with the picker (incl. clearing
+    // to "No icon"), the picker state wins — even when empty (clearing).
+    // Otherwise fall back to the pasted icon, then the existing agent's icon.
+    const resolvedIcon = iconTouched ? icon : parsedIcon || existing?.icon
     const stored: StoredAgentConfig = {
       ...config,
       configId,
       id,
-      templateId: undefined
+      templateId: undefined,
+      icon: resolvedIcon || undefined
+    }
+
+    // Sync the picker state from a pasted icon so the UI reflects the
+    // pasted value (the picker shows the right selected-state ring).
+    if (!iconTouched && parsedIcon) {
+      setIcon(parsedIcon)
     }
 
     // Move into the in-dialog arbitrary-command confirmation step (CAP-3).
     // `allowTerminal: true` advances to a SECOND confirmation after the first.
     setPendingConfig(stored)
     setStep('confirm')
-  }, [jsonText, saving, step])
+  }, [jsonText, saving, step, icon, iconTouched])
 
   const handleConfirmArbitrary = useCallback(() => {
     if (!pendingConfig || saving) return
@@ -319,13 +467,25 @@ export function CustomAcpAgentDialog({
           <DialogDescription>
             {confirming
               ? 'Persisting this agent will let it execute the configured command. Review it before confirming.'
-              : 'Paste an ACP agent config as JSON. Only configId, name, command, args, env, and allowTerminal fields are accepted; env values must be $VAR placeholders.'}
+              : 'Paste an ACP agent config as JSON (flat or Zed agent_servers format). Env values must be $VAR placeholders.'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-3 py-2">
           {!confirming && (
             <>
+              <div className="flex items-end gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Icon</Label>
+                  <IconPicker
+                    value={icon}
+                    onChange={(svg) => {
+                      setIcon(svg)
+                      setIconTouched(true)
+                    }}
+                  />
+                </div>
+              </div>
               <Label htmlFor="custom-acp-agent-json" className="text-xs">
                 Agent config JSON
               </Label>

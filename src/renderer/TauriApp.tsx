@@ -30,6 +30,7 @@ import { useGitStatus } from './hooks/use-git-status'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
+import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
@@ -42,9 +43,7 @@ import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
-import AppPreferences from './pages/AppPreferences'
 import NotFound from './pages/NotFound'
-import ProjectSettings from './pages/ProjectSettings'
 import WorkspaceDashboard from './pages/WorkspaceDashboard'
 import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 
@@ -58,6 +57,7 @@ function AppEffects(): null {
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
+  useProjectGitBranch()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
@@ -114,9 +114,7 @@ const router = createHashRouter(
       children: [
         { index: true, element: <WorkspaceDashboard /> },
         { path: 'c/:sessionId', element: <ChatRoute /> },
-        { path: 'snapshots', element: <WorkspaceSnapshots /> },
-        { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> }
+        { path: 'snapshots', element: <WorkspaceSnapshots /> }
       ]
     },
     { path: '*', element: <NotFound /> }

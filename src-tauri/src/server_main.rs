@@ -45,6 +45,16 @@ fn main() -> ExitCode {
         return run_one_shot_update_check();
     }
 
+    // `onboard`: guided interactive setup + background launch. Handled before
+    // `ServerConfig::from_args` so the `--onboard` flag (unknown to the shared
+    // parser) does not trip it. The wizard performs the background launch
+    // itself (systemd unit or setsid detach); it does NOT fall through to the
+    // foreground bootstrap. Only the binary wiring here is gated by
+    // `standalone-server`; the `onboard` lib module is unconditionally compiled.
+    if raw_args.first().is_some_and(|arg| arg == "onboard" || arg == "--onboard") {
+        init_tracing();
+        return termul_manager_lib::onboard::run();
+    }
     // `--internal-mcp-plan-server`: self-spawned child of the host-injected
     // `plan` MCP tool. The agent spawns `current_exe()` with this flag
     // (the injected `McpServer::Stdio`); the child runs an rmcp MCP server over
@@ -495,6 +505,8 @@ r#"termul-server — standalone headless ACP web server
 
 USAGE:
     termul-server [OPTIONS]
+    termul-server onboard          Guided setup + background launch
+    termul-server --check-update   One-shot self-update
 
 OPTIONS:
   Network:
@@ -560,6 +572,14 @@ OPTIONS:
                                   wins when set. A locally-built binary without a
                                   baked-in pubkey reports self-update unavailable.
 
+  Commands:
+    onboard                       Guided interactive setup + background launch.
+                                  Auto-detects the service manager (systemd unit
+                                  or setsid detach) so the server survives SSH
+                                  logout. Non-TTY stdin prints the resolved
+                                  default command + mechanism tip and exits 0
+                                  without launching.
+
     -h, --help                    Show this help
 
 ENVIRONMENT:
@@ -593,6 +613,9 @@ EXAMPLES:
     # Background with debug logging
     RUST_LOG=termul_manager_lib=debug termul-server --host 0.0.0.0 \
         --project-root $HOME/src/myproj > /tmp/termul-server.log 2>&1 &
+
+    # Guided setup (auto-detects systemd or setsid, survives SSH logout)
+    termul-server onboard
 
     # One-shot self-update check
     termul-server --check-update

@@ -61,6 +61,7 @@ import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
@@ -87,6 +88,7 @@ import {
   useProjects,
   useProjectsLoaded
 } from '@/stores/project-store'
+import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import {
   useActiveSSHProfile,
@@ -142,6 +144,12 @@ const MobileChatShell = lazy(() =>
 const SSHFileExplorer = lazy(() =>
   import('@/components/ssh/SSHFileExplorer').then((m) => ({ default: m.SSHFileExplorer }))
 )
+const ProjectSettingsModal = lazy(() =>
+  import('@/pages/ProjectSettings').then((m) => ({ default: m.ProjectSettingsModal }))
+)
+const AppPreferencesModal = lazy(() =>
+  import('@/pages/AppPreferences').then((m) => ({ default: m.AppPreferencesModal }))
+)
 
 /** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
 function ShellSkeleton(): React.JSX.Element {
@@ -177,7 +185,9 @@ const macOsTrafficLightClearance = 'w-[80px] shrink-0'
 function MacOsTitlebarStrip(): React.JSX.Element | null {
   const activeProject = useActiveProject()
 
-  if (!isMac) return null
+  // macOS desktop only — native traffic lights + drag region. Web (even on
+  // a Mac browser) falls through to the web TitleBar path instead.
+  if (!isMac || !isTauriContext()) return null
 
   return (
     <div
@@ -213,6 +223,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
+  const settingsModalView = useSettingsModalView()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
 
   useEffect(() => {
@@ -811,16 +822,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const handleOpenProjectSettings = useCallback(() => {
     setIsCommandPaletteOpen(false)
-    navigate('/settings')
-  }, [navigate])
+    useSettingsModalStore.getState().openProject()
+  }, [])
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
     if (useThemePickerStore.getState().isOpen) {
       useThemePickerStore.getState().cancel()
     }
-    navigate('/preferences')
-  }, [navigate])
+    useSettingsModalStore.getState().openApp()
+  }, [])
 
   const handleOpenCommandHistory = useCallback(() => {
     setIsCommandPaletteOpen(false)
@@ -888,32 +899,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandPaletteOpen(false)
     setIsShortcutMenuOpen(false)
     setIsCommandHistoryOpen(false)
+    // Close the settings modal too — the old code closed the /preferences
+    // route via navigate('/') before opening the theme picker. The route is
+    // gone, so close the modal via the store (EdgeCaseHunter #3).
+    useSettingsModalStore.getState().close()
   }, [])
 
   const handleToggleThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
-    if (location.pathname === '/preferences') {
-      navigate('/')
-    }
     closeThemePickerPeerOverlays()
     useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
-    }
-    if (location.pathname === '/preferences') {
-      navigate('/')
     }
     closeThemePickerPeerOverlays()
     const store = useThemePickerStore.getState()
     if (!store.isOpen) {
       store.open(getEffectiveThemeId(colorTheme, appearanceMode))
     }
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
@@ -1729,6 +1738,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
         </Suspense>
       )}
 
+      {settingsModalView === 'project' && (
+        <Suspense fallback={null}>
+          <ProjectSettingsModal />
+        </Suspense>
+      )}
+
+      {settingsModalView === 'app' && (
+        <Suspense fallback={null}>
+          <AppPreferencesModal />
+        </Suspense>
+      )}
+
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -1919,7 +1940,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
             <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
               {/* Sidebar */}
-              {isSidebarVisible && (
+              {isSidebarVisible ? (
                 <div className="mr-2">
                   <ProjectSidebar
                     projects={projects}
@@ -1936,6 +1957,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     activeSSHProfileId={activeSSHProfileId}
                   />
                 </div>
+              ) : (
+                // Web-only slim edge toggle so a hidden sidebar stays
+                // re-openable. Desktop re-opens via the TitleBar toggle.
+                !isTauriContext() && (
+                  <div className="mr-2 flex items-start pt-0">
+                    <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                  </div>
+                )
               )}
 
               {/* Main Content and File Explorer Container */}
@@ -1988,6 +2017,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
                           </Suspense>
                         </div>
                       )}
+                    </div>
+                  ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
+                    // Web-only slim edge toggle so a hidden file explorer
+                    // stays re-openable. Desktop re-opens via the TitleBar.
+                    <div className="flex-shrink-0 ml-2 flex items-start">
+                      <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </div>
                   ) : null}
                 </div>

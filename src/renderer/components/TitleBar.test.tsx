@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TitleBar } from './TitleBar'
 
-const { mockWindowApi, platformState, maximizeRef, projectState } = vi.hoisted(() => ({
+const { mockWindowApi, platformState, maximizeRef, projectState, tauriState } = vi.hoisted(() => ({
   mockWindowApi: {
     onMaximizeChange: vi.fn(),
     minimize: vi.fn(),
@@ -11,7 +11,8 @@ const { mockWindowApi, platformState, maximizeRef, projectState } = vi.hoisted((
   },
   platformState: { isMac: false },
   maximizeRef: { cb: null as null | ((maximized: boolean) => void) },
-  projectState: { activeProject: null as null | { name: string } }
+  projectState: { activeProject: null as null | { name: string } },
+  tauriState: { isTauri: true }
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -22,6 +23,10 @@ vi.mock('@/lib/platform', () => ({
   get isMac() {
     return platformState.isMac
   }
+}))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriState.isTauri
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -40,13 +45,14 @@ describe('TitleBar (window control strip)', () => {
     platformState.isMac = false
     projectState.activeProject = null
     maximizeRef.cb = null
+    tauriState.isTauri = true
     mockWindowApi.onMaximizeChange.mockImplementation((cb: (maximized: boolean) => void) => {
       maximizeRef.cb = cb
       return vi.fn()
     })
   })
 
-  it('renders window controls on Windows/Linux', () => {
+  it('renders window controls on Windows/Linux desktop', () => {
     render(<TitleBar />)
 
     expect(screen.getByRole('button', { name: 'Minimize window' })).toBeInTheDocument()
@@ -54,18 +60,30 @@ describe('TitleBar (window control strip)', () => {
     expect(screen.getByRole('button', { name: 'Close window' })).toBeInTheDocument()
   })
 
-  it('renders the sidebar and file-explorer panel toggles', () => {
+  it('renders the sidebar and file-explorer panel toggles on desktop', () => {
     render(<TitleBar />)
 
     expect(screen.getByRole('button', { name: 'toggle-sidebar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'toggle-explorer' })).toBeInTheDocument()
   })
 
-  it('renders nothing on macOS (native traffic lights)', () => {
+  it('renders nothing on macOS desktop (native traffic lights)', () => {
     platformState.isMac = true
     const { container } = render(<TitleBar />)
 
     expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByRole('button', { name: 'Minimize window' })).not.toBeInTheDocument()
+  })
+
+  it('renders the project-name strip on macOS web (not native traffic lights)', () => {
+    platformState.isMac = true
+    tauriState.isTauri = false
+    projectState.activeProject = { name: 'mac-web-app' }
+
+    render(<TitleBar />)
+
+    // Web-on-mac must NOT return null — it falls through to the web branch.
+    expect(screen.getByText('mac-web-app')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Minimize window' })).not.toBeInTheDocument()
   })
 
@@ -119,5 +137,26 @@ describe('TitleBar (window control strip)', () => {
     render(<TitleBar />)
 
     expect(screen.queryByText('my-app')).not.toBeInTheDocument()
+  })
+
+  it('renders no window controls or panel toggles on web', () => {
+    tauriState.isTauri = false
+
+    render(<TitleBar />)
+
+    expect(screen.queryByRole('button', { name: 'Minimize window' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Maximize window' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close window' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'toggle-sidebar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'toggle-explorer' })).not.toBeInTheDocument()
+  })
+
+  it('still renders the project name on web', () => {
+    tauriState.isTauri = false
+    projectState.activeProject = { name: 'web-app' }
+
+    render(<TitleBar />)
+
+    expect(screen.getByText('web-app')).toBeInTheDocument()
   })
 })

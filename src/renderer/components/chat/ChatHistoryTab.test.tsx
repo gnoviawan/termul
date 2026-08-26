@@ -63,7 +63,15 @@ vi.mock('@/stores/acp-store', () => {
   const configIdFromReuseKey = () => ''
   const discoveryKey = (agentId: string, cwd: string) => `${agentId}\0${cwd}`
   const useAgentTemplateId = () => null
-  return { useAcpStore, agentReuseKey, configIdFromReuseKey, discoveryKey, useAgentTemplateId }
+  const useAgentIcon = () => null
+  return {
+    useAcpStore,
+    agentReuseKey,
+    configIdFromReuseKey,
+    discoveryKey,
+    useAgentTemplateId,
+    useAgentIcon
+  }
 })
 
 vi.mock('@/stores/workspace-store', () => ({

@@ -5941,16 +5941,18 @@ export interface AgentIdentity {
   name: string | null
   /** Template id used to resolve the agent icon, when known. */
   templateId: string | null
+  /** Persisted custom icon SVG (bundled or uploaded), when present. */
+  icon: string | null
 }
 
 /**
- * Resolve the configured agent's display name + template (for icon) behind a
- * live session, via the configToLiveAgent mapping. Falls back to the session
+ * Resolve the configured agent's display name + template + custom icon behind
+ * a live session, via the configToLiveAgent mapping. Falls back to the session
  * index `agentConfigId` when the live map is cold (history reopen / empty
  * state) so `AgentGlyph` still resolves the registry icon instead of Bot.
  */
 export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
-  if (!agentId) return { name: null, templateId: null }
+  if (!agentId) return { name: null, templateId: null, icon: null }
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === agentId
   )
@@ -5960,7 +5962,11 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
     configId = indexed?.agentConfigId
   }
   const config = configId ? state.agentConfigs.find((c) => c.id === configId) : undefined
-  return { name: config?.name ?? null, templateId: config?.templateId ?? null }
+  return {
+    name: config?.name ?? null,
+    templateId: config?.templateId ?? null,
+    icon: config?.icon ?? null
+  }
 }
 
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
@@ -5978,6 +5984,28 @@ export function useAgentTemplateId(agentId: AgentId | null, agentConfigId?: stri
         if (config?.templateId) return config.templateId
       }
       return selectAgentIdentity(s, agentId).templateId
+    })
+  )
+}
+
+/**
+ * Resolve an agent's persisted custom icon (bundled or uploaded) by
+ * `agentConfigId` (from a history entry) when the agent isn't live. Falls
+ * back to `useAgentIdentity` for live sessions. Returns null when no custom
+ * icon is set (the caller should fall back to the bundled catalog).
+ */
+export function useAgentIcon(agentId: AgentId | null, agentConfigId?: string): string | null {
+  return useAcpStore(
+    useShallow((s) => {
+      if (agentConfigId) {
+        const config = s.agentConfigs.find((c) => c.id === agentConfigId)
+        if (config?.icon) return config.icon
+        // Config found but no icon — short-circuit to null so we don't
+        // redundantly scan configToLiveAgent + agentConfigs again via
+        // selectAgentIdentity when the result would be the same null.
+        if (config) return null
+      }
+      return selectAgentIdentity(s, agentId).icon
     })
   )
 }

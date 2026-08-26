@@ -18,6 +18,7 @@ import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
+import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
@@ -28,8 +29,6 @@ import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
 
 const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
-const ProjectSettings = lazy(() => import('./pages/ProjectSettings'))
-const AppPreferences = lazy(() => import('./pages/AppPreferences'))
 const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 
@@ -126,6 +125,7 @@ function AppEffects(): null {
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
+  useProjectGitBranch()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
@@ -186,22 +186,6 @@ const router = createHashRouter(
           element: (
             <Suspense fallback={<RouteFallback />}>
               <WorkspaceSnapshots />
-            </Suspense>
-          )
-        },
-        {
-          path: 'settings',
-          element: (
-            <Suspense fallback={<RouteFallback />}>
-              <ProjectSettings />
-            </Suspense>
-          )
-        },
-        {
-          path: 'preferences',
-          element: (
-            <Suspense fallback={<RouteFallback />}>
-              <AppPreferences />
             </Suspense>
           )
         }

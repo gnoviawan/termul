@@ -17,6 +17,12 @@ mod secure_storage;
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
+// Guided setup + background launch for the standalone `termul-server`. Like
+// `server_update`, the library module is intentionally NOT feature-gated so
+// its test suite runs under the spec's default `cargo test` gate; only the
+// standalone binary wiring (server_main.rs `--onboard` branch) is gated by
+// `standalone-server`.
+pub mod onboard;
 mod shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.

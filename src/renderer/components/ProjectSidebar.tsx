@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { SidebarToggleButton } from '@/components/TitlebarPanelToggles'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {
   ContextMenu,
@@ -42,9 +43,11 @@ import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
 import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
 import type { Project, ProjectColor } from '@/types/project'
@@ -562,7 +565,7 @@ export function ProjectSidebar({
           <ContextMenuItem
             onSelect={() => {
               selectProject(project.id)
-              navigate('/settings')
+              useSettingsModalStore.getState().openProject()
             }}
           >
             <Settings className="mr-2 h-4 w-4" /> Settings
@@ -667,7 +670,6 @@ export function ProjectSidebar({
       onArchiveProject,
       handleConfirmDelete,
       selectProject,
-      navigate,
       groups,
       moveProjectToGroup
     ]
@@ -787,6 +789,9 @@ export function ProjectSidebar({
       <div className="h-9 flex items-center justify-between px-3 border-b border-sidebar-border rounded-t-xl">
         <span className="label-section text-sidebar-foreground">Projects</span>
         <div className="flex items-center gap-1">
+          {!isTauriContext() && (
+            <SidebarToggleButton className="[&_svg]:size-3.5 h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer" />
+          )}
           <button
             onClick={handleCreateGroup}
             className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -1068,7 +1073,7 @@ export function ProjectSidebar({
                                     onCancelRename={handleCancelRename}
                                     onSettingsClick={() => {
                                       selectProject(project.id)
-                                      navigate('/settings')
+                                      useSettingsModalStore.getState().openProject()
                                     }}
                                   />
                                 </Reorder.Item>
@@ -1163,7 +1168,7 @@ export function ProjectSidebar({
                           onCancelRename={handleCancelRename}
                           onSettingsClick={() => {
                             selectProject(project.id)
-                            navigate('/settings')
+                            useSettingsModalStore.getState().openProject()
                           }}
                         />
                       </Reorder.Item>

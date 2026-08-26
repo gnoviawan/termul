@@ -299,4 +299,140 @@ describe('CustomAcpAgentDialog', () => {
     }
     expect(() => exportAgentConfig(corrupt)).toThrow(/configId missing/)
   })
+
+  // --- Zed-style map-unwrap (research 2026-08-22) ---
+
+  it('unwraps a Zed agent_servers map and takes name from the key', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(
+      `{"agent_servers":{"Poolside":{"type":"custom","command":"pool","args":["acp"]}}}`
+    )
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const stored = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    expect(stored.name).toBe('Poolside')
+    expect(stored.command).toBe('pool')
+    expect(stored.args).toEqual(['acp'])
+  })
+
+  it('unwraps a JetBrains-style agent_servers map (no type field)', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(
+      `{"agent_servers":{"MyAgent":{"command":"node","args":["a.js"],"env":{}}}}`
+    )
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const stored = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    expect(stored.name).toBe('MyAgent')
+    expect(stored.command).toBe('node')
+  })
+
+  it('unwraps a VS Code acp.agents nested map', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(`{"acp":{"agents":{"X":{"command":"npx","args":["-y","pkg"]}}}}`)
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const stored = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    expect(stored.name).toBe('X')
+    expect(stored.command).toBe('npx')
+  })
+
+  it('unwraps an acpx agents map', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(`{"agents":{"Y":{"command":"uvx","args":["pkg"]}}}`)
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const stored = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    expect(stored.name).toBe('Y')
+    expect(stored.command).toBe('uvx')
+  })
+
+  it('rejects a multi-entry agent_servers map inline', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(
+      `{"agent_servers":{"A":{"command":"a","args":[]},"B":{"command":"b","args":[]}}}`
+    )
+    expect(screen.getByRole('alert').textContent).toContain('Found 2 agent entries')
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+  })
+
+  it('rejects a type:registry entry inline', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(`{"agent_servers":{"Z":{"type":"registry","name":"Z"}}}`)
+    expect(screen.getByRole('alert').textContent).toContain('registry')
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+  })
+
+  it('accepts a bare single-entry object with a name (backward compat)', async () => {
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(`{"name":"H","command":"node","args":[],"env":{}}`)
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const stored = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    expect(stored.name).toBe('H')
+  })
+
+  // --- Icon support ---
+
+  it('exportAgentConfig includes icon when present (7 fields)', () => {
+    const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/></svg>'
+    const stored: StoredAgentConfig = {
+      id: 'custom-abc12345',
+      configId: 'custom-abc12345',
+      name: 'Icon Agent',
+      command: 'node',
+      args: [],
+      env: {},
+      allowTerminal: false,
+      icon: svg
+    }
+    const json = exportAgentConfig(stored)
+    const parsed = JSON.parse(json)
+    expect(parsed.icon).toBe(svg)
+    expect(Object.keys(parsed).sort()).toEqual(
+      ['allowTerminal', 'args', 'command', 'configId', 'env', 'icon', 'name'].sort()
+    )
+  })
+
+  it('exportAgentConfig omits icon when absent (6 fields)', () => {
+    const stored: StoredAgentConfig = {
+      id: 'custom-abc12345',
+      configId: 'custom-abc12345',
+      name: 'No Icon',
+      command: 'node',
+      args: [],
+      env: {},
+      allowTerminal: false
+    }
+    const json = exportAgentConfig(stored)
+    const parsed = JSON.parse(json)
+    expect(parsed).not.toHaveProperty('icon')
+  })
+
+  it('round-trips an exported config with icon', async () => {
+    const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/></svg>'
+    const stored: StoredAgentConfig = {
+      id: 'custom-abc12345',
+      configId: 'custom-abc12345',
+      name: 'Icon Agent',
+      command: 'node',
+      args: [],
+      env: {},
+      allowTerminal: false,
+      icon: svg
+    }
+    const json = exportAgentConfig(stored)
+    render(<CustomAcpAgentDialog open={true} onOpenChange={() => {}} />)
+    await pasteAndAdvanceToConfirm(json)
+    await clickButton('Confirm — Execute Command')
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+    const reimported = mockSaveAgentConfig.mock.calls[0][0] as StoredAgentConfig
+    // The paste path sanitizes the icon via DOMPurify — the exact string
+    // may differ (attribute order, self-closing tags), so assert the
+    // semantic content survives: it's a valid SVG with viewBox + circle.
+    expect(reimported.icon).toContain('viewBox')
+    expect(reimported.icon).toContain('circle')
+    expect(reimported.name).toBe('Icon Agent')
+    expect(reimported.id).toMatch(/^custom-[0-9a-f]{8}$/)
+  })
 })

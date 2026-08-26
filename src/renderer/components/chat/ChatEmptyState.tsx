@@ -43,7 +43,7 @@ interface ChatEmptyStateProps {
 /** First-run state for an empty thread: agent identity + clickable starter prompts. */
 export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-  const { name, templateId } = useAgentIdentity(agentId)
+  const { name, templateId, icon } = useAgentIdentity(agentId)
   const transition = (i: number): Transition =>
     reduced ? { duration: 0 } : { ...CHAT_SPRING, delay: 0.04 * i }
 
@@ -56,7 +56,7 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
         transition={transition(0)}
       >
         <div className="flex size-12 items-center justify-center rounded-2xl bg-secondary/60">
-          <AgentGlyph templateId={templateId} size={24} className="text-foreground" />
+          <AgentGlyph templateId={templateId} icon={icon} size={24} className="text-foreground" />
         </div>
         <div>
           <h2 className="text-base font-semibold text-foreground">
