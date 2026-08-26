@@ -576,8 +576,7 @@ export async function loadSessionPayloadTail(
       messages: cached.messages.slice(tailStart),
       toolCalls: cached.toolCalls?.filter(
         (tc) =>
-          typeof tc.seq !== 'number' ||
-          tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
+          typeof tc.seq !== 'number' || tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
       )
     }
   }

@@ -776,9 +776,7 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('open_persisted_session', { sessionId, lastSeq })
   }
 
-  async getSessionPayload(
-    sessionId: SessionId
-  ): Promise<SessionPayload | null> {
+  async getSessionPayload(sessionId: SessionId): Promise<SessionPayload | null> {
     try {
       return await this.request<SessionPayload>('get_session_payload', { sessionId })
     } catch (err) {
@@ -789,10 +787,7 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
-  async getSessionPayloadTail(
-    sessionId: SessionId,
-    limit: number
-  ): Promise<SessionPayload | null> {
+  async getSessionPayloadTail(sessionId: SessionId, limit: number): Promise<SessionPayload | null> {
     try {
       return await this.request<SessionPayload>('get_session_payload_tail', {
         sessionId,
