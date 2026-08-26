@@ -15,6 +15,7 @@ import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/st
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -501,28 +502,33 @@ export function AgentChatPanel({
       {pendingQuestion && !isClosed ? (
         <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
       ) : (
-        <ChatInputBar
-          session={session}
-          projectRoot={skillsProjectRoot}
-          busy={session.activeTurn}
-          disabled={isClosed}
-          imageCapable={imageCapable}
-          embedCapable={embedCapable}
-          onSend={handleSend}
-          onSendBlocks={handleSendBlocks}
-          onCancel={handleCancel}
-          queue={promptQueue}
-          onRemoveQueued={handleRemoveQueued}
-          onSendQueuedNow={handleSendQueuedNow}
-          commands={commands}
-          configOptions={session.configOptions}
-          modes={session.modes}
-          onSetConfig={handleSetConfig}
-          onSetMode={handleSetMode}
-          onSetModel={handleSetModel}
-          seedText={seed?.text}
-          seedNonce={seed?.nonce}
-        />
+        <>
+          {session.activeTurn && !isClosed && (
+            <ChatChangedFilesPanel cwd={session.cwd} activeTurn={session.activeTurn} />
+          )}
+          <ChatInputBar
+            session={session}
+            projectRoot={skillsProjectRoot}
+            busy={session.activeTurn}
+            disabled={isClosed}
+            imageCapable={imageCapable}
+            embedCapable={embedCapable}
+            onSend={handleSend}
+            onSendBlocks={handleSendBlocks}
+            onCancel={handleCancel}
+            queue={promptQueue}
+            onRemoveQueued={handleRemoveQueued}
+            onSendQueuedNow={handleSendQueuedNow}
+            commands={commands}
+            configOptions={session.configOptions}
+            modes={session.modes}
+            onSetConfig={handleSetConfig}
+            onSetMode={handleSetMode}
+            onSetModel={handleSetModel}
+            seedText={seed?.text}
+            seedNonce={seed?.nonce}
+          />
+        </>
       )}
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>

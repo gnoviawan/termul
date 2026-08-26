@@ -10,12 +10,10 @@ import {
   ClipboardPaste,
   Columns2,
   FileCode,
-  FileQuestion,
   FileText,
   GitBranch,
   GitCommit,
   Minus,
-  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -27,6 +25,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { GitDiffView } from '@/components/git/GitDiffView'
+import { GitStatusBadge } from '@/components/git/git-status-badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -1959,52 +1958,6 @@ function RowAction({
     >
       {icon}
     </button>
-  )
-}
-
-const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {
-  added: 'Added',
-  modified: 'Modified',
-  deleted: 'Deleted',
-  renamed: 'Renamed',
-  untracked: 'Untracked',
-  staged: 'Staged'
-}
-
-function GitStatusBadge({ status }: { status: GitFileStatus }) {
-  const label = GIT_STATUS_LABELS[status]
-  let icon: React.ReactNode
-  switch (status) {
-    case 'added':
-      icon = <Plus className="text-green-500" size={14} aria-hidden />
-      break
-    case 'modified':
-      icon = <Pencil className="text-amber-500" size={14} aria-hidden />
-      break
-    case 'deleted':
-      icon = <Minus className="text-red-500" size={14} aria-hidden />
-      break
-    case 'renamed':
-      icon = <RotateCcw className="text-blue-500" size={14} aria-hidden />
-      break
-    case 'untracked':
-      icon = <FileQuestion className="text-orange-500" size={14} aria-hidden />
-      break
-    case 'staged':
-      icon = <Check className="text-primary" size={14} aria-hidden />
-      break
-    default:
-      icon = <FileCode size={14} aria-hidden />
-  }
-
-  return (
-    <div
-      className="flex h-5 w-5 shrink-0 items-center justify-center"
-      title={label}
-      aria-label={label}
-    >
-      {icon}
-    </div>
   )
 }
 
