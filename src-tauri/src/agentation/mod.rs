@@ -76,6 +76,7 @@ pub async fn run_mcp_stdio(app_data_dir: &std::path::Path) -> Result<(), String>
 // ---------------------------------------------------------------------------
 
 use tauri::{AppHandle, Manager};
+use tauri_plugin_store::StoreExt;
 
 #[tauri::command]
 pub async fn agentation_create_session(
@@ -200,6 +201,13 @@ pub async fn agentation_set_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     log::info!("[Agentation] set_enabled called: enabled={}", enabled);
+    // Persist to settings.json so the preference survives restarts.
+    if let Ok(store) = app.store("settings.json") {
+        store.set("agentation/enabled", enabled);
+        let _ = store.save();
+    } else {
+        log::warn!("[Agentation] settings store unavailable — preference will not persist");
+    }
     if let Some(bt) = app.try_state::<Arc<browser_tab_manager::BrowserTabManager>>() {
         bt.set_agentation_enabled(enabled);
         log::info!("[Agentation] set_agentation_enabled applied to BrowserTabManager");
@@ -211,6 +219,13 @@ pub async fn agentation_set_enabled(
 
 #[tauri::command]
 pub async fn agentation_is_enabled(app: AppHandle) -> Result<bool, String> {
+    // Read from persisted store first (source of truth), fall back to runtime state.
+    if let Ok(store) = app.store("settings.json") {
+        if let Some(val) = store.get("agentation/enabled") {
+            return Ok(val.as_bool().unwrap_or(true));
+        }
+    }
+    // No persisted value — use runtime default.
     if let Some(bt) = app.try_state::<Arc<browser_tab_manager::BrowserTabManager>>() {
         return Ok(bt.is_agentation_enabled());
     }

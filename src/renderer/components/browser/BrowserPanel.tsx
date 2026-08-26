@@ -1,7 +1,7 @@
 import { Loader2 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useBrowserWebview } from '@/hooks/use-browser-webview'
-import { browserTabHide, browserTabShow, onBrowserTabTitleChanged } from '@/lib/browser-api'
+import { onBrowserTabTitleChanged } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { BrowserControls } from './BrowserControls'
@@ -17,6 +17,8 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
   const url = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url || DEFAULT_URL)
   const loading = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.loading ?? false)
 
+  // Visibility is owned solely by useBrowserWebview — it serializes
+  // show/hide after create and inspects IpcResult.success.
   const { containerRef } = useBrowserWebview(browserTabId, isVisible, url)
 
   // Listen for title changes and update store
@@ -28,18 +30,6 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
     })
     return () => subscription.unlisten()
   }, [browserTabId])
-
-  // Manage webview visibility
-  const webviewWasVisibleRef = useRef(false)
-  useEffect(() => {
-    if (isVisible && !webviewWasVisibleRef.current) {
-      browserTabShow(browserTabId).catch(console.error)
-      webviewWasVisibleRef.current = true
-    } else if (!isVisible && webviewWasVisibleRef.current) {
-      browserTabHide(browserTabId).catch(console.error)
-      webviewWasVisibleRef.current = false
-    }
-  }, [browserTabId, isVisible])
 
   return (
     <div

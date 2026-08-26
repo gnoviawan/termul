@@ -23,7 +23,7 @@ use axum::{
     Router,
 };
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::CorsLayer;
 use futures_util::stream::Stream;
 
 use super::store::SqliteStore;
@@ -89,9 +89,14 @@ async fn add_annotation(
     Path(id): Path<String>,
     Json(body): Json<AnnotationInput>,
 ) -> impl IntoResponse {
+    // Distinguish session-not-found (404) from insertion failure (500).
+    // The store logs the insertion error; we map the HTTP response accordingly.
+    if state.store.get_session(&id).is_none() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"})));
+    }
     match state.store.add_annotation(&id, &body) {
         Some(ann) => (StatusCode::CREATED, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create annotation"}))),
     }
 }
 
@@ -182,7 +187,7 @@ async fn request_action(
     Path(id): Path<String>,
     Json(body): Json<ActionBody>,
 ) -> impl IntoResponse {
-    let session = match state.store.get_session(&id) {
+    let _session = match state.store.get_session(&id) {
         Some(s) => s,
         None => {
             return (
@@ -282,10 +287,11 @@ async fn global_sse(
 // ---------------------------------------------------------------------------
 
 pub fn router(state: AppState) -> Router {
+    // Server binds to 127.0.0.1 only — no remote access possible.
+    // The toolbar runs inside child-webview pages at arbitrary origins,
+    // so CORS must allow any origin (not just portless 127.0.0.1).
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::exact(
-            "http://127.0.0.1".parse().unwrap(),
-        ))
+        .allow_origin(tower_http::cors::Any)
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,

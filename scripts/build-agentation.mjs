@@ -32,20 +32,23 @@ function scssLoader() {
         const styleId = `${parentDir}-${baseName}`
 
         if (isModule) {
-          // CSS Module — generate scoped class names and inject as JS
-          // Simple approach: use the styleId as prefix for all class names
-          const scopedCss = css.replace(/\.([a-zA-Z_][\w-]*)/g, `.${styleId}_$1`)
+          // CSS Module — generate scoped class names and inject as JS.
+          // Build an { originalName: scopedName } map during scoping so
+          // styles.button resolves to the scoped class even after the
+          // selector is transformed to .toolbar_button.
+          const classMap = {}
+          const scopedCss = css.replace(/\.([a-zA-Z_][\w-]*)/g, (fullMatch, originalName) => {
+            const scopedName = `${styleId}_${originalName}`
+            classMap[originalName] = scopedName
+            return `.${scopedName}`
+          })
           const cssModuleJs = `
-            const styles = {};
+            const styles = ${JSON.stringify(classMap)};
             const css = ${JSON.stringify(scopedCss)};
             if (typeof document !== 'undefined') {
               const style = document.createElement('style');
               style.textContent = css;
               document.head.appendChild(style);
-              css.replace(/\\.([a-zA-Z_][\\w-]*)/g, (m, cls) => {
-                styles[cls] = cls;
-                return '';
-              });
             }
             export default styles;
           `
@@ -111,8 +114,8 @@ try {
   const sizeKB = Math.round(stats.size / 1024)
   console.log(`✓ Agentation toolbar built: ${outfile} (${sizeKB}KB)`)
 
-  if (sizeKB > 600) {
-    console.error(`✗ Bundle size ${sizeKB}KB exceeds 600KB limit`)
+  if (sizeKB > 400) {
+    console.error(`✗ Bundle size ${sizeKB}KB exceeds 400KB release limit`)
     process.exit(1)
   }
 } catch (error) {

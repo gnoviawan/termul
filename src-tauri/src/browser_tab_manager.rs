@@ -470,19 +470,21 @@ impl BrowserTabManager {
         Ok(())
     }
 
-    /// Schedule a delayed agentation toolbar re-injection after navigation.
-    /// The page needs time to load before the toolbar bundle can run
-    /// (it accesses document.head at module top-level).
+    /// Re-inject the URL poller after navigation. The poller detects
+    /// `readyState === 'complete'` and calls `browser_tab_report_loaded`,
+    /// which in turn injects the agentation toolbar. This chains the
+    /// document-load signal instead of using a blind fixed delay.
     fn schedule_agentation_reinject(&self, tab_id: &str) {
         let app_handle = self.app_handle.clone();
         let tab_id = tab_id.to_string();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(3000));
+            // Wait for the new document to start loading before re-injecting
+            // the poller. The poller self-deduplicates via __termul_poller.
+            std::thread::sleep(std::time::Duration::from_millis(500));
             if let Some(bt) = app_handle.try_state::<Arc<BrowserTabManager>>() {
                 if bt.is_agentation_enabled() {
-                    if let Err(e) = bt.inject_agentation_toolbar(&tab_id) {
-                        log::warn!("[BrowserTab] Agentation re-inject failed for tab={}: {}", tab_id, e);
-                    }
+                    bt.start_url_poller(tab_id.clone());
+                    log::info!("[BrowserTab] Re-injected URL poller after navigation for tab={}", tab_id);
                 }
             }
         });

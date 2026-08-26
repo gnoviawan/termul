@@ -8,6 +8,7 @@ import {
   browserTabOpenDevtools,
   browserTabReload
 } from '@/lib/browser-api'
+import { logFrontendError } from '@/lib/log-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserControlsProps {
@@ -51,11 +52,19 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
     browserTabInjectAgentation(browserTabId)
       .then((result) => {
         if (!result.success) {
-          console.error('[Agentation] Toolbar injection failed:', result.error, result.code)
+          logFrontendError({
+            level: 'warn',
+            message: `Toolbar injection failed: ${result.error ?? 'unknown'} [${result.code ?? 'NO_CODE'}]`,
+            source: 'BrowserControls'
+          })
         }
       })
       .catch((e) => {
-        console.error('[Agentation] Toolbar injection error:', e)
+        logFrontendError({
+          level: 'warn',
+          message: `Toolbar injection error: ${e instanceof Error ? e.message : String(e)}`,
+          source: 'BrowserControls'
+        })
       })
   }, [browserTabId])
 

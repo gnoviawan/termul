@@ -466,8 +466,15 @@ impl AnnotationStore for SqliteStore {
 
     fn delete_annotation(&self, id: &str) -> Option<Annotation> {
         let existing = self.get_annotation(id)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.execute("DELETE FROM annotations WHERE id=?", params![id]).ok()?;
+        {
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let rows = db.execute("DELETE FROM annotations WHERE id=?", params![id]).ok()?;
+            if rows != 1 {
+                log::warn!("[Agentation] delete_annotation affected {rows} rows for id={id}");
+                return None;
+            }
+        }
+        // Guard released — safe to emit + persist (which re-locks the mutex).
         let ev = self.bus.emit(AFSEventType::AnnotationDeleted, &existing.session_id, serde_json::to_value(&existing).unwrap());
         self.persist_event(&ev);
         Some(existing)

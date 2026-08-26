@@ -9,6 +9,7 @@ import {
   onBrowserTabLoaded,
   onBrowserTabNavigated
 } from '@/lib/browser-api'
+import { logFrontendError } from '@/lib/log-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserBounds {
@@ -59,14 +60,21 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     browserTabResize(browserTabId, bounds)
       .then((result) => {
         if (!result.success) {
-          console.error('[BrowserWebview] resize failed:', result.error)
+          logFrontendError({
+            level: 'warn',
+            message: `webview resize failed: ${result.error ?? 'unknown'}`,
+            source: 'use-browser-webview'
+          })
         }
       })
       .catch((err) => {
-        console.error('[BrowserWebview] resize error:', err)
+        logFrontendError({
+          level: 'warn',
+          message: `webview resize error: ${err instanceof Error ? err.message : String(err)}`,
+          source: 'use-browser-webview'
+        })
       })
   }, [browserTabId])
-
   // Create / destroy webview lifecycle
   useEffect(() => {
     mountedRef.current = true
@@ -83,7 +91,13 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     browserTabCreate(browserTabId, urlRef.current, bounds)
       .then((result) => {
         if (!mountedRef.current || mountToken !== mountTokenRef.current) {
-          browserTabDestroy(browserTabId).catch(console.error)
+          browserTabDestroy(browserTabId).catch((e) => {
+            logFrontendError({
+              level: 'warn',
+              message: `webview destroy after stale mount: ${e instanceof Error ? e.message : String(e)}`,
+              source: 'use-browser-webview'
+            })
+          })
           return
         }
         if (result.success) {
@@ -91,24 +105,54 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
           if (visibilityRef.current) {
             browserTabShow(browserTabId)
               .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+                if (!r.success)
+                  logFrontendError({
+                    level: 'warn',
+                    message: `webview show failed: ${r.error ?? 'unknown'}`,
+                    source: 'use-browser-webview'
+                  })
               })
-              .catch(console.error)
+              .catch((e) => {
+                logFrontendError({
+                  level: 'warn',
+                  message: `webview show error: ${e instanceof Error ? e.message : String(e)}`,
+                  source: 'use-browser-webview'
+                })
+              })
           } else {
             browserTabHide(browserTabId)
               .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+                if (!r.success)
+                  logFrontendError({
+                    level: 'warn',
+                    message: `webview hide failed: ${r.error ?? 'unknown'}`,
+                    source: 'use-browser-webview'
+                  })
               })
-              .catch(console.error)
+              .catch((e) => {
+                logFrontendError({
+                  level: 'warn',
+                  message: `webview hide error: ${e instanceof Error ? e.message : String(e)}`,
+                  source: 'use-browser-webview'
+                })
+              })
           }
         } else {
-          console.error('[BrowserWebview] create failed:', result.error)
+          logFrontendError({
+            level: 'warn',
+            message: `webview create failed: ${result.error ?? 'unknown'} [${result.code ?? 'NO_CODE'}]`,
+            source: 'use-browser-webview'
+          })
           clearLoadingTimeout()
           useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
-        console.error('[BrowserWebview] create error:', err)
+        logFrontendError({
+          level: 'warn',
+          message: `webview create error: ${err instanceof Error ? err.message : String(err)}`,
+          source: 'use-browser-webview'
+        })
         clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
@@ -120,10 +164,20 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       browserTabDestroy(browserTabId)
         .then((result) => {
           if (!result.success) {
-            console.error('[BrowserWebview] destroy failed:', result.error)
+            logFrontendError({
+              level: 'warn',
+              message: `webview destroy failed: ${result.error ?? 'unknown'}`,
+              source: 'use-browser-webview'
+            })
           }
         })
-        .catch(console.error)
+        .catch((e) => {
+          logFrontendError({
+            level: 'warn',
+            message: `webview destroy error: ${e instanceof Error ? e.message : String(e)}`,
+            source: 'use-browser-webview'
+          })
+        })
       createdRef.current = false
     }
   }, [browserTabId, clearLoadingTimeout, armLoadingTimeout])
@@ -136,15 +190,37 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       updateBounds()
       browserTabShow(browserTabId)
         .then((r) => {
-          if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+          if (!r.success)
+            logFrontendError({
+              level: 'warn',
+              message: `webview show failed: ${r.error ?? 'unknown'}`,
+              source: 'use-browser-webview'
+            })
         })
-        .catch(console.error)
+        .catch((e) => {
+          logFrontendError({
+            level: 'warn',
+            message: `webview show error: ${e instanceof Error ? e.message : String(e)}`,
+            source: 'use-browser-webview'
+          })
+        })
     } else {
       browserTabHide(browserTabId)
         .then((r) => {
-          if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+          if (!r.success)
+            logFrontendError({
+              level: 'warn',
+              message: `webview hide failed: ${r.error ?? 'unknown'}`,
+              source: 'use-browser-webview'
+            })
         })
-        .catch(console.error)
+        .catch((e) => {
+          logFrontendError({
+            level: 'warn',
+            message: `webview hide error: ${e instanceof Error ? e.message : String(e)}`,
+            source: 'use-browser-webview'
+          })
+        })
     }
   }, [isVisible, browserTabId, updateBounds])
 

@@ -12,6 +12,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 // --- Types (mirror the Rust types in agentation/types.rs) ---
 
@@ -70,29 +71,77 @@ function getEndpoint(): string {
 }
 
 async function httpGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${getEndpoint()}${path}`)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch(`${getEndpoint()}${path}`)
+    if (!res.ok) {
+      logFrontendError({
+        level: 'warn',
+        message: `agentation httpGet ${path} failed: HTTP ${res.status}`,
+        source: 'agentation-api'
+      })
+      throw new Error(`HTTP ${res.status}`)
+    }
+    return res.json()
+  } catch (e) {
+    logFrontendError({
+      level: 'warn',
+      message: `agentation httpGet ${path} error: ${e instanceof Error ? e.message : String(e)}`,
+      source: 'agentation-api'
+    })
+    throw e
+  }
 }
 
 async function httpPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${getEndpoint()}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch(`${getEndpoint()}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    if (!res.ok) {
+      logFrontendError({
+        level: 'warn',
+        message: `agentation httpPost ${path} failed: HTTP ${res.status}`,
+        source: 'agentation-api'
+      })
+      throw new Error(`HTTP ${res.status}`)
+    }
+    return res.json()
+  } catch (e) {
+    logFrontendError({
+      level: 'warn',
+      message: `agentation httpPost ${path} error: ${e instanceof Error ? e.message : String(e)}`,
+      source: 'agentation-api'
+    })
+    throw e
+  }
 }
 
 async function httpPatch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${getEndpoint()}${path}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch(`${getEndpoint()}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    if (!res.ok) {
+      logFrontendError({
+        level: 'warn',
+        message: `agentation httpPatch ${path} failed: HTTP ${res.status}`,
+        source: 'agentation-api'
+      })
+      throw new Error(`HTTP ${res.status}`)
+    }
+    return res.json()
+  } catch (e) {
+    logFrontendError({
+      level: 'warn',
+      message: `agentation httpPatch ${path} error: ${e instanceof Error ? e.message : String(e)}`,
+      source: 'agentation-api'
+    })
+    throw e
+  }
 }
 
 export const agentationApi = {
@@ -177,14 +226,18 @@ export const agentationApi = {
     await httpPost(`/annotations/${annotationId}/thread`, { role: 'agent', content: message })
   },
 
-  // Feature flag
+  // Feature flag — platform-only; outside Tauri the setting cannot affect
+  // any browser tab, so we reject explicitly rather than silently succeeding.
   async setEnabled(enabled: boolean): Promise<void> {
-    const tauri = isTauriContext()
-    console.log('[Agentation API] setEnabled called: enabled=', enabled, 'isTauriContext=', tauri)
-    if (tauri) {
-      await tauriInvoke('agentation_set_enabled', { enabled })
-      console.log('[Agentation API] tauriInvoke succeeded')
+    if (!isTauriContext()) {
+      logFrontendError({
+        level: 'warn',
+        message: 'agentation setEnabled called outside Tauri — unsupported',
+        source: 'agentation-api'
+      })
+      throw new Error('Agentation setEnabled is not supported outside Tauri')
     }
+    await tauriInvoke('agentation_set_enabled', { enabled })
   },
   async isEnabled(): Promise<boolean> {
     if (isTauriContext()) {

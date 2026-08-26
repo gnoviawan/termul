@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_store::StoreExt;
 
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -1045,9 +1046,19 @@ pub fn run() {
 
             // Create Browser Tab Manager
             let browser_tab_manager =
-                Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
-            app.manage(browser_tab_manager);
+            Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            app.manage(browser_tab_manager.clone());
 
+            // Load persisted agentation enabled preference (issue #451 CodeRabbit).
+            // Falls back to true (enabled by default) when no stored value exists.
+            if let Ok(store) = handle.store("settings.json") {
+                let enabled = store
+                    .get("agentation/enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                browser_tab_manager.set_agentation_enabled(enabled);
+                log::info!("[agentation] loaded persisted enabled={}", enabled);
+            }
             // Start the agentation annotation service (issue #451, Epic 1).
             // Spawns the axum HTTP/SSE server on a dynamic port and opens SQLite.
             // The endpoint is wired to BrowserTabManager for toolbar injection.
