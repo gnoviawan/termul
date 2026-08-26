@@ -1,4 +1,14 @@
-import { AlertTriangle, ChevronDown, ExternalLink, Pencil, Plus, RefreshCw, Server, Trash2, Unlink } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  ExternalLink,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+  Unlink
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -334,7 +344,9 @@ export function McpServersSettings(): React.JSX.Element {
                           void connectMcpOAuth(server.id)
                             .then(() => toast.success(`Connected to ${server.name}`))
                             .catch(() =>
-                              toast.error('OAuth flow failed. Check your browser for the authorization page.')
+                              toast.error(
+                                'OAuth flow failed. Check your browser for the authorization page.'
+                              )
                             )
                         }
                       }}
@@ -428,7 +440,8 @@ export function McpServersSettings(): React.JSX.Element {
                   ) : probeStatus === 'authRequired' ? (
                     <div className="space-y-1">
                       <p className="text-3xs text-amber-600 dark:text-amber-400">
-                        This server requires OAuth authentication. Click "Connect" to authorize in your browser.
+                        This server requires OAuth authentication. Click "Connect" to authorize in
+                        your browser.
                       </p>
                     </div>
                   ) : probeStatus === 'connected' ? (

@@ -14,11 +14,11 @@
  * normalize it (toast, etc.).
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
+import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
-import { invoke } from '@tauri-apps/api/core'
-import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 
 // --- Identifiers -----------------------------------------------------------
 
