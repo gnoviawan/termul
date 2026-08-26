@@ -242,7 +242,7 @@ pub struct ThreadBody {
 async fn session_sse(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<EventsQuery>,
+    Query(_query): Query<EventsQuery>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, axum::Error>>> {
     let rx = state.store.event_bus().subscribe();
     let stream = BroadcastStream::new(rx).filter_map(move |result| {

@@ -8,6 +8,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn()
 }))
 
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
 import { invoke } from '@tauri-apps/api/core'
 import { browserTabInjectAgentation } from './browser-api'
 

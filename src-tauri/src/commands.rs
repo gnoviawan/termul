@@ -1233,7 +1233,7 @@ pub async fn browser_tab_report_url(
     url: String,
     app_handle: AppHandle,
     webview: Webview,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
+    _browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);

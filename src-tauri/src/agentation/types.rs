@@ -27,47 +27,32 @@ pub enum AnnotationSeverity {
     Suggestion,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationStatus {
+    #[default]
     Pending,
     Acknowledged,
     Resolved,
     Dismissed,
 }
 
-impl Default for AnnotationStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
+    #[default]
     Active,
     Approved,
     Closed,
 }
 
-impl Default for SessionStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationKind {
+    #[default]
     Feedback,
     Placement,
     Rearrange,
-}
-
-impl Default for AnnotationKind {
-    fn default() -> Self {
-        Self::Feedback
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

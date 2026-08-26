@@ -13,9 +13,13 @@
 //! The HTTP server serves the injected toolbar's direct HTTP calls.
 //! The MCP server serves agent-facing tool calls over stdio.
 
+#[allow(dead_code)]
 pub mod http_server;
+#[allow(dead_code)]
 pub mod mcp_server;
+#[allow(dead_code)]
 pub mod store;
+#[allow(dead_code)]
 pub mod types;
 
 use std::sync::Arc;
@@ -26,6 +30,7 @@ use types::AnnotationStore;
 use crate::browser_tab_manager;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AgentationService {
     pub store: Arc<SqliteStore>,
     pub http_addr: std::net::SocketAddr,
@@ -53,6 +58,7 @@ impl AgentationService {
     }
 
     /// Graceful shutdown.
+    #[allow(dead_code)]
     pub fn shutdown(&self) {
         self.shutdown.cancel();
     }
@@ -65,6 +71,7 @@ pub fn db_path(app_data_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Run the MCP server on stdio (called from a subcommand entry point).
+#[allow(dead_code)]
 pub async fn run_mcp_stdio(app_data_dir: &std::path::Path) -> Result<(), String> {
     let path = db_path(app_data_dir);
     let store = Arc::new(SqliteStore::open(&path)?);
@@ -119,7 +126,7 @@ pub async fn agentation_get_pending(
 ) -> Result<serde_json::Value, String> {
     let svc = get_service(&app)?;
     let annotations = svc.store.get_pending_annotations(&session_id);
-    serde_json::to_value(&serde_json::json!({
+    serde_json::to_value(serde_json::json!({
         "count": annotations.len(),
         "annotations": annotations,
     })).map_err(|e| e.to_string())
@@ -133,7 +140,7 @@ pub async fn agentation_get_all_pending(app: AppHandle) -> Result<serde_json::Va
     for s in &sessions {
         all.extend(svc.store.get_pending_annotations(&s.id));
     }
-    serde_json::to_value(&serde_json::json!({
+    serde_json::to_value(serde_json::json!({
         "count": all.len(),
         "annotations": all,
     })).map_err(|e| e.to_string())
@@ -171,7 +178,7 @@ pub async fn agentation_resolve(
     if let Some(s) = &summary {
         svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Resolved: {s}"));
     }
-    serde_json::to_value(&serde_json::json!({"resolved": true, "annotationId": annotation_id, "summary": summary}))
+    serde_json::to_value(serde_json::json!({"resolved": true, "annotationId": annotation_id, "summary": summary}))
         .map_err(|e| e.to_string())
 }
 
@@ -190,7 +197,7 @@ pub async fn agentation_dismiss(
             format!("Annotation not found: {annotation_id}")
         })?;
     svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Dismissed: {reason}"));
-    serde_json::to_value(&serde_json::json!({"dismissed": true, "annotationId": annotation_id, "reason": reason}))
+    serde_json::to_value(serde_json::json!({"dismissed": true, "annotationId": annotation_id, "reason": reason}))
         .map_err(|e| e.to_string())
 }
 

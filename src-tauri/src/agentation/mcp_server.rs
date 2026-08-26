@@ -248,8 +248,8 @@ impl AgentationMcpServer {
         description = "Block until new annotations appear, then collect a batch and return them. Triggers automatically when annotations are created — the user just annotates in the browser and the agent picks them up. Includes all annotation kinds: feedback, placement (design components), and rearrange (section reorder/resize). After detecting the first new annotation, waits for a batch window to collect more before returning. Use in a loop for hands-free processing. After addressing each annotation, call agentation_resolve with the annotation ID and a summary of what you did. Only resolve annotations the user accepted — if the user rejects your change, leave the annotation open."
     )]
     async fn watch_annotations(&self, Parameters(input): Parameters<WatchAnnotationsInput>) -> String {
-        let batch_window = input.batch_window_seconds.unwrap_or(10).min(60).max(1);
-        let timeout_secs = input.timeout_seconds.unwrap_or(120).min(300).max(1);
+        let batch_window = input.batch_window_seconds.unwrap_or(10).clamp(1, 60);
+        let timeout_secs = input.timeout_seconds.unwrap_or(120).clamp(1, 300);
 
         // Drain: return any pending immediately before blocking on SSE.
         let pending_path = input.session_id.as_deref();

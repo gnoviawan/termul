@@ -313,7 +313,7 @@ impl AnnotationStore for SqliteStore {
 
     fn add_annotation(&self, session_id: &str, data: &AnnotationInput) -> Option<Annotation> {
         // Verify session exists
-        if self.get_session(session_id).is_none() { return None; }
+        self.get_session(session_id)?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let id = generate_id();
