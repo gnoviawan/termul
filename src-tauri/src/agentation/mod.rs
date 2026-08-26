@@ -106,7 +106,10 @@ pub async fn agentation_get_session(
     svc.store
         .get_session_with_annotations(&session_id)
         .and_then(|s| serde_json::to_value(&s).ok())
-        .ok_or_else(|| format!("Session not found: {session_id}"))
+        .ok_or_else(|| {
+            log::warn!("[Agentation] get_session: session not found: {session_id}");
+            format!("Session not found: {session_id}")
+        })
 }
 
 #[tauri::command]
@@ -145,7 +148,10 @@ pub async fn agentation_acknowledge(
     svc.store
         .update_annotation_status(&annotation_id, types::AnnotationStatus::Acknowledged, Some("agent"))
         .and_then(|a| serde_json::to_value(&a).ok())
-        .ok_or_else(|| format!("Annotation not found: {annotation_id}"))
+        .ok_or_else(|| {
+            log::warn!("[Agentation] acknowledge: annotation not found: {annotation_id}");
+            format!("Annotation not found: {annotation_id}")
+        })
 }
 
 #[tauri::command]
@@ -158,7 +164,10 @@ pub async fn agentation_resolve(
     svc.store
         .update_annotation_status(&annotation_id, types::AnnotationStatus::Resolved, Some("agent"))
         .and_then(|a| serde_json::to_value(&a).ok())
-        .ok_or_else(|| format!("Annotation not found: {annotation_id}"))?;
+        .ok_or_else(|| {
+            log::warn!("[Agentation] resolve: annotation not found: {annotation_id}");
+            format!("Annotation not found: {annotation_id}")
+        })?;
     if let Some(s) = &summary {
         svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Resolved: {s}"));
     }
@@ -176,7 +185,10 @@ pub async fn agentation_dismiss(
     svc.store
         .update_annotation_status(&annotation_id, types::AnnotationStatus::Dismissed, Some("agent"))
         .and_then(|a| serde_json::to_value(&a).ok())
-        .ok_or_else(|| format!("Annotation not found: {annotation_id}"))?;
+        .ok_or_else(|| {
+            log::warn!("[Agentation] dismiss: annotation not found: {annotation_id}");
+            format!("Annotation not found: {annotation_id}")
+        })?;
     svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Dismissed: {reason}"));
     serde_json::to_value(&serde_json::json!({"dismissed": true, "annotationId": annotation_id, "reason": reason}))
         .map_err(|e| e.to_string())
@@ -192,7 +204,10 @@ pub async fn agentation_reply(
     svc.store
         .add_thread_message(&annotation_id, types::ThreadRole::Agent, &message)
         .and_then(|a| serde_json::to_value(&a).ok())
-        .ok_or_else(|| format!("Annotation not found: {annotation_id}"))
+        .ok_or_else(|| {
+            log::warn!("[Agentation] reply: annotation not found: {annotation_id}");
+            format!("Annotation not found: {annotation_id}")
+        })
 }
 
 #[tauri::command]
@@ -234,5 +249,8 @@ pub async fn agentation_is_enabled(app: AppHandle) -> Result<bool, String> {
 fn get_service(app: &AppHandle) -> Result<AgentationService, String> {
     app.try_state::<AgentationService>()
         .map(|s| s.inner().clone())
-        .ok_or_else(|| "Agentation service not started".to_string())
+        .ok_or_else(|| {
+            log::warn!("[Agentation] service not started — command rejected");
+            "Agentation service not started".to_string()
+        })
 }
