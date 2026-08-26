@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 36 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(36)
+  it('exports exactly 37 request types including discovered-session promotion', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(37)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -81,6 +81,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'open_persisted_session',
       'get_session_payload',
       'recover_session_snapshot',
+      'get_session_payload_tail',
       'get_session_cursor',
       'register_discovered_session',
       'list_sessions',
