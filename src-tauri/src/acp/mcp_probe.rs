@@ -480,13 +480,6 @@ async fn check_oauth_required(url: &str) -> Option<String> {
     }
     None
 }
-/// Extract the `www_authenticate_header` value from a rmcp error string.
-/// rmcp's `AuthRequiredError` Debug impl prints
-/// `AuthRequired(AuthRequiredError { www_authenticate_header: "..." })` — we
-/// parse the inner quoted value. This is a best-effort extraction: if the
-/// format changes, the probe falls back to `Disconnected` (not a false
-/// AuthRequired), which is safe.
-
 /// Drive an initialized rmcp client service: list all tools (paginated), then
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.
