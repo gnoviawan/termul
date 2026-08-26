@@ -51,6 +51,7 @@ import type {
   SpawnAgentResult,
   StopReason
 } from '@/lib/acp-api'
+import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -179,9 +180,9 @@ export interface AcpTransport {
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>
   /** Web/remote: fetch the full stored transcript for a session (server mode). */
-  getSessionPayload?(
-    sessionId: SessionId
-  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null>
+  getSessionPayload?(sessionId: SessionId): Promise<SessionPayload | null>
+  /** Tail-first variant of `getSessionPayload`: fetches only the last `limit` messages. */
+  getSessionPayloadTail?(sessionId: SessionId, limit: number): Promise<SessionPayload | null>
   onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
@@ -777,15 +778,27 @@ export class WsAcpTransport implements AcpTransport {
 
   async getSessionPayload(
     sessionId: SessionId
-  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null> {
+  ): Promise<SessionPayload | null> {
     try {
-      return await this.request<import('@/lib/acp-history-persistence').SessionPayload>(
-        'get_session_payload',
-        { sessionId }
-      )
+      return await this.request<SessionPayload>('get_session_payload', { sessionId })
     } catch (err) {
       // `not_found` → the session is absent from the cache (web shows "chat
       // unavailable"); other errors propagate.
+      if (err instanceof AcpTransportError && err.code === 'not_found') return null
+      throw err
+    }
+  }
+
+  async getSessionPayloadTail(
+    sessionId: SessionId,
+    limit: number
+  ): Promise<SessionPayload | null> {
+    try {
+      return await this.request<SessionPayload>('get_session_payload_tail', {
+        sessionId,
+        limit
+      })
+    } catch (err) {
       if (err instanceof AcpTransportError && err.code === 'not_found') return null
       throw err
     }

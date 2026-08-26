@@ -185,6 +185,50 @@ impl ChatHistoryStore {
         Ok(file.payload)
     }
 
+    /// Tail-first variant of [`get`]: reads the full payload (same I/O), then
+    /// keeps only the last `limit` messages + the tool calls whose `seq` falls
+    /// within the tail message range. Returns the same `Value` shape so the
+    /// renderer can consume it identically to a full payload. The metadata's
+    /// `messageCount` reflects the tail slice.
+    pub fn get_tail(&self, session_id: &str, limit: usize) -> Result<Value> {
+        let payload = self.get(session_id)?;
+        let mut messages = payload
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if messages.len() <= limit {
+            return Ok(payload);
+        }
+        let tail = messages.split_off(messages.len() - limit);
+        let oldest_tail_seq = tail
+            .iter()
+            .filter_map(|m| m.get("seq").and_then(|s| s.as_u64()))
+            .min()
+            .unwrap_or(0);
+        let mut result = payload;
+        result["messages"] = serde_json::Value::Array(tail);
+        if let Some(metadata) = result.get_mut("metadata").and_then(|m| m.as_object_mut()) {
+            metadata.insert(
+                "messageCount".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from(messages.len().min(limit)),
+                ),
+            );
+        }
+        if let Some(tool_calls) = result
+            .get_mut("toolCalls")
+            .and_then(|t| t.as_array_mut())
+        {
+            tool_calls.retain(|tc| {
+                tc.get("seq")
+                    .and_then(|s| s.as_u64())
+                    .is_some_and(|seq| seq >= oldest_tail_seq)
+            });
+        }
+        Ok(result)
+    }
+
     /// Server-authoritative replay cursor (R2): the highest persisted event
     /// `seq` for a session, so a refreshed transport can seed `lastSeq` from
     /// the backend before subscribing (instead of a dead per-instance cursor).

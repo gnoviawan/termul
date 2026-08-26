@@ -12,6 +12,11 @@ export const SESSION_INDEX_KEY = 'acp/sessions/index'
 export const WIPE_MIGRATION_KEY = 'acp/sessions/migrated-v2'
 export const INACTIVE_PAYLOAD_CACHE_BUDGET = 3
 
+/** Default tail message count for lazy-load chat history open. Smaller than
+ * `MAX_LIVE_WINDOW_MESSAGES` (300) — only the recent transcript is needed
+ * for the user to read + chat; the full payload loads on scroll-up. */
+export const HISTORY_TAIL_MESSAGE_LIMIT = 50
+
 export function sessionPayloadKey(id: string): string {
   return `acp/sessions/${id}`
 }
@@ -543,6 +548,47 @@ export async function loadSessionPayload(id: string): Promise<SessionPayload | n
   const payload = await acpHistoryApi.get(id)
   if (payload) touchPayload(id, payload)
   return payload
+}
+
+/**
+ * Tail-first variant of {@link loadSessionPayload}: fetches only the last
+ * `limit` messages + matching tool calls so the renderer can install the
+ * recent transcript immediately and lazy-load the full payload on scroll-up.
+ *
+ * Cache-first: if the full payload is already cached (instant second open),
+ * slices the tail from it — no IPC. Otherwise fetches via the transport/API
+ * tail method. NEVER writes to `payloadCache` — the cache is for full
+ * payloads only, and `loadOlderMessages` expects to find (or fetch) the full
+ * payload on a cache miss.
+ */
+export async function loadSessionPayloadTail(
+  id: string,
+  limit: number = HISTORY_TAIL_MESSAGE_LIMIT
+): Promise<SessionPayload | null> {
+  // Cache-first: slice the tail from a cached full payload (instant re-open).
+  const cached = payloadCache.get(id)
+  if (cached) {
+    touchPayload(id, cached)
+    if (cached.messages.length <= limit) return cached
+    const tailStart = cached.messages.length - limit
+    return {
+      ...cached,
+      messages: cached.messages.slice(tailStart),
+      toolCalls: cached.toolCalls?.filter(
+        (tc) =>
+          typeof tc.seq !== 'number' ||
+          tc.seq >= (cached.messages[tailStart]?.seq ?? 0)
+      )
+    }
+  }
+  // Transport tail (web/remote) → API tail (desktop) → null.
+  const transport = getAcpTransport()
+  const mode = transport.historyMode?.()
+  if (mode === 'server' && transport.getSessionPayloadTail) {
+    return transport.getSessionPayloadTail(id, limit)
+  }
+  if (mode === 'live_only') return null
+  return acpHistoryApi.getTail(id, limit)
 }
 
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {

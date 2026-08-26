@@ -836,6 +836,25 @@ impl SessionPersistence {
         ))
     }
 
+    /// Tail-first variant of [`session_payload_async`]: materialize the full
+    /// payload (same flush + replay), then keep only the last `limit` messages.
+    /// Used by the lazy-load chat history path so the renderer can install the
+    /// recent transcript immediately and fetch the full payload on scroll-up.
+    /// The metadata's `messageCount` reflects the tail slice (not the full
+    /// session), so the renderer knows how many messages it received.
+    pub async fn session_payload_tail_async(
+        self: &Arc<Self>,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<crate::acp::session_payload::MaterializedSessionPayload> {
+        let mut payload = self.session_payload_async(session_id).await?;
+        if payload.messages.len() > limit {
+            payload.messages = payload.messages.split_off(payload.messages.len() - limit);
+            payload.metadata.message_count = payload.messages.len() as u64;
+        }
+        Ok(payload)
+    }
+
     /// Completed client turn ids reconstructed from durable prompt-complete
     /// records. This survives restart without treating arbitrary browser input
     /// as authoritative transcript state.

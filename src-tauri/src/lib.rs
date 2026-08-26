@@ -1650,6 +1650,7 @@ pub fn run() {
             commands::acp_history_list,
             commands::acp_history_get,
             commands::acp_history_save,
+            commands::acp_history_get_tail,
             commands::acp_history_delete,
             commands::acp_history_flush,
             commands::acp_history_mark_legacy_import_complete,

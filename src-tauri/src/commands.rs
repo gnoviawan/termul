@@ -3803,6 +3803,57 @@ pub async fn acp_history_get(
     }
 }
 
+/// Tail-first variant of [`acp_history_get`]: fetches only the last `limit`
+/// messages + matching tool calls so the renderer can install the recent
+/// transcript immediately and lazy-load the full payload on scroll-up.
+/// `limit` is clamped to `[1, 500]` (defensive bounds — the live window is
+/// 300, and a tail fetch larger than the full payload is pointless).
+/// Mirrors `acp_history_get` but calls `session_payload_tail_async`.
+#[tauri::command]
+pub async fn acp_history_get_tail(
+    session_id: String,
+    limit: Option<u32>,
+    host: State<'_, HostHistoryStore>,
+) -> Result<IpcResult<Option<serde_json::Value>>, String> {
+    let log_session_id = sanitize_log_field(&session_id);
+    let limit = limit.unwrap_or(50).clamp(1, 500) as usize;
+    log::info!(
+        "[acp-history] get_tail start session_id={} limit={}",
+        log_session_id,
+        limit
+    );
+    let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
+        log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+        return Ok(IpcResult::success(None));
+    };
+    match persistence.session_payload_tail_async(&session_id, limit).await {
+        Ok(payload) => {
+            log::info!(
+                "[acp-history] get_tail success session_id={} messages={}",
+                log_session_id,
+                payload.messages.len()
+            );
+            let value = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
+            Ok(IpcResult::success(Some(value)))
+        }
+        Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+            log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+            Ok(IpcResult::success(None))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] get_tail failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_GET_FAILED",
+            ))
+        }
+    }
+}
+
 /// Legacy write path (renderer wipe-migration only). Live sessions are authored
 /// by the host event/session layer and never flow through this command. The
 /// payload lands in the legacy `ChatHistoryStore`; the incremental host import

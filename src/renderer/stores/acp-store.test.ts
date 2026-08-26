@@ -42,7 +42,11 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => {
     // Read-through the module-level cache so tests can seed payloads via
     // setCachedSessionPayload (preferred over per-test mockResolvedValue).
     loadSessionPayload: vi.fn(async (id: string) => actual.getCachedSessionPayload(id) ?? null),
-    deleteSessionPayload: vi.fn(async () => {})
+    // Tail-first: the store calls `loadSessionPayloadTail` first, then falls
+    // back to `loadSessionPayload`. Mock both to the same cache-backed fn so
+    // per-test `mockResolvedValueOnce` on `loadSessionPayload` still fires
+    // (the tail mock returns null when no cache is seeded → fallback runs).
+    loadSessionPayloadTail: vi.fn(async () => null),
   }
 })
 vi.mock('@/lib/acp-mcp-persistence', async (orig) => {

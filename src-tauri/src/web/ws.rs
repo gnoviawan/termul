@@ -1081,6 +1081,9 @@ async fn handle_request(
         "get_session_payload" => {
             handle_get_session_payload(id, &req.payload, relay, history_mode).await
         }
+        "get_session_payload_tail" => {
+            handle_get_session_payload_tail(id, &req.payload, relay, history_mode).await
+        }
         "recover_session_snapshot" => {
             handle_recover_session_snapshot(
                 id,
@@ -1402,6 +1405,75 @@ async fn handle_get_session_payload(
                         id,
                         WsErrorCode::Unsupported,
                         "failed to read session payload",
+                    )
+                }
+            }
+        }
+        None => WsReply::err(id, WsErrorCode::NotFound, "session payload not found"),
+    }
+}
+
+/// `get_session_payload_tail` — tail-first variant of `get_session_payload`.
+/// Fetches only the last `limit` messages + matching tool calls so the
+/// renderer can install the recent transcript immediately and lazy-load the
+/// full payload on scroll-up. Mirrors `handle_get_session_payload` but calls
+/// `session_payload_tail_async`.
+async fn handle_get_session_payload_tail(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GetSessionPayloadTailRequest {
+        session_id: String,
+        limit: Option<u32>,
+    }
+    let parsed: GetSessionPayloadTailRequest = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed get_session_payload_tail payload (want sessionId, limit?): {e}"),
+            )
+        }
+    };
+    let limit = parsed.limit.unwrap_or(50).clamp(1, 500) as usize;
+    match relay.persistence() {
+        Some(persistence) => {
+            match persistence.session_payload_tail_async(&parsed.session_id, limit).await {
+                Ok(payload) => {
+                    tracing::debug!(
+                        target: "termul::web::ws",
+                        session_id = %parsed.session_id,
+                        messages = payload.messages.len(),
+                        "get_session_payload_tail: materialized host tail payload"
+                    );
+                    ok_with_payload(id, &payload)
+                }
+                Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+                    WsReply::err(id, WsErrorCode::NotFound, "session payload not found")
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "termul::web::ws",
+                        session_id = %parsed.session_id,
+                        error = %error,
+                        "get_session_payload_tail: host tail materialization failed"
+                    );
+                    WsReply::err(
+                        id,
+                        WsErrorCode::Unsupported,
+                        "failed to read session payload tail",
                     )
                 }
             }

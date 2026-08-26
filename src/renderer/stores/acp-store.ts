@@ -89,6 +89,7 @@ import {
   getCachedSessionPayload,
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
+  loadSessionPayloadTail,
   markSessionPayloadPinned,
   maxPayloadSeq,
   queueSessionPayloadDelete,
@@ -2251,7 +2252,12 @@ async function openHistorySessionInner(
     })
   }
 
-  const payload = await loadSessionPayload(id)
+  // Tail-first: fetch only the recent messages so the pane shows the
+  // conversation immediately. The full payload loads lazily on scroll-up
+  // via `loadOlderMessages`. Falls back to the full `loadSessionPayload`
+  // on tail-fetch failure (no regression vs. the previous behavior).
+  let payload = await loadSessionPayloadTail(id).catch(() => null)
+  if (!payload) payload = await loadSessionPayload(id)
   if (!isCurrentSessionReopen(id, reopenGeneration)) return
   if (!payload) throw new Error(`no persisted history for ${id}`)
   const meta = payload.metadata
@@ -4018,7 +4024,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // on refresh. The backend `gate_resume_session` enforces the capability
     // (reused — not duplicated); a rejection rejects here so the bootstrap hook
     // can record `acp-resume-skipped` and keep the transcript read-only.
-    const payload = await loadSessionPayload(id)
+    // Tail-first: fetch only the recent messages for fast resume. The full
+    // payload loads lazily on scroll-up via `loadOlderMessages`. Falls back
+    // to the full `loadSessionPayload` on tail-fetch failure.
+    let payload = await loadSessionPayloadTail(id).catch(() => null)
+    if (!payload) payload = await loadSessionPayload(id)
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
     rebaseSeqCounter(maxPayloadSeq(payload))

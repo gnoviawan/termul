@@ -139,6 +139,10 @@ export const WS_REQUEST_TYPES = [
   // this only returns the durable `{ sessionId, watermark }` so a refreshed
   // transport can seed `lastSeq` before its first subscribe.
   'get_session_cursor',
+  // Tail-first variant of `get_session_payload`: fetches only the last `limit`
+  // messages + matching tool calls so the renderer can install the recent
+  // transcript immediately and lazy-load the full payload on scroll-up.
+  'get_session_payload_tail',
   // CAP-6 / Story 8: host-owned ACP catalog resolution. The web client
   // resolves the catalog through `list_acp_catalog` (the host's OS/arch/
   // runtime + per-agent `SupportedAcpAgentStatus`) + `set_catalog_opt_in`
