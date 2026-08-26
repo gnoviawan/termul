@@ -289,7 +289,10 @@ interface ProjectChatRowProps {
   onCopyPath: (cwd: string) => void
   onDelete: (entry: ProjectChatEntry) => void
 }
-
+/**
+ * A single per-project chat row: title + relative last-activity time, with a
+ * context menu (open terminal / file explorer / copy path / delete).
+ */
 function ProjectChatRow({
   entry,
   onOpen,

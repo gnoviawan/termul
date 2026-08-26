@@ -38,7 +38,10 @@ interface ChatHistoryEntryRowProps {
   onOpen: (entry: ChatHistorySidebarEntry) => void
   onDelete: (id: string) => void
 }
-
+/**
+ * A single chat-history row for the sidebar `ChatHistoryTab`: agent icon, title,
+ * and a compact relative last-activity time (replacing the old message count).
+ */
 export function ChatHistoryEntryRow({
   entry,
   onOpen,
