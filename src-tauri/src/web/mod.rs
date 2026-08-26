@@ -23,6 +23,7 @@ pub mod install_api;
 pub mod log_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod mcp_oauth_api;
 pub mod search_api;
 pub mod skills_api;
 pub mod permissions;

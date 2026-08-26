@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, Pencil, Plus, RefreshCw, Server, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ExternalLink, Pencil, Plus, RefreshCw, Server, Trash2, Unlink } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -77,6 +77,11 @@ export function McpServersSettings(): React.JSX.Element {
   const mcpProbeError = useAcpStore((state) => state.mcpProbeError)
   const mcpTools = useAcpStore((state) => state.mcpTools)
   const mcpProbing = useAcpStore((state) => state.mcpProbing)
+  const mcpOAuthConnecting = useAcpStore((state) => state.mcpOAuthConnecting)
+  const mcpOAuthConnected = useAcpStore((state) => state.mcpOAuthConnected)
+  const connectMcpOAuth = useAcpStore((state) => state.connectMcpOAuth)
+  const disconnectMcpOAuth = useAcpStore((state) => state.disconnectMcpOAuth)
+  const checkMcpOAuthStatus = useAcpStore((state) => state.checkMcpOAuthStatus)
   const [dialog, setDialog] = useState<McpDialogState | null>(null)
   const [jsonText, setJsonText] = useState('')
   const [jsonErrors, setJsonErrors] = useState<string[]>([])
@@ -91,12 +96,19 @@ export function McpServersSettings(): React.JSX.Element {
   // biome-ignore lint/correctness/useExhaustiveDependencies: shape-only dep — re-probe only when the id set changes shape, not on every toggle; `probeMcpServer` is a stable store action reference.
   useEffect(() => {
     for (const server of servers) {
-      // Skip disabled servers on mount — they are not injected into sessions, so
-      // their reachability status is not actionable at idle. The manual "Test"
-      // button below still probes a disabled server on explicit request.
       if (server.enabled === false) continue
-      // Fire-and-forget; the store dedupes concurrent probes per id.
       void probeMcpServer(server.id)
+    }
+  }, [servers.map((s) => s.id).join('|')])
+
+  // Check OAuth token status for HTTP/SSE servers on mount. If a token
+  // exists, the probe will use it automatically and show "connected".
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shape-only dep
+  useEffect(() => {
+    for (const server of servers) {
+      if (transportOf(server) === 'http' || transportOf(server) === 'sse') {
+        void checkMcpOAuthStatus(server.id)
+      }
     }
   }, [servers.map((s) => s.id).join('|')])
 
@@ -269,21 +281,27 @@ export function McpServersSettings(): React.JSX.Element {
                         ? 'size-2 shrink-0 rounded-full bg-emerald-500'
                         : probeStatus === 'disconnected'
                           ? 'size-2 shrink-0 rounded-full bg-red-500'
-                          : 'size-2 shrink-0 rounded-full bg-muted-foreground/40'
+                          : probeStatus === 'authRequired'
+                            ? 'size-2 shrink-0 rounded-full bg-amber-500'
+                            : 'size-2 shrink-0 rounded-full bg-muted-foreground/40'
                     }
                     aria-label={
                       probeStatus === 'connected'
                         ? `${server.name} reachable`
                         : probeStatus === 'disconnected'
                           ? `${server.name} unreachable`
-                          : `${server.name} not probed yet`
+                          : probeStatus === 'authRequired'
+                            ? `${server.name} requires authentication`
+                            : `${server.name} not probed yet`
                     }
                     title={
                       probeStatus === 'connected'
                         ? 'Connected (Termul can reach this server)'
                         : probeStatus === 'disconnected'
                           ? 'Disconnected (Termul could not reach this server)'
-                          : 'Not probed yet — click "Test" to check'
+                          : probeStatus === 'authRequired'
+                            ? 'Authentication required — click "Connect" to authorize'
+                            : 'Not probed yet — click "Test" to check'
                     }
                   />
                   <span className="min-w-0 shrink truncate text-sm font-medium">{server.name}</span>
@@ -301,6 +319,41 @@ export function McpServersSettings(): React.JSX.Element {
                         ? 'Probe failed — retry'
                         : 'Show tools'}
                   </CollapsibleTrigger>
+                  {(probeStatus === 'authRequired' || mcpOAuthConnected[server.id]) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={mcpOAuthConnected[server.id] ? 'outline' : 'default'}
+                      disabled={Boolean(mcpOAuthConnecting[server.id])}
+                      onClick={() => {
+                        if (mcpOAuthConnected[server.id]) {
+                          void disconnectMcpOAuth(server.id).catch(() =>
+                            toast.error('Could not disconnect OAuth. Try again.')
+                          )
+                        } else {
+                          void connectMcpOAuth(server.id)
+                            .then(() => toast.success(`Connected to ${server.name}`))
+                            .catch(() =>
+                              toast.error('OAuth flow failed. Check your browser for the authorization page.')
+                            )
+                        }
+                      }}
+                      className="shrink-0"
+                    >
+                      {mcpOAuthConnecting[server.id] ? (
+                        <RefreshCw size={13} className="mr-1 animate-spin" />
+                      ) : mcpOAuthConnected[server.id] ? (
+                        <Unlink size={13} className="mr-1" />
+                      ) : (
+                        <ExternalLink size={13} className="mr-1" />
+                      )}
+                      {mcpOAuthConnecting[server.id]
+                        ? 'Connecting…'
+                        : mcpOAuthConnected[server.id]
+                          ? 'Disconnect'
+                          : 'Connect'}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     size="icon"
@@ -371,6 +424,12 @@ export function McpServersSettings(): React.JSX.Element {
                           {mcpProbeError[server.id]}
                         </span>
                       ) : null}
+                    </div>
+                  ) : probeStatus === 'authRequired' ? (
+                    <div className="space-y-1">
+                      <p className="text-3xs text-amber-600 dark:text-amber-400">
+                        This server requires OAuth authentication. Click "Connect" to authorize in your browser.
+                      </p>
                     </div>
                   ) : probeStatus === 'connected' ? (
                     <p className="text-3xs text-muted-foreground">

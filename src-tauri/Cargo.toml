@@ -116,7 +116,11 @@ rmcp = { version = "1.4.0", features = [
     "server",
     "transport-io",
     "macros",
+    "auth",
 ] }
+# OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
+# (rmcp's `auth` feature pulls this transitively, but we use it directly).
+oauth2 = "5.0"
 
 # Regex and parsing
 regex = "1"

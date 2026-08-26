@@ -389,6 +389,16 @@ pub struct AppState {
     /// for the duration of the `starts_with` containment check (no `.await`
     /// under the guard).
     pub project_root: Arc<parking_lot::RwLock<std::path::PathBuf>>,
+    /// Pending MCP OAuth flows keyed by server URL. Used by the web OAuth
+    /// callback route to complete the token exchange after the browser
+    /// redirect. The desktop path doesn't use this (it runs the full flow
+    /// synchronously in the `acp_mcp_oauth_start` command).
+    pub pending_oauth_flows: Arc<parking_lot::RwLock<std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>>>,
+    /// Base URL for OAuth redirect URIs on the web path. The standalone
+    /// server derives this from its bind address; the desktop shared-live
+    /// host uses the cloudflared tunnel URL. The OAuth callback route lives
+    /// at `{base}/oauth/callback`.
+    pub oauth_base_url: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

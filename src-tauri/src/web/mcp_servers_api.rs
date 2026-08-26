@@ -138,6 +138,8 @@ mod tests {
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         project_root: Arc::new(parking_lot::RwLock::new(dir)),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,

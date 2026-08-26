@@ -30,6 +30,7 @@ use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::mcp_oauth_api;
 use crate::web::search_api;
 use crate::web::skills_api;
 use crate::web::project_registry::ProjectRegistry;
@@ -114,6 +115,14 @@ pub fn router(
         // host where stdio commands execute. Mirrors the `acp_probe_mcp_server`
         // Tauri command; returns the same `IpcBody<ProbeResult>` shape.
         .route("/mcp-servers/probe", post(mcp_probe_api::probe))
+        // MCP OAuth (web parity): start flow, check status, disconnect.
+        // Registered AHEAD of the static fallback so the SPA mount cannot
+        // shadow them.
+        .route("/mcp-servers/oauth/start", post(mcp_oauth_api::oauth_start))
+        .route("/mcp-servers/oauth/status", post(mcp_oauth_api::oauth_status))
+        .route("/mcp-servers/oauth/disconnect", post(mcp_oauth_api::oauth_disconnect))
+        // The OAuth callback redirect target (GET — the AS redirects here).
+        .route("/oauth/callback", get(mcp_oauth_api::oauth_callback))
         // Project-creation fs/git/shell routes (Story: Web/remote project
         // creation). Registered AHEAD of the static fallback so `/health` +
         // `/ws` keep priority and the SPA fallback cannot shadow them.
@@ -235,6 +244,10 @@ pub fn router(
         allow_remote_writes,
         shared_live_writes_denied,
         project_root: project_root_handle,
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        oauth_base_url: format!("http://{}", "127.0.0.1"), // Updated at serve time
     })
 }
 
@@ -346,6 +359,10 @@ pub fn router_with_static(
                 allow_remote_writes,
                 shared_live_writes_denied,
                 project_root: project_root_handle,
+                pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
+                oauth_base_url: "http://127.0.0.1".to_string(),
             }
         })
 }

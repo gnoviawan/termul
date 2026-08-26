@@ -346,6 +346,10 @@ interface AcpState {
    * and as the chatbox "Probe failed" tooltip so failures are diagnosable.
    */
   mcpProbeError: Record<string, string | undefined>
+  /** Per-server OAuth connecting state (true while the browser OAuth flow is in progress). */
+  mcpOAuthConnecting: Record<string, boolean>
+  /** Per-server OAuth connected state (true when a stored token exists). */
+  mcpOAuthConnected: Record<string, boolean>
 
   // Sessions
   sessions: Record<SessionId, AcpSession>
@@ -594,6 +598,13 @@ interface AcpState {
    * loaded; otherwise delegates to `probeMcpServer(id)`.
    */
   loadMcpTools: (id: string) => Promise<void>
+  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`.
+   * Opens the system browser, waits for the callback, stores the token. */
+  connectMcpOAuth: (id: string) => Promise<void>
+  /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
+  checkMcpOAuthStatus: (id: string) => Promise<void>
+  /** Delete the stored OAuth token (the "Disconnect" action). */
+  disconnectMcpOAuth: (id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
@@ -2835,6 +2846,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   mcpServers: [],
   mcpServersLoaded: false,
   mcpProbeStatus: {},
+  mcpOAuthConnecting: {},
+  mcpOAuthConnected: {},
   mcpTools: {},
   mcpToolsLoaded: {},
   mcpProbing: {},
@@ -4637,6 +4650,61 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // Auto-probe on first expand — no-op if already loaded (or in flight).
     if (get().mcpToolsLoaded[id] || get().mcpProbing[id]) return
     await get().probeMcpServer(id)
+  },
+  connectMcpOAuth: async (id) => {
+    const server = get().mcpServers.find((s) => s.id === id)
+    if (!server) return
+    const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
+    if (!url) return
+    set((s) => ({ mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: true } }))
+    try {
+      await acpApi.startMcpOAuth(url)
+      set((s) => ({
+        mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: true },
+        mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false }
+      }))
+      // Re-probe now that we have a token — should succeed.
+      await get().probeMcpServer(id)
+    } catch (err) {
+      set((s) => ({ mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false } }))
+      void logFrontendError({
+        source: 'acp-store.connectMcpOAuth',
+        message: `OAuth flow failed for server '${server.name}' (${String(err)})`
+      })
+      throw err
+    }
+  },
+
+  checkMcpOAuthStatus: async (id) => {
+    const server = get().mcpServers.find((s) => s.id === id)
+    if (!server) return
+    const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
+    if (!url) return
+    try {
+      const hasToken = await acpApi.hasMcpOAuthToken(url)
+      set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: hasToken } }))
+    } catch {
+      // Best-effort — the probe will still detect authRequired.
+    }
+  },
+
+  disconnectMcpOAuth: async (id) => {
+    const server = get().mcpServers.find((s) => s.id === id)
+    if (!server) return
+    const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
+    if (!url) return
+    try {
+      await acpApi.disconnectMcpOAuth(url)
+      set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: false } }))
+      // Re-probe — should return authRequired again.
+      await get().probeMcpServer(id)
+    } catch (err) {
+      void logFrontendError({
+        source: 'acp-store.disconnectMcpOAuth',
+        message: `OAuth disconnect failed for server '${server.name}' (${String(err)})`
+      })
+      throw err
+    }
   },
 
   sendPrompt: (sessionId, text) =>

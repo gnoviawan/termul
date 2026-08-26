@@ -15,6 +15,9 @@
  */
 
 import { getAcpTransport } from '@/lib/acp-transport'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { webServerMcpOAuth } from '@/lib/web-server-api'
+import { invoke } from '@tauri-apps/api/core'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 
 // --- Identifiers -----------------------------------------------------------
@@ -221,7 +224,7 @@ export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 // --- MCP client probe (on-demand `initialize` + `tools/list`) -------------
 
 /** Per-server probe status (Termul's own client connection, not the agent's). */
-export type ProbeStatus = 'connected' | 'disconnected'
+export type ProbeStatus = 'connected' | 'disconnected' | 'authRequired'
 
 /** A tool exposed by a probed MCP server (`tools/list` output, UI subset). */
 export interface McpToolInfo {
@@ -229,11 +232,14 @@ export interface McpToolInfo {
   description?: string
 }
 
-/** Probe result. On `disconnected`, `error` is a short, value-free message. */
+/** Probe result. On `disconnected`, `error` is a short, value-free message.
+ * On `authRequired`, `wwwAuthenticateHeader` carries the raw WWW-Authenticate
+ * header so the frontend can detect OAuth and start the connect flow. */
 export interface ProbeResult {
   status: ProbeStatus
   tools: McpToolInfo[]
   error?: string
+  wwwAuthenticateHeader?: string
 }
 /** Wire type forwarded verbatim to the backend `acp_new_session` command. */
 export type McpServer = McpServerConfig
@@ -538,6 +544,41 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
   const { listMcpTools: canonicalList } = await import('@/lib/acp-mcp-probe')
   return canonicalList(server)
 }
+// --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
+
+/** Start the OAuth flow for an MCP server URL. On desktop, opens the system
+ * browser and waits for the callback. On web, returns the auth URL to redirect
+ * the browser to. Throws on failure (discovery, registration, timeout). */
+export async function startMcpOAuth(serverUrl: string): Promise<void> {
+  if (isTauriContext()) {
+    await invoke('acp_mcp_oauth_start', { serverUrl })
+  } else {
+    // Web path: the server returns the auth URL; the caller redirects.
+    const result = await webServerMcpOAuth.start(serverUrl)
+    if (!result.success) {
+      throw new Error(result.error ?? 'OAuth start failed')
+    }
+    window.open(result.data.authUrl, '_blank', 'noopener')
+  }
+}
+
+/** Check whether a stored OAuth token exists for a server URL. */
+export async function hasMcpOAuthToken(serverUrl: string): Promise<boolean> {
+  if (isTauriContext()) {
+    return invoke<boolean>('acp_mcp_oauth_has_token', { serverUrl })
+  }
+  const result = await webServerMcpOAuth.status(serverUrl)
+  return result.success && result.data ? result.data.hasToken : false
+}
+
+/** Delete the stored OAuth token for a server URL (the "Disconnect" action). */
+export async function disconnectMcpOAuth(serverUrl: string): Promise<void> {
+  if (isTauriContext()) {
+    await invoke('acp_mcp_oauth_disconnect', { serverUrl })
+  } else {
+    await webServerMcpOAuth.disconnect(serverUrl)
+  }
+}
 
 export interface AcpRegistrySnapshot {
   agents: unknown
@@ -768,6 +809,9 @@ export const acpApi = {
   probeRuntime: acpProbeRuntime,
   probeMcpServer,
   listMcpTools,
+  startMcpOAuth,
+  hasMcpOAuthToken,
+  disconnectMcpOAuth,
   fetchRegistrySnapshot: acpFetchRegistrySnapshot,
   onEvent: onAcpEvent
 }

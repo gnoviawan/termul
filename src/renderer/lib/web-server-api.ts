@@ -565,3 +565,20 @@ export const webServerWorktree = {
     })
   }
 }
+/** MCP OAuth web parity — mirrors the desktop Tauri commands. */
+export const webServerMcpOAuth = {
+  /** Start the OAuth flow; returns the auth URL to redirect the browser to. */
+  async start(serverUrl: string): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
+    return postJson('/mcp-servers/oauth/start', { serverUrl })
+  },
+
+  /** Check whether a stored OAuth token exists for a server URL. */
+  async status(serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
+    return postJson('/mcp-servers/oauth/status', { serverUrl })
+  },
+
+  /** Delete the stored OAuth token for a server URL. */
+  async disconnect(serverUrl: string): Promise<IpcResult<void>> {
+    return postJson('/mcp-servers/oauth/disconnect', { serverUrl })
+  }
+}

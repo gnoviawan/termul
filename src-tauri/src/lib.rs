@@ -1625,6 +1625,9 @@ pub fn run() {
             acp::commands::acp_set_session_reopen_timeout,
             acp::commands::acp_set_first_prompt_warmup_timeout,
             acp::commands::acp_probe_mcp_server,
+            acp::commands::acp_mcp_oauth_start,
+            acp::commands::acp_mcp_oauth_has_token,
+            acp::commands::acp_mcp_oauth_disconnect,
             // CAP-6 / Story 8: ACP catalog (host-owned resolution).
             acp::commands::acp_list_catalog,
             acp::commands::acp_set_catalog_opt_in,

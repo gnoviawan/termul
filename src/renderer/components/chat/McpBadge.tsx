@@ -64,6 +64,7 @@ function McpIcon({ className }: { className?: string }): React.JSX.Element {
 function statusColor(status: ProbeStatus | undefined): string {
   if (status === 'connected') return 'bg-connection'
   if (status === 'disconnected') return 'bg-destructive'
+  if (status === 'authRequired') return 'bg-amber-500'
   return 'bg-muted-foreground/40'
 }
 
@@ -71,12 +72,14 @@ function statusColor(status: ProbeStatus | undefined): string {
 function statusShortLabel(status: ProbeStatus | undefined): string {
   if (status === 'connected') return 'Connected'
   if (status === 'disconnected') return 'Disconnected'
+  if (status === 'authRequired') return 'Needs auth'
   return 'Not probed'
 }
 
 function statusLabel(status: ProbeStatus | undefined): string {
   if (status === 'connected') return 'Connected (Termul can reach this server)'
   if (status === 'disconnected') return 'Disconnected (Termul could not reach this server)'
+  if (status === 'authRequired') return 'Authentication required — connect in MCP Server settings'
   return 'Not probed yet — click to test'
 }
 

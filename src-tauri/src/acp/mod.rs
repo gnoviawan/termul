@@ -21,6 +21,7 @@ pub mod host_mcp;
 pub mod install;
 pub mod manager;
 pub mod mcp_probe;
+pub mod mcp_oauth;
 pub mod project_registry;
 pub mod session;
 pub mod session_payload;
