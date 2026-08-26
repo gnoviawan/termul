@@ -326,6 +326,19 @@ impl SessionPersistence {
         &self,
         registration: SessionRegistration,
     ) -> Result<SessionMetadata> {
+        // Idempotent catalog check BEFORE path validation: a duplicate
+        // registration must return the existing entry even when its cwd is
+        // unavailable (deleted between calls). Canonicalizing first would
+        // surface an `Io` error for a path the session was never going to use.
+        let _guard = self.inner.registration_lock.lock().await;
+        if self
+            .inner
+            .catalog
+            .lock()
+            .contains_key(&registration.session_id)
+        {
+            return self.metadata(&registration.session_id);
+        }
         let canonical = registration
             .cwd
             .canonicalize()
@@ -342,17 +355,6 @@ impl SessionPersistence {
         // sanitizer keeps the `?` → an illegal Windows folder name → `mkdir`
         // fails with ENOENT and the resume is skipped (read-only transcript).
         let cwd = strip_verbatim_prefix(&canonical.to_string_lossy()).into_owned();
-        // `canonical.is_dir()` already verified above; the stripped string
-        // refers to the same directory, so no second check is needed.
-        let _guard = self.inner.registration_lock.lock().await;
-        if self
-            .inner
-            .catalog
-            .lock()
-            .contains_key(&registration.session_id)
-        {
-            return self.metadata(&registration.session_id);
-        }
         let storage_key = Uuid::new_v4().to_string();
         let now = now_millis();
         let metadata = SessionMetadata {
@@ -383,6 +385,11 @@ impl SessionPersistence {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
+        log::info!(
+            "[acp-history] session registered storage_key={} session_id={}",
+            metadata.storage_key,
+            metadata.session_id
+        );
         Ok(metadata)
     }
 
@@ -471,6 +478,11 @@ impl SessionPersistence {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
+        log::info!(
+            "[acp-history] discovered session registered storage_key={} session_id={}",
+            metadata.storage_key,
+            metadata.session_id
+        );
         Ok(metadata)
     }
 
@@ -528,6 +540,11 @@ impl SessionPersistence {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
+        log::info!(
+            "[acp-history] imported session registered storage_key={} session_id={}",
+            metadata.storage_key,
+            metadata.session_id
+        );
         Ok(metadata)
     }
 
@@ -958,11 +975,12 @@ impl SessionPersistence {
             // Repair a verbatim (`\\?\`) cwd persisted by an older build that
             // did not strip the prefix after `canonicalize()`. The prefix
             // breaks agent-side cwd→dir sanitization (`?` is illegal in
-            // Windows folder names), so `session/resume` fails with ENOENT.
-            // Stripping here + re-persisting below heals the entire index on
-            // the next startup without a dedicated migration.
             let stripped = strip_verbatim_prefix(&metadata.cwd).into_owned();
             if stripped != metadata.cwd {
+                log::info!(
+                    "[acp-history] recover() healed verbatim cwd prefix for session_id={}",
+                    metadata.session_id
+                );
                 metadata.cwd = stripped;
             }
             // Agent subprocesses cannot survive a host restart. A session that
