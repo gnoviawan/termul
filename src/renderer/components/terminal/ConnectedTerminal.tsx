@@ -120,6 +120,13 @@ const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
 const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100
 const VISIBILITY_RECOVERY_DELAY_MS = 150
 const POWER_RESUME_RECOVERY_DELAY_MS = 300
+// Render-liveness watchdog interval. The xterm 6.x WebGL renderer can stop
+// re-presenting its canvas mid-session even though the context is healthy and
+// the PTY keeps producing output (the "TUI stuck but process runs" symptom).
+// Existing recovery only fires on window visibility/focus/power events, so a
+// long-running tab that is never minimized never recovers. The watchdog nudges
+// recovery while the pane is visible AND has recently received output.
+const RENDER_WATCHDOG_INTERVAL_MS = 20000
 const ACTIVITY_DEBOUNCE_MS = 1000
 const CLIPBOARD_RATE_LIMIT_MS = 100
 
@@ -224,6 +231,10 @@ function ConnectedTerminalComponent({
   // fire close together; without this guard each would start its own
   // layout-wait RAF loop and overlapping fit + visibility-flip cycles.
   const recoveryInProgressRef = useRef<boolean>(false)
+  // Flipped true whenever PTY output is written to xterm; the render-liveness
+  // watchdog reads (and resets) it to decide whether the pane is actively
+  // streaming and may need a compositor re-present nudge.
+  const outputReceivedSinceTickRef = useRef<boolean>(false)
   // Track visibility prop for recovery path guards (tab-active, not window-visible).
   // Ref avoids stale closures in event listeners referencing isVisible directly.
   const isVisibleRef = useRef(isVisible)
@@ -832,6 +843,7 @@ function ConnectedTerminalComponent({
     cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
       if (id === ptyIdRef.current && terminalRef.current) {
         terminalRef.current.write(data)
+        outputReceivedSinceTickRef.current = true
         // Resolve terminal record ID (cached to avoid linear scan)
         if (!cachedTerminalId) {
           const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
@@ -1521,6 +1533,31 @@ function ConnectedTerminalComponent({
       }
       cleanup()
     }
+  }, [performTerminalRecovery])
+
+  // Render-liveness watchdog: mitigate the xterm 6.x WebGL compositor stall
+  // that freezes the pane mid-session (output flows but the canvas stops
+  // updating). Visibility/focus/power handlers only recover on window events,
+  // so an always-visible, never-minimized tab would stay frozen. Every
+  // RENDER_WATCHDOG_INTERVAL_MS, if the pane is visible and has received output
+  // since the last tick, nudge performTerminalRecovery (single-flight guarded,
+  // layout-aware). Skipped for the DOM renderer (no canvas to stall) and when
+  // the document is hidden.
+  useEffect(() => {
+    // The DOM renderer has no canvas layer to stall, so the watchdog only runs
+    // for the WebGL renderer.
+    if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) return
+
+    const tick = (): void => {
+      if (document.visibilityState !== 'visible') return
+      if (!isVisibleRef.current) return
+      if (!outputReceivedSinceTickRef.current) return
+      outputReceivedSinceTickRef.current = false
+      performTerminalRecovery()
+    }
+
+    const intervalId = setInterval(tick, RENDER_WATCHDOG_INTERVAL_MS)
+    return () => clearInterval(intervalId)
   }, [performTerminalRecovery])
 
   const handleContainerClick = useCallback((): void => {
