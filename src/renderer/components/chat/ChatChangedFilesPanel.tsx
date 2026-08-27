@@ -14,6 +14,10 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
 
 const REFRESH_INTERVAL_MS = 3000
 
+/** Stable empty array so the Zustand selector never returns a new reference
+ * when `statuses[cwd]` is undefined (would cause an infinite re-render loop). */
+const EMPTY_STATUSES: GitStatusDetail[] = []
+
 /** Join a cwd (absolute) with a relative git path, normalizing separators. */
 function joinPath(cwd: string, relativePath: string): string {
   const normalizedCwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -90,7 +94,7 @@ export function ChatChangedFilesPanel({
   cwd,
   activeTurn
 }: ChatChangedFilesPanelProps): React.JSX.Element {
-  const statuses = useGitStatusStore((s) => s.statuses[cwd] ?? [])
+  const statuses = useGitStatusStore((s) => s.statuses[cwd] ?? EMPTY_STATUSES)
   const refreshStatus = useGitStatusStore((s) => s.refreshStatus)
   const [expanded, setExpanded] = useState(false)
   const timeoutRef = useRef<number | null>(null)
