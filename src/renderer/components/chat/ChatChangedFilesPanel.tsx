@@ -142,7 +142,7 @@ export function ChatChangedFilesPanel({
   if (count === 0) return null
 
   return (
-    <div className={cn(CHAT_GUTTER_X, '-mb-3 pt-1')}>
+    <div className={cn(CHAT_GUTTER_X, '-mb-5 pt-1')}>
       <div className="relative mx-auto w-full max-w-3xl">
         <Collapsible open={expanded} onOpenChange={setExpanded}>
           <CollapsibleTrigger asChild>
@@ -150,7 +150,7 @@ export function ChatChangedFilesPanel({
               type="button"
               className={cn(
                 'relative z-0 flex w-full min-w-0 items-center gap-2',
-                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 py-1.5',
+                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pb-4 py-1.5',
                 'text-xs text-muted-foreground transition-colors',
                 'hover:bg-secondary/40 hover:text-foreground'
               )}
@@ -175,7 +175,7 @@ export function ChatChangedFilesPanel({
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
+            <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 pb-4">
               <ScrollArea className="max-h-48 w-full">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
