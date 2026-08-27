@@ -469,14 +469,25 @@ fn get_main_webview_window<R: tauri::Runtime>(
 /// external URLs and must stay unrestricted — the policy gates on `label()`.
 ///
 /// Allowed: the app's own document/scheme (`tauri`, `tauri-index.html`), the
-/// IPC bridge (`ipc`), dev-server pages (`http(s)://localhost` while
-/// `cfg!(dev)`), and `data:`/`blob:` asset URLs the renderer itself emits.
-/// Everything else (an external `https://example.com` from a chat link) is
-/// rejected so the WebView stays on the SPA.
+/// IPC bridge (`ipc`), `blob:` object URLs the renderer emits, the Windows
+/// production app origin (`http://tauri.localhost` — Tauri 2's default when
+/// `useHttpsScheme` is unset, which this project does not override), and
+/// dev-server pages (`http(s)://localhost`/`127.0.0.1` while `cfg!(dev)`).
+/// Everything else (an external `https://example.com` from a chat link, or an
+/// active `data:text/html,<script>` document) is rejected so the WebView
+/// stays on the SPA. `data:` is deliberately excluded: a top-level navigation
+/// to `data:text/html` replaces the SPA document, and `<img src="data:">` is a
+/// resource load (not navigation), so excluding it here does not break images.
 fn main_webview_allows_navigation(url: &tauri::Url) -> bool {
     match url.scheme() {
-        "tauri" | "ipc" | "data" | "blob" => true,
+        "tauri" | "ipc" | "blob" => true,
         "http" | "https" => {
+            // Windows production origin: Tauri 2 serves the SPA at
+            // http://tauri.localhost by default (no useHttpsScheme override).
+            // macOS/Linux use the `tauri` scheme, handled above.
+            if cfg!(not(dev)) && url.host_str() == Some("tauri.localhost") {
+                return true;
+            }
             cfg!(dev) && matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
         }
         _ => false,
@@ -1030,9 +1041,14 @@ pub fn run() {
             if webview.label() == "main" {
                 let allow = main_webview_allows_navigation(url);
                 if !allow {
+                    // Log only the scheme and host — a blocked URL's query,
+                    // fragment, or userinfo may carry secrets/PII (CWE-532).
+                    let scheme = url.scheme();
+                    let host = url.host_str().unwrap_or("(unknown)");
                     log::warn!(
-                        "[navigation] blocked top-level navigation on main webview: {}",
-                        url
+                        "[navigation] blocked top-level navigation on main webview: {}://{}",
+                        scheme,
+                        host
                     );
                 }
                 allow
@@ -1992,15 +2008,32 @@ mod tests {
     fn test_main_webview_allows_app_internal_schemes() {
         assert!(main_webview_allows_navigation(&"tauri://localhost".parse().unwrap()));
         assert!(main_webview_allows_navigation(&"ipc://localhost".parse().unwrap()));
-        assert!(main_webview_allows_navigation(&"data:text/plain,hello".parse().unwrap()));
         assert!(main_webview_allows_navigation(&"blob:https://termul.app/".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_main_webview_allows_windows_production_origin_in_release() {
+        // Tauri 2 serves the SPA at http://tauri.localhost on Windows in
+        // packaged builds (no useHttpsScheme override in tauri.conf.json).
+        // The policy must allow this origin or the main webview stays blank.
+        let windows_app_origin = "http://tauri.localhost/tauri-index.html"
+            .parse::<tauri::Url>()
+            .unwrap();
+        if cfg!(dev) {
+            // In dev the origin is the Vite server (localhost), not
+            // tauri.localhost, so the Windows origin is correctly rejected.
+            assert!(!main_webview_allows_navigation(&windows_app_origin));
+        } else {
+            assert!(main_webview_allows_navigation(&windows_app_origin));
+        }
     }
 
     #[test]
     fn test_main_webview_allows_dev_localhost_only_when_dev() {
         // The dev allowance is a compile-time gate. In a dev build, localhost
         // navigations are allowed (Vite dev server); in a release build they
-        // are rejected because the main webview is the SPA document only.
+        // are rejected because the main webview is the SPA document only
+        // (Windows release uses tauri.localhost, tested above).
         let localhost = "http://localhost:5180/tauri-index.html"
             .parse::<tauri::Url>()
             .unwrap();
@@ -2015,6 +2048,19 @@ mod tests {
             assert!(!main_webview_allows_navigation(&localhost));
             assert!(!main_webview_allows_navigation(&external));
         }
+    }
+
+    #[test]
+    fn test_main_webview_rejects_active_data_documents() {
+        // A top-level navigation to data:text/html can replace the SPA with an
+        // active document (arbitrary inline script). Reject it. Note: this
+        // does not affect <img src="data:"> resource loads, only navigation.
+        assert!(!main_webview_allows_navigation(
+            &"data:text/html,<script>alert(1)</script>"
+                .parse()
+                .unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(&"data:text/plain,hello".parse().unwrap()));
     }
 
     #[test]
