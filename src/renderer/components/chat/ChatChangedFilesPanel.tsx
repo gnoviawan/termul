@@ -2,9 +2,8 @@ import { ChevronDown, FileDiff } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CHAT_GUTTER_X } from '@/components/chat/chat-layout'
-import { diffLineCounts } from '@/components/chat/tool-call-format'
-import { toolCallPath } from '@/components/chat/tool-call-summary'
-import type { ToolCall, ToolCallContent } from '@/lib/acp-api'
+import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
+import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -21,23 +20,10 @@ interface ChangedFile {
   removed: number
 }
 
-/** Compute add/remove line counts from a tool call's diff content items. */
-function diffCounts(content: ToolCallContent[]): { added: number; removed: number } {
-  let added = 0
-  let removed = 0
-  for (const item of content) {
-    if (item.type === 'diff') {
-      const d = item as { path?: string; oldText?: string | null; newText: string }
-      const counts = diffLineCounts({ oldText: d.oldText ?? null, newText: d.newText ?? '' })
-      added += counts.added
-      removed += counts.removed
-    }
-  }
-  return { added, removed }
-}
-
 /** Extract file-changing tool calls (edit, delete, move) from the session's
- * tool-call list. Paths come from `toolCallPath` (rawInput + diff content). */
+ * tool-call list. Paths come from `toolCallPath` (rawInput + diff content).
+ * Add/remove counts come from `describeToolCall().diffStat` — the same
+ * battle-tested path used by ToolCallCard. */
 function extractChangedFiles(toolCalls: ToolCall[]): ChangedFile[] {
   const files: ChangedFile[] = []
   const seen = new Set<string>()
@@ -48,8 +34,15 @@ function extractChangedFiles(toolCalls: ToolCall[]): ChangedFile[] {
     const key = `${path}:${tc.toolCallId}`
     if (seen.has(key)) continue
     seen.add(key)
-    const { added, removed } = diffCounts(tc.content ?? [])
-    files.push({ path, toolCallId: tc.toolCallId, kind: tc.kind ?? 'edit', added, removed })
+    const summary = describeToolCall(tc)
+    const stat = summary.diffStat ?? { added: 0, removed: 0 }
+    files.push({
+      path,
+      toolCallId: tc.toolCallId,
+      kind: tc.kind ?? 'edit',
+      added: stat.added,
+      removed: stat.removed
+    })
   }
   return files
 }
@@ -121,9 +114,9 @@ interface ChatChangedFilesPanelProps {
  * opens it in the editor workspace. View-and-open-only.
  *
  * The panel sits behind the chatbox (z-0 vs z-10). A negative bottom margin
- * extends the panel's opaque bg-card behind the chatbox's rounded top corners,
- * covering the transparent gap. The visible content has bottom padding so text
- * clears the overlap zone.
+ * extends the panel's translucent bg-card/60 behind the chatbox's rounded top
+ * corners, covering the transparent gap. The visible content has bottom
+ * padding so text clears the overlap zone.
  */
 export function ChatChangedFilesPanel({
   cwd,
@@ -135,6 +128,7 @@ export function ChatChangedFilesPanel({
   const count = files.length
   const totalAdded = useMemo(() => files.reduce((sum, f) => sum + f.added, 0), [files])
   const totalRemoved = useMemo(() => files.reduce((sum, f) => sum + f.removed, 0), [files])
+  const hasTotalCounts = totalAdded > 0 || totalRemoved > 0
 
   const handleOpenFile = useCallback(async (fullPath: string) => {
     try {
@@ -162,7 +156,7 @@ export function ChatChangedFilesPanel({
   return (
     <div className={cn(CHAT_GUTTER_X, '-mb-6 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
-        <div className="relative z-0 rounded-t-2xl border border-b-0 border-border/60 bg-card select-none">
+        <div className="relative z-0 rounded-t-2xl border border-b-0 border-border/60 bg-card/60 select-none">
           {/* biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink */}
           <div
             role="button"
@@ -192,10 +186,12 @@ export function ChatChangedFilesPanel({
             <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
               {count}
             </span>
-            <span className="ml-auto shrink-0 font-mono text-3xs">
-              <span className="text-success">+{totalAdded}</span>{' '}
-              <span className="text-destructive">−{totalRemoved}</span>
-            </span>
+            {hasTotalCounts && (
+              <span className="ml-auto shrink-0 font-mono text-3xs">
+                <span className="text-success">+{totalAdded}</span>{' '}
+                <span className="text-destructive">−{totalRemoved}</span>
+              </span>
+            )}
           </div>
           <div
             className={cn(
