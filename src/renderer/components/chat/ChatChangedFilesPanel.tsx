@@ -73,23 +73,26 @@ function FileRow({
 
   const hasCounts = file.added > 0 || file.removed > 0
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpen(fullPath)
+    }
+  }
+
   return (
-    <button
-      type="button"
+    // biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(fullPath)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onOpen(fullPath)
-        }
-      }}
+      onKeyDown={handleKeyDown}
       className={cn(
         'group/row flex w-full items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer text-left',
         'transition-colors duration-150',
-        'hover:bg-secondary/60',
+        'hover:bg-secondary/60 text-muted-foreground hover:text-foreground',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
-      style={{ width: '100%' }}
     >
       <FileDiff size={13} className="shrink-0 text-amber-500" aria-hidden />
       <span className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight">
@@ -101,7 +104,7 @@ function FileRow({
           <span className="text-destructive">−{file.removed}</span>
         </span>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -115,6 +118,11 @@ interface ChatChangedFilesPanelProps {
  * ChatInputBar. Lists files touched by ACP tool calls (edit/delete/move) in
  * the current session — persists across agent replies. Clicking a file row
  * opens it in the editor workspace. View-and-open-only.
+ *
+ * The panel sits behind the chatbox (z-0 vs z-10). A negative bottom margin
+ * extends the panel's opaque bg-card behind the chatbox's rounded top corners,
+ * covering the transparent gap. The visible content has bottom padding so text
+ * clears the overlap zone.
  */
 export function ChatChangedFilesPanel({
   cwd,
@@ -143,21 +151,30 @@ export function ChatChangedFilesPanel({
 
   if (count === 0) return null
 
+  const handleToggleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      setExpanded((v) => !v)
+    }
+  }
+
   return (
-    <div className={cn(CHAT_GUTTER_X, '-mb-3 pt-0')}>
+    <div className={cn(CHAT_GUTTER_X, '-mb-5 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
-        <div className="relative z-0">
-          <button
-            type="button"
+        <div className="relative z-0 border border-b-0 border-border/60 bg-card">
+          {/* biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink */}
+          <div
+            role="button"
+            tabIndex={0}
             onClick={() => setExpanded((v) => !v)}
+            onKeyDown={handleToggleKeyDown}
             className={cn(
-              'flex w-full items-center gap-2 overflow-hidden',
-              'rounded-t-2xl border border-b-0 border-border/60 bg-card px-3 pb-4 pt-2',
-              'text-xs text-muted-foreground',
+              'flex w-full items-center gap-2 px-3 pb-5 pt-2',
+              'cursor-pointer text-xs text-muted-foreground',
               'transition-colors duration-150',
-              'hover:bg-secondary/40 hover:text-foreground'
+              'hover:bg-secondary/40 hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
             )}
-            style={{ width: '100%' }}
             aria-expanded={expanded}
             aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
           >
@@ -177,9 +194,9 @@ export function ChatChangedFilesPanel({
               <span className="text-success">+{totalAdded}</span>{' '}
               <span className="text-destructive">−{totalRemoved}</span>
             </span>
-          </button>
+          </div>
           <CollapseExpandMotion open={expanded}>
-            <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card pb-4">
+            <div className="w-full pb-5">
               <ScrollArea className="max-h-48 w-full">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
