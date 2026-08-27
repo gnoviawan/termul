@@ -117,7 +117,7 @@ export function ChatChangedFilesPanel({
   if (count === 0) return null
 
   return (
-    <div className={cn(CHAT_GUTTER_X, '-mb-1 pt-1')}>
+    <div className={cn(CHAT_GUTTER_X, '-mb-2 pt-1')}>
       <div className="relative mx-auto w-full max-w-3xl">
         <Collapsible open={expanded} onOpenChange={setExpanded}>
           <CollapsibleTrigger asChild>
