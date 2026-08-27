@@ -67,16 +67,15 @@ function FileRow({
         }
       }}
       className={cn(
-        'group/row flex w-full items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer',
+        'group/row flex w-full items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer',
         'hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
     >
       <FileDiff size={13} className="shrink-0 text-amber-500" aria-hidden />
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <span className="text-2xs font-medium truncate leading-tight">{fileName}</span>
-        {dirName && <span className="text-4xs truncate opacity-50 leading-tight">{dirName}</span>}
-      </div>
+      <span className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight">
+        {dirName ? `${dirName}/${fileName}` : fileName}
+      </span>
     </button>
   )
 }
@@ -118,15 +117,15 @@ export function ChatChangedFilesPanel({
   if (count === 0) return null
 
   return (
-    <div className={cn(CHAT_GUTTER_X, 'pb-2 pt-1')}>
+    <div className={cn(CHAT_GUTTER_X, '-mb-1 pt-1')}>
       <div className="relative mx-auto w-full max-w-3xl">
         <Collapsible open={expanded} onOpenChange={setExpanded}>
           <CollapsibleTrigger asChild>
             <button
               type="button"
               className={cn(
-                'relative z-0 mx-auto flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2',
-                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-2 py-1.5',
+                'relative z-0 flex w-full min-w-0 items-center gap-2',
+                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 py-1.5',
                 'text-xs text-muted-foreground transition-colors',
                 'hover:bg-secondary/40 hover:text-foreground'
               )}
@@ -152,7 +151,7 @@ export function ChatChangedFilesPanel({
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="relative z-0 mx-auto w-[calc(100%-2.75rem)] min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
+            <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
               <ScrollArea className="max-h-48 w-full">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (

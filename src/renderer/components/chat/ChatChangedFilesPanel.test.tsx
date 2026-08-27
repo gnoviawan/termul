@@ -94,8 +94,8 @@ describe('ChatChangedFilesPanel', () => {
       makeToolCall({ toolCallId: 'e2', path: 'src/bar.ts' })
     ])
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
-    expect(await screen.findByText('foo.ts')).toBeInTheDocument()
-    expect(screen.getByText('bar.ts')).toBeInTheDocument()
+    expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
+    expect(screen.getByText('src/bar.ts')).toBeInTheDocument()
   })
 
   it('opens the file in the editor when a row is clicked', async () => {
@@ -154,10 +154,10 @@ describe('ChatChangedFilesPanel', () => {
     expect(addEditorTabRef.current).not.toHaveBeenCalled()
   })
 
-  it('shows the directory subtitle for nested paths', async () => {
+  it('shows the full inline path for nested files', async () => {
     renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
-    expect(await screen.findByText('src')).toBeInTheDocument()
+    expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
   })
 
   it('deduplicates files touched by multiple tool calls to the same path', () => {
