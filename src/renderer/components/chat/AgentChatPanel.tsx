@@ -528,6 +528,7 @@ export function AgentChatPanel({
             onSetMode={handleSetMode}
             onSetModel={handleSetModel}
             seedText={seed?.text}
+            seedNonce={seed?.nonce}
             compactTop={hasFileChanges}
           />
         </>
