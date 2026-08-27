@@ -88,6 +88,15 @@ describe('ChatChangedFilesPanel', () => {
     expect(screen.getByText('2')).toBeInTheDocument()
   })
 
+  it('shows total +/- counts on the header bar', () => {
+    renderPanel([
+      makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' }),
+      makeToolCall({ toolCallId: 'e2', path: 'src/bar.ts' })
+    ])
+    expect(screen.getByText('+2')).toBeInTheDocument()
+    expect(screen.getByText('−2')).toBeInTheDocument()
+  })
+
   it('expands and shows file rows on header click', async () => {
     renderPanel([
       makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' }),
@@ -158,6 +167,14 @@ describe('ChatChangedFilesPanel', () => {
     renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
     expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
+  })
+
+  it('shows per-file +/- counts when expanded', async () => {
+    renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
+    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
+    await screen.findByText('src/foo.ts')
+    expect(screen.getAllByText('+1').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('−1').length).toBeGreaterThanOrEqual(2)
   })
 
   it('deduplicates files touched by multiple tool calls to the same path', () => {
