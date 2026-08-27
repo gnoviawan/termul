@@ -455,6 +455,33 @@ fn get_main_webview_window<R: tauri::Runtime>(
     app.get_webview_window("main")
         .ok_or_else(|| "Main webview window not found".to_string())
 }
+/// Defense-in-depth navigation policy for the main app webview (issue #406).
+///
+/// The primary chat-link interception already lives in the renderer
+/// (Streamdown + the global context-menu block from #623), so a stray
+/// `<a href>` left-click is routed to the system browser before the WebView
+/// can navigate. This native guard is the backstop: even if a future markdown
+/// change regresses the renderer path, the main window can never be torn down
+/// by a top-level navigation to an external URL.
+///
+/// Only the `main` webview is restricted. Browser-tab webviews (created with
+/// dynamic labels in `browser_tab_manager::create`) intentionally load
+/// external URLs and must stay unrestricted — the policy gates on `label()`.
+///
+/// Allowed: the app's own document/scheme (`tauri`, `tauri-index.html`), the
+/// IPC bridge (`ipc`), dev-server pages (`http(s)://localhost` while
+/// `cfg!(dev)`), and `data:`/`blob:` asset URLs the renderer itself emits.
+/// Everything else (an external `https://example.com` from a chat link) is
+/// rejected so the WebView stays on the SPA.
+fn main_webview_allows_navigation(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "ipc" | "data" | "blob" => true,
+        "http" | "https" => {
+            cfg!(dev) && matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+        }
+        _ => false,
+    }
+}
 
 fn set_zoom_factor<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -993,6 +1020,27 @@ pub fn run() {
 
     // MCP Bridge in all builds
     builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+
+    // Defense-in-depth: reject top-level navigation on the main app webview so
+    // a stray chat-link click (or any external anchor) can never tear down the
+    // SPA (issue #406). Only the `main` webview is restricted — browser-tab
+    // webviews load external URLs by design and stay unrestricted.
+    builder = builder.plugin(tauri::plugin::Builder::<_, ()>::new("main-navigation-guard")
+        .on_navigation(|webview, url| {
+            if webview.label() == "main" {
+                let allow = main_webview_allows_navigation(url);
+                if !allow {
+                    log::warn!(
+                        "[navigation] blocked top-level navigation on main webview: {}",
+                        url
+                    );
+                }
+                allow
+            } else {
+                true
+            }
+        })
+        .build());
 
     let app = builder
         .setup(|app| {
@@ -1939,5 +1987,44 @@ mod tests {
     fn test_git_bash_shell_display_name() {
         let display_name = shell_display_name("git-bash");
         assert_eq!(display_name, "Git Bash");
+    }
+    #[test]
+    fn test_main_webview_allows_app_internal_schemes() {
+        assert!(main_webview_allows_navigation(&"tauri://localhost".parse().unwrap()));
+        assert!(main_webview_allows_navigation(&"ipc://localhost".parse().unwrap()));
+        assert!(main_webview_allows_navigation(&"data:text/plain,hello".parse().unwrap()));
+        assert!(main_webview_allows_navigation(&"blob:https://termul.app/".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_main_webview_allows_dev_localhost_only_when_dev() {
+        // The dev allowance is a compile-time gate. In a dev build, localhost
+        // navigations are allowed (Vite dev server); in a release build they
+        // are rejected because the main webview is the SPA document only.
+        let localhost = "http://localhost:5180/tauri-index.html"
+            .parse::<tauri::Url>()
+            .unwrap();
+        let external = "https://example.com".parse::<tauri::Url>().unwrap();
+
+        if cfg!(dev) {
+            assert!(main_webview_allows_navigation(&localhost));
+            // External URLs are still blocked in dev so a chat link cannot
+            // tear down the SPA — only the local dev server is trusted.
+            assert!(!main_webview_allows_navigation(&external));
+        } else {
+            assert!(!main_webview_allows_navigation(&localhost));
+            assert!(!main_webview_allows_navigation(&external));
+        }
+    }
+
+    #[test]
+    fn test_main_webview_rejects_external_urls() {
+        // The core invariant of issue #406: a chat-link click to an external
+        // site must never replace the app. This holds in both dev and release.
+        assert!(!main_webview_allows_navigation(&"https://example.com".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(&"https://tauri.app/guide".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(&"http://example.com".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(&"ftp://example.com".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(&"market://details?id=app".parse().unwrap()));
     }
 }
