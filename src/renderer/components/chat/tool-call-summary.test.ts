@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
-import { baseName, describeToolCall, isSubagentCall, readableOutput } from './tool-call-summary'
+import {
+  baseName,
+  describeToolCall,
+  isSubagentCall,
+  readableOutput,
+  toolCallPath
+} from './tool-call-summary'
 
 function call(partial: Partial<ToolCall>): ToolCall {
   return { toolCallId: 't1', ...partial }
@@ -135,5 +141,39 @@ describe('readableOutput', () => {
   it('returns empty (never raw JSON) when nothing readable exists', () => {
     expect(readableOutput({ metadata: { ids: [1, 2] } })).toBe('')
     expect(readableOutput(null)).toBe('')
+  })
+})
+
+describe('toolCallPath', () => {
+  it('prefers locations[0].path over rawInput and diff content', () => {
+    const p = toolCallPath(
+      call({
+        kind: 'edit',
+        rawInput: { filePath: 'src/from-input.ts' },
+        content: [{ type: 'diff', path: 'src/from-diff.ts', newText: 'x' }],
+        locations: [{ path: 'src/from-locations.ts' }]
+      })
+    )
+    expect(p).toBe('src/from-locations.ts')
+  })
+
+  it('falls back to rawInput when locations is absent', () => {
+    const p = toolCallPath(call({ kind: 'edit', rawInput: { path: 'src/from-input.ts' } }))
+    expect(p).toBe('src/from-input.ts')
+  })
+
+  it('falls back to diff content path when locations and rawInput are absent', () => {
+    const p = toolCallPath(
+      call({
+        kind: 'edit',
+        content: [{ type: 'diff', path: 'src/from-diff.ts', newText: 'x' }]
+      })
+    )
+    expect(p).toBe('src/from-diff.ts')
+  })
+
+  it('returns undefined when no path source is available', () => {
+    expect(toolCallPath(call({ kind: 'edit', rawInput: { command: 'ls' } }))).toBeUndefined()
+    expect(toolCallPath(call({ kind: 'edit' }))).toBeUndefined()
   })
 })

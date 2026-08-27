@@ -21,9 +21,9 @@ interface ChangedFile {
 }
 
 /** Extract file-changing tool calls (edit, delete, move) from the session's
- * tool-call list. Paths come from `toolCallPath` (rawInput + diff content).
- * Add/remove counts come from `describeToolCall().diffStat` — the same
- * battle-tested path used by ToolCallCard. */
+ * tool-call list. Paths come from `toolCallPath` (locations → rawInput → diff
+ * content). Add/remove counts come from `describeToolCall().diffStat` — the
+ * same battle-tested path used by ToolCallCard. */
 function extractChangedFiles(toolCalls: ToolCall[]): ChangedFile[] {
   const files: ChangedFile[] = []
   const seen = new Set<string>()

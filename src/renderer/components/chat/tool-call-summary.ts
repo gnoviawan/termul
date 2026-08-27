@@ -121,12 +121,15 @@ function diffInfo(content: ToolCallContent[]): {
 }
 
 /**
- * Shared best-effort file-path resolver for a tool call. Checks `rawInput`
- * against `PATH_KEYS`, then falls back to `diffInfo(content).path`. Used by
- * both `describeToolCall` (chip label) and `ToolCallCard`'s open-file action
+ * Shared best-effort file-path resolver for a tool call. Checks `locations`
+ * (the canonical ACP follow-along field) first, then `rawInput` against
+ * `PATH_KEYS`, then falls back to `diffInfo(content).path`. Used by both
+ * `describeToolCall` (chip label) and `ToolCallCard`'s open-file action
  * so they stay in sync.
  */
 export function toolCallPath(toolCall: ToolCall): string | undefined {
+  const loc = toolCall.locations?.[0]?.path
+  if (loc) return loc
   const input = asRecord(toolCall.rawInput)
   const fromInput = firstString(input, PATH_KEYS)
   if (fromInput) return fromInput

@@ -129,12 +129,22 @@ export type ToolCallContent =
   | { type: 'terminal'; terminalId?: string }
   | { type: string; [k: string]: unknown }
 
+/** A file location affected by a tool call (ACP `ToolCallLocation`). */
+export interface ToolCallLocation {
+  path: string
+  line?: number
+}
+
 export interface ToolCall {
   toolCallId: string
   title?: string
   kind?: ToolKind
   status?: ToolCallStatus
   content?: ToolCallContent[]
+  /** File locations affected by this tool call (ACP `locations` field).
+   * Agents populate this for "follow-along" features — it is the canonical
+   * path source, ahead of the `rawInput` heuristic and diff-content fallback. */
+  locations?: ToolCallLocation[]
   rawInput?: unknown
   rawOutput?: unknown
   /** Client-side arrival time (stamped in the store for timeline ordering). */
@@ -150,6 +160,7 @@ export interface ToolCallUpdate {
   kind?: ToolKind
   status?: ToolCallStatus
   content?: ToolCallContent[]
+  locations?: ToolCallLocation[]
   rawInput?: unknown
   rawOutput?: unknown
   [k: string]: unknown

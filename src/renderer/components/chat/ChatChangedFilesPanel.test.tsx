@@ -199,4 +199,42 @@ describe('ChatChangedFilesPanel', () => {
     renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
     expect(screen.getByText('Changed files')).toBeInTheDocument()
   })
+
+  it('resolves file path from ACP locations field when rawInput has no path key', () => {
+    renderPanel([
+      makeToolCall({
+        toolCallId: 'e1',
+        path: undefined as unknown as string,
+        rawInput: { command: 'sed -i ...' },
+        locations: [{ path: 'src/from-locations.ts' }]
+      })
+    ])
+    expect(screen.getByText('Changed files')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
+  })
+
+  it('prefers locations path over rawInput path', () => {
+    renderPanel([
+      makeToolCall({
+        toolCallId: 'e1',
+        rawInput: { filePath: 'src/from-input.ts' },
+        locations: [{ path: 'src/from-locations.ts' }]
+      })
+    ])
+    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
+    expect(screen.getByText('src/from-locations.ts')).toBeInTheDocument()
+  })
+
+  it('shows panel when locations is present even without diff content', () => {
+    renderPanel([
+      makeToolCall({
+        toolCallId: 'e1',
+        path: undefined as unknown as string,
+        content: [],
+        rawInput: {},
+        locations: [{ path: 'src/edited-via-locations.ts' }]
+      })
+    ])
+    expect(screen.getByText('Changed files')).toBeInTheDocument()
+  })
 })
