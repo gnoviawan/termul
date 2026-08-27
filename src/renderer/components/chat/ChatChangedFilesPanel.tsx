@@ -118,48 +118,57 @@ export function ChatChangedFilesPanel({
   if (count === 0) return null
 
   return (
-    <div className={cn(CHAT_GUTTER_X, 'pb-0 pt-1')}>
-      <Collapsible open={expanded} onOpenChange={setExpanded}>
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              'relative z-0 mx-auto flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2',
-              'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-2 py-1.5',
-              'text-xs text-muted-foreground transition-colors',
-              'hover:bg-secondary/40 hover:text-foreground'
-            )}
-            aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
-          >
-            <ChevronDown
-              size={14}
-              className={cn('shrink-0 transition-transform', expanded ? 'rotate-180' : 'rotate-0')}
-            />
-            <GitBranch size={13} className="shrink-0 text-muted-foreground/70" />
-            <span className="font-medium">Changed files</span>
-            <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
-              {count}
-            </span>
-            <FileDiff size={12} className="ml-auto shrink-0 text-muted-foreground/50" aria-hidden />
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="relative z-0 mx-auto w-[calc(100%-2.75rem)] min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
-            <ScrollArea className="max-h-48 w-full">
-              <div className="space-y-0.5 p-1">
-                {files.map((file) => (
-                  <FileRow
-                    key={`${file.path}:${file.toolCallId}`}
-                    file={file}
-                    cwd={cwd}
-                    onOpen={handleOpenFile}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+    <div className={cn(CHAT_GUTTER_X, 'pb-2 pt-1')}>
+      <div className="relative mx-auto w-full max-w-3xl">
+        <Collapsible open={expanded} onOpenChange={setExpanded}>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                'relative z-0 mx-auto flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2',
+                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-2 py-1.5',
+                'text-xs text-muted-foreground transition-colors',
+                'hover:bg-secondary/40 hover:text-foreground'
+              )}
+              aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
+            >
+              <ChevronDown
+                size={14}
+                className={cn(
+                  'shrink-0 transition-transform',
+                  expanded ? 'rotate-180' : 'rotate-0'
+                )}
+              />
+              <GitBranch size={13} className="shrink-0 text-muted-foreground/70" />
+              <span className="font-medium">Changed files</span>
+              <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
+                {count}
+              </span>
+              <FileDiff
+                size={12}
+                className="ml-auto shrink-0 text-muted-foreground/50"
+                aria-hidden
+              />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="relative z-0 mx-auto w-[calc(100%-2.75rem)] min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
+              <ScrollArea className="max-h-48 w-full">
+                <div className="space-y-0.5 p-1">
+                  {files.map((file) => (
+                    <FileRow
+                      key={`${file.path}:${file.toolCallId}`}
+                      file={file}
+                      cwd={cwd}
+                      onOpen={handleOpenFile}
+                    />
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
     </div>
   )
 }
