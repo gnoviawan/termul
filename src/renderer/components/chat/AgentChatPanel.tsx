@@ -503,9 +503,7 @@ export function AgentChatPanel({
         <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
       ) : (
         <>
-          {session.activeTurn && !isClosed && (
-            <ChatChangedFilesPanel cwd={session.cwd} activeTurn={session.activeTurn} />
-          )}
+          <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
           <ChatInputBar
             session={session}
             projectRoot={skillsProjectRoot}

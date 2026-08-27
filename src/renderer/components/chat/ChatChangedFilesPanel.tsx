@@ -1,41 +1,38 @@
-import type { GitStatusDetail } from '@shared/types/ipc.types'
-import { ChevronDown, GitBranch } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown, FileDiff, GitBranch } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CHAT_GUTTER_X } from '@/components/chat/chat-layout'
-import { GitStatusBadge } from '@/components/git/git-status-badge'
+import { toolCallPath } from '@/components/chat/tool-call-summary'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
-import { useGitStatusStore } from '@/stores/git-status-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
-const REFRESH_INTERVAL_MS = 3000
-
-/** Stable empty array so the Zustand selector never returns a new reference
- * when `statuses[cwd]` is undefined (would cause an infinite re-render loop). */
-const EMPTY_STATUSES: GitStatusDetail[] = []
-
-/** Join a cwd (absolute) with a relative git path, normalizing separators. */
-function joinPath(cwd: string, relativePath: string): string {
-  const normalizedCwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
-  const normalizedRel = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
-  return `${normalizedCwd}/${normalizedRel}`
+/** A file touched by an ACP tool call in this session. */
+interface ChangedFile {
+  path: string
+  toolCallId: string
+  kind: string
 }
 
-/** Extract the file name from a path that may use forward or backslash separators. */
-function basename(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  return normalized.split('/').pop() || filePath
-}
-
-/** Extract the directory portion from a path that may use forward or backslash separators. */
-function dirname(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  const idx = normalized.lastIndexOf('/')
-  return idx === -1 ? '' : normalized.substring(0, idx)
+/** Extract file-changing tool calls (edit, delete, move) from the session's
+ * tool-call list. Paths come from `toolCallPath` (rawInput + diff content). */
+function extractChangedFiles(toolCalls: ToolCall[]): ChangedFile[] {
+  const files: ChangedFile[] = []
+  const seen = new Set<string>()
+  for (const tc of toolCalls) {
+    if (tc.kind !== 'edit' && tc.kind !== 'delete' && tc.kind !== 'move') continue
+    const path = toolCallPath(tc)
+    if (!path) continue
+    const key = `${path}:${tc.toolCallId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    files.push({ path, toolCallId: tc.toolCallId, kind: tc.kind ?? 'edit' })
+  }
+  return files
 }
 
 function FileRow({
@@ -43,33 +40,36 @@ function FileRow({
   cwd,
   onOpen
 }: {
-  file: GitStatusDetail
+  file: ChangedFile
   cwd: string
   onOpen: (path: string) => void
 }) {
-  const fileName = basename(file.path)
-  const dirName = dirname(file.path)
-  const fullPath = joinPath(cwd, file.path)
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onOpen(fullPath)
-    }
-  }
+  const normalized = file.path.replace(/\\/g, '/')
+  const fileName = normalized.split('/').pop() || file.path
+  const dirName = normalized.includes('/')
+    ? normalized.substring(0, normalized.lastIndexOf('/'))
+    : ''
+  const fullPath = cwd
+    ? `${cwd.replace(/\\/g, '/').replace(/\/+$/, '')}/${normalized.replace(/^\/+/, '')}`
+    : file.path
 
   return (
     <button
       type="button"
       onClick={() => onOpen(fullPath)}
-      onKeyDown={handleKeyDown}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen(fullPath)
+        }
+      }}
       className={cn(
         'group/row flex w-full items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer',
         'hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
     >
-      <GitStatusBadge status={file.status} />
+      <FileDiff size={13} className="shrink-0 text-amber-500" aria-hidden />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <span className="text-2xs font-medium truncate leading-tight">{fileName}</span>
         {dirName && <span className="text-4xs truncate opacity-50 leading-tight">{dirName}</span>}
@@ -80,62 +80,23 @@ function FileRow({
 
 interface ChatChangedFilesPanelProps {
   cwd: string
-  activeTurn: boolean
+  toolCalls: ToolCall[]
 }
 
 /**
  * Collapsible, scrollable "Changed files" panel anchored on top of the
- * ChatInputBar while an agent turn is in flight. Reads from the global
- * `useGitStatusStore` (keyed by `cwd`) — no per-session store slice. Clicking a
- * file row opens it in the editor workspace. View-and-open-only: no staging,
- * diff, or commit actions.
+ * ChatInputBar. Lists files touched by ACP tool calls (edit/delete/move) in
+ * the current session — persists across agent replies. Clicking a file row
+ * opens it in the editor workspace. View-and-open-only.
  */
 export function ChatChangedFilesPanel({
   cwd,
-  activeTurn
-}: ChatChangedFilesPanelProps): React.JSX.Element {
-  const statuses = useGitStatusStore((s) => s.statuses[cwd] ?? EMPTY_STATUSES)
-  const refreshStatus = useGitStatusStore((s) => s.refreshStatus)
+  toolCalls
+}: ChatChangedFilesPanelProps): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false)
-  const timeoutRef = useRef<number | null>(null)
 
-  // Fetch once on mount / when the turn starts. The count badge needs current
-  // data even while collapsed.
-  useEffect(() => {
-    if (!activeTurn) return
-    void refreshStatus(cwd).catch((err) => {
-      void logFrontendError({
-        level: 'warn',
-        message: `ChatChangedFilesPanel: refreshStatus failed for ${cwd}: ${String(err)}`,
-        source: 'ChatChangedFilesPanel'
-      })
-    })
-  }, [activeTurn, cwd, refreshStatus])
-
-  // Poll while expanded and turn is active. Uses recursive setTimeout instead
-  // of setInterval so a slow refreshStatus cannot pile up overlapping calls.
-  useEffect(() => {
-    if (!activeTurn || !expanded) return
-
-    const tick = (): void => {
-      void refreshStatus(cwd).catch((err) => {
-        void logFrontendError({
-          level: 'warn',
-          message: `ChatChangedFilesPanel: poll refreshStatus failed for ${cwd}: ${String(err)}`,
-          source: 'ChatChangedFilesPanel'
-        })
-      })
-      timeoutRef.current = setTimeout(tick, REFRESH_INTERVAL_MS)
-    }
-    timeoutRef.current = setTimeout(tick, REFRESH_INTERVAL_MS)
-
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-        timeoutRef.current = null
-      }
-    }
-  }, [activeTurn, expanded, cwd, refreshStatus])
+  const files = useMemo(() => extractChangedFiles(toolCalls), [toolCalls])
+  const count = files.length
 
   const handleOpenFile = useCallback(async (fullPath: string) => {
     try {
@@ -151,17 +112,18 @@ export function ChatChangedFilesPanel({
     }
   }, [])
 
-  const count = statuses.length
+  if (count === 0) return null
 
   return (
-    <div className={cn(CHAT_GUTTER_X, 'pb-1 pt-1')}>
+    <div className={cn(CHAT_GUTTER_X, 'pb-0 pt-1')}>
       <Collapsible open={expanded} onOpenChange={setExpanded}>
         <CollapsibleTrigger asChild>
           <button
             type="button"
             className={cn(
-              'flex w-full items-center gap-2 rounded-lg border border-border/60 bg-card/60',
-              'px-3 py-1.5 text-xs text-muted-foreground transition-colors',
+              'relative z-0 mx-auto flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2',
+              'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-2 py-1.5',
+              'text-xs text-muted-foreground transition-colors',
               'hover:bg-secondary/40 hover:text-foreground'
             )}
             aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
@@ -175,28 +137,24 @@ export function ChatChangedFilesPanel({
             <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
               {count}
             </span>
-            {count === 0 && <span className="ml-auto text-3xs opacity-50">No changes</span>}
+            <FileDiff size={12} className="ml-auto shrink-0 text-muted-foreground/50" aria-hidden />
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <ScrollArea className="max-h-48 w-full">
-            <div className="space-y-0.5 p-1">
-              {statuses.length === 0 ? (
-                <div className="px-3 py-4 text-center">
-                  <p className="text-xs text-muted-foreground">No changes detected</p>
-                </div>
-              ) : (
-                statuses.map((file) => (
+          <div className="relative z-0 mx-auto w-[calc(100%-2.75rem)] min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60">
+            <ScrollArea className="max-h-48 w-full">
+              <div className="space-y-0.5 p-1">
+                {files.map((file) => (
                   <FileRow
-                    key={`${file.path}:${file.staged}`}
+                    key={`${file.path}:${file.toolCallId}`}
                     file={file}
                     cwd={cwd}
                     onOpen={handleOpenFile}
                   />
-                ))
-              )}
-            </div>
-          </ScrollArea>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
         </CollapsibleContent>
       </Collapsible>
     </div>

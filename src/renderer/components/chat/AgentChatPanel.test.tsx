@@ -28,7 +28,7 @@ const {
   // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
-  changedFilesPanelPropsRef: { current: [] as Array<{ cwd: string; activeTurn: boolean }> },
+  changedFilesPanelPropsRef: { current: [] as Array<{ cwd: string; toolCalls: unknown[] }> },
   discoveredContextRef: {
     current: {} as Record<string, { agentId: string; cwd: string; projectId: string }>
   }
@@ -84,7 +84,7 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
 // before any of them mount.
 vi.mock('./ChatErrorNotice', () => ({ ChatErrorNotice: () => null }))
 vi.mock('./ChatChangedFilesPanel', () => ({
-  ChatChangedFilesPanel: (props: { cwd: string; activeTurn: boolean }) => {
+  ChatChangedFilesPanel: (props: { cwd: string; toolCalls: unknown[] }) => {
     changedFilesPanelPropsRef.current.push(props)
     return null
   }
@@ -339,12 +339,12 @@ describe('AgentChatPanel pending question rendering (issue #411)', () => {
   })
 })
 
-describe('AgentChatPanel ChatChangedFilesPanel mount guard', () => {
+describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
   beforeEach(() => {
     changedFilesPanelPropsRef.current = []
   })
 
-  it('does not mount ChatChangedFilesPanel when activeTurn is false', () => {
+  it('always mounts ChatChangedFilesPanel with cwd and toolCalls for an active session', () => {
     sessionRef.current = {
       id: 's1',
       agentId: 'agent-1',
@@ -353,7 +353,7 @@ describe('AgentChatPanel ChatChangedFilesPanel mount guard', () => {
       status: 'active',
       title: null,
       activeTurn: false,
-      openTurnId: 'turn-1',
+      openTurnId: null,
       modes: null,
       models: null,
       configOptions: [],
@@ -361,19 +361,21 @@ describe('AgentChatPanel ChatChangedFilesPanel mount guard', () => {
       createdAt: 1
     } satisfies AcpSession
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current).toHaveLength(0)
+    expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
+    expect(changedFilesPanelPropsRef.current[0]).toMatchObject({ cwd: '/w' })
+    expect(Array.isArray(changedFilesPanelPropsRef.current[0].toolCalls)).toBe(true)
   })
 
-  it('mounts ChatChangedFilesPanel when activeTurn is true and session is active', () => {
+  it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {
     sessionRef.current = {
       id: 's2',
       agentId: 'agent-1',
       cwd: '/w',
       projectId: 'p1',
-      status: 'active',
+      status: 'closed',
       title: null,
-      activeTurn: true,
-      openTurnId: 'turn-1',
+      activeTurn: false,
+      openTurnId: null,
       modes: null,
       models: null,
       configOptions: [],
@@ -382,26 +384,5 @@ describe('AgentChatPanel ChatChangedFilesPanel mount guard', () => {
     } satisfies AcpSession
     render(<AgentChatPanel sessionId="s2" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
-    expect(changedFilesPanelPropsRef.current[0]).toEqual({ cwd: '/w', activeTurn: true })
-  })
-
-  it('does not mount ChatChangedFilesPanel when session is closed', () => {
-    sessionRef.current = {
-      id: 's3',
-      agentId: 'agent-1',
-      cwd: '/w',
-      projectId: 'p1',
-      status: 'closed',
-      title: null,
-      activeTurn: true,
-      openTurnId: 'turn-1',
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
-    render(<AgentChatPanel sessionId="s3" isVisible />)
-    expect(changedFilesPanelPropsRef.current).toHaveLength(0)
   })
 })
