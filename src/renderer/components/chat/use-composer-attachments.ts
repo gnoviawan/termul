@@ -374,7 +374,6 @@ export function useComposerAttachments(opts: {
     if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
   }, [disabled, imageCapable, addFiles])
 
-
   const handlePaste = useCallback(
     (e: ClipboardEvent) => {
       if (disabled) return

@@ -562,10 +562,7 @@ export type RemoveFileTokenResult =
  * backspace. Parallel to `removeSkillTokenBeforeCaret`/`removeCommandTokenBeforeCaret`
  * but without a padding block (files carry none).
  */
-export function removeFileTokenBeforeCaret(
-  value: string,
-  caret: number
-): RemoveFileTokenResult {
+export function removeFileTokenBeforeCaret(value: string, caret: number): RemoveFileTokenResult {
   if (caret <= 0 || caret > value.length) return { removed: false }
   // Walk back from the caret over the optional trailing space to reach the
   // token-end \uE007.

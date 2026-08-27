@@ -613,10 +613,12 @@ describe('ChatInputBar file mentions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
-      const blocks = onSendBlocks.mock.calls[0]?.[0] as Array<{
-        type: string
-        uri?: string
-      }> | undefined
+      const blocks = onSendBlocks.mock.calls[0]?.[0] as
+        | Array<{
+            type: string
+            uri?: string
+          }>
+        | undefined
       expect(blocks).toBeDefined()
       const resourceLinks = blocks!.filter(
         (b) => b.type === 'resource_link' && b.uri === 'file:///work/src/auth.ts'
@@ -628,7 +630,12 @@ describe('ChatInputBar file mentions', () => {
   it('renders a file pill + skill pill together (visually distinct)', async () => {
     vi.useRealTimers()
     mockSkills.current = [
-      { name: 'git-worktree', description: 'Isolated worktree', scope: 'project', path: '/home/u/.agents/skills/git-worktree/SKILL.md' }
+      {
+        name: 'git-worktree',
+        description: 'Isolated worktree',
+        scope: 'project',
+        path: '/home/u/.agents/skills/git-worktree/SKILL.md'
+      }
     ]
     renderInputBar()
 
@@ -648,7 +655,9 @@ describe('ChatInputBar file mentions', () => {
     vi.useRealTimers()
     renderInputBar()
     // Wait for the Tiptap editor to mount (useEditor initializes in an effect).
-    await waitFor(() => expect(document.querySelector('[data-composer-editor="true"]')).not.toBeNull())
+    await waitFor(() =>
+      expect(document.querySelector('[data-composer-editor="true"]')).not.toBeNull()
+    )
 
     const ft = fileToken('auth.ts', '/work/src/auth.ts')
     setComposerValue(`fix ${ft} `)
