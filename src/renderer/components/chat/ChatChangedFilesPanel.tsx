@@ -85,6 +85,7 @@ function FileRow({
     <div
       role="button"
       tabIndex={0}
+      data-press-feedback="off"
       onClick={() => onOpen(fullPath)}
       onKeyDown={handleKeyDown}
       className={cn(
@@ -166,6 +167,7 @@ export function ChatChangedFilesPanel({
           <div
             role="button"
             tabIndex={0}
+            data-press-feedback="off"
             onClick={() => setExpanded((v) => !v)}
             onKeyDown={handleToggleKeyDown}
             className={cn(
