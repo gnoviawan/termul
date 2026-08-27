@@ -4,13 +4,13 @@ import { toast } from 'sonner'
 import { CHAT_GUTTER_X } from '@/components/chat/chat-layout'
 import { diffLineCounts } from '@/components/chat/tool-call-format'
 import { toolCallPath } from '@/components/chat/tool-call-summary'
-import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import type { ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+
+const COLLAPSE_TRANSITION = 'transition-[max-height,opacity] duration-150 ease-in-out'
 
 /** A file touched by an ACP tool call in this session. */
 interface ChangedFile {
@@ -89,7 +89,7 @@ function FileRow({
       onKeyDown={handleKeyDown}
       className={cn(
         'group/row flex w-full items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer text-left',
-        'transition-colors duration-150',
+        'select-none transition-colors duration-100',
         'hover:bg-secondary/60 text-muted-foreground hover:text-foreground',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
@@ -161,7 +161,7 @@ export function ChatChangedFilesPanel({
   return (
     <div className={cn(CHAT_GUTTER_X, '-mb-5 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
-        <div className="relative z-0 border border-b-0 border-border/60 bg-card">
+        <div className="relative z-0 rounded-t-2xl border border-b-0 border-border/60 bg-card select-none">
           {/* biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink */}
           <div
             role="button"
@@ -171,7 +171,7 @@ export function ChatChangedFilesPanel({
             className={cn(
               'flex w-full items-center gap-2 px-3 pb-5 pt-2',
               'cursor-pointer text-xs text-muted-foreground',
-              'transition-colors duration-150',
+              'select-none transition-colors duration-100',
               'hover:bg-secondary/40 hover:text-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
             )}
@@ -181,7 +181,7 @@ export function ChatChangedFilesPanel({
             <ChevronDown
               size={14}
               className={cn(
-                'shrink-0 transition-transform duration-200',
+                'shrink-0 transition-transform duration-150',
                 expanded ? 'rotate-180' : 'rotate-0'
               )}
             />
@@ -195,9 +195,15 @@ export function ChatChangedFilesPanel({
               <span className="text-destructive">−{totalRemoved}</span>
             </span>
           </div>
-          <CollapseExpandMotion open={expanded}>
-            <div className="w-full pb-5">
-              <ScrollArea className="max-h-48 w-full">
+          <div
+            className={cn(
+              'overflow-hidden',
+              expanded ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0',
+              COLLAPSE_TRANSITION
+            )}
+          >
+            <div className="pb-5">
+              <div className="max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
                     <FileRow
@@ -208,9 +214,9 @@ export function ChatChangedFilesPanel({
                     />
                   ))}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
-          </CollapseExpandMotion>
+          </div>
         </div>
       </div>
     </div>
