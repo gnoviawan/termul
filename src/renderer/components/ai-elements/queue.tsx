@@ -151,7 +151,7 @@ export type QueueProps = ComponentProps<'div'>
 export const Queue = ({ className, ...props }: QueueProps) => (
   <div
     className={cn(
-      'relative z-0 flex flex-col gap-1 rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pt-2 pb-6 select-none',
+      'relative z-0 flex flex-col gap-1 rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pt-2 pb-6',
       className
     )}
     {...props}
