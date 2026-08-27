@@ -737,6 +737,26 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/setDefaultProject\b/)
       expect(content).toMatch(/\/projects\/default/)
     })
+    it('web-server-api.ts exposes addProject hitting POST /projects', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/addProject\b/)
+      expect(content).toMatch(/postJson.*\/projects'/)
+    })
+
+    it('web-server-api.ts exposes updateProject hitting PUT /projects/{id}', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/updateProject\b/)
+      expect(content).toMatch(/\/projects\/\$\{encodeURIComponent\(projectId\)\}/)
+    })
+
+    it('web-server-api.ts exposes removeProject hitting DELETE /projects/{id}', () => {
+      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebServerApi, 'utf-8')
+      expect(content).toMatch(/removeProject\b/)
+      expect(content).toMatch(/method:\s*'DELETE'/)
+    })
   })
 
   // CAP-1/CAP-2: ACP history parity. The host owns the session transcript (the
@@ -898,6 +918,440 @@ describe('Parity Checklist Automation', () => {
       // The cursor authority is the host (WS subscribe lastSeq / server
       // watermark), never the `localStorage` persistence API.
       expect(content).not.toMatch(/localStorage(?:\.|\[)/)
+    })
+  })
+
+  // GH-587/588/589: Web non-secure-context + cross-OS parity. The shared
+  // `dist-web` bundle is served by `termul-server` over plain HTTP on a bare
+  // IP, where `crypto.randomUUID` / `navigator.clipboard` are unavailable and
+  // `navigator.platform` reflects the client browser, not the host. These
+  // static assertions pin the three fallback seams so a regression (re-adding a
+  // direct `crypto.randomUUID()` / `navigator.clipboard.readText()` call, or
+  // re-pinning the picker's initial path to `navigator.platform`) surfaces
+  // here. The runtime behavior of each fallback is pinned by its colocated
+  // unit test (uuid.test.ts, clipboard-api.web.test.ts, DirectoryPicker.test.tsx).
+  describe('Web non-secure-context + cross-OS parity (GH-587/588/589)', () => {
+    const UuidHelper = join(LIB_DIR, 'uuid.ts')
+    const ClipboardFacade = join(LIB_DIR, 'clipboard-api.ts')
+    const DirectoryPicker = join(LIB_DIR, '..', 'components', 'DirectoryPicker.tsx')
+    const AcpTransport = join(LIB_DIR, 'acp-transport.ts')
+
+    it('CAP-1: lib/uuid.ts exists and exports the safe-uuid helper', () => {
+      expect(existsSync(UuidHelper), 'lib/uuid.ts should exist').toBe(true)
+      const content = readFileSync(UuidHelper, 'utf-8')
+      expect(content).toMatch(/export\s+function\s+\brandomUUID\b/)
+    })
+
+    it('CAP-1: uuid helper uses native crypto.randomUUID when present, else a getRandomValues fallback', () => {
+      const content = readFileSync(UuidHelper, 'utf-8')
+      // Prefers the native API when available (secure context).
+      expect(content).toMatch(/crypto\.randomUUID/)
+      // Falls back to the CSPRNG available in ALL browser contexts (HTTP+HTTPS).
+      expect(content).toMatch(/getRandomValues/)
+      // Sets the RFC-4122 v4 version + variant bits so server-side id matching
+      // (turn:<uuid>, WS frame ids) stays valid — NOT a Math.random() call.
+      expect(content).toMatch(/0x40/)
+      expect(content).toMatch(/0x80/)
+      expect(content).not.toMatch(/Math\.random\s*\(/)
+    })
+
+    it('CAP-1: acp-transport.ts no longer calls crypto.randomUUID directly (uses the helper)', () => {
+      expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
+      const content = readFileSync(AcpTransport, 'utf-8')
+      // The helper import must be present.
+      expect(content).toMatch(/from\s+['"]@\/lib\/uuid['"]/)
+      // No direct crypto.randomUUID() call remains in the transport hot path.
+      expect(content).not.toMatch(/crypto\.randomUUID\(\)/)
+    })
+
+    it('CAP-2: clipboard-api.ts browser path has a non-navigator.clipboard fallback', () => {
+      expect(existsSync(ClipboardFacade), 'clipboard-api.ts should exist').toBe(true)
+      const content = readFileSync(ClipboardFacade, 'utf-8')
+      // Structured logging for the fallback trigger (not raw console.*).
+      expect(content).toMatch(/logFrontendError/)
+      // readText fallback: a document-level paste-event capture.
+      expect(content).toMatch(/['"]paste['"]/)
+      expect(content).toMatch(/clipboardData/)
+      // writeText fallback: a hidden textarea + the legacy synchronous copy.
+      expect(content).toMatch(/createElement\(['"]textarea['"]\)/)
+      expect(content).toMatch(/execCommand\(['"]copy['"]\)/)
+      // The desktop tauriClipboardApi path is preserved (facade boundary).
+      expect(content).toMatch(/tauriClipboardApi/)
+      expect(content).toMatch(/isTauriContext\(\)/)
+    })
+
+    it('CAP-2: ConnectedTerminal Ctrl+V degrades to native xterm paste when navigator.clipboard is undefined', () => {
+      // In a non-secure context the facade's paste-event fallback can't fire
+      // for the terminal Ctrl+V — the keydown handler would preventDefault the
+      // very paste event it waits on. The handler must detect the missing Async
+      // Clipboard API and let xterm handle the key natively (return true) so the
+      // browser paste event reaches xterm's helper textarea. The secure-context
+      // path keeps the bracketed + sanitized paste via pasteFromClipboard.
+      const ConnectedTerminal = join(
+        LIB_DIR,
+        '..',
+        'components',
+        'terminal',
+        'ConnectedTerminal.tsx'
+      )
+      expect(existsSync(ConnectedTerminal), 'ConnectedTerminal.tsx should exist').toBe(true)
+      const content = readFileSync(ConnectedTerminal, 'utf-8')
+      expect(content).toMatch(/case ['"]v['"]/)
+      // Pins the non-secure branch exists (specific to the degrade path); the
+      // bare `return true` check was too coarse (matched any return in the file).
+      expect(content).toMatch(/typeof navigator\.clipboard === ['"]undefined['"]/)
+    })
+
+    it('CAP-3: DirectoryPicker sources the initial path from the host catalog (acpCatalogApi.listCatalog), not navigator.platform', () => {
+      expect(existsSync(DirectoryPicker), 'DirectoryPicker.tsx should exist').toBe(true)
+      const content = readFileSync(DirectoryPicker, 'utf-8')
+      // Imports the catalog facade (host-OS source of truth).
+      expect(content).toMatch(/from\s+['"]@\/lib\/acp-catalog-api['"]/)
+      expect(content).toMatch(/acpCatalogApi/)
+      // Resolves the initial path by awaiting listCatalog() and reading host.os.
+      expect(content).toMatch(/listCatalog\(\)/)
+      expect(content).toMatch(/host\.os|host\?\.os/)
+      // Maps the known host OS values to filesystem roots.
+      expect(content).toMatch(/['"]windows['"]/)
+      expect(content).toMatch(/['"]linux['"]/)
+      expect(content).toMatch(/C:\\\\/)
+      // The navigator.platform fallback is preserved ONLY for the
+      // catalog-unavailable degrade path (picker never fails to open).
+      expect(content).toMatch(/navigator\.platform/)
+      // The module-level INITIAL_PATH const that sourced from navigator.platform
+      // at import-time is gone (replaced by an async resolveInitialPath).
+      expect(content).not.toMatch(/const\s+INITIAL_PATH\s*=/)
+    })
+  })
+
+  // CAP — Web worktree parity. The 7 launch-flow worktree ops ship on THREE
+  // transports (Tauri command `worktree_*`, HTTP `/worktree/*` route, facade
+  // branch `isTauriContext()` between `invoke(...)` and `webServerWorktree`).
+  // This block pins the TS-side parity (the Rust-side parity — router routes +
+  // Tauri command registration + `web/worktree_api.rs` — is covered by the Rust
+  // test suite). The 8 advanced ops stay `WEB_UNSUPPORTED` on web (deferred).
+  describe('Worktree parity (CAP — Web worktree parity)', () => {
+    const Facade = join(LIB_DIR, 'worktree-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
+    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
+    const WorktreeApiRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'worktree_api.rs'
+    )
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+
+    const LAUNCH_FLOW_METHODS = [
+      'list',
+      'create',
+      'remove',
+      'branches',
+      'checkDirty',
+      'resolveBaseBranch',
+      'copyIncludeFiles'
+    ] as const
+
+    const ADVANCED_METHODS = [
+      'removeAllManaged',
+      'parseGitignore',
+      'createSymlinks',
+      'ensureSymlinks',
+      'archive',
+      'restore',
+      'mergePreview',
+      'mergeExecute'
+    ] as const
+
+    it('worktree-api.ts facade exists and branches on isTauriContext()', () => {
+      expect(existsSync(Facade), 'worktree-api.ts should exist').toBe(true)
+      const content = readFileSync(Facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/webServerWorktree/)
+    })
+
+    it('web-server-api.ts exports webServerWorktree hitting the 7 routes', () => {
+      expect(existsSync(WebAdapter), 'web-server-api.ts should exist').toBe(true)
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/export\s+const\s+\bwebServerWorktree\b/)
+      for (const route of [
+        '/worktree/list',
+        '/worktree/create',
+        '/worktree/remove',
+        '/worktree/branches',
+        '/worktree/check-dirty',
+        '/worktree/resolve-base-branch',
+        '/worktree/copy-include-files'
+      ]) {
+        expect(content, `web-server-api.ts should hit ${route}`).toMatch(
+          new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        )
+      }
+      // Network/parse failures must map to `NETWORK_ERROR`.
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('facade branches the 7 launch-flow methods (invoke on Tauri, webServerWorktree on web)', () => {
+      const content = readFileSync(Facade, 'utf-8')
+      for (const method of LAUNCH_FLOW_METHODS) {
+        expect(content, `worktree-api.ts should branch ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+      }
+      // The 7 launch-flow methods must reference `webServerWorktree` (the web branch).
+      const launchFlowRefs = (content.match(/webServerWorktree\./g) ?? []).length
+      expect(launchFlowRefs, '7 launch-flow methods should reference webServerWorktree').toBe(7)
+    })
+
+    it('facade keeps the 8 advanced methods as WEB_UNSUPPORTED (no webServerWorktree ref)', () => {
+      const content = readFileSync(Facade, 'utf-8')
+      for (const method of ADVANCED_METHODS) {
+        expect(content, `worktree-api.ts should still define ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*:`)
+        )
+      }
+      // Exactly 7 webServerWorktree refs (not 8) — the advanced methods do NOT branch.
+      const launchFlowRefs = (content.match(/webServerWorktree\./g) ?? []).length
+      expect(launchFlowRefs).toBe(7)
+    })
+
+    it('router.rs registers the 7 /worktree/* routes ahead of the static fallback', () => {
+      expect(existsSync(RouterRust), 'router.rs should exist').toBe(true)
+      const content = readFileSync(RouterRust, 'utf-8')
+      for (const route of [
+        '/worktree/list',
+        '/worktree/create',
+        '/worktree/remove',
+        '/worktree/branches',
+        '/worktree/check-dirty',
+        '/worktree/resolve-base-branch',
+        '/worktree/copy-include-files'
+      ]) {
+        expect(content, `router.rs should register ${route}`).toMatch(
+          new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        )
+      }
+    })
+
+    it('worktree_api.rs exists and defines the 7 Axum handlers', () => {
+      expect(existsSync(WorktreeApiRust), 'worktree_api.rs should exist').toBe(true)
+      const content = readFileSync(WorktreeApiRust, 'utf-8')
+      for (const handler of [
+        'pub async fn list',
+        'pub async fn create',
+        'pub async fn remove',
+        'pub async fn branches',
+        'pub async fn check_dirty',
+        'pub async fn resolve_base_branch',
+        'pub async fn copy_include_files'
+      ]) {
+        expect(content, `worktree_api.rs should define ${handler}`).toMatch(
+          new RegExp(handler.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        )
+      }
+      // IpcBody contract + spawn_blocking + tracing logs.
+      expect(content).toMatch(/IpcBody/)
+      expect(content).toMatch(/spawn_blocking/)
+      expect(content).toMatch(/tracing/)
+      // Loopback guard on write routes + containment on all routes.
+      expect(content).toMatch(/check_local_only/)
+      expect(content).toMatch(/ensure_within_project_boundary/)
+    })
+
+    it('commands.rs defines the 7 desktop Tauri commands (worktree_*)', () => {
+      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
+      const content = readFileSync(CommandsRust, 'utf-8')
+      for (const cmd of [
+        'worktree_list',
+        'worktree_create',
+        'worktree_remove',
+        'worktree_branches',
+        'worktree_check_dirty',
+        'worktree_resolve_base_branch',
+        'worktree_copy_include_files'
+      ]) {
+        expect(content, `commands.rs should define ${cmd}`).toMatch(
+          new RegExp(`\\b${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+        )
+      }
+    })
+  })
+
+  // Global right-click context menu + production devtools block. Pins that:
+  //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
+  //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).
+  //   - The native-context-menu preventDefault hook (usePreventNativeContextMenu) is
+  //     mounted on BOTH roots (P4: portal regression defense).
+  //   - The browser-tab devtools command is cfg-gated in Rust (debug real impl,
+  //     release Err stub); the manager method is debug-only (P13: no release stub).
+  //   - The Debug Console button is hidden in prod (import.meta.env.PROD).
+  describe('Global context menu + devtools block parity', () => {
+    const GlobalMenu = join(LIB_DIR, '..', 'components', 'GlobalContextMenu.tsx')
+    const DevtoolsHook = join(LIB_DIR, '..', 'hooks', 'use-prevent-devtools-shortcuts.ts')
+    const TextEditOps = join(LIB_DIR, 'text-edit-ops.ts')
+    const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
+    const WebApp = join(LIB_DIR, '..', 'App.tsx')
+    const BrowserControls = join(LIB_DIR, '..', 'components', 'browser', 'BrowserControls.tsx')
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const BrowserTabManagerRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'browser_tab_manager.rs'
+    )
+
+    it('GlobalContextMenu.tsx exists and renders the Radix menu with Copy/Cut/Paste/Select All', () => {
+      expect(existsSync(GlobalMenu), 'GlobalContextMenu.tsx should exist').toBe(true)
+      const content = readFileSync(GlobalMenu, 'utf-8')
+      expect(content).toMatch(/from\s+['"]@\/components\/ui\/context-menu['"]/)
+      expect(content).toMatch(/ContextMenuContent/)
+      expect(content).toMatch(/ContextMenuTrigger/)
+      expect(content).toMatch(/ContextMenuSeparator/)
+      // The four edit operations must be wired. The "no Reload/Back/Inspect"
+      // constraint is asserted at runtime by GlobalContextMenu.test.tsx
+      // (queryByRole), not here — this is a static file check.
+      expect(content).toMatch(/copySelection/)
+      expect(content).toMatch(/cutSelection/)
+      expect(content).toMatch(/pasteIntoFocused/)
+      expect(content).toMatch(/selectAllFocused/)
+    })
+
+    it('text-edit-ops.ts exists with the four edit helpers + log-api boundary', () => {
+      expect(existsSync(TextEditOps), 'text-edit-ops.ts should exist').toBe(true)
+      const content = readFileSync(TextEditOps, 'utf-8')
+      expect(content).toMatch(/export\s+async\s+function\s+\bcopySelection\b/)
+      expect(content).toMatch(/export\s+async\s+function\s+\bcutSelection\b/)
+      expect(content).toMatch(/export\s+async\s+function\s+\bpasteIntoFocused\b/)
+      expect(content).toMatch(/export\s+function\s+\bselectAllFocused\b/)
+      // Reuses clipboardApi + copyText + logFrontendError (never throws).
+      expect(content).toMatch(/clipboardApi/)
+      expect(content).toMatch(/copyText/)
+      expect(content).toMatch(/logFrontendError/)
+    })
+
+    it('use-prevent-devtools-shortcuts.ts exists and is a capture-phase keydown blocker', () => {
+      expect(existsSync(DevtoolsHook), 'use-prevent-devtools-shortcuts.ts should exist').toBe(true)
+      const content = readFileSync(DevtoolsHook, 'utf-8')
+      // Capture-phase document listener (mirror usePreventDefaultContextMenu shape).
+      expect(content).toMatch(/addEventListener\(\s*['"]keydown['"]/)
+      expect(content).toMatch(/capture:\s*true/)
+      // P5: production-gated (no-op in dev so devs keep F12 access).
+      expect(content).toMatch(/import\.meta\.env\.PROD/)
+      // P6: uses e.code (locale-independent) for the letter matches.
+      expect(content).toMatch(/KeyI/)
+      expect(content).toMatch(/KeyJ/)
+      expect(content).toMatch(/KeyC/)
+      expect(content).toMatch(/KeyU/)
+      // P6: accepts metaKey (macOS Cmd).
+      expect(content).toMatch(/metaKey/)
+      // P6: excludes altKey.
+      expect(content).toMatch(/!.*altKey|!e\.altKey/)
+      // preventDefault + stopPropagation on match.
+      expect(content).toMatch(/preventDefault/)
+      expect(content).toMatch(/stopPropagation/)
+      // P10: boundary log via logFrontendError on each block.
+      expect(content).toMatch(/logFrontendError/)
+    })
+
+    it('TauriApp.tsx wraps root in GlobalContextMenu + mounts the devtools blocker + native-context-menu defense', () => {
+      expect(existsSync(TauriApp), 'TauriApp.tsx should exist').toBe(true)
+      const content = readFileSync(TauriApp, 'utf-8')
+      expect(content).toMatch(/GlobalContextMenu/)
+      expect(content).toMatch(/usePreventDevToolsShortcuts/)
+      // P4: the native-context-menu preventDefault hook is re-added as
+      // defense-in-depth (usePreventNativeContextMenu) alongside
+      // <GlobalContextMenu> so portaled overlays don't show the native menu.
+      expect(content).toMatch(/usePreventNativeContextMenu/)
+      // The old hook name must be gone (renamed).
+      expect(content).not.toMatch(/usePreventDefaultContextMenu/)
+    })
+
+    it('App.tsx wraps root in GlobalContextMenu + mounts native-context-menu defense (no devtools blocker)', () => {
+      expect(existsSync(WebApp), 'App.tsx should exist').toBe(true)
+      const content = readFileSync(WebApp, 'utf-8')
+      expect(content).toMatch(/GlobalContextMenu/)
+      // P4: web also mounts the native-context-menu defense (portal regression).
+      expect(content).toMatch(/usePreventNativeContextMenu/)
+      // Web parity: NO devtools blocker (browser cannot block its own devtools).
+      // Assert no import of the hook (the dashed import path), not the camelCase
+      // name — App.tsx's comment mentions the hook by name for documentation.
+      expect(content).not.toMatch(/from\s+['"]@\/hooks\/use-prevent-devtools-shortcuts['"]/)
+      expect(content).not.toMatch(/usePreventDevToolsShortcuts\(\)/)
+    })
+
+    it('commands.rs cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
+      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
+      const content = readFileSync(CommandsRust, 'utf-8')
+      expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?browser_tab_open_devtools/)
+      expect(content).toMatch(
+        /#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?browser_tab_open_devtools/
+      )
+      expect(content).toMatch(/DevTools disabled in production/)
+    })
+
+    it('browser_tab_manager.rs cfg-gates open_devtools (debug-only; P13: no release stub)', () => {
+      expect(existsSync(BrowserTabManagerRust), 'browser_tab_manager.rs should exist').toBe(true)
+      const content = readFileSync(BrowserTabManagerRust, 'utf-8')
+      // P13: only the debug (#[cfg(debug_assertions)]) method exists — the
+      // release stub was removed (the release command returns the error
+      // directly, so the method is never called in release → no dead_code).
+      expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?fn\s+open_devtools/)
+      // No release cfg-gated open_devtools stub (P13 removed it).
+      expect(content).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?fn\s+open_devtools/)
+    })
+
+    it('BrowserControls.tsx hides the Debug Console button in production', () => {
+      expect(existsSync(BrowserControls), 'BrowserControls.tsx should exist').toBe(true)
+      const content = readFileSync(BrowserControls, 'utf-8')
+      expect(content).toMatch(/import\.meta\.env\.PROD/)
+      expect(content).toMatch(/browserTabOpenDevtools/)
+    })
+
+    it('ProjectSidebar.tsx handleContextMenu calls stopPropagation so the global trigger does not fire', () => {
+      const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
+      expect(existsSync(sidebar), 'ProjectSidebar.tsx should exist').toBe(true)
+      const content = readFileSync(sidebar, 'utf-8')
+      // The handleContextMenu callback must call both preventDefault and
+      // stopPropagation so the global Radix trigger doesn't double-fire.
+      const handlerMatch = content.match(
+        /handleContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[\]\)/
+      )
+      expect(handlerMatch, 'handleContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
+    })
+
+    it('ProjectSidebar.tsx handleGroupContextMenu calls stopPropagation (parity with handleContextMenu)', () => {
+      const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
+      const content = readFileSync(sidebar, 'utf-8')
+      // The group context menu handler must also stopPropagation so the global
+      // Radix trigger doesn't double-fire over the sidebar's group menu.
+      const handlerMatch = content.match(
+        /handleGroupContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[/
+      )
+      expect(handlerMatch, 'handleGroupContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
+    })
+
+    it('FileExplorer.tsx handleContextMenu calls stopPropagation (pre-existing pattern)', () => {
+      const explorer = join(LIB_DIR, '..', 'components', 'file-explorer', 'FileExplorer.tsx')
+      expect(existsSync(explorer), 'FileExplorer.tsx should exist').toBe(true)
+      const content = readFileSync(explorer, 'utf-8')
+      const handlerMatch = content.match(/handleContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[/)
+      expect(handlerMatch, 'FileExplorer handleContextMenu callback should exist').not.toBeNull()
+      const handler = handlerMatch![1]
+      expect(handler).toMatch(/preventDefault/)
+      expect(handler).toMatch(/stopPropagation/)
     })
   })
 })

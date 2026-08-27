@@ -149,6 +149,66 @@ impl ProjectRegistry {
         }
         self.rebind_project_root();
     }
+    /// Insert or replace a single project summary by `id` in the in-memory
+    /// mirror (Option B: web-client project create/update). A root with an
+    /// existing `id` is replaced in place (preserving order); a new id is
+    /// appended. Does NOT touch the default. When the new project is the only
+    /// one and no default is set, the caller may set it via
+    /// `set_default_project`. Triggers a `project_root` rebind so the
+    /// containment boundary follows when this becomes the default.
+    pub fn upsert(&self, project: ProjectSummary) {
+        let mut g = self.inner.lock();
+        if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
+            *existing = project;
+        } else {
+            g.projects.push(project);
+        }
+    }
+
+    /// Remove a project summary by `id` from the in-memory mirror. Clears the
+    /// default when it referenced the removed project (P4: no dangling
+    /// default). Returns `true` when a project was removed.
+    pub fn remove(&self, project_id: &str) -> bool {
+        let mut g = self.inner.lock();
+        let before = g.projects.len();
+        g.projects.retain(|p| p.id != project_id);
+        if g.projects.len() == before {
+            return false;
+        }
+        if g.default_project_id.as_deref() == Some(project_id) {
+            g.default_project_id = None;
+        }
+        true
+    }
+
+    /// Patch a single project's display fields (name, color, archived) by
+    /// `id`. Returns `false` when the id is absent. Clears the default when the
+    /// project is archived (P4: an archived default is not switchable).
+    pub fn update(
+        &self,
+        project_id: &str,
+        name: Option<String>,
+        color: Option<String>,
+        is_archived: Option<bool>,
+    ) -> bool {
+        let mut g = self.inner.lock();
+        let Some(project) = g.projects.iter_mut().find(|p| p.id == project_id) else {
+            return false;
+        };
+        if let Some(name) = name {
+            project.name = name;
+        }
+        if let Some(color) = color {
+            project.color = color;
+        }
+        if let Some(is_archived) = is_archived {
+            project.is_archived = is_archived;
+        }
+        if project.is_archived && g.default_project_id.as_deref() == Some(project_id) {
+            g.default_project_id = None;
+        }
+        true
+    }
 
     /// Snapshot the current mirror for `GET /projects`. Clones the vec under
     /// the lock (the read is short); the caller serializes outside the lock.

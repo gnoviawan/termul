@@ -69,16 +69,28 @@ function pathIdentity(path: string): string {
   return normalized === '/' ? normalized : normalized.replace(/\/+$/, '')
 }
 
+/** Case-insensitive comparison form of a path: `pathIdentity` lowercased.
+ * Routed through every within-root comparison (`isWithinRoot`, `parentOf`,
+ * `isAtRoot`, `navigateBack`) so a casing discrepancy between the stored
+ * `rootPath` (config casing, e.g. `e:/proj`) and server-canonicalized entry
+ * paths (on-disk casing, e.g. `E:/proj/...`) no longer clamps back
+ * navigation to root. Never feeds the stored `currentPath` or any display
+ * string — those keep the case-preserving `normalizePath` output. */
+function comparePath(path: string): string {
+  return pathIdentity(path).toLowerCase()
+}
+
 function joinPath(parent: string, name: string): string {
   return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
 }
 
 function isWithinRoot(path: string, root: string): boolean {
-  const p = pathIdentity(path)
-  const r = pathIdentity(root)
+  const p = comparePath(path)
+  const r = comparePath(root)
   if (p === r) return true
-  // Drive roots (`C:/`) and posix `/` prefix any child without a trailing
-  // separator, so check `startsWith(r)` directly for those.
+  // Drive roots (`c:/`, lowercased from `C:/`) and posix `/` prefix any
+  // child without a trailing separator, so check `startsWith(r)` directly
+  // for those.
   if (r === '/' || /^[A-Za-z]:\/$/.test(r)) return p.startsWith(r)
   return p.startsWith(`${r}/`)
 }
@@ -168,14 +180,14 @@ export function MobileFileExplorer({
   function parentOf(path: string): string {
     const normalized = normalizePath(path)
     const canonicalRoot = rootPath ? normalizePath(rootPath) : normalized
-    const rootIdentity = pathIdentity(canonicalRoot)
-    const currentIdentity = pathIdentity(normalized)
-    const rootPrefix = rootIdentity === '/' ? '/' : `${rootIdentity}/`
-    if (currentIdentity === rootIdentity || !currentIdentity.startsWith(rootPrefix)) {
+    const rootCompare = comparePath(canonicalRoot)
+    const currentCompare = comparePath(normalized)
+    const rootPrefix = rootCompare === '/' ? '/' : `${rootCompare}/`
+    if (currentCompare === rootCompare || !currentCompare.startsWith(rootPrefix)) {
       return canonicalRoot
     }
     const parent = normalized.slice(0, normalized.lastIndexOf('/'))
-    return pathIdentity(parent) === rootIdentity ? canonicalRoot : parent
+    return comparePath(parent) === rootCompare ? canonicalRoot : parent
   }
 
   function closeAffectedTabs(target: DirectoryEntry): void {
@@ -214,7 +226,7 @@ export function MobileFileExplorer({
   }
 
   function navigateBack(): void {
-    if (!currentPath || !rootPath || pathIdentity(currentPath) === pathIdentity(rootPath)) return
+    if (!currentPath || !rootPath || comparePath(currentPath) === comparePath(rootPath)) return
     setCreating(null)
     setRenaming(null)
     setNavigationDirection(-1)
@@ -389,7 +401,7 @@ export function MobileFileExplorer({
       : normalizedRoot.length + 1
     : 0
   const isAtRoot =
-    !normalizedRoot || pathIdentity(normalizedCurrent ?? '/') === pathIdentity(normalizedRoot)
+    !normalizedRoot || comparePath(normalizedCurrent ?? '/') === comparePath(normalizedRoot)
   const currentName =
     normalizedCurrent && normalizedRoot
       ? isAtRoot

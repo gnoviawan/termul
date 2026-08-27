@@ -1,7 +1,8 @@
+import type { Editor } from '@tiptap/core'
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowUp, Paperclip, Square } from 'lucide-react'
-import { type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
+import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -18,11 +19,11 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
-import { CommandChip } from './CommandChip'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -33,17 +34,17 @@ import {
 } from './chat-input-bar-config'
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
+import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PromptQueuePanel } from './PromptQueuePanel'
-import { SkillComposerOverlay } from './SkillComposerOverlay'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
 import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
+import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
-import { useComposerTextarea } from './use-composer-textarea'
 
 // Subtle embossed/raised look shared by the send + stop buttons: soft outer
 // drop shadow to lift the button off the composer, a top inner highlight, and a
@@ -94,6 +95,8 @@ interface ChatInputBarProps {
   queue?: QueuedPrompt[]
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
+  /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
+  compactTop?: boolean
 }
 
 export function ChatInputBar({
@@ -116,10 +119,31 @@ export function ChatInputBar({
   seedNonce,
   queue = [],
   onRemoveQueued,
-  onSendQueuedNow
+  onSendQueuedNow,
+  compactTop = false
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
+  // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
+  // (worktree chats show their `chat/*` branch, not the long worktree path —
+  // the path stays on the hover tooltip). Current-branch mode falls back to
+  // the project's reactive `gitBranch`. Switching chats re-renders via
+  // `session`.
+  const projectGitBranch = useProjectStore(
+    (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
+  )
+  const isolationLabel =
+    session.worktreePath && session.worktreeBranch
+      ? `${session.worktreeBranch} · New worktree`
+      : projectGitBranch
+        ? `${projectGitBranch} · Local`
+        : (session.worktreeBranch ?? null)
+  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const isolationBranch = session.worktreeBranch ?? projectGitBranch
+  const isolationTitle =
+    isolationLabel && session.worktreePath
+      ? `${isolationLabel} — ${session.worktreePath}`
+      : isolationLabel
   const {
     model,
     thoughtLevel,
@@ -133,7 +157,7 @@ export function ChatInputBar({
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
   const messages = useAcpMessages(session.id)
-  const { templateId: agentTemplateId } = useAgentIdentity(session.agentId)
+  const { templateId: agentTemplateId, icon: agentIcon } = useAgentIdentity(session.agentId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -227,7 +251,6 @@ export function ChatInputBar({
     }
   }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
-  const [focused, setFocused] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
@@ -244,7 +267,6 @@ export function ChatInputBar({
     attachments,
     addFiles,
     pickFiles,
-    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,
@@ -254,7 +276,9 @@ export function ChatInputBar({
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<Editor | null>(null)
+  const composerInputRef = useRef<HTMLElement | null>(null)
+  const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
   const slashMenuRef = useRef<SlashMenuHandle>(null)
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
     session.projectId,
@@ -265,7 +289,6 @@ export function ChatInputBar({
     disabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
-      addFileRef(m)
       pushMentionRecent(m)
     }
   })
@@ -296,36 +319,44 @@ export function ChatInputBar({
   }, [canDropPaste])
 
   const slashOpen = isSlashTriggerAny(value) && !disabled
-  const {
-    onInput,
-    onKeyUp,
-    onSelect,
-    onMentionSelect,
-    handleMentionKeyDown,
-    mentionMenuOpen,
-    mentionSections,
-    mentionMenuRef,
-    emptyLabel,
-    resetMentions,
-    resetHeight,
-    clampHeight,
-    updateMentions
-  } = useComposerTextarea({ value, setValue, textareaRef, mentions, disabled, slashOpen })
+  // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
+  // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
+  // natural typing, and `handleSelect`/`onMentionSelect` feed it on
+  // programmatic splices). `onMentionSelect` restores the caret via the editor.
+  // `mentions` is a new object each render (useComposerMentions returns a fresh
+  // literal), so effects that depend on it would re-fire every render and loop
+  // (the seed effect calls `setValue`, which re-renders, which re-fires the
+  // effect). Stabilize the `update` access via a ref so effect deps stay
+  // stable without lying to the lint rule.
+  const mentionsRef = useRef(mentions)
+  mentionsRef.current = mentions
+  const updateMentionsStable = useCallback((v: string, c: number) => {
+    mentionsRef.current.update(v, c)
+  }, [])
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+  const mentionSections = mentions.sections
+  const mentionMenuRef = mentions.menuRef
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const resetMentions = mentions.reset
+  const onMentionSelect = useComposerMentionSelect({
+    value,
+    setValue,
+    editorRef,
+    mentions,
+    scheduleRestoreCaret
+  })
 
   const {
     slashSections,
-    activeCommand,
-    setActiveCommand,
-    clearActiveCommand,
+    hasCommandToken,
     skillPathsRef,
-    hasSkillToken,
     handleSelect,
-    handleKeyDown: composerHandleKeyDown,
+    onSlashOrMentionKeyDown,
     buildPromptParts
   } = useChatComposer({
     value,
     setValue,
-    textareaRef,
+    editorRef,
     slashMenuRef,
     commands,
     configOptions,
@@ -335,42 +366,47 @@ export function ChatInputBar({
     onSetConfig,
     onSetMode,
     onSetModel,
-    handleMentionKeyDown,
-    updateMentions,
-    resetMentions,
-    resetHeight,
-    clampHeight
+    mentions,
+    scheduleRestoreCaret
   })
 
-  const canSend =
-    !disabled &&
-    !sending &&
-    (value.trim().length > 0 || activeCommand !== null || attachments.length > 0)
+  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
   const showStop = busy && !canSend
   const iconMotion = iconPop(reduced)
 
   const submit = useCallback(async () => {
     const hasAttachments = attachments.length > 0
     const hasText = value.trim().length > 0
-    if ((!hasText && !activeCommand && !hasAttachments) || disabled || sending) return
+    if ((!hasText && !hasAttachments) || disabled || sending) return
 
     setSending(true)
     try {
-      // Build the wire/display text parts from the current value, resolved skill
-      // paths, and active command. Throws `Skill '<name>' is missing a path`
-      // when a selected skill has no resolvable path (Block If) — caught below.
-      const { hasSkills, wireWithCommand, displayWithCommand, wireTrimmed, displayTrimmed } =
-        buildPromptParts()
-      if (!wireTrimmed && !hasAttachments) return
+      // Build the wire/display text parts from the current value, resolved
+      // skill paths, and inline command token. Throws `Skill '<name>' is
+      // missing a path` when a selected skill has no resolvable path (Block If)
+      // — caught below.
+      const {
+        hasSkills,
+        wireWithCommand,
+        displayWithCommand,
+        wireTrimmed,
+        displayTrimmed,
+        fileBlocks
+      } = buildPromptParts()
+      const hasFileRefs = fileBlocks.length > 0
+      if (!wireTrimmed && !hasAttachments && !hasFileRefs) return
 
       if (hasAttachments) {
         const wireBlocks: ContentBlock[] = []
         if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
         for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
+        wireBlocks.push(...fileBlocks)
         const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Only split display from wire when skills are present; otherwise
-        // display == wire and a single-arg call preserves the existing contract.
-        if (hasSkills) {
+        // Split display from wire when skills OR file-mention pills are
+        // present: skills carry framing tokens, file mentions carry inline
+        // pill tokens — both need the display to keep the raw token text so
+        // the timeline renders inline chips. Without either, display == wire.
+        if (hasSkills || hasFileRefs) {
           const displayBlocks: ContentBlock[] = []
           if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
           for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
@@ -381,8 +417,28 @@ export function ChatInputBar({
         }
       } else if (hasSkills) {
         // Skills (tokens) present: split display (tokens) from wire (framing).
+        // File-mention `resource_link` blocks append to the wire only — the
+        // display keeps the raw token text so the timeline renders inline
+        // file pills.
+        const wireBlocks: ContentBlock[] = wireTrimmed
+          ? [{ type: 'text', text: wireWithCommand }]
+          : []
+        wireBlocks.push(...fileBlocks)
         onSendBlocks(
-          wireTrimmed ? [{ type: 'text', text: wireWithCommand }] : [],
+          dedupeAttachmentBlocks(wireBlocks),
+          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
+        )
+      } else if (hasFileRefs) {
+        // File-mention pills present (no skills, no attachments): the wire
+        // carries the text (tokens → `(display)`) + `resource_link` blocks for
+        // each unique file. Display keeps the token text so the timeline
+        // renders inline file pills.
+        const wireBlocks: ContentBlock[] = wireTrimmed
+          ? [{ type: 'text', text: wireWithCommand }]
+          : []
+        wireBlocks.push(...fileBlocks)
+        onSendBlocks(
+          dedupeAttachmentBlocks(wireBlocks),
           displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
         )
       } else {
@@ -395,10 +451,8 @@ export function ChatInputBar({
       registerSessionTempFiles(session.id, appOwnedTempPaths())
       setValue('')
       skillPathsRef.current = {}
-      setActiveCommand(null)
       clearAttachments()
       resetMentions()
-      resetHeight()
     } catch (err) {
       // Skill path resolution throws a specific user-facing message — keep it.
       const msg = err instanceof Error ? err.message : ''
@@ -409,73 +463,76 @@ export function ChatInputBar({
   }, [
     value,
     attachments,
-    activeCommand,
     disabled,
     sending,
     clearAttachments,
     appOwnedTempPaths,
     onSend,
     onSendBlocks,
-    resetHeight,
     resetMentions,
     session.id,
     buildPromptParts,
-    skillPathsRef,
-    setActiveCommand
+    skillPathsRef
   ])
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Shared composer dispatch (skill-token backspace, slash-menu keys,
-      // mention-menu keys) lives in `useChatComposer`. Enter→submit and
-      // Escape→cancel are surface-specific (the running chatbox cancels a busy
-      // turn on Escape and morphs send/stop) and run only when the shared
-      // handler did not consume the event.
-      composerHandleKeyDown(e)
-      if (e.defaultPrevented) return
-      if (e.key === 'Escape' && busy) {
-        e.preventDefault()
+    (event: KeyboardEvent): boolean | undefined => {
+      // Editor-first keymap: the slash/mention menu keys + Enter→submit /
+      // Escape→cancel run BEFORE the editor's own keymap (Backspace-pill
+      // removal is editor-owned). `onSlashOrMentionKeyDown` consumes the
+      // slash/mention menu arrows/Tab/Enter/Escape when their menus are open;
+      // Enter→submit + Ctrl/Cmd+Enter→submit + Escape→cancel are
+      // surface-specific (the running chatbox cancels a busy turn on Escape
+      // and morphs send/stop). Ctrl/Cmd+Enter is part of the frozen
+      // accessibility baseline (parity with `AgentLauncher`).
+      if (onSlashOrMentionKeyDown(event) === true) return true
+      if (event.key === 'Escape' && busy) {
+        event.preventDefault()
         onCancel()
-        return
+        return true
       }
-      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-        e.preventDefault()
-        if (showStop) return
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault()
+        if (showStop) return true
         void submit()
+        return true
       }
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault()
+        if (showStop) return true
+        void submit()
+        return true
+      }
+      return undefined
     },
-    [composerHandleKeyDown, busy, showStop, onCancel, submit]
+    [onSlashOrMentionKeyDown, busy, showStop, onCancel, submit]
   )
 
   // Load externally-seeded text (edit a message, pick a starter prompt), then
   // focus and place the cursor at the end. Keyed on a nonce so re-picking the
-  // same text still applies.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the intended trigger
+  // same text still applies. The editor re-parses `value` on the next render
+  // (its external-sync effect) — the rAF below lands the caret at the end.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the intended trigger; `mentions` is read via a stable ref (`updateMentionsStable`) so it doesn't re-fire every render (which would loop via setValue).
   useEffect(() => {
     if (seedNonce === undefined) return
     const next = seedText ?? ''
     setValue(next)
-    setActiveCommand(null)
-    updateMentions(next, next.length)
-    const el = textareaRef.current
-    if (!el) return
-    el.focus()
-    requestAnimationFrame(() => {
-      clampHeight(el)
-      el.setSelectionRange(next.length, next.length)
-    })
-  }, [seedNonce, updateMentions, clampHeight])
+    updateMentionsStable(next, next.length)
+    // Shared rAF caret-restore (cancels pending frames, no-ops on destroyed
+    // editor) — replaces the bare `requestAnimationFrame` that swallowed
+    // throws against a destroyed editor.
+    scheduleRestoreCaret(next.length)
+  }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
 
-  // Story 5.3 (T2.3): on mobile web, scroll the textarea into view once per
+  // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
-  // Moved from onFocus (where `osk.isOskOpen` may still be false at focus
-  // time) to a closed→open transition effect — mirrors AgentChatPanel. rAF-
-  // deferred to let layout settle; fires once per OSK-open window.
+  // rAF-deferred to let layout settle; fires once per OSK-open window.
   useEffect(() => {
     const wasOpen = prevOskOpenRef.current
     prevOskOpenRef.current = osk.isOskOpen
     if (!wasOpen && osk.isOskOpen && isMobileShell) {
-      const el = textareaRef.current
+      const ed = editorRef.current
+      const el = ed?.view.dom ?? null
       if (el) {
         requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
       }
@@ -490,7 +547,12 @@ export function ChatInputBar({
       searchable
       maxVisibleOptions={5}
       leading={
-        <AgentGlyph templateId={agentTemplateId} size={13} className="text-muted-foreground" />
+        <AgentGlyph
+          templateId={agentTemplateId}
+          icon={agentIcon}
+          size={13}
+          className="text-muted-foreground"
+        />
       }
       onSelect={(valueId) =>
         modelSource === 'models' ? onSetModel(valueId) : onSetConfig(modelOption.id, valueId)
@@ -550,9 +612,15 @@ export function ChatInputBar({
       }}
     />
   )
-
   return (
-    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>
+    <div
+      ref={rootRef}
+      className={cn(
+        CHAT_GUTTER_X,
+        compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
+        compactTop && 'relative z-10'
+      )}
+    >
       <div className="relative mx-auto w-full max-w-3xl">
         {disabled && (
           <div
@@ -570,7 +638,7 @@ export function ChatInputBar({
             ref={slashMenuRef}
             sections={slashSections}
             onSelect={handleSelect}
-            inputRef={textareaRef}
+            inputRef={composerInputRef}
           />
         )}
         {mentionMenuOpen && (
@@ -579,12 +647,13 @@ export function ChatInputBar({
             sections={mentionSections}
             onSelect={onMentionSelect}
             emptyLabel={emptyLabel}
-            inputRef={textareaRef}
+            inputRef={composerInputRef}
           />
         )}
         <ComposerBeamShell busy={busy} reduced={reduced}>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
+            data-chat-composer="true"
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
               'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
@@ -602,129 +671,99 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
-            {activeCommand && <CommandChip name={activeCommand} onRemove={clearActiveCommand} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
-              {/* Transparent-textarea overlay: mirrors the value with inline
-                  SkillChip pills. The textarea text is transparent with a
-                  visible caret; this overlay renders the visible text + chips
-                  in the same metrics so the caret stays aligned.
-
-                  The overlay is `absolute inset-0`, so its containing block
-                  must be a box that exactly matches the textarea — not the
-                  padded parent (which would shift the overlay up-left by the
-                  parent's padding and paint chips above the caret). The inner
-                  `relative` wrapper has no padding, so its box == the
-                  textarea's box and the overlay stays caret-aligned. */}
-              <div className="relative">
-                <SkillComposerOverlay textareaRef={textareaRef} value={value} />
-                <textarea
-                  ref={textareaRef}
-                  value={value}
-                  onChange={onInput}
-                  onKeyDown={handleKeyDown}
-                  onKeyUp={onKeyUp}
-                  onSelect={onSelect}
-                  onPaste={handlePaste}
-                  // Story 5.3 (T2.3): on mobile web when the OSK is open, scroll
-                  // the textarea into view once per OSK-open window so iOS Safari
-                  // doesn't leave the input under the keyboard. rAF-deferred to
-                  // let layout settle. Guarded against focus-loop thrash (the OSK
-                  // can re-focus the textarea as it animates; only the first
-                  // focus per OSK-open window triggers the scroll).
-                  onFocus={() => {
-                    setFocused(true)
-                    // OSK-open scroll is handled by the `osk.isOskOpen`
-                    // transition effect above (the OSK state can lag the focus
-                    // event, so reading it here was unreliable).
-                  }}
-                  onBlur={() => setFocused(false)}
-                  // Story 5.3 (T2.4): mobile keyboards show a "send" affordance.
-                  // Do NOT change Enter keyboard semantics — handleKeyDown still
-                  // routes Enter→send only when the slash menu is closed.
-                  inputMode="text"
-                  enterKeyHint="send"
-                  disabled={disabled || sending}
-                  rows={1}
-                  placeholder={
-                    disabled
-                      ? 'Composer unavailable'
-                      : activeCommand
-                        ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
-                  }
-                  className={cn(
-                    // text-base (16px): floor for iOS Safari — sub-16px inputs zoom on focus.
-                    'relative z-10 min-h-[52px] w-full resize-none bg-transparent text-base leading-relaxed',
-                    hasSkillToken ? 'text-transparent caret-foreground' : 'text-foreground',
-                    'placeholder:text-muted-foreground focus:outline-none',
-                    'disabled:cursor-not-allowed disabled:text-muted-foreground disabled:placeholder:text-muted-foreground/70 max-h-40'
-                  )}
-                />
-              </div>
+              {/* Tiptap rich-text editor — the skill "pill" is a real inline
+                  DOM node (a Tiptap `NodeView`), so the caret sits flush
+                  against the pill's right edge by construction. No transparent
+                  textarea + mirror overlay, no canvas padding, no overlay
+                  scroll-sync. The `value` string (sentinel-token format) is
+                  the shared model the wire builder + draft persistence +
+                  timeline consume (byte-identical wire payload). */}
+              <ChatComposerEditor
+                value={value}
+                onValueChange={setValue}
+                onCaretChange={mentions.update}
+                onBeforeEditorKeyDown={handleKeyDown}
+                onPasteAttachments={handlePaste}
+                getSkillPaths={() => skillPathsRef.current}
+                editorRef={editorRef}
+                inputRef={composerInputRef}
+                disabled={disabled || sending}
+                minHeight={26} /* 1 line: 16px × 1.625 */
+                maxHeight={78} /* 3 lines: 3 × 26px, then scroll */
+                placeholder={
+                  disabled
+                    ? 'Composer unavailable'
+                    : hasCommandToken
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything.. (/ for commands, @ for files )'
+                }
+              />
             </div>
             <div
-              className="flex items-center justify-between gap-3 px-2.5 pb-2.5"
+              className="flex items-end justify-between gap-3 px-3 pb-3"
               data-composer-toolbar={toolbarMode}
             >
-              {toolbarMode === 'narrow' ? (
-                (() => {
-                  // Use the underlying availability conditions, not JSX-element
-                  // truthiness — a chip element is always truthy even when it
-                  // renders null internally, which made this empty-row guard
-                  // unreachable in narrow mode.
-                  const agentModesAvailable =
-                    session.modes != null && session.modes.availableModes.length > 0
-                  const hasRow1 = agentModesAvailable || Boolean(modelChip)
-                  const hasRow2 = hasConfigOptions || mcpCount > 0
-                  if (!hasRow1 && !hasRow2) return null
-                  return (
-                    <div className="flex min-w-0 flex-1 flex-col gap-2">
-                      {hasRow1 && (
-                        <div
-                          className="flex min-w-0 flex-wrap items-center gap-2"
-                          data-composer-toolbar-row="1"
-                        >
-                          {agentModeChip}
-                          {modelChip}
-                        </div>
-                      )}
-                      {hasRow2 && (
-                        <div
-                          className="flex min-w-0 flex-wrap items-center gap-2"
-                          data-composer-toolbar-row="2"
-                        >
-                          {thoughtChip}
-                          {fastModeToggle}
-                          {genericChips}
-                          {mcpBadge}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()
-              ) : (
-                <div
-                  className="flex min-w-0 flex-wrap items-center gap-2"
-                  data-composer-toolbar-row="single"
-                >
-                  {modelChip}
-                  {thoughtChip}
-                  {fastModeToggle}
-                  {genericChips}
-                  {agentModeChip}
-                  {mcpBadge}
-                </div>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
+                {mcpBadge}
+              </div>
               <div
                 className={cn(
-                  'flex shrink-0 items-center gap-2',
-                  toolbarMode === 'narrow' && 'self-end'
+                  'flex min-w-0 flex-wrap items-end justify-end gap-2.5',
+                  toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
+                {toolbarMode === 'narrow' ? (
+                  (() => {
+                    // Use the underlying availability conditions, not JSX-element
+                    // truthiness — a chip element is always truthy even when it
+                    // renders null internally, which made this empty-row guard
+                    // unreachable in narrow mode.
+                    const agentModesAvailable =
+                      session.modes != null && session.modes.availableModes.length > 0
+                    const hasRow1 = agentModesAvailable || Boolean(modelChip)
+                    const hasRow2 = hasConfigOptions
+                    if (!hasRow1 && !hasRow2) return null
+                    return (
+                      <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
+                        {hasRow1 && (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                            data-composer-toolbar-row="1"
+                          >
+                            {modelChip}
+                            {agentModeChip}
+                          </div>
+                        )}
+                        {hasRow2 && (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                            data-composer-toolbar-row="2"
+                          >
+                            {thoughtChip}
+                            {fastModeToggle}
+                            {genericChips}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()
+                ) : (
+                  <div
+                    className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+                    data-composer-toolbar-row="single"
+                  >
+                    {modelChip}
+                    {thoughtChip}
+                    {fastModeToggle}
+                    {genericChips}
+                    {agentModeChip}
+                  </div>
+                )}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
-                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
-                <div className="relative size-8 shrink-0 overflow-visible">
+                <div className="relative size-[34px] shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -739,7 +778,7 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-md bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
+                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
                           EMBOSSED_BUTTON
                         )}
                       >
@@ -759,7 +798,7 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-md transition-transform',
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
                           canSend
                             ? cn(
                                 'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
@@ -768,7 +807,7 @@ export function ChatInputBar({
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
                         )}
                       >
-                        <ArrowUp size={14} strokeWidth={2.5} />
+                        <ArrowUp size={18} />
                       </motion.button>
                     )}
                   </AnimatePresence>
@@ -778,31 +817,32 @@ export function ChatInputBar({
           </div>
         </ComposerBeamShell>
         <div
-          className={cn(
-            'flex items-center px-1 pt-1.5 text-3xs text-muted-foreground transition-opacity duration-150',
-            focused ? 'opacity-100' : 'opacity-0'
-          )}
+          data-chat-composer-context-strip="true"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          {showStop ? (
-            <>
-              <KbdHint k="Esc" /> to stop
-            </>
+          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground/70">
+            {session.worktreePath ? (
+              <FolderGit2 className="size-3.5" aria-hidden="true" />
+            ) : (
+              <Folder className="size-3.5" aria-hidden="true" />
+            )}
+            {isolationModeLabel}
+          </span>
+          {isolationBranch ? (
+            <span
+              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground/70"
+              title={isolationTitle ?? undefined}
+            >
+              <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{isolationBranch}</span>
+            </span>
           ) : (
-            <>
-              <KbdHint k="Enter" /> {busy ? 'to queue' : 'to send'}
-              <span className="mx-1.5 text-border">·</span>
-              <KbdHint k="Shift+Enter" /> newline
-            </>
+            <span />
           )}
         </div>
       </div>
     </div>
   )
-}
-
-/** Inline keyboard-key hint used in the composer footer. */
-function KbdHint({ k }: { k: string }): React.JSX.Element {
-  return <kbd className="mr-1 font-mono text-[0.6rem] font-medium text-foreground">{k}</kbd>
 }
 
 /**
@@ -819,7 +859,7 @@ function ComposerBeamShell({
   children: React.ReactNode
 }): React.JSX.Element {
   if (reduced) {
-    return <div className="w-full">{children}</div>
+    return <div className="relative z-10 w-full">{children}</div>
   }
   return (
     <BorderBeam
@@ -828,7 +868,7 @@ function ComposerBeamShell({
       theme="auto"
       borderRadius={16}
       active={busy}
-      className="w-full"
+      className="relative z-10 w-full"
     >
       {children}
     </BorderBeam>

@@ -10,6 +10,7 @@ import { readImage } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 
 export async function writeBytesToTempFile(bytes: Uint8Array, fileName: string): Promise<string> {
   if (!isTauriContext()) {
@@ -17,7 +18,7 @@ export async function writeBytesToTempFile(bytes: Uint8Array, fileName: string):
   }
   const safe = (fileName || 'pasted-image.png').replace(/[^\w.-]+/g, '_')
   const dir = await tempDir()
-  const path = await join(dir, `faizui-${crypto.randomUUID()}-${safe}`)
+  const path = await join(dir, `faizui-${randomUUID()}-${safe}`)
   await writeFile(path, bytes)
   return path
 }

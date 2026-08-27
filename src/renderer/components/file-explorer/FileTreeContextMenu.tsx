@@ -12,15 +12,15 @@ import {
   Terminal,
   Trash2
 } from 'lucide-react'
-import type { ContextMenuItem } from '@/components/ContextMenu'
-import { ContextMenu } from '@/components/ContextMenu'
+import {
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator
+} from '@/components/ui/context-menu'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
-interface FileTreeContextMenuProps {
+interface FileTreeContextMenuContentProps {
   entry: DirectoryEntry
-  x: number
-  y: number
-  onClose: () => void
   onNewFile: (dirPath: string) => void
   onNewFolder: (dirPath: string) => void
   onRename: (entry: DirectoryEntry) => void
@@ -37,11 +37,18 @@ interface FileTreeContextMenuProps {
   hasClipboardContent?: boolean
 }
 
-export function FileTreeContextMenu({
+/**
+ * Declarative Radix `<ContextMenuContent>` for a file-tree node.
+ *
+ * Rendered inside a `<ContextMenu><ContextMenuTrigger asChild>{node}</ContextMenuTrigger>`
+ * wrapper in `FileExplorer`; the trigger opens the menu at the pointer and Radix
+ * owns positioning/keyboard nav/Escape. Items use the canonical `onSelect` API
+ * and the `mr-2 h-4 w-4` icon convention. Desktop-only reveal/external-open
+ * items are gated by `isTauriContext()` (absent on web, not just disabled) so
+ * the FileExplorer parity invariants stay green.
+ */
+export function FileTreeContextMenuContent({
   entry,
-  x,
-  y,
-  onClose,
   onNewFile,
   onNewFolder,
   onRename,
@@ -56,111 +63,80 @@ export function FileTreeContextMenu({
   onShowInFileManager,
   selectedCount = 1,
   hasClipboardContent = false
-}: FileTreeContextMenuProps): React.JSX.Element {
-  const items: ContextMenuItem[] = []
+}: FileTreeContextMenuContentProps): React.JSX.Element {
   const isDir = entry.type === 'directory'
   const selectionLabel = selectedCount > 1 ? ` (${selectedCount})` : ''
 
-  // New File/Folder (directories only)
-  if (isDir) {
-    items.push(
-      {
-        label: 'New File',
-        icon: <FilePlus size={14} />,
-        onClick: () => onNewFile(entry.path)
-      },
-      {
-        label: 'New Folder',
-        icon: <FolderPlus size={14} />,
-        onClick: () => onNewFolder(entry.path)
-      },
-      { type: 'separator' }
-    )
-  }
+  return (
+    <ContextMenuContent className="w-56">
+      {/* New File/Folder (directories only) */}
+      {isDir && (
+        <>
+          <ContextMenuItem onSelect={() => onNewFile(entry.path)}>
+            <FilePlus className="mr-2 h-4 w-4" /> New File
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onNewFolder(entry.path)}>
+            <FolderPlus className="mr-2 h-4 w-4" /> New Folder
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </>
+      )}
 
-  // Clipboard operations
-  items.push(
-    {
-      label: `Copy${selectionLabel}`,
-      icon: <Copy size={14} />,
-      onClick: () => onCopy()
-    },
-    {
-      label: `Cut${selectionLabel}`,
-      icon: <Scissors size={14} />,
-      onClick: () => onCut()
-    }
+      {/* Clipboard operations */}
+      <ContextMenuItem onSelect={onCopy}>
+        <Copy className="mr-2 h-4 w-4" /> Copy{selectionLabel}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={onCut}>
+        <Scissors className="mr-2 h-4 w-4" /> Cut{selectionLabel}
+      </ContextMenuItem>
+
+      {/* Paste (only when clipboard has content and we're on a directory) */}
+      {hasClipboardContent && isDir && (
+        <ContextMenuItem onSelect={() => onPaste(entry.path)}>
+          <ClipboardPaste className="mr-2 h-4 w-4" /> Paste
+        </ContextMenuItem>
+      )}
+
+      <ContextMenuItem onSelect={onDuplicate}>
+        <Files className="mr-2 h-4 w-4" /> Duplicate{selectionLabel}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => onRename(entry)} disabled={selectedCount > 1}>
+        <Edit2 className="mr-2 h-4 w-4" /> Rename{selectedCount > 1 ? ' (1 item)' : ''}
+      </ContextMenuItem>
+      <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
+        <Trash2 className="mr-2 h-4 w-4" /> Delete{selectionLabel}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => onCopyPath(entry.path)}>
+        <Copy className="mr-2 h-4 w-4" /> Copy Path
+      </ContextMenuItem>
+
+      {/* External operations — separator only when at least one following
+          item is visible (Open in Terminal on any platform, or the
+          desktop-only reveal/open-external items). */}
+      {(isDir || isTauriContext()) && <ContextMenuSeparator />}
+
+      {/* Open in Terminal (directories only — works on web too, server PTY) */}
+      {isDir && (
+        <ContextMenuItem onSelect={() => onOpenInTerminal(entry.path)}>
+          <Terminal className="mr-2 h-4 w-4" /> Open in Terminal
+        </ContextMenuItem>
+      )}
+
+      {/* Open with External App (files only, desktop-only — no browser equivalent) */}
+      {isTauriContext() && !isDir && (
+        <ContextMenuItem onSelect={() => onOpenWithExternal(entry.path)}>
+          <ExternalLink className="mr-2 h-4 w-4" /> Open with External App
+        </ContextMenuItem>
+      )}
+
+      {/* Show in File Manager (desktop-only — no browser equivalent) */}
+      {isTauriContext() && (
+        <ContextMenuItem onSelect={() => onShowInFileManager(entry.path)}>
+          <FolderOpen className="mr-2 h-4 w-4" /> Show in File Manager
+        </ContextMenuItem>
+      )}
+    </ContextMenuContent>
   )
-
-  // Paste (only when clipboard has content and we're on a directory)
-  if (hasClipboardContent && isDir) {
-    items.push({
-      label: 'Paste',
-      icon: <ClipboardPaste size={14} />,
-      onClick: () => onPaste(entry.path)
-    })
-  }
-
-  items.push(
-    {
-      label: `Duplicate${selectionLabel}`,
-      icon: <Files size={14} />,
-      onClick: () => onDuplicate()
-    },
-    { type: 'separator' },
-    {
-      label: `Rename${selectedCount > 1 ? ' (1 item)' : ''}`,
-      icon: <Edit2 size={14} />,
-      onClick: () => onRename(entry),
-      disabled: selectedCount > 1
-    },
-    {
-      label: `Delete${selectionLabel}`,
-      icon: <Trash2 size={14} />,
-      onClick: () => onDelete(entry),
-      variant: 'danger'
-    },
-    { type: 'separator' },
-    {
-      label: 'Copy Path',
-      icon: <Copy size={14} />,
-      onClick: () => onCopyPath(entry.path)
-    }
-  )
-
-  // External operations — separator only when at least one following item is
-  // visible (Open in Terminal on any platform, or the desktop-only
-  // reveal/open-external items).
-  if (isDir || isTauriContext()) {
-    items.push({ type: 'separator' })
-  }
-
-  // Open in Terminal (directories only)
-  if (isDir) {
-    items.push({
-      label: 'Open in Terminal',
-      icon: <Terminal size={14} />,
-      onClick: () => onOpenInTerminal(entry.path)
-    })
-  }
-
-  // Open with External App (files only, desktop-only — no browser equivalent)
-  if (isTauriContext() && !isDir) {
-    items.push({
-      label: 'Open with External App',
-      icon: <ExternalLink size={14} />,
-      onClick: () => onOpenWithExternal(entry.path)
-    })
-  }
-
-  // Show in File Manager (desktop-only — no browser equivalent)
-  if (isTauriContext()) {
-    items.push({
-      label: 'Show in File Manager',
-      icon: <FolderOpen size={14} />,
-      onClick: () => onShowInFileManager(entry.path)
-    })
-  }
-
-  return <ContextMenu items={items} x={x} y={y} onClose={onClose} />
 }

@@ -1,7 +1,9 @@
 import type { AgentCapabilities, McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
+import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpServers } from '@/lib/web-server-api'
+import { logFrontendError } from './log-api'
 
 export const ACP_MCP_KEY = 'acp/mcp-servers'
 
@@ -183,10 +185,45 @@ export async function loadMcpServers(): Promise<StoredMcpServer[]> {
 
 export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
   const normalized = normalizeMcpRegistry(list)
-  const res = isTauriContext()
-    ? await persistenceApi.write(ACP_MCP_KEY, normalized)
-    : await webServerMcpServers.put(normalized)
+  if (isTauriContext()) {
+    const res = await persistenceApi.write(ACP_MCP_KEY, normalized)
+    if (!res.success) {
+      throw new Error(res.error ?? 'Failed to persist MCP servers')
+    }
+    // CAP-7: mirror the app-store registry to the active project's
+    // `.termul/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
+    // serves the same registry. Best-effort — a sync failure is logged but
+    // never blocks the app-store save (the save above already succeeded).
+    await syncMcpRegistryToProjectBestEffort(normalized)
+    return
+  }
+  const res = await webServerMcpServers.put(normalized)
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist MCP servers')
+  }
+}
+
+/**
+ * Best-effort wrapper for `syncMcpRegistryToProject`: logs a failure via
+ * `logFrontendError` (with the IpcResult error/code) and never throws. Shared by
+ * the `saveMcpServers` desktop hook and the acp-store project-switch hook so the
+ * error path stays identical (CAP-7 — registry sync is always non-fatal).
+ */
+export async function syncMcpRegistryToProjectBestEffort(
+  registry: StoredMcpServer[]
+): Promise<void> {
+  try {
+    const result = await syncMcpRegistryToProject(registry)
+    if (!result.success) {
+      void logFrontendError({
+        source: 'acp-mcp-persistence.syncMcpRegistryToProject',
+        message: `MCP registry project-file sync failed (${result.error ?? result.code ?? 'unknown'})`
+      })
+    }
+  } catch (err) {
+    void logFrontendError({
+      source: 'acp-mcp-persistence.syncMcpRegistryToProject',
+      message: `MCP registry project-file sync failed (${String(err)})`
+    })
   }
 }

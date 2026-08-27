@@ -22,7 +22,8 @@ pub struct BrowserBounds {
 pub struct BrowserTabManager {
     app_handle: AppHandle,
     tabs: Arc<Mutex<HashMap<String, BrowserTabInfo>>>,
-    annotation_injected: Arc<Mutex<HashMap<String, Option<String>>>>,
+    agentation_endpoint: Arc<Mutex<Option<String>>>,
+    agentation_enabled: Arc<Mutex<bool>>,
 }
 
 impl BrowserTabManager {
@@ -30,7 +31,9 @@ impl BrowserTabManager {
         Self {
             app_handle,
             tabs: Arc::new(Mutex::new(HashMap::new())),
-            annotation_injected: Arc::new(Mutex::new(HashMap::new())),
+
+            agentation_endpoint: Arc::new(Mutex::new(None)),
+            agentation_enabled: Arc::new(Mutex::new(true)),
         }
     }
 
@@ -170,6 +173,28 @@ impl BrowserTabManager {
                     }
                 }
             }
+
+            // Inject agentation toolbar via eval after a delay for DOM readiness.
+            // The agentation library accesses document.head at module top-level,
+            // so it needs a ready DOM. 3s delay matches the poller's init time.
+            let app_handle_clone = app_handle.clone();
+            let tab_id_clone = tab_id.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(3000));
+                log::info!("[BrowserTab] Agentation delayed injection check for tab={}", tab_id_clone);
+                if let Some(bt) = app_handle_clone.try_state::<Arc<BrowserTabManager>>() {
+                    let enabled = bt.is_agentation_enabled();
+                    log::info!("[BrowserTab] Agentation enabled={} for tab={}", enabled, tab_id_clone);
+                    if enabled {
+                        match bt.inject_agentation_toolbar(&tab_id_clone) {
+                            Ok(()) => {}
+                            Err(e) => log::warn!("[BrowserTab] Agentation toolbar eval failed for tab={}: {}", tab_id_clone, e),
+                        }
+                    }
+                } else {
+                    log::warn!("[BrowserTab] Could not get BrowserTabManager from state for tab={}", tab_id_clone);
+                }
+            });
         });
     }
 
@@ -184,10 +209,32 @@ impl BrowserTabManager {
             .parse()
             .map_err(|e| format!("Invalid URL: {}", e))?;
 
-        let builder = tauri::webview::WebviewBuilder::new(
+        let mut builder = tauri::webview::WebviewBuilder::new(
             tab_id.clone(),
             tauri::WebviewUrl::External(parsed_url),
         );
+
+        // Inject agentation globals via initialization_script (runs before page JS).
+        // The toolbar bundle itself is injected via eval AFTER page load,
+        // because the agentation library accesses document.head at module
+        // top-level — initialization_script runs before DOM exists.
+        let (endpoint, enabled) = {
+            let ep = self.agentation_endpoint.lock().map_err(|_| "Lock poisoned")?.clone();
+            let en = *self.agentation_enabled.lock().map_err(|_| "Lock poisoned")?;
+            (ep, en)
+        };
+        if enabled {
+            if let Some(endpoint_url) = &endpoint {
+                let init_script = format!(
+                    r#"
+                    window.__TERMUL_AGENTATION_ENDPOINT__ = "{endpoint_url}";
+                    window.__TERMUL_ANNOTATION_MODE__ = true;
+                    "#
+                );
+                builder = builder.initialization_script(&init_script);
+                log::info!("[BrowserTab] Agentation init script set for tab={} endpoint={}", tab_id, endpoint_url);
+            }
+        }
 
         let _webview = window
             .add_child(
@@ -298,198 +345,9 @@ impl BrowserTabManager {
         tabs.insert(tab_id.clone(), info.clone());
         drop(tabs);
 
-        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        annotation_injected.insert(tab_id, None);
-        drop(annotation_injected);
-
         Ok(info)
     }
-
-    pub fn inject_annotation_script(&self, tab_id: &str, mode: &str) -> Result<(), String> {
-        let normalized_mode = match mode {
-            "select" => "select",
-            _ => "draw",
-        };
-
-        {
-            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-            let current_mode = annotation_injected
-                .get(tab_id)
-                .and_then(|value| value.as_deref());
-            if current_mode == Some(normalized_mode) {
-                return Ok(());
-            }
-        }
-
-        let webview = self.get_webview(tab_id)?;
-
-        {
-            let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-            let current_mode = annotation_injected
-                .get(tab_id)
-                .and_then(|value| value.as_deref());
-            if current_mode.is_some() && current_mode != Some(normalized_mode) {
-                drop(annotation_injected);
-                self.remove_annotation_overlay(tab_id)?;
-            }
-        }
-
-        let overlay_script = include_str!("../resources/annotation-overlay.js");
-        let bootstrap_script = format!(
-            r#"
-            window.__termul_annotation_mode = {mode:?};
-            window.__termul_annotation_tab_id = {tab_id:?};
-            {overlay_script}
-            "#,
-            mode = normalized_mode,
-            tab_id = tab_id,
-            overlay_script = overlay_script,
-        );
-
-        webview
-            .eval(&bootstrap_script)
-            .map_err(|e| format!("Failed to inject annotation overlay: {}", e))?;
-
-        webview
-            .eval(
-                r#"
-                if (typeof window.__termul_remove_annotation_overlay !== 'function') {
-                    throw new Error('Annotation overlay bootstrap probe failed');
-                }
-                "#,
-            )
-            .map_err(|e| format!("Annotation overlay probe failed: {}", e))?;
-
-        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        annotation_injected.insert(tab_id.to_string(), Some(normalized_mode.to_string()));
-        log::info!(
-            "[BrowserTab] Injected annotation overlay for tab={} mode={}",
-            tab_id,
-            normalized_mode
-        );
-        Ok(())
-    }
-
-    pub fn remove_annotation_overlay(&self, tab_id: &str) -> Result<(), String> {
-        // Do NOT gate the JS cleanup on the `annotation_injected` map: navigation/load
-        // reporting (`browser_tab_report_loaded`/`_url`) invalidates the map entry to
-        // `None` BEFORE the renderer-driven remove runs. Gating here would skip the JS
-        // cleanup and leave a stale overlay in the webview DOM. The cleanup script is
-        // self-guarded, so calling it when no overlay exists is a safe no-op.
-        let webview = match self.get_webview(tab_id) {
-            Ok(webview) => webview,
-            // No webview (tab gone / not yet created) means nothing to clean up.
-            Err(e) => {
-                log::debug!(
-                    "[BrowserTab] remove_annotation_overlay: no webview for tab={} ({}); clearing state",
-                    tab_id,
-                    e
-                );
-                let mut annotation_injected =
-                    self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-                annotation_injected.insert(tab_id.to_string(), None);
-                return Ok(());
-            }
-        };
-
-        let cleanup_script = r#"
-            if (window.__termul_remove_annotation_overlay) {
-                window.__termul_remove_annotation_overlay();
-            }
-        "#;
-        let _ = webview.eval(cleanup_script);
-
-        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        annotation_injected.insert(tab_id.to_string(), None);
-        log::info!("[BrowserTab] Removed annotation overlay for tab={}", tab_id);
-        Ok(())
-    }
-
-    fn escape_js_string_literal(value: &str) -> String {
-        value
-            .replace('\\', "\\\\")
-            .replace('\'', "\\'")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\0', "\\0")
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029")
-    }
-
-    pub fn inject_annotation_markers(
-        &self,
-        tab_id: &str,
-        annotations_json: &str,
-        selected_id: Option<&str>,
-    ) -> Result<(), String> {
-        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
-            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
-        }
-        drop(annotation_injected);
-
-        let webview = self.get_webview(tab_id)?;
-
-        let probe = r#"
-            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
-                throw new Error('Annotation overlay probe failed');
-            }
-        "#;
-        if webview.eval(probe).is_err() {
-            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-            annotation_injected.insert(tab_id.to_string(), None);
-            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
-        }
-        let escaped_json = Self::escape_js_string_literal(annotations_json);
-        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
-        let js = format!(
-            "window.__termul_render_markers(JSON.parse('{}'), {});",
-            escaped_json,
-            selected_id_js,
-        );
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Failed to inject annotation markers: {}", e))?;
-        Ok(())
-    }
-
-    pub fn update_annotation_marker_selection(
-        &self,
-        tab_id: &str,
-        selected_id: Option<&str>,
-    ) -> Result<(), String> {
-        let annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        if annotation_injected.get(tab_id).is_none() || annotation_injected.get(tab_id).and_then(|v| v.as_deref()).is_none() {
-            return Err(format!("Annotation overlay not injected for tab={}", tab_id));
-        }
-        drop(annotation_injected);
-
-        let webview = self.get_webview(tab_id)?;
-
-        let probe = r#"
-            if (typeof window.__termul_remove_annotation_overlay !== 'function') {
-                throw new Error('Annotation overlay probe failed');
-            }
-        "#;
-        if webview.eval(probe).is_err() {
-            let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-            annotation_injected.insert(tab_id.to_string(), None);
-            return Err(format!("Annotation overlay was cleared by navigation for tab={}", tab_id));
-        }
-        let selected_id_js = selected_id.map_or_else(|| "null".to_string(), |id| format!("'{}'", Self::escape_js_string_literal(id)));
-        let js = format!(
-            "window.__termul_update_marker_selection({});",
-            selected_id_js,
-        );
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Failed to update annotation marker selection: {}", e))?;
-        Ok(())
-    }
-
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
-        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         let parsed_url: tauri::Url = url
             .parse()
@@ -497,6 +355,7 @@ impl BrowserTabManager {
         webview
             .navigate(parsed_url)
             .map_err(|e| format!("Navigation failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -573,9 +432,62 @@ impl BrowserTabManager {
         Ok(())
     }
 
-    pub fn invalidate_annotation_injected(&self, tab_id: &str) {
-        let mut annotation_injected = self.annotation_injected.lock().unwrap_or_else(|e| e.into_inner());
-        annotation_injected.insert(tab_id.to_string(), None);
+    /// Set the agentation HTTP endpoint (called when the Rust server starts).
+    /// This makes the endpoint available for injection into new browser tabs.
+    pub fn set_agentation_endpoint(&self, endpoint: String) {
+        let mut ep = self.agentation_endpoint.lock().unwrap_or_else(|e| e.into_inner());
+        *ep = Some(endpoint);
+    }
+
+    /// Enable/disable agentation annotation mode (feature flag from AppPreferences).
+    pub fn set_agentation_enabled(&self, enabled: bool) {
+        let mut en = self.agentation_enabled.lock().unwrap_or_else(|e| e.into_inner());
+        *en = enabled;
+    }
+
+    /// Check if agentation mode is enabled.
+    pub fn is_agentation_enabled(&self) -> bool {
+        *self.agentation_enabled.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Inject the agentation toolbar bundle into a browser tab via eval.
+    /// Called after page load (browser_tab_report_loaded) because the
+    /// agentation library accesses document.head at module top-level.
+    pub fn inject_agentation_toolbar(&self, tab_id: &str) -> Result<(), String> {
+        let webview = self.get_webview(tab_id)?;
+
+        // Inject the agentation toolbar bundle (bundled IIFE).
+        // The bundle self-checks __TERMUL_AGENTATION_HOST__ to avoid double-mount.
+        let toolbar_script = include_str!("../resources/agentation-toolbar.js");
+        webview
+            .eval(toolbar_script)
+            .map_err(|e| format!("Failed to inject agentation toolbar: {}", e))?;
+
+        log::info!(
+            "[BrowserTab] Agentation toolbar injected (post-load) for tab={}",
+            tab_id
+        );
+        Ok(())
+    }
+
+    /// Re-inject the URL poller after navigation. The poller detects
+    /// `readyState === 'complete'` and calls `browser_tab_report_loaded`,
+    /// which in turn injects the agentation toolbar. This chains the
+    /// document-load signal instead of using a blind fixed delay.
+    fn schedule_agentation_reinject(&self, tab_id: &str) {
+        let app_handle = self.app_handle.clone();
+        let tab_id = tab_id.to_string();
+        std::thread::spawn(move || {
+            // Wait for the new document to start loading before re-injecting
+            // the poller. The poller self-deduplicates via __termul_poller.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if let Some(bt) = app_handle.try_state::<Arc<BrowserTabManager>>() {
+                if bt.is_agentation_enabled() {
+                    bt.start_url_poller(tab_id.clone());
+                    log::info!("[BrowserTab] Re-injected URL poller after navigation for tab={}", tab_id);
+                }
+            }
+        });
     }
 
     pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
@@ -600,38 +512,47 @@ impl BrowserTabManager {
         let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;
         tabs.remove(tab_id);
         drop(tabs);
-        let mut annotation_injected = self.annotation_injected.lock().map_err(|_| "Lock poisoned")?;
-        annotation_injected.remove(tab_id);
         Ok(())
     }
 
     pub fn go_back(&self, tab_id: &str) -> Result<(), String> {
-        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.back()")
             .map_err(|e| format!("Go back failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
     pub fn go_forward(&self, tab_id: &str) -> Result<(), String> {
-        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.history.forward()")
             .map_err(|e| format!("Go forward failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
     pub fn reload(&self, tab_id: &str) -> Result<(), String> {
-        self.invalidate_annotation_injected(tab_id);
         let webview = self.get_webview(tab_id)?;
         webview
             .eval("window.location.reload()")
             .map_err(|e| format!("Reload failed: {}", e))?;
+        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
+
+    /// Open DevTools for the webview backing this browser tab.
+    ///
+    /// Debug-gated: only exists in debug builds. In release builds, the
+    /// `browser_tab_open_devtools` Tauri command is a cfg-gated stub that
+    /// returns `Ok(IpcResult::error("DevTools disabled in production", ...))`
+    /// directly — it never calls this method, so there's no release stub
+    /// (avoids dead_code).
+    /// The desktop "Toggle DevTools" menu item is already debug-gated
+    /// separately in `lib.rs`.
+    #[cfg(debug_assertions)]
     pub fn open_devtools(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
         webview.open_devtools();
@@ -666,8 +587,6 @@ impl BrowserTabManager {
             }
         }
         tabs.clear();
-        let mut annotation_injected = self.annotation_injected.lock().unwrap_or_else(|e| e.into_inner());
-        annotation_injected.clear();
     }
 }
 

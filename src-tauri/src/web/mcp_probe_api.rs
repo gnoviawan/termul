@@ -56,23 +56,24 @@ mod tests {
 
     fn test_app() -> axum::Router {
         let pty = test_pty_manager();
-        let state = AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-        };
+        let state = AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry: Arc::new(ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  };
         axum::Router::new()
             .route("/mcp-servers/probe", post(super::probe))
             .with_state(state)

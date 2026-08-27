@@ -12,6 +12,8 @@ const {
   discoveredSessionsRef,
   agentsRef,
   agentStatusRef,
+  configToLiveAgentRef,
+  activeSessionIdRef,
   projectRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
@@ -23,6 +25,8 @@ const {
   discoveredSessionsRef: { current: {} as Record<string, unknown[]> },
   agentsRef: { current: {} as Record<string, unknown> },
   agentStatusRef: { current: {} as Record<string, string> },
+  configToLiveAgentRef: { current: {} as Record<string, string> },
+  activeSessionIdRef: { current: null as string | null },
   projectRef: {
     current: null as {
       id: string
@@ -49,15 +53,25 @@ vi.mock('@/stores/acp-store', () => {
       agents: agentsRef.current,
       agentStatus: agentStatusRef.current,
       agentConfigs: [],
-      configToLiveAgent: {},
+      configToLiveAgent: configToLiveAgentRef.current,
       discoverSessions: mockDiscover,
-      openDiscoveredSession: mockOpenDiscovered
+      openDiscoveredSession: mockOpenDiscovered,
+      activeSessionId: activeSessionIdRef.current
     })
   // Stubs for the store helpers the component imports.
+  const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const configIdFromReuseKey = () => ''
   const discoveryKey = (agentId: string, cwd: string) => `${agentId}\0${cwd}`
   const useAgentTemplateId = () => null
-  return { useAcpStore, configIdFromReuseKey, discoveryKey, useAgentTemplateId }
+  const useAgentIcon = () => null
+  return {
+    useAcpStore,
+    agentReuseKey,
+    configIdFromReuseKey,
+    discoveryKey,
+    useAgentTemplateId,
+    useAgentIcon
+  }
 })
 
 vi.mock('@/stores/workspace-store', () => ({
@@ -107,6 +121,8 @@ describe('ChatHistoryTab scoping', () => {
     discoveredSessionsRef.current = {}
     agentsRef.current = {}
     agentStatusRef.current = {}
+    configToLiveAgentRef.current = {}
+    activeSessionIdRef.current = null
     projectRef.current = {
       id: 'p1',
       path: '/work',
@@ -115,26 +131,32 @@ describe('ChatHistoryTab scoping', () => {
     }
   })
 
-  it('shows only sessions matching active (projectId, cwd)', () => {
+  it('shows root-cwd and active-project worktree-cwd sessions from the root view', () => {
     sessionIndexRef.current = [
       entry('mine-main', { projectId: 'p1', cwd: '/work', title: 'mine-main' }),
       entry('mine-wt', { projectId: 'p1', cwd: '/work-wt', title: 'mine-wt' }),
       entry('other-main', { projectId: 'p2', cwd: '/work', title: 'other-main' })
     ]
     render(<ChatHistoryTab />)
+    // mine-main: exact-cwd match against the active project root.
     expect(screen.getByText('mine-main')).toBeInTheDocument()
-    expect(screen.queryByText('mine-wt')).not.toBeInTheDocument()
+    // mine-wt: cwd is a registered worktree path of the active project, so the
+    // worktree-inclusive scoping keeps it reachable from the root view.
+    expect(screen.getByText('mine-wt')).toBeInTheDocument()
+    // other-main: a different project — never listed.
     expect(screen.queryByText('other-main')).not.toBeInTheDocument()
   })
 
-  it('re-scopes when the active worktree changes', () => {
+  it('re-scopes to the active worktree session when the active worktree changes', () => {
     sessionIndexRef.current = [
       entry('mine-main', { projectId: 'p1', cwd: '/work', title: 'mine-main' }),
       entry('mine-wt', { projectId: 'p1', cwd: '/work-wt', title: 'mine-wt' })
     ]
     const { rerender } = render(<ChatHistoryTab />)
+    // Root view (activeWorktreeId=null): worktree-inclusive scoping lists both
+    // the root chat and the project's registered worktree chat.
     expect(screen.getByText('mine-main')).toBeInTheDocument()
-    expect(screen.queryByText('mine-wt')).not.toBeInTheDocument()
+    expect(screen.getByText('mine-wt')).toBeInTheDocument()
     // The project store creates a new record on update; mirror that so the
     // subscription notices the change.
     const prev = projectRef.current
@@ -145,6 +167,8 @@ describe('ChatHistoryTab scoping', () => {
       worktrees: prev!.worktrees
     }
     rerender(<ChatHistoryTab />)
+    // Active worktree view: scoped to the worktree cwd, the root chat is
+    // hidden while the active worktree's chat stays visible.
     expect(screen.queryByText('mine-main')).not.toBeInTheDocument()
     expect(screen.getByText('mine-wt')).toBeInTheDocument()
   })
@@ -157,6 +181,22 @@ describe('ChatHistoryTab scoping', () => {
     expect(screen.queryByText('s1')).not.toBeInTheDocument()
     expect(container.textContent).toMatch(/No chats yet/)
     projectRef.current = prev
+  })
+
+  it('does not auto-trigger session/list discovery on mount', () => {
+    // The sidebar must not call session/list; external sessions are never listed
+    // and discovery is intentionally stopped to avoid surfacing CLI/other chats.
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
+
+    render(<ChatHistoryTab />)
+    expect(mockDiscover).not.toHaveBeenCalled()
   })
 
   it('opens a visible chat via addAgentChatTab', () => {
@@ -189,7 +229,7 @@ describe('ChatHistoryTab scoping', () => {
     resolveOpen?.()
   })
 
-  it('opens a discovered tab immediately without waiting for its reopen', () => {
+  it('does not list discovered sessions for opening', () => {
     agentsRef.current = {
       'agent-1': {
         id: 'agent-1',
@@ -202,23 +242,107 @@ describe('ChatHistoryTab scoping', () => {
         { sessionId: 'cli-1', cwd: '/work', title: 'CLI chat', updatedAt: '2026-01-01' }
       ]
     }
-    let resolveOpen: (() => void) | undefined
-    mockOpenDiscovered.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveOpen = resolve
-        })
-    )
 
     render(<ChatHistoryTab />)
-    fireEvent.click(screen.getByText('CLI chat'))
 
-    expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-1', 'cli-1', '/work', 'p1')
-    expect(mockAddTab).toHaveBeenCalledWith('cli-1')
-    expect(mockOpenDiscovered.mock.invocationCallOrder[0]).toBeLessThan(
-      mockAddTab.mock.invocationCallOrder[0]
-    )
-    resolveOpen?.()
+    // Discovered (external/CLI) sessions are never listed, so they can't be
+    // opened from the sidebar — only Termul-created sessions render.
+    expect(screen.queryByText('CLI chat')).not.toBeInTheDocument()
+    expect(mockOpenDiscovered).not.toHaveBeenCalled()
+  })
+
+  it('hides discovered sessions even when no session is active', () => {
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'CLI chat', updatedAt: '2026-01-01' },
+        { sessionId: 'cli-2', cwd: '/work', title: 'Another CLI chat', updatedAt: '2026-01-01' }
+      ]
+    }
+    activeSessionIdRef.current = null
+
+    render(<ChatHistoryTab />)
+    expect(screen.queryByText('CLI chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Another CLI chat')).not.toBeInTheDocument()
+  })
+
+  it('hides discovered sessions regardless of which session is active', () => {
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'Active CLI chat', updatedAt: '2026-01-01' },
+        { sessionId: 'cli-2', cwd: '/work', title: 'Other CLI chat', updatedAt: '2026-01-01' }
+      ]
+    }
+    activeSessionIdRef.current = 'cli-1'
+
+    render(<ChatHistoryTab />)
+    expect(screen.queryByText('Active CLI chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Other CLI chat')).not.toBeInTheDocument()
+  })
+
+  it('shows local mirror sessions and hides discovered sessions', () => {
+    sessionIndexRef.current = [
+      entry('local-1', { projectId: 'p1', cwd: '/work', title: 'Local chat' })
+    ]
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    discoveredSessionsRef.current = {
+      ['agent-1\0/work']: [
+        { sessionId: 'cli-1', cwd: '/work', title: 'Active discovered', updatedAt: '2026-01-01' }
+      ]
+    }
+    activeSessionIdRef.current = 'cli-1'
+
+    render(<ChatHistoryTab />)
+    expect(screen.getByText('Local chat')).toBeInTheDocument()
+    expect(screen.queryByText('Active discovered')).not.toBeInTheDocument()
+  })
+
+  it('hides promoted metadata-only discovered sessions', () => {
+    sessionIndexRef.current = [
+      entry('cli-1', {
+        agentId: 'agent-1',
+        title: 'Promoted CLI chat',
+        messageCount: 0,
+        status: 'active',
+        discovered: true,
+        agentConfigId: 'config-1'
+      })
+    ]
+    agentsRef.current = {
+      'agent-1': {
+        id: 'agent-1',
+        capabilities: { loadSession: true, sessionCapabilities: { list: {} } }
+      }
+    }
+    agentStatusRef.current = { 'agent-1': 'connected' }
+    configToLiveAgentRef.current = { ['config-1\0/work']: 'agent-1' }
+
+    render(<ChatHistoryTab />)
+
+    // Promoted external sessions (discovered: true) are hidden; neither open
+    // path fires for them.
+    expect(screen.queryByText('Promoted CLI chat')).not.toBeInTheDocument()
+    expect(mockOpenDiscovered).not.toHaveBeenCalled()
+    expect(mockOpen).not.toHaveBeenCalled()
   })
 
   it('caps the rendered rows and lazily loads more', () => {

@@ -45,6 +45,27 @@ fn main() -> ExitCode {
         return run_one_shot_update_check();
     }
 
+    // `onboard`: guided interactive setup + background launch. Handled before
+    // `ServerConfig::from_args` so the `--onboard` flag (unknown to the shared
+    // parser) does not trip it. The wizard performs the background launch
+    // itself (systemd unit or setsid detach); it does NOT fall through to the
+    // foreground bootstrap. Only the binary wiring here is gated by
+    // `standalone-server`; the `onboard` lib module is unconditionally compiled.
+    if raw_args.first().is_some_and(|arg| arg == "onboard" || arg == "--onboard") {
+        init_tracing();
+        return termul_manager_lib::onboard::run();
+    }
+    // `--internal-mcp-plan-server`: self-spawned child of the host-injected
+    // `plan` MCP tool. The agent spawns `current_exe()` with this flag
+    // (the injected `McpServer::Stdio`); the child runs an rmcp MCP server over
+    // stdio + forwards calls to the parent's TCP listener. Branch BEFORE any
+    // tokio/app setup (AC2) so the standalone binary never inits the server
+    // stack for the child path. See `acp::host_mcp::child` + spec
+    // `spec-acp-host-todo-plan-tool.md`.
+    if termul_manager_lib::host_mcp::is_child_invocation() {
+        return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
+    }
+
     // Parse CLI BEFORE any tokio / app setup (AC2).
     let cfg = match ServerConfig::from_args(raw_args) {
         Ok(cfg) => cfg,
@@ -61,6 +82,29 @@ fn main() -> ExitCode {
     };
 
     init_tracing();
+
+    // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
+    // standalone server enables `--allow-remote-writes`, any non-loopback peer
+    // gains write access to a broad set of mutation routes — surface it
+    // loudly at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
+    if cfg.allow_remote_writes {
+        let host = &cfg.host;
+        tracing::warn!(
+            "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
+             on {} gain: fs mkdir/write/delete/rename/copy CONFINED to project_root '{}'; \
+             git + worktree operations confined to project_root; AND host-state mutation via \
+             /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
+             keep ADR-007 breadth (any path). No web auth is enforced yet (Epic 2).",
+            host,
+            cfg.project_root.display()
+        );
+        if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
+            tracing::warn!(
+                "termul-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
+                 (no non-loopback peer can ever reach the server)"
+            );
+        }
+    }
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -457,23 +501,123 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-    "Usage: termul-server [--host HOST] [--port PORT] [--event-log-capacity N] [--permission-timeout SECS] [--permission-reconnect-grace SECS] [--project-root PATH] [--projects-file PATH] [--sessions-dir PATH] [--workspace-manifests-dir PATH] [--acp-catalog-dir PATH] [--check-update]\n\n\
-     Options:\n\
-        --host HOST                 Bind host (default: 127.0.0.1; use 0.0.0.0 to expose)\n\
-        --port PORT                 Bind port (default: 8080)\n\
-        --event-log-capacity N      Per-session event-log ring capacity (default: 4096)\n\
-        --permission-timeout SECS   Permission rendezvous timeout in seconds (default: 60)\n\
-        --permission-reconnect-grace SECS  Last-subscriber reconnect grace (default: 15)\n\
-        --project-root PATH         Project-root boundary for /fs/* routes (default: $TERMUL_PROJECT_ROOT or $HOME)\n\
-        --projects-file PATH        VFS-roots registry file (default: $TERMUL_PROJECTS_FILE; missing = empty list)\n\
-        --sessions-dir PATH         Durable sessions root (default: $TERMUL_SESSIONS_DIR or service-account state dir)\n\
-        --workspace-manifests-dir PATH  Workspace manifests root (default: <state dir>/workspace-manifests)\n\
-        --acp-catalog-dir PATH      ACP catalog root (default: <state dir>/acp-catalog)\n\
-        --check-update              Run one opt-in self-update now: fetch the channel manifest,\n\
-                                     verify the downloaded binary signature, atomically swap, and\n\
-                                     reexec. Defaults to the stable channel when\n\
-                                     TERMUL_SERVER_UPDATE_CHANNEL is unset; the env wins when set.\n\
-                                     (env: TERMUL_SERVER_UPDATE_ENABLED + TERMUL_SERVER_UPDATE_CHANNEL\n\
-                                     gate the periodic loop; TERMUL_SERVER_UPDATE_INTERVAL_SECS default 21600)\n\
-        -h, --help                  Show this help"
+r#"termul-server — standalone headless ACP web server
+
+USAGE:
+    termul-server [OPTIONS]
+    termul-server onboard          Guided setup + background launch
+    termul-server --check-update   One-shot self-update
+
+OPTIONS:
+  Network:
+    --host <HOST>                 Bind host. Accepted: 127.0.0.1, localhost,
+                                  loopback (loopback only); 0.0.0.0, all, any
+                                  (all interfaces).
+                                  [default: 127.0.0.1]
+    --port <PORT>                 Bind port. Range 1-65535 (0 is rejected).
+                                  [default: 8080]
+
+  Sessions & state:
+    --sessions-dir <PATH>         Durable sessions root.
+                                  [default: $TERMUL_SESSIONS_DIR or state dir]
+    --project-root <PATH>         Boundary for /git/*, /skills, /search/content
+                                  routes (NOT /fs/* — ADR-007). Must exist and
+                                  be a directory; validated at startup.
+                                  [default: $TERMUL_PROJECT_ROOT or $HOME]
+    --projects-file <PATH>        VFS-roots registry file. A missing file loads
+                                  as an empty registry (not fatal); a corrupt
+                                  file is fatal.
+                                  [default: $TERMUL_PROJECTS_FILE; unset = empty]
+    --workspace-manifests-dir <PATH>
+                                  Workspace manifests root.
+                                  [default: <state dir>/workspace-manifests]
+    --acp-catalog-dir <PATH>      ACP catalog root.
+                                  [default: <state dir>/acp-catalog]
+    --store-file <PATH>           Server-side key-value store for the web client
+                                  (terminal layout, settings, editor state,
+                                  command history, SSH profiles, ...).
+                                  [default: $TERMUL_STORE_FILE or
+                                  <state dir>/store.json]
+
+  Tuning:
+    --event-log-capacity <N>      Per-session event-log ring capacity.
+                                  [default: 4096]
+    --permission-timeout <SECS>   Permission rendezvous timeout. On expiry the
+                                  pending permission resolves as deny.
+                                  [default: 60]
+    --permission-reconnect-grace <SECS>
+                                  Grace after last subscriber disconnect before
+                                  pending permissions are denied.
+                                  [default: 60]
+
+  Security & updates:
+    --allow-remote-writes         Admit non-loopback peers on all guarded write
+                                  routes. /fs/* writes reject only .. traversal
+                                  (ADR-007 breadth, any path); /git/* and
+                                  /worktree/* writes confined to --project-root;
+                                  AND host-state writes (/projects/default,
+                                  /acp/install, /log/frontend-error,
+                                  /workspace/*). Loopback callers keep ADR-007
+                                  breadth (any path). No-op when bound to
+                                  127.0.0.1. No web auth is enforced yet
+                                  (Epic 2). Only enable on a trusted network.
+                                  [env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1]
+    --check-update                Run one opt-in self-update now: fetch the channel
+                                  manifest, verify the downloaded binary signature,
+                                  and atomically swap. Does NOT auto-reexec —
+                                  restart the server to run the new version (the
+                                  .old binary is retained for rollback). Defaults
+                                  to the stable channel when
+                                  TERMUL_SERVER_UPDATE_CHANNEL is unset; the env
+                                  wins when set. A locally-built binary without a
+                                  baked-in pubkey reports self-update unavailable.
+
+  Commands:
+    onboard                       Guided interactive setup + background launch.
+                                  Auto-detects the service manager (systemd unit
+                                  or setsid detach) so the server survives SSH
+                                  logout. Non-TTY stdin prints the resolved
+                                  default command + mechanism tip and exits 0
+                                  without launching.
+
+    -h, --help                    Show this help
+
+ENVIRONMENT:
+    <state dir>                   Unix: $XDG_STATE_HOME/termul or
+                                  $HOME/.local/state/termul
+                                  Windows: %LOCALAPPDATA%\Termul
+                                  Fallback: <tmp>/termul
+    RUST_LOG                      tracing filter (floor: info). Try
+                                  RUST_LOG=termul_manager_lib=debug
+    TERMUL_PROJECT_ROOT           Fallback for --project-root
+    TERMUL_PROJECTS_FILE          Fallback for --projects-file
+    TERMUL_SESSIONS_DIR           Fallback for --sessions-dir
+    TERMUL_STORE_FILE             Fallback for --store-file
+    TERMUL_SERVER_ALLOW_REMOTE_WRITES  true|1 enables --allow-remote-writes
+    TERMUL_SERVER_UPDATE_ENABLED  true gates the periodic self-update loop
+    TERMUL_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
+    TERMUL_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]
+
+EXAMPLES:
+    # Local: serve the embedded web client on loopback
+    termul-server --project-root $HOME/src/myproj
+
+    # LAN: expose to phone browsers on the trusted network
+    termul-server --host 0.0.0.0 --port 8080 \
+        --project-root $HOME/src/myproj
+
+    # LAN with remote writes (trusted network only)
+    termul-server --host 0.0.0.0 --project-root $HOME/src/myproj \
+        --allow-remote-writes
+
+    # Background with debug logging
+    RUST_LOG=termul_manager_lib=debug termul-server --host 0.0.0.0 \
+        --project-root $HOME/src/myproj > /tmp/termul-server.log 2>&1 &
+
+    # Guided setup (auto-detects systemd or setsid, survives SSH logout)
+    termul-server onboard
+
+    # One-shot self-update check
+    termul-server --check-update
+"#
 }

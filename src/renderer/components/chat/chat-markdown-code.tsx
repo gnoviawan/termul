@@ -10,21 +10,26 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { CodeBlock, Streamdown, StreamdownContext } from 'streamdown'
+import { CodeBlock, Streamdown, StreamdownContext, useIsCodeFenceIncomplete } from 'streamdown'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
+import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 
 const MERMAID_PLUGIN = mermaidPlugin
 const LANGUAGE_RE = /language-([^\s]+)/
 
 /** Pull fenced-code text out of Streamdown's `code` children shapes. */
-function childrenToCode(children: ReactNode): string {
+function childrenToCode(children: ReactNode, node?: unknown): string {
+  // Prefer the raw markdown node value — it preserves the original newlines
+  // that React's children-array shape would collapse when joined with ''.
+  const nodeValue = (node as { value?: string } | null | undefined)?.value
+  if (typeof nodeValue === 'string') return nodeValue
+
   if (typeof children === 'string') return children
   if (isValidElement<{ children?: ReactNode }>(children)) {
-    const nested = children.props.children
-    if (typeof nested === 'string') return nested
+    return childrenToCode(children.props.children)
   }
   if (Array.isArray(children)) {
     return children.map((child) => childrenToCode(child as ReactNode)).join('')
@@ -67,7 +72,12 @@ function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
   }, [code, isAnimating])
 
   return (
-    <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy} disabled={isAnimating}>
+    <IconActionButton
+      label={copied ? 'Copied' : 'Copy'}
+      onClick={copy}
+      disabled={isAnimating}
+      size="sm"
+    >
       <IconSwap iconKey={copied}>{copied ? <Check className="text-success" /> : <Copy />}</IconSwap>
     </IconActionButton>
   )
@@ -93,7 +103,7 @@ function CodeDownloadAction({
   }, [code, isAnimating, language])
 
   return (
-    <IconActionButton label="Download" onClick={download} disabled={isAnimating}>
+    <IconActionButton label="Download" onClick={download} disabled={isAnimating} size="sm">
       <Download />
     </IconActionButton>
   )
@@ -111,13 +121,14 @@ type ChatMarkdownCodeProps = ComponentPropsWithoutRef<'code'> & {
 export function ChatMarkdownCode({
   className,
   children,
-  node: _node,
+  node,
   ...props
 }: ChatMarkdownCodeProps): React.JSX.Element {
   const { lineNumbers } = useContext(StreamdownContext)
+  const isIncomplete = useIsCodeFenceIncomplete()
   const isInline = !('data-block' in props)
   const language = languageFromClassName(className)
-  const code = childrenToCode(children)
+  const code = childrenToCode(children, node)
 
   if (isInline) {
     return (
@@ -152,11 +163,25 @@ export function ChatMarkdownCode({
     )
   }
 
+  // termul-plan fences render as an inline read-only PlanPanel, not a code
+  // block. This override replaces Streamdown's default `code` component (the
+  // only one that consults the `renderers` plugin config), so the lookup must
+  // happen here. `useIsCodeFenceIncomplete` is the public per-block hook that
+  // reports whether THIS fence is still being streamed — the same signal the
+  // default component passes to custom renderers.
+  if (language === 'termul-plan') {
+    return (
+      <Suspense fallback={null}>
+        <TermulPlanRenderer code={code} isIncomplete={isIncomplete} language={language} />
+      </Suspense>
+    )
+  }
+
   return (
     <CodeBlock
       code={code}
       language={language || 'text'}
-      className={className}
+      className={cn('[&_code>span]:block', className)}
       lineNumbers={lineNumbers}
     >
       <CodeDownloadAction code={code} language={language || 'text'} />

@@ -45,8 +45,12 @@ use crate::web::sink::ClientId;
 /// Default permission timeout (60s) — the bounded rendezvous window.
 /// Expiry resolves the permission as deny (`Cancelled`). Per FR14 / NFR7-adjacent.
 pub const DEFAULT_PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
-/// Default last-subscriber reconnect grace. The ticket timeout keeps running.
-pub const DEFAULT_PERMISSION_RECONNECT_GRACE: Duration = Duration::from_secs(15);
+/// Default last-subscriber reconnect grace (CAP-4: 60s). Widened from 15s so
+/// the mobile wake + reconnect chain (3-8s desktop, 5-15s throttled mobile per
+/// prod logs) completes before pending permission tickets are denied. The
+/// per-ticket timeout keeps running throughout; only the orphan-deny grace is
+/// widened. Already overridable via `permission_reconnect_grace_secs`.
+pub const DEFAULT_PERMISSION_RECONNECT_GRACE: Duration = Duration::from_secs(60);
 
 /// Outcome of a successful [`PermissionRendezvous::try_respond`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1301,6 +1305,42 @@ mod tests {
         assert!(!option_id_is_valid(&json!("not-an-array"), "allow"));
         assert!(!option_id_is_valid(&json!([{}]), "allow")); // no optionId field
         assert!(!option_id_is_valid(&json!(null), "allow"));
+    }
+
+    #[test]
+    fn turn_claim_release_releases_exact_claim_when_cancelled() {
+        let watermark = TurnWatermark::new();
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-1")),
+            TurnClaim::Claimed
+        );
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Busy
+        );
+        watermark.release_claim("session-1", Some("turn-1"));
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Claimed
+        );
+    }
+
+    #[test]
+    fn turn_claim_completion_records_stale_watermark() {
+        let watermark = TurnWatermark::new();
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-1")),
+            TurnClaim::Claimed
+        );
+        watermark.record_completed("session-1", "turn-1");
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-1")),
+            TurnClaim::Completed
+        );
+        assert_eq!(
+            watermark.claim_turn("session-1", Some("turn-2")),
+            TurnClaim::Claimed
+        );
     }
 
     // --- Rendezvous bookkeeping tests (Story 1.7 AC3) -------------------------

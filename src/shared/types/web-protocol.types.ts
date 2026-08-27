@@ -117,6 +117,7 @@ export const WS_REQUEST_TYPES = [
   'close_session',
   'dispose_ephemeral_session',
   'list_sessions',
+  'register_discovered_session',
   'spawn_agent',
   'kill_agent',
   'list_agents',
@@ -138,6 +139,10 @@ export const WS_REQUEST_TYPES = [
   // this only returns the durable `{ sessionId, watermark }` so a refreshed
   // transport can seed `lastSeq` before its first subscribe.
   'get_session_cursor',
+  // Tail-first variant of `get_session_payload`: fetches only the last `limit`
+  // messages + matching tool calls so the renderer can install the recent
+  // transcript immediately and lazy-load the full payload on scroll-up.
+  'get_session_payload_tail',
   // CAP-6 / Story 8: host-owned ACP catalog resolution. The web client
   // resolves the catalog through `list_acp_catalog` (the host's OS/arch/
   // runtime + per-agent `SupportedAcpAgentStatus`) + `set_catalog_opt_in`
@@ -150,11 +155,74 @@ export const WS_REQUEST_TYPES = [
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
   // `{ agentId }` only; the host resolves everything from the trusted catalog.
-  'install_acp_agent'
+  'install_acp_agent',
+  // Issue #613: server-side generic key-value store — the web client routes
+  // its `persistenceApi` through these (replacing the per-browser localStorage
+  // stub) so settings / layout / command history / SSH profiles survive
+  // browser switches + server restarts. Errors carry SCREAMING_SNAKE_CASE
+  // codes via `err_with_code`: `STORE_UNAVAILABLE` (no store attached),
+  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`.
+  'store_read',
+  'store_write',
+  'store_delete',
+  // Option B: project-list mutations (the standalone server is a first-class
+  // project-list authority). Mirrors `POST /projects`, `PUT /projects/{id}`,
+  // `DELETE /projects/{id}` HTTP routes (transport parity). The WS variants
+  // persist to `FileProjectRegistry` (VPS) with rollback + broadcast
+  // `projects_changed`.
+  'add_project',
+  'update_project',
+  'remove_project'
 ] as const
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+// ============================================================================
+// Server-side key-value store (issue #613) — request payloads + replies
+// ============================================================================
+
+/** `store_read` request payload. Reply: `{ value: unknown | null }`. */
+export interface StoreReadPayload {
+  key: string
+}
+
+/** `store_write` request payload. `value` is any JSON value. Reply: `{}`. */
+export interface StoreWritePayload {
+  key: string
+  value: unknown
+}
+
+/** `store_delete` request payload. Reply: `{ existed: boolean }`. */
+export interface StoreDeletePayload {
+  key: string
+}
+
+// ============================================================================
+// Project-list mutations (Option B) — request payloads + replies
+// ============================================================================
+
+/** `add_project` request payload. Reply: `{ project: ProjectSummary }`. */
+export interface AddProjectPayload {
+  id: string
+  name: string
+  path: string
+  color: string
+  isArchived?: boolean
+}
+
+/** `update_project` request payload. All fields optional. Reply: `{}`. */
+export interface UpdateProjectPayload {
+  projectId: string
+  name?: string
+  color?: string
+  isArchived?: boolean
+}
+
+/** `remove_project` request payload. Reply: `{}`. */
+export interface RemoveProjectPayload {
+  projectId: string
+}
 
 // ============================================================================
 // Error codes (9) — stable machine strings (AC2)
@@ -281,7 +349,16 @@ export interface PersistedSessionSummary {
   messageCount: number
   toolCount: number
   lastSeq: number
+  /** Agent-owned metadata mirror; transcript remains authoritative in the agent. */
+  discovered?: boolean
   resumeEligible: boolean
+  /**
+   * Worktree path the agent runs in (CAP-3). Additive: absent on pre-feature
+   * sessions. Used by the CAP-6 indicator + the deleted-worktree fallback.
+   * State isolation still keys on `cwd`; this field is for display only.
+   */
+  worktreePath?: string
+  worktreeBranch?: string
 }
 
 export interface UserPromptEvent {

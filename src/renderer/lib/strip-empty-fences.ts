@@ -144,3 +144,34 @@ export function stripEmptyFences(text: string, streaming: boolean): string {
   if (!streaming) return stripTrailingEmptyFence(out)
   return out
 }
+
+/**
+ * Ensure a `termul-plan` fence opener sits on its own line. CommonMark
+ * requires the opening ``` of a fenced code block to be at the start of a
+ * line; when text blocks are joined with '' a preceding block that does not
+ * end in '\n' glues the opener onto the prose (e.g. "prose```termul-plan"),
+ * so Streamdown never recognizes the fence and renders the snapshot as plain
+ * text. This inserts a '\n' before any `termul-plan` opener that is not
+ * already at the start of a line, covering both freshly-appended snapshots
+ * and persisted messages written before the `appendPlanSnapshot` boundary fix.
+ *
+ * Only the exact opener (`termul-plan` followed by a newline or end of input)
+ * is normalized, so a quoted reference like ` ```termul-plan-v2` or a longer
+ * info string is left alone. An opener already at line start (preceded by
+ * only up to three spaces/tabs, or by a backtick run that is part of another
+ * fence construct) is left untouched.
+ */
+export function normalizePlanFenceBoundary(text: string): string {
+  return text.replace(/```termul-plan(?=\r?\n|$)/g, (opener, offset, source) => {
+    const lineStart = source.lastIndexOf('\n', offset - 1) + 1
+    const linePrefix = source.slice(lineStart, offset)
+    // Valid CommonMark fence position: indented up to 3 spaces/tabs, or the
+    // opener is the first non-newline content on the line. A backtick-only
+    // prefix means the opener is part of a longer backtick run (e.g. a
+    // different fenced construct) — don't split it.
+    if (/^[ \t]{0,3}$/.test(linePrefix) || /^`{1,3}$/.test(linePrefix)) {
+      return opener
+    }
+    return `\n${opener}`
+  })
+}

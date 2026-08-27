@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Brain,
   ChevronRight,
+  ExternalLink,
   FilePen,
   FileText,
   FolderInput,
@@ -13,10 +14,14 @@ import {
   Trash2,
   Wrench
 } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { IconActionButton } from '@/components/ui/icon-action-button'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
+import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { MediaBlocks } from './ChatMessage'
 import { bubbleEnter, CHEVRON_TRANSITION } from './chat-motion'
@@ -26,7 +31,8 @@ import {
   describeToolCall,
   firstString,
   READABLE_TEXT_KEYS,
-  readableOutput
+  readableOutput,
+  toolCallPath
 } from './tool-call-summary'
 
 /** Common prop shape shared by lucide icons and the bundled RobotIcon. */
@@ -167,11 +173,29 @@ interface ToolCallCardProps {
   toolCall: ToolCall
   /** Play enter animation only for newly arrived tool calls. */
   animateEnter?: boolean
+  /** Filesystem roots used to resolve an "Open file" action on file tool calls. */
+  filePathContext?: FilePathResolutionContext
+}
+
+/** Kinds whose `rawInput` carries a file path worth offering to open in the editor. */
+const FILE_OPEN_KINDS = new Set(['read', 'edit', 'delete', 'move'])
+
+/**
+ * Best-effort extraction of a file path from a tool call's `rawInput`, using
+ * the shared `PATH_KEYS` set so the chip's primary path and the open-file
+ * button stay in sync. Falls back to `diffInfo(content).path` for edit calls
+ * whose path lives only in the diff content. Returns undefined when no
+ * path-like field is present.
+ */
+function toolCallFilePath(toolCall: ToolCall): string | undefined {
+  if (!FILE_OPEN_KINDS.has(toolCall.kind ?? '')) return undefined
+  return toolCallPath(toolCall)
 }
 
 function ToolCallCardComponent({
   toolCall,
-  animateEnter = true
+  animateEnter = true,
+  filePathContext
 }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const Icon = ICONS[toolIconName(toolCall)]
@@ -203,7 +227,30 @@ function ToolCallCardComponent({
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
   const enter = bubbleEnter('neutral', reduced)
 
-  const row = (
+  const openFilePath = filePathContext ? toolCallFilePath(toolCall) : undefined
+  const openFile = useCallback(() => {
+    if (!openFilePath || !filePathContext) return
+    void openFilePathFromTerminal(openFilePath, filePathContext)
+      .then((result) => {
+        if (!result.ok) toast.error(result.message)
+      })
+      .catch((error: unknown) => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'ToolCallCard.openFile',
+          message: `Failed to open ${openFilePath}: ${String(error)}`
+        })
+        toast.error('Failed to open file from chat.')
+      })
+  }, [openFilePath, filePathContext])
+
+  // Row summary (icon + label + meta) lives inside the disclosure button so
+  // clicking the label toggles details. The open-file button and chevron are
+  // rendered as siblings outside the disclosure button — nesting a <button>
+  // inside the disclosure <button> is invalid HTML, so they stay at the row
+  // level. Visual order (icon, label, meta/diffStat, duration, alert,
+  // chevron, open-file) is preserved by the flex container below.
+  const rowSummary = (
     <>
       <Icon
         size={13}
@@ -227,22 +274,6 @@ function ToolCallCardComponent({
           <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">{detail}</span>
         )
       )}
-      {durationMs != null && (
-        <span className="hidden shrink-0 text-3xs tabular-nums text-muted-foreground group-hover/tool:inline">
-          {formatDuration(durationMs)}
-        </span>
-      )}
-      {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
-      {hasDetail && (
-        <motion.span
-          aria-hidden="true"
-          className="shrink-0 text-muted-foreground"
-          animate={{ rotate: open ? 90 : 0 }}
-          transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
-        >
-          <ChevronRight size={13} />
-        </motion.span>
-      )}
     </>
   )
 
@@ -259,19 +290,44 @@ function ToolCallCardComponent({
       transition={enter.transition}
     >
       <div className="relative z-10">
-        {hasDetail ? (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            data-press-feedback="off"
-            className="flex min-h-7 w-full items-center gap-2 px-1 py-1 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            {row}
-          </button>
-        ) : (
-          <div className="flex min-h-7 items-center gap-2 px-1 py-1 text-xs">{row}</div>
-        )}
+        <div className="flex min-h-7 items-center gap-2 px-1 py-1 text-xs">
+          {hasDetail ? (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              data-press-feedback="off"
+              className="flex min-h-7 min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              {rowSummary}
+            </button>
+          ) : (
+            <div className="flex min-h-7 min-w-0 flex-1 items-center gap-2 text-xs">
+              {rowSummary}
+            </div>
+          )}
+          {durationMs != null && (
+            <span className="hidden shrink-0 text-3xs tabular-nums text-muted-foreground group-hover/tool:inline">
+              {formatDuration(durationMs)}
+            </span>
+          )}
+          {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
+          {hasDetail && (
+            <motion.span
+              aria-hidden="true"
+              className="shrink-0 text-muted-foreground"
+              animate={{ rotate: open ? 90 : 0 }}
+              transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
+            >
+              <ChevronRight size={13} />
+            </motion.span>
+          )}
+          {openFilePath ? (
+            <IconActionButton label="Open file" onClick={openFile} size="sm">
+              <ExternalLink />
+            </IconActionButton>
+          ) : null}
+        </div>
         {hasDetail && (
           <CollapseExpandMotion open={open}>
             <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">

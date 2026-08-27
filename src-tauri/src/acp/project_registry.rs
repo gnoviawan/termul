@@ -348,6 +348,80 @@ impl FileProjectRegistry {
     pub(crate) fn restore_default_project(&mut self, default_project_id: Option<String>) {
         self.default_project_id = default_project_id;
     }
+    /// Insert or replace a VFS root by `id`, canonicalizing + validating its
+    /// path. Used by the web-client project create/update mutations (Option B:
+    /// the standalone server is a first-class project-list authority).
+    ///
+    /// The path is canonicalized + must-be-a-directory (same `validate_root_path`
+    /// leaf `load` uses) so the fs boundary check is stable. A root with an
+    /// existing `id` is replaced in place (preserving order); a new id is
+    /// appended. Does NOT touch `default_project_id` — the caller persists
+    /// separately via `set_default_project` if the new root should be default.
+    /// Persistence is an explicit caller-owned `save_atomic` step (same posture
+    /// as `set_default_project`).
+    pub fn upsert_root(&mut self, root: VfsRoot) -> Result<(), ProjectRegistryError> {
+        let mut root = root;
+        root.path = validate_root_path(&root.path).map_err(|reason| {
+            ProjectRegistryError::InvalidRoot {
+                id: root.id.clone(),
+                reason,
+            }
+        })?;
+        if let Some(existing) = self.roots.iter_mut().find(|r| r.id == root.id) {
+            *existing = root;
+        } else {
+            self.roots.push(root);
+        }
+        Ok(())
+    }
+
+    /// Remove a VFS root by `id`. Returns `false` (and the caller replies
+    /// `NOT_FOUND`) when the id is absent. Clears `default_project_id` when it
+    /// referenced the removed root (P4: no dangling default — mirrors `load`'s
+    /// post-load cleanup). Persistence is a caller-owned `save_atomic` step.
+    pub fn remove_root(&mut self, project_id: &str) -> bool {
+        let before = self.roots.len();
+        self.roots.retain(|r| r.id != project_id);
+        if self.roots.len() == before {
+            return false;
+        }
+        if self.default_project_id.as_deref() == Some(project_id) {
+            self.default_project_id = None;
+        }
+        true
+    }
+
+    /// Patch a subset of a root's display fields (name, color, archived) by
+    /// `id` without re-canonicalizing the path. Used by the web-client
+    /// rename/color/archive mutations. Returns `false` when the id is absent.
+    /// Persistence is a caller-owned `save_atomic` step.
+    pub fn update_root(
+        &mut self,
+        project_id: &str,
+        name: Option<String>,
+        color: Option<String>,
+        is_archived: Option<bool>,
+    ) -> bool {
+        let Some(root) = self.roots.iter_mut().find(|r| r.id == project_id) else {
+            return false;
+        };
+        if let Some(name) = name {
+            root.name = name;
+        }
+        if let Some(color) = color {
+            root.color = color;
+        }
+        if let Some(is_archived) = is_archived {
+            root.is_archived = is_archived;
+        }
+        // P4: an archived default is not switchable — clear the default so a
+        // stale id does not survive (mirrors `set_default_project` + `load`).
+        if root.is_archived && self.default_project_id.as_deref() == Some(project_id) {
+            self.default_project_id = None;
+        }
+        true
+    }
+
 
     /// Resolve a project id → its canonical VFS root path. Returns `None` for
     /// an unknown id, an archived root, or an empty path (mirrors
@@ -407,7 +481,15 @@ fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectReg
         }),
     }
 }
-
+/// Public alias for [`validate_root_path`] so the web HTTP layer can validate
+/// a path without constructing a full `VfsRoot` + `upsert_root` (e.g. the
+/// desktop-hosted path with no file registry). Kept as a thin wrapper rather
+/// than renaming `validate_root_path` (which is `pub(crate)`-private) to avoid
+/// widening the leaf's visibility beyond what the module-cycle invariant
+/// requires.
+pub fn validate_root_path_pub(raw: &Path) -> Result<PathBuf, String> {
+    validate_root_path(raw)
+}
 /// Validate a raw VFS-root path: canonicalize (exists + accessible) and require
 /// a directory. Mirrors `web::config::resolve_and_validate_project_root` but is
 /// duplicated here as a std-only leaf so this module never imports `web::*`

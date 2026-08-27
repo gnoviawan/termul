@@ -1,17 +1,42 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
-import { skillToken } from '@/lib/skill-tokens'
+import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 import { ChatInputBar } from './ChatInputBar'
+import {
+  getComposerValue,
+  pressComposerKey,
+  setComposerCaret,
+  setComposerValue
+} from './composer/chat-composer-test-helpers'
 
-const T = skillToken
+// jsdom omits `document.elementFromPoint`. ProseMirror's native drop handler
+// (`editHandlers.drop` → `view.posAtCoords`) calls it; without a stub the
+// file-drop test throws an unhandled exception that fails the run even though
+// the host's `onDrop` already staged the file. Returning `null` makes
+// ProseMirror's drop handler a noop (coords resolve to nothing) — the host
+// owns attachment staging either way.
+if (typeof document.elementFromPoint !== 'function') {
+  Object.defineProperty(document, 'elementFromPoint', {
+    value: () => null,
+    configurable: true,
+    writable: true
+  })
+}
+
+/** Padded token form — matches what `docToDisplayText` re-emits (pills carry the
+ *  `\uE002<pad>\uE003` block for on-disk draft byte-stability) and what
+ *  `handleSelect` splices (`insertSkillToken(..., SKILL_PAD_DEFAULT)`). Editor
+ *  value assertions use this so they match the editor's serialized output. */
+const PT = (name: string): string => skillToken(name, SKILL_PAD_DEFAULT)
 
 function clickMenuOption(name: string | RegExp): void {
   const dialog = screen.getByRole('dialog')
-  fireEvent.pointerDown(within(dialog).getByText(name))
+  fireEvent.click(within(dialog).getByText(name))
 }
 
 const {
@@ -21,37 +46,66 @@ const {
   mockMcpCount,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
-  mockReadDir,
   mockSkills,
-  mockToastError
-} = vi.hoisted(() => ({
-  mockSetConfig: vi.fn(),
-  mockSetMode: vi.fn(),
-  mockSetModel: vi.fn(),
-  // Story 1.8 review (verification-gap #8): override-able MCP server count for
-  // the read-only badge. 0 by default (badge hidden); tests set it to render.
-  mockMcpCount: { current: 0 },
-  // Stable mocks for the chatbox popover's per-server toggle + probe actions
-  // (introduced alongside the status/tools/chatbox-toggle work). Reused across
-  // renders so call assertions hold.
-  mockSetMcpServerEnabled: vi.fn(async () => {}),
-  mockLoadMcpTools: vi.fn(async () => {}),
-  mockReadDir: vi.fn(),
-  // Override-able skills list (defaults to [] — web/no-skills parity). Skill
-  // tests push entries here so useAgentSkills surfaces them in the slash menu.
-  // `path` is required so the wire prompt can cite it (desktop always has one).
-  mockSkills: {
-    current: [] as Array<{
-      name: string
-      description: string
-      scope: string
-      path: string
-    }>
-  },
-  mockToastError: vi.fn()
-}))
+  mockToastError,
+  mockIsTauri,
+  mockStreamApi,
+  batchCb,
+  doneCb
+} = vi.hoisted(() => {
+  const batch = { current: null as null | ((e: never) => void) }
+  const done = { current: null as null | ((e: never) => void) }
+  return {
+    mockSetConfig: vi.fn(),
+    mockSetMode: vi.fn(),
+    mockSetModel: vi.fn(),
+    // Story 1.8 review (verification-gap #8): override-able MCP server count for
+    // the read-only badge. 0 by default (badge hidden); tests set it to render.
+    mockMcpCount: { current: 0 },
+    // Stable mocks for the chatbox popover's per-server toggle + probe actions
+    // (introduced alongside the status/tools/chatbox-toggle work). Reused across
+    // renders so call assertions hold.
+    mockSetMcpServerEnabled: vi.fn(async () => {}),
+    mockLoadMcpTools: vi.fn(async () => {}),
+    // Override-able skills list (defaults to [] — web/no-skills parity). Skill
+    // tests push entries here so useAgentSkills surfaces them in the slash menu.
+    // `path` is required so the wire prompt can cite it (desktop always has one).
+    mockSkills: {
+      current: [] as Array<{
+        name: string
+        description: string
+        scope: string
+        path: string
+      }>
+    },
+    mockToastError: vi.fn(),
+    // Desktop/web gate for the @-mention stream. Defaults to false (web parity);
+    // the file-mentions describe flips it true to exercise the ripgrep stream.
+    mockIsTauri: vi.fn(() => false),
+    // Streaming filename-search stubs (mirror use-composer-mentions.test.tsx).
+    // Callbacks are captured into refs so tests can emit synthetic batches/done.
+    batchCb: batch,
+    doneCb: done,
+    mockStreamApi: {
+      searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
+      searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
+      onSearchFileNamesBatch: vi.fn((cb: (e: never) => void) => {
+        batch.current = cb
+        return () => {
+          batch.current = null
+        }
+      }),
+      onSearchFileNamesDone: vi.fn((cb: (e: never) => void) => {
+        done.current = cb
+        return () => {
+          done.current = null
+        }
+      })
+    }
+  }
+})
 
-vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauri }))
 
 vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
@@ -69,7 +123,7 @@ vi.mock('@/hooks/use-agent-skills', async () => {
 })
 
 vi.mock('@/stores/acp-store', () => ({
-  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' }),
+  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
   useSessionUsage: () => null,
   useAcpMessages: () => [],
   // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
@@ -128,7 +182,11 @@ const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return { ...actual, persistenceApi: fakePersistenceApi }
+  return {
+    ...actual,
+    persistenceApi: fakePersistenceApi,
+    filesystemApi: { ...actual.filesystemApi, ...mockStreamApi }
+  }
 })
 
 beforeEach(() => {
@@ -137,6 +195,27 @@ beforeEach(() => {
   // Start each test from a clean skill slate (web/no-skills default). Skill
   // tests override mockSkills.current.
   mockSkills.current = []
+})
+
+// Destroy lingering Tiptap/ProseMirror editors after each test. React's
+// `useEditor` cleanup destroys the editor on unmount, but ProseMirror's
+// `EditorView` can leave dangling `MutationObserver`/rAF callbacks in jsdom;
+// destroying explicitly (via the test-only `__composerEditor` handle) is a
+// best-effort release before the next test mounts a fresh editor. The handle
+// is gone after React unmounts, so this is a no-op when cleanup already ran —
+// it mainly guards against a half-mounted editor surviving into the next test.
+afterEach(() => {
+  const els = document.querySelectorAll('[data-composer-editor="true"]')
+  for (const el of Array.from(els)) {
+    const handle = el as HTMLElement & {
+      __composerEditor?: { destroy?: () => void; isDestroyed?: boolean } | null
+    }
+    const editor = handle.__composerEditor
+    if (editor && typeof editor.destroy === 'function' && !editor.isDestroyed) {
+      editor.destroy()
+    }
+  }
+  cleanup()
 })
 
 function option(
@@ -184,6 +263,28 @@ function session(): AcpSession {
 describe('ChatInputBar config controls', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('renders worktree context below the composer without keyboard helper text', () => {
+    renderInputBar({
+      session: {
+        ...session(),
+        cwd: '/work/.termul/worktrees/abcd1234',
+        worktreePath: '/work/.termul/worktrees/abcd1234',
+        worktreeBranch: 'chat/abcd1234'
+      }
+    })
+
+    const composer = document.querySelector('[data-chat-composer="true"]')
+    const contextStrip = document.querySelector('[data-chat-composer-context-strip="true"]')
+
+    expect(composer).toBeInTheDocument()
+    expect(contextStrip).toBeInTheDocument()
+    expect(composer).not.toContainElement(contextStrip)
+    expect(screen.getByText('New worktree')).toBeInTheDocument()
+    expect(screen.getByText('chat/abcd1234')).toBeInTheDocument()
+    expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/to send|to queue|newline/i)).not.toBeInTheDocument()
   })
 
   it('uses model config and native Agent/mode picker without duplicate Agent chips', async () => {
@@ -327,28 +428,40 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     mockMcpCount.current = 0
   })
 
-  it('hides the MCP badge when no MCP servers are configured', () => {
+  it('hides the compact MCP icon when no MCP servers are configured', () => {
     mockMcpCount.current = 0
     renderInputBar()
-    // The badge returns null at count 0 — no "MCP servers attached" text.
+    expect(screen.queryByRole('img', { name: /MCP servers/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/MCP servers attached/i)).not.toBeInTheDocument()
   })
 
   it('renders the MCP badge with the count when MCP servers are configured', () => {
     mockMcpCount.current = 2
     renderInputBar()
-    // The badge is now a popover trigger (per-server enable/disable + status
-    // dot) showing the count. The old sr-only "MCP servers attached" text moved
-    // into the trigger's aria-label + the popover content (opened below).
-    expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /MCP servers/i })).toBeInTheDocument()
+    // The badge is now an icon-only popover trigger (#643): the count lives
+    // only in the trigger's aria-label — no bare text node.
+    expect(
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
   })
 
   it('prefers the switched session MCP count over the global registry', () => {
     mockMcpCount.current = 5
     renderInputBar({ session: { ...session(), mcpServerCount: 2 } })
-    expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.queryByText('5')).not.toBeInTheDocument()
+    // The session-scoped count (2) wins over the global registry (5); the
+    // trigger's aria-label carries the session count.
+    expect(
+      screen.getByRole('button', {
+        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
+      })
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -375,42 +488,186 @@ function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}
   )
 }
 
+describe('ChatInputBar placeholder', () => {
+  it('prompts for commands and file mentions in the empty editor', async () => {
+    renderInputBar()
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Ask anything.. (/ for commands, @ for files )'
+      )
+    })
+  })
+})
+
 describe('ChatInputBar file mentions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockReadDir.mockImplementation(async (path: string) => {
-      if (path === '/work') return [{ name: 'src', isDirectory: true }]
-      if (path === '/work/src') return [{ name: 'auth.ts', isDirectory: false }]
-      return []
-    })
+    vi.useFakeTimers()
+    mockIsTauri.mockReturnValue(true)
+    mockStreamApi.searchFileNamesStreamStart.mockResolvedValue({ success: true as const })
+    mockStreamApi.searchFileNamesStreamCancel.mockResolvedValue({ success: true as const })
+    mockStreamApi.onSearchFileNamesBatch.mockClear()
+    mockStreamApi.onSearchFileNamesDone.mockClear()
+    batchCb.current = null
+    doneCb.current = null
   })
 
-  it('stages a selected @ file and sends it as a resource link block', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    mockIsTauri.mockReturnValue(false)
+  })
+
+  /** Drive the ripgrep stream: advance the debounce, emit a batch + done. */
+  async function driveStream(files: Array<{ path: string; ignored: boolean }>): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90)
+    })
+    const batch = batchCb.current as unknown as
+      | ((e: {
+          searchId: string
+          files: Array<{ path: string; ignored: boolean }>
+          truncated?: boolean
+        }) => void)
+      | null
+    const sid = mockStreamApi.searchFileNamesStreamStart.mock.calls[0]?.[0] as string
+    batch?.({ searchId: sid, files })
+    const done = doneCb.current as unknown as
+      | ((e: {
+          searchId: string
+          truncated: boolean
+          totalFiles: number
+          code?: string
+          error?: string
+        }) => void)
+      | null
+    done?.({ searchId: sid, truncated: false, totalFiles: files.length })
+    vi.useRealTimers()
+    await act(async () => {})
+  }
+
+  it('renders an inline FileChip on @ file pick (not in the attachment bar)', async () => {
+    renderInputBar()
+
+    setComposerValue('fix @auth')
+    await driveStream([{ path: 'src/auth.ts', ignored: false }])
+
+    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+
+    // The @filter text is removed and a file token is spliced IN at the caret.
+    // The FileChip renders inline (the file pill's name span shows "auth.ts").
+    await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
+    const value = getComposerValue()
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    expect(value).toBe(`fix ${ft} `)
+
+    // NO entry in the attachment bar (the mention did not hoist to
+    // AttachmentPreviewGroup — only drag/drop/paste/OS-picker files appear
+    // there). The file exists only as an inline pill in the editor.
+    const removeButtons = screen.queryAllByRole('button', { name: /Remove / })
+    expect(removeButtons).toHaveLength(0)
+  })
+
+  it('sends the wire text + resource_link block on submit (display keeps tokens)', async () => {
     const onSendBlocks = vi.fn()
     renderInputBar({ onSendBlocks })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'fix @auth' } })
+    setComposerValue('fix @auth')
+    await driveStream([{ path: 'src/auth.ts', ignored: false }])
+    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
 
-    const option = await screen.findByRole('option', { name: /auth\.ts/ })
-    fireEvent.mouseDown(option)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    expect(textarea).toHaveValue('fix ')
-    expect(screen.getByText('auth.ts')).toBeInTheDocument()
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    await waitFor(() => {
+      // Wire: text with tokens replaced by (display) + resource_link block.
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [
+          { type: 'text', text: 'fix (auth.ts)' },
+          {
+            type: 'resource_link',
+            uri: 'file:///work/src/auth.ts',
+            name: 'auth.ts',
+            mimeType: 'text/typescript'
+          }
+        ],
+        // Display: raw token text so the timeline renders an inline FileChip.
+        [{ type: 'text', text: `fix ${ft} ` }]
+      )
+    })
+    // The composer value is cleared after send.
+    expect(getComposerValue()).toBe('')
+  })
+
+  it('dedupes the same file mentioned twice into one resource_link block', async () => {
+    vi.useRealTimers()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    // Splice two file tokens for the same path directly into the editor value.
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`${ft} and again ${ft} `)
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
-      expect(onSendBlocks).toHaveBeenCalledWith([
-        { type: 'text', text: 'fix' },
-        {
-          type: 'resource_link',
-          uri: 'file:///work/src/auth.ts',
-          name: 'auth.ts',
-          mimeType: 'text/typescript'
-        }
-      ])
+      const blocks = onSendBlocks.mock.calls[0]?.[0] as
+        | Array<{
+            type: string
+            uri?: string
+          }>
+        | undefined
+      expect(blocks).toBeDefined()
+      const resourceLinks = blocks!.filter(
+        (b) => b.type === 'resource_link' && b.uri === 'file:///work/src/auth.ts'
+      )
+      expect(resourceLinks).toHaveLength(1)
     })
+  })
+
+  it('renders a file pill + skill pill together (visually distinct)', async () => {
+    vi.useRealTimers()
+    mockSkills.current = [
+      {
+        name: 'git-worktree',
+        description: 'Isolated worktree',
+        scope: 'project',
+        path: '/home/u/.agents/skills/git-worktree/SKILL.md'
+      }
+    ]
+    renderInputBar()
+
+    const st = skillToken('git-worktree', SKILL_PAD_DEFAULT)
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`use ${st} on ${ft} `)
+
+    // Both pills render inline with their respective chip names.
+    await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
+    expect(screen.getByText('auth.ts')).toBeInTheDocument()
+    // The skill chip's Sparkles icon + the file chip's File icon both present.
+    expect(document.querySelector('.lucide-sparkles')).not.toBeNull()
+    expect(document.querySelector('.lucide-file')).not.toBeNull()
+  })
+
+  it('backspace removes a whole file pill + trailing space', async () => {
+    vi.useRealTimers()
+    renderInputBar()
+    // Wait for the Tiptap editor to mount (useEditor initializes in an effect).
+    await waitFor(() =>
+      expect(document.querySelector('[data-composer-editor="true"]')).not.toBeNull()
+    )
+
+    const ft = fileToken('auth.ts', '/work/src/auth.ts')
+    setComposerValue(`fix ${ft} `)
+    // Place the caret right after the trailing space.
+    setComposerCaret(`fix ${ft} `.length)
+
+    pressComposerKey('Backspace')
+
+    // The whole file token + trailing space is removed; the value is "fix ".
+    await waitFor(() => expect(getComposerValue()).toBe('fix '))
   })
 })
 
@@ -430,7 +687,7 @@ describe('ChatInputBar morph button', () => {
   it('morphs to a single queue send button when the user types during a turn', async () => {
     renderInputBar({ busy: true })
 
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'follow up' } })
+    setComposerValue('follow up')
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Queue message' })).toBeInTheDocument()
@@ -464,12 +721,11 @@ describe('ChatInputBar command chip', () => {
     fireEvent.mouseDown(within(listbox).getByText(name))
   }
 
-  it('renders a command chip when a slash command is selected from the menu', async () => {
+  it('renders an inline command pill when a slash command is selected from the menu', async () => {
     const commands = [{ name: 'compact', description: 'Compact the conversation' }]
     renderInputBar({ commands })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     // Menu should open as a listbox
     await waitFor(() => {
@@ -479,13 +735,11 @@ describe('ChatInputBar command chip', () => {
     // Select the command
     selectSlashOption('/compact')
 
-    // Command chip should appear
+    // Command pill should render inline (the CommandPill NodeView renders the
+    // SkillChip with name prefixed by `/` so the visible text is `/compact`).
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+      expect(screen.getByText('/compact')).toBeInTheDocument()
     })
-
-    // Textarea should be cleared
-    expect(textarea).toHaveValue('')
   })
 
   it('prepends the command to the prompt on send', async () => {
@@ -493,8 +747,7 @@ describe('ChatInputBar command chip', () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands, onSend })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -502,12 +755,13 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    // Command pill renders inline.
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type a message
-    fireEvent.change(textarea, { target: { value: 'hello' } })
+    // Append text after the pill + trailing space (the value carries the
+    // command token, so we append to it — `setComposerValue` replaces the
+    // whole value, losing the pill, so we build the full value with the token).
+    setComposerValue(`${commandToken('compact')} hello`)
 
     // Send
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -517,12 +771,11 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('removes the command chip when the X button is clicked', async () => {
+  it('removes the command pill on Backspace when the caret is immediately after it', async () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -530,28 +783,30 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+
+    // The value carries the command token + trailing space. Place the caret
+    // after the trailing space + dispatch Backspace — the editor's keymap
+    // removes the whole atom pill node.
+    const valueWithToken = `${commandToken('compact')} `
+    expect(getComposerValue()).toBe(valueWithToken)
+    setComposerCaret(valueWithToken.length)
+    pressComposerKey('Backspace')
+
+    // The whole pill + trailing space are removed.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
+      expect(screen.queryByText('/compact')).not.toBeInTheDocument()
     })
-
-    // Click remove
-    fireEvent.click(screen.getByRole('button', { name: 'Remove /compact command' }))
-
-    // Chip should be gone
-    expect(
-      screen.queryByRole('button', { name: 'Remove /compact command' })
-    ).not.toBeInTheDocument()
   })
 
-  it('opens the slash menu when / is typed with an active command chip', async () => {
+  it('opens the slash menu when / is typed with an active command pill', async () => {
     const commands = [
       { name: 'compact', description: 'Compact' },
       { name: 'clear', description: 'Clear' }
     ]
     renderInputBar({ commands })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -559,27 +814,25 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type / again to re-open the menu
-    fireEvent.change(textarea, { target: { value: '/' } })
+    // Type / again to re-open the menu (the value carries the command token +
+    // trailing space + the new `/`).
+    setComposerValue(`${commandToken('compact')} /`)
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
     })
   })
 
-  it('updates the command chip when a different command is selected', async () => {
+  it('rejects a second command pick (single-command invariant)', async () => {
     const commands = [
       { name: 'compact', description: 'Compact' },
       { name: 'clear', description: 'Clear' }
     ]
     renderInputBar({ commands })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -587,26 +840,35 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Type / again to re-open the menu
-    fireEvent.change(textarea, { target: { value: '/' } })
+    // Type / again to re-open the menu, then select a different command.
+    setComposerValue(`${commandToken('compact')} /`)
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
     })
-
-    // Select a different command
     selectSlashOption('/clear')
 
+    // The second command is rejected — the single-command invariant keeps the
+    // existing `/compact` pill. The `/clear` pill must NOT render (the
+    // rejection is a no-op, not a replace). The slash menu may list `/compact`
+    // as an option (filter matches), so we assert at least one `/compact`
+    // element is present (the pill). And critically, the `/clear` pill must
+    // NOT have been inserted — its text must not appear in the editor's pill
+    // area. The menu still shows `/clear` as a listbox option, so we scope
+    // the absence check to the editor's data-composer-editor subtree.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /clear command' })).toBeInTheDocument()
+      expect(screen.getAllByText('/compact').length).toBeGreaterThanOrEqual(1)
     })
+    const editor = document.querySelector('[data-composer-editor="true"]')
+    expect(editor).not.toBeNull()
     expect(
-      screen.queryByRole('button', { name: 'Remove /compact command' })
-    ).not.toBeInTheDocument()
+      editor!.querySelector('[data-command-pill="true"][data-command-name="clear"]')
+    ).toBeNull()
+    expect(
+      editor!.querySelector('[data-command-pill="true"][data-command-name="compact"]')
+    ).not.toBeNull()
   })
 
   it('sends just the command when no message is typed', async () => {
@@ -614,8 +876,7 @@ describe('ChatInputBar command chip', () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands, onSend })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -623,11 +884,9 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
-    // Send with just the command chip (no text)
+    // Send with just the command pill (no text after it).
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
@@ -635,13 +894,12 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('clears active command when externally seeded text is applied', async () => {
+  it('clears the command pill when externally seeded text is applied', async () => {
     const onSend = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
     const { rerender } = renderInputBar({ commands, onSend })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -649,9 +907,7 @@ describe('ChatInputBar command chip', () => {
 
     selectSlashOption('/compact')
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Remove /compact command' })).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
     // Externally seed text (e.g. editing a message)
     rerender(
@@ -675,15 +931,13 @@ describe('ChatInputBar command chip', () => {
       </TooltipProvider>
     )
 
-    // Command chip should be gone after seeding
+    // Command pill should be gone after seeding
     await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Remove /compact command' })
-      ).not.toBeInTheDocument()
+      expect(screen.queryByText('/compact')).not.toBeInTheDocument()
     })
 
-    // Textarea should have the seeded text
-    expect(screen.getByRole('textbox')).toHaveValue('edited message')
+    // Editor should carry the seeded text
+    await waitFor(() => expect(getComposerValue()).toBe('edited message'))
 
     // Send should use only the seeded text (no command prefix)
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -697,11 +951,10 @@ describe('ChatInputBar command chip', () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands })
 
-    const textarea = screen.getByRole('textbox')
     // Type text before the slash so the trigger is mid-text, not leading.
     // This is the canonical behavior the AgentLauncher was drifting from
     // (it used the leading-only `isSlashTrigger`).
-    fireEvent.change(textarea, { target: { value: 'hello /' } })
+    setComposerValue('hello /')
 
     await waitFor(() => {
       expect(screen.getByRole('listbox')).toBeInTheDocument()
@@ -719,7 +972,7 @@ describe('ChatInputBar draft persistence', () => {
     persistenceStore.set('chat-draft/p1/session-1', 'half-typed message')
     renderInputBar()
     await waitFor(() => {
-      expect(screen.getByRole('textbox')).toHaveValue('half-typed message')
+      expect(getComposerValue()).toBe('half-typed message')
     })
   })
 
@@ -729,7 +982,7 @@ describe('ChatInputBar draft persistence', () => {
     renderInputBar({ onSend })
 
     await waitFor(() => {
-      expect(screen.getByRole('textbox')).toHaveValue('send me')
+      expect(getComposerValue()).toBe('send me')
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -744,7 +997,7 @@ describe('ChatInputBar draft persistence', () => {
   it('does not crash when storage is empty', () => {
     // No draft persisted → empty composer, current behavior, no throw.
     renderInputBar()
-    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(getComposerValue()).toBe('')
   })
 
   it('does not crash when storage is unavailable', async () => {
@@ -752,7 +1005,7 @@ describe('ChatInputBar draft persistence', () => {
     renderInputBar()
     // read returns a non-throwing failure → degrade to empty, no crash.
     await waitFor(() => {
-      expect(screen.getByRole('textbox')).toHaveValue('')
+      expect(getComposerValue()).toBe('')
     })
   })
 
@@ -779,8 +1032,7 @@ describe('ChatInputBar draft persistence', () => {
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(0)
 
-      const textarea = screen.getByRole('textbox')
-      fireEvent.change(textarea, { target: { value: 'typed draft' } })
+      setComposerValue('typed draft')
 
       fakePersistenceApi.writeDebounced.mockClear()
       await vi.advanceTimersByTimeAsync(400)
@@ -814,9 +1066,8 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     fireEvent.mouseDown(within(listbox).getByText(name))
   }
 
-  /** The transparent-textarea overlay renders the chip name as a visible span;
-   *  `findByText` already retries until the overlay paints, so await it
-   *  directly (no `waitFor(expect(...))` wrapper needed). */
+  /** The Tiptap NodeView renders the chip name as a visible span; `findByText`
+   *  retries until the editor paints the pill. */
   async function findChip(name: string): Promise<HTMLElement> {
     return screen.findByText(name, { ignore: 'option' })
   }
@@ -829,48 +1080,43 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'use this skill /' } })
-    // Move the caret to the end so the slash trigger matches the trailing `/`.
-    fireEvent.keyUp(textarea, { key: 'ArrowRight' })
+    setComposerValue('use this skill /')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     // The `/` filter text is removed and a token is spliced inline; the
-    // transparent-textarea overlay renders the chip name as a visible span.
+    // Tiptap NodeView renders the chip name as a visible span (real DOM node).
     await findChip('git-worktree')
-    // The textarea value now carries the token (filter text removed).
-    expect(textarea).toHaveValue(`use this skill ${T('git-worktree')} `)
+    // The editor's display string now carries the token (filter text removed).
+    expect(getComposerValue()).toBe(`use this skill ${PT('git-worktree')} `)
   })
 
   it('renders two inline chips when two distinct skills are picked at their positions', async () => {
     mockSkills.current = [SKILL_GIT, SKILL_REVIEW]
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'use this /' } })
+    setComposerValue('use this /')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
 
     // Re-open the menu after the chip + trailing space, then pick a second skill.
-    fireEvent.change(textarea, { target: { value: `${T('git-worktree')} then do /` } })
+    setComposerValue(`${PT('git-worktree')} then do /`)
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/release-version')
 
     await findChip('release-version')
     // Both chips are present; the value carries two tokens.
-    expect(textarea).toHaveValue(`${T('git-worktree')} then do ${T('release-version')} `)
+    expect(getComposerValue()).toBe(`${PT('git-worktree')} then do ${PT('release-version')} `)
   })
 
   it('allows the same skill inline at multiple positions (no dedupe of tokens)', async () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'first /' } })
+    setComposerValue('first /')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
@@ -878,12 +1124,12 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
     // Pick the same skill again — the second pick splices a second token (the
     // wire header dedupes by name, but inline positions are preserved).
-    fireEvent.change(textarea, { target: { value: `${T('git-worktree')} again /` } })
+    setComposerValue(`${PT('git-worktree')} again /`)
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await waitFor(() =>
-      expect(textarea).toHaveValue(`${T('git-worktree')} again ${T('git-worktree')} `)
+      expect(getComposerValue()).toBe(`${PT('git-worktree')} again ${PT('git-worktree')} `)
     )
   })
 
@@ -891,43 +1137,43 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'use this /' } })
+    setComposerValue('use this /')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
-    const valueWithToken = `use this ${T('git-worktree')} `
-    expect(textarea).toHaveValue(valueWithToken)
+    const valueWithToken = `use this ${PT('git-worktree')} `
+    expect(getComposerValue()).toBe(valueWithToken)
 
-    // Place the caret right after the trailing space (the splicer's position).
-    const caret = valueWithToken.length
-    fireEvent.select(textarea, {
-      target: { selectionStart: caret, selectionEnd: caret }
-    })
-    fireEvent.keyDown(textarea, { key: 'Backspace' })
+    // Place the caret right after the trailing space (the splicer's position),
+    // then dispatch a real DOM keydown so the editor's Backspace-pill keymap
+    // runs and removes the whole atom node.
+    setComposerCaret(valueWithToken.length)
+    pressComposerKey('Backspace')
 
     // The whole chip token + the trailing space are removed; the preceding text
     // ("use this ") stays and the caret lands at the end of it.
-    await waitFor(() => expect(textarea).toHaveValue('use this '))
+    await waitFor(() => expect(getComposerValue()).toBe('use this '))
   })
 
   it('falls through to the default one-char backspace when the caret is in plain text', async () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
     // Plain text, no tokens; caret at the end.
-    fireEvent.change(textarea, { target: { value: 'hello world' } })
+    setComposerValue('hello world')
     const caret = 'hello world'.length
-    fireEvent.select(textarea, { target: { selectionStart: caret, selectionEnd: caret } })
+    setComposerCaret(caret)
 
-    fireEvent.keyDown(textarea, { key: 'Backspace' })
-    // Default backspace is NOT preventDefault'd here (the browser would delete
-    // one char); the React handler returns without mutating the value. The
-    // textarea value is unchanged by our handler — the DOM input event would
-    // do the actual deletion, which fireEvent.keyDown does not simulate.
-    expect(textarea).toHaveValue('hello world')
+    pressComposerKey('Backspace')
+    // The editor-native pill-removal handler is a noop when the node before the
+    // caret is plain text (no atom skillPill), so it does NOT remove the whole
+    // token or anything beyond a single char. ProseMirror's default one-char
+    // backspace fires (deletes exactly one char) — the exact value guards the
+    // one-char-deletion behavior (a regex like `/^hello wor/` would pass even
+    // if the editor ate multiple chars). 'hello world' minus the trailing 'd'
+    // is 'hello worl' (one char) — NOT 'hello wor' (two chars).
+    await waitFor(() => expect(getComposerValue()).toBe('hello worl'))
   })
 
   it('emits display (token) + wire (path-framed) blocks on send, then clears the token', async () => {
@@ -935,20 +1181,17 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     mockSkills.current = [SKILL_GIT]
     renderInputBar({ onSendBlocks })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'use this /' } })
+    setComposerValue('use this /')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
     // Type after the chip + trailing space.
-    fireEvent.change(textarea, {
-      target: { value: `${T('git-worktree')} and then` }
-    })
+    setComposerValue(`${PT('git-worktree')} and then`)
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     const wireText = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) and then`
-    const displayText = `${T('git-worktree')} and then`
+    const displayText = `${PT('git-worktree')} and then`
     await waitFor(() =>
       expect(onSendBlocks).toHaveBeenCalledWith(
         [{ type: 'text', text: wireText }],
@@ -961,7 +1204,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     // isn't mistaken for a command.
     expect(onSendBlocks.mock.calls[0]![0][0]!.text).not.toMatch(/(^|\s)\/git-worktree(?=\s|$)/)
     // The token is cleared after send.
-    await waitFor(() => expect(textarea).toHaveValue(''))
+    await waitFor(() => expect(getComposerValue()).toBe(''))
   })
 
   it('blocks send and toasts when a selected skill has no path (web parity gap)', async () => {
@@ -972,13 +1215,12 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     mockSkills.current = [{ name: 'pathless', description: 'no path', scope: 'project', path: '' }]
     renderInputBar({ onSendBlocks, onSend })
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'use this /' } })
+    setComposerValue('use this /')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     selectSlashOption('/pathless')
 
     await findChip('pathless')
-    fireEvent.change(textarea, { target: { value: `${T('pathless')} hi` } })
+    setComposerValue(`${PT('pathless')} hi`)
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     // The toast names the missing path; no message is sent.
@@ -992,8 +1234,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     mockSkills.current = []
     renderInputBar()
 
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: '/' } })
+    setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
@@ -1001,10 +1242,10 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
   it('re-renders inline chips when the composer is seeded with token text (edit a sent message)', async () => {
     // Editing a user message that carried skill tokens re-seeds the composer
-    // with the raw token text; the transparent-textarea overlay must re-render
-    // the chips inline (MessageActions.onEdit passes the token text verbatim).
+    // with the raw token text; the Tiptap editor re-parses the tokens into
+    // pill NodeViews (MessageActions.onEdit passes the token text verbatim).
     mockSkills.current = [SKILL_GIT]
-    const seeded = `use this ${T('git-worktree')} then`
+    const seeded = `use this ${PT('git-worktree')} then`
     const { rerender } = renderInputBar()
 
     rerender(
@@ -1028,8 +1269,8 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
       </TooltipProvider>
     )
 
-    // The textarea value carries the tokens; the overlay re-renders the chip.
+    // The editor re-parses the tokens into pill nodes; the chip text renders.
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
-    expect(screen.getByRole('textbox')).toHaveValue(seeded)
+    await waitFor(() => expect(getComposerValue()).toBe(seeded))
   })
 })

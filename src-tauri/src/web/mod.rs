@@ -23,15 +23,18 @@ pub mod install_api;
 pub mod log_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod mcp_oauth_api;
 pub mod search_api;
 pub mod skills_api;
 pub mod permissions;
+pub mod store;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;
 pub mod sink;
 pub mod terminal_ws;
 pub mod workspace_api;
+pub mod worktree_api;
 pub mod ws;
 
 pub use config::ServerConfig;
@@ -58,6 +61,7 @@ use tracing::{error, info, warn};
 use crate::acp::AcpManager;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::store::WebStore;
 
 #[cfg(test)]
 pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
@@ -139,6 +143,9 @@ pub async fn serve(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        // Standalone binary is NOT shared-live — its admission path is the
+        // `--allow-remote-writes` opt-in, not a deployment-mode deny.
+        false,
     )
     .await?;
 
@@ -208,6 +215,7 @@ pub async fn serve_router(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    shared_live_writes_denied: bool,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -237,6 +245,16 @@ pub async fn serve_router(
     } else {
         HistoryMode::LiveOnly
     };
+    // Issue #613: resolve the server-side store path — explicit
+    // `--store-file` wins, otherwise default under the service-account state
+    // dir (same resolution posture as workspace-manifests / acp-catalog). The
+    // desktop shared-live host passes `store_file: None`, so it lands on the
+    // same default and gets a durable store too.
+    let store = Some(Arc::new(WebStore::open(
+        cfg.store_file
+            .clone()
+            .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
+    )));
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -253,6 +271,16 @@ pub async fn serve_router(
         workspace_manifest,
         acp_catalog,
         acp_install,
+        store,
+        cfg.allow_remote_writes,
+        shared_live_writes_denied,
+        // The effective externally reachable origin for OAuth redirect URIs.
+        // The bound address is known here (before `router()` is called), so
+        // the callback route's `redirect_uri` uses it instead of the
+        // hardcoded loopback default. Desktop shared-live denies all OAuth
+        // control routes before this is read, so it stays `http://127.0.0.1`
+        // (harmless — never used).
+        format!("http://{}", addr),
     );
 
     let handle = tokio::spawn(async move {

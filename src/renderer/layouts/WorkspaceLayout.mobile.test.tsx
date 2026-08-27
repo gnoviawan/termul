@@ -230,8 +230,10 @@ vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
 }))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
-vi.mock('@/pages/AppPreferences', () => ({ default: () => <div>preferences</div> }))
-vi.mock('@/pages/ProjectSettings', () => ({ default: () => <div>project-settings</div> }))
+vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))
+vi.mock('@/pages/ProjectSettings', () => ({
+  ProjectSettingsModal: () => <div>project-settings</div>
+}))
 vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> }))
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
@@ -246,6 +248,76 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
   MobileTerminalControls: () => null
 }))
 
+// CAP-6 Patch 3: SSH workspace lazy/Suspense boundary test.
+// Stub SSHWorkspace + SSHFileExplorer so the lazy chunks resolve to
+// lightweight markers. The ssh-store and ssh-connection hooks are stubbed
+// with a controllable profile ref so the SSH render path activates.
+const { sshProfileRef } = vi.hoisted(() => ({
+  sshProfileRef: {
+    current: null as {
+      id: string
+      name: string
+      host: string
+      username: string
+      password: string
+    } | null
+  }
+}))
+
+vi.mock('@/stores/ssh-store', () => ({
+  useActiveSSHProfile: () => sshProfileRef.current,
+  useActiveSSHProfileId: () => (sshProfileRef.current ? 'ssh-1' : null),
+  useSSHActions: () => ({
+    loadProfiles: vi.fn(),
+    saveProfile: vi.fn(),
+    deleteProfile: vi.fn(),
+    importConfig: vi.fn(),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    startPortForward: vi.fn(),
+    stopPortForward: vi.fn(),
+    clearCompletedTransfers: vi.fn(),
+    selectProfile: vi.fn(),
+    markConnecting: vi.fn(),
+    markDisconnected: vi.fn(),
+    updateConnectionId: vi.fn(),
+    updateConnectionStatusByProfile: vi.fn(),
+    setEditingFile: vi.fn()
+  }),
+  useSSHProfiles: () => [],
+  useSSHStore: Object.assign(vi.fn(), {
+    getState: () => ({ profiles: [], activeSSHProfileId: null })
+  })
+}))
+
+vi.mock('@/hooks/use-ssh-connection', () => ({
+  useSSHConnection: () => ({
+    connectionId: 'conn-1',
+    isConnected: true,
+    sftpReady: true,
+    entries: [],
+    currentPath: '/home',
+    expandedDirs: new Set(),
+    childEntries: {},
+    loadingDirs: new Set(),
+    isLoadingRoot: false,
+    handleConnect: vi.fn(),
+    handleBrowseFiles: vi.fn(),
+    toggleDirectory: vi.fn(),
+    loadDirectory: vi.fn()
+  })
+}))
+
+vi.mock('@/components/ssh/SSHWorkspace', () => ({
+  SSHWorkspace: ({ profile }: { profile: { name?: string } }) => (
+    <div data-testid="ssh-workspace-stub">SSH: {profile?.name}</div>
+  )
+}))
+
+vi.mock('@/components/ssh/SSHFileExplorer', () => ({
+  SSHFileExplorer: () => <div data-testid="ssh-file-explorer-stub" />
+}))
+
 import WorkspaceLayout from './WorkspaceLayout'
 
 describe('WorkspaceLayout mobile branch', () => {
@@ -257,16 +329,18 @@ describe('WorkspaceLayout mobile branch', () => {
     gitState.statuses = {}
     gitState.selectedFile = null
     gitState.commitContexts = {}
+    sshProfileRef.current = null
   })
 
-  it('mounts MobileChatShell and threads the command-palette + git-changes triggers', () => {
+  it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
     render(
       <MemoryRouter>
         <WorkspaceLayout />
       </MemoryRouter>
     )
 
-    expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy()
+    // MobileChatShell is React.lazy — wait for it to load before asserting.
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
     expect(screen.getByLabelText('Command palette')).toBeInTheDocument()
     expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
   })
@@ -281,7 +355,8 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(
       screen.queryByPlaceholderText('Search commands, projects, settings...')
     ).not.toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Command palette'))
+    // MobileChatShell is React.lazy — wait for the trigger button to appear.
+    fireEvent.click(await screen.findByLabelText('Command palette'))
     expect(
       await screen.findByPlaceholderText('Search commands, projects, settings...')
     ).toBeInTheDocument()
@@ -296,19 +371,21 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
     expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the trigger button to appear.
+    fireEvent.click(await screen.findByLabelText('Git changes'))
     // GitPanel mobile branch renders the file-list filter input (full-width).
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
 
-  it('disables the Git changes trigger when no active project path', () => {
+  it('disables the Git changes trigger when no active project path', async () => {
     projectRef.current = { id: 'p1', name: 'Demo' }
     render(
       <MemoryRouter>
         <WorkspaceLayout />
       </MemoryRouter>
     )
-    expect(screen.getByLabelText('Git changes')).toBeDisabled()
+    // MobileChatShell is React.lazy — wait for the trigger to appear.
+    expect(await screen.findByLabelText('Git changes')).toBeDisabled()
   })
 
   it('closes the Git Changes sheet if the active project loses its path while open', async () => {
@@ -318,7 +395,8 @@ describe('WorkspaceLayout mobile branch', () => {
       </MemoryRouter>
     )
 
-    fireEvent.click(screen.getByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the trigger to appear.
+    fireEvent.click(await screen.findByLabelText('Git changes'))
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
     // Active project switches to one without a path while the sheet is open.
@@ -333,5 +411,42 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
+  })
+})
+
+describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tauriRef.current = false
+    mobileRef.current = true
+    projectRef.current = {
+      id: 'p1',
+      name: 'Demo',
+      path: '/demo',
+      color: 'blue',
+      gitBranch: 'main'
+    }
+    sshProfileRef.current = {
+      id: 'ssh-1',
+      name: 'Test SSH',
+      host: 'example.com',
+      username: 'user',
+      password: 'pass'
+    }
+  })
+
+  it('renders SSHWorkspace through React.lazy + <Suspense> when an SSH profile is active', async () => {
+    render(
+      <MemoryRouter>
+        <WorkspaceLayout />
+      </MemoryRouter>
+    )
+
+    // SSHWorkspace is React.lazy — <Suspense> shows ShellSkeleton first, then
+    // the lazy chunk resolves and the SSH workspace renders. MobileChatShell
+    // (also lazy) wraps workspaceMain which contains the SSH render site.
+    const ssh = await screen.findByTestId('ssh-workspace-stub')
+    expect(ssh).toBeInTheDocument()
+    expect(ssh).toHaveTextContent('Test SSH')
   })
 })

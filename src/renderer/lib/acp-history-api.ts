@@ -27,6 +27,11 @@ export const acpHistoryApi = {
     return invokeHistory<SessionPayload | null>('acp_history_get', { sessionId })
   },
 
+  /** Tail-first variant of `get`: fetches only the last `limit` messages. */
+  getTail(sessionId: string, limit: number): Promise<SessionPayload | null> {
+    return invokeHistory<SessionPayload | null>('acp_history_get_tail', { sessionId, limit })
+  },
+
   /** Legacy-store reads for the one-time KV wipe migration only. */
   listLegacy(): Promise<DesktopHistoryListResult> {
     return invokeHistory<DesktopHistoryListResult>('acp_history_list_legacy')

@@ -19,11 +19,12 @@ import { useProjectStore } from '@/stores/project-store'
  * Runs AFTER `useAcpHistory`'s `loadSessionIndex()` populates the index. For
  * each resume-eligible session scoped to the active project: seed the WS
  * transport's `lastSeq` from the server watermark (R2 — web only), then call
- * `resumeLiveSession` (which installs the transcript + `acpApi.resumeSession`).
- * The backend `gate_resume_session` enforces the capability; a rejection
- * (agent exited / no resume capability) falls through to read-only local
- * (`acp-resume-skipped`) — never cold-spawns, never throws on the bootstrap
- * path. Desktop: `session/load` replay covers the gap (no WS cursor needed).
+ * `openHistorySession` — the same code path as click-to-open, which remaps
+ * stale agent IDs and picks the appropriate reopen strategy. When the remap
+ * fails or the strategy lands at read-only local, the session ends up `closed`
+ * and the "Chat disconnected (read-only)." banner surfaces — never cold-spawns,
+ * never throws on the bootstrap path. Desktop: `session/load` replay covers
+ * the gap (no WS cursor needed).
  *
  * Best-effort + idempotent: a ref guards against re-attempting a session whose
  * index identity churns (a resumed session re-persists + re-renders the row),
@@ -44,7 +45,7 @@ export function useAcpSessionResume(): void {
     void (async () => {
       const correlationId = getOrCreateProjectContinuityCorrelation(activeProjectId)
       const transport = getAcpTransport()
-      const { resumeLiveSession, sessions } = useAcpStore.getState()
+      const { openHistorySession, sessions } = useAcpStore.getState()
       // Eligible: belongs to this project, advertises an agent (resumeEligible
       // = agentConfigId || agentId), has the authoritative agent id needed to
       // resume, and is not already closed (closed chats re-open lazily on
@@ -81,21 +82,34 @@ export function useAcpSessionResume(): void {
             if (cancelled) return
             transport.seedSessionCursor?.(entry.id, cursor)
           }
-          await resumeLiveSession(entry.id, entry.agentId, entry.cwd)
+          await openHistorySession(entry.id)
           if (cancelled) return
-          recordTerminalContinuityEvent({
-            name: 'acp-resume-succeeded',
-            correlationId,
-            projectId: activeProjectId,
-            terminalId: entry.id
-          })
+          // 'local' strategy resolves without throwing but leaves the session
+          // closed (read-only) — record a skip, not a false-positive success.
+          const resumed = useAcpStore.getState().sessions[entry.id]
+          if (!resumed || resumed.status === 'closed' || resumed.status === 'error') {
+            recordTerminalContinuityEvent({
+              name: 'acp-resume-skipped',
+              correlationId,
+              projectId: activeProjectId,
+              terminalId: entry.id,
+              details: { reason: 'read-only (local strategy)' }
+            })
+          } else {
+            recordTerminalContinuityEvent({
+              name: 'acp-resume-succeeded',
+              correlationId,
+              projectId: activeProjectId,
+              terminalId: entry.id
+            })
+          }
         } catch (err) {
           if (cancelled) return
-          // Backend gate rejected (agent exited or no resume capability) →
-          // read-only local. Degrades safely; never throws on the bootstrap
-          // path. A load-capable (not resume-capable) agent also lands here —
-          // the user's click re-opens it via `openHistorySession` →
-          // `decideResume` → 'load' (the capability gate is honored either way).
+          // `openHistorySession` rejected (spawn failed, or resume/load threw
+          // after the remap) → read-only local. Degrades safely; never throws
+          // on the bootstrap path. A load-capable (not resume-capable) agent
+          // also lands here — the user's click re-opens it via
+          // `openHistorySession` (the capability gate is honored either way).
           recordTerminalContinuityEvent({
             name: 'acp-resume-skipped',
             correlationId,

@@ -10,7 +10,10 @@ use crate::remote;
 use crate::trackers::{
     CwdTracker, ExitCodeTracker, GitCommit, GitStatus, GitStatusDetail, GitTracker,
 };
-use crate::worktree::{BranchEntry, DirtyStatus, GitWorktreeEntry, RemoveResult, WorktreeManager};
+use crate::worktree::{
+    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, RemoveResult,
+    WorktreeManager,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
@@ -261,7 +264,8 @@ fn attach_forwarders() -> &'static Mutex<HashMap<String, (u64, tokio::task::Abor
 /// Recover the forwarder map guard even if a holder panicked while holding the
 /// lock — silently skipping on poison would skip predecessor aborts and leak
 /// entries.
-fn lock_forwarders() -> std::sync::MutexGuard<'static, HashMap<String, (u64, tokio::task::AbortHandle)>> {
+fn lock_forwarders(
+) -> std::sync::MutexGuard<'static, HashMap<String, (u64, tokio::task::AbortHandle)>> {
     attach_forwarders()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -926,6 +930,45 @@ pub async fn worktree_merge_execute(
     }
 }
 
+/// Resolve the default base branch for a new chat worktree (CAP-2).
+/// Returns the origin/HEAD default with a `main`/`master`/current fallback
+/// chain and a detached-HEAD flag so the launcher can force a base pick.
+#[tauri::command]
+pub async fn worktree_resolve_base_branch(
+    project_path: String,
+) -> Result<IpcResult<BaseBranchInfo>, String> {
+    let validated_path = validate_and_stringify!(&project_path);
+    match WorktreeManager::resolve_default_base_branch(&validated_path) {
+        Ok(info) => Ok(IpcResult::success(info)),
+        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    }
+}
+
+/// Carry over untracked files listed in `.worktree-include` into a fresh
+/// worktree (CAP-5). Symlink/path-escape/already-present defenses run per
+/// file; the result reports `ran`/`copied`/`skipped` with per-file reasons.
+#[tauri::command]
+pub async fn worktree_copy_include_files(
+    project_path: String,
+    worktree_path: String,
+) -> Result<IpcResult<IncludeCopyResult>, String> {
+    let validated_project = validate_and_stringify!(&project_path);
+    let validated_worktree = validate_and_stringify!(&worktree_path);
+    // Filesystem walk + copy is blocking; offload from the async runtime.
+    match tokio::task::spawn_blocking(move || {
+        WorktreeManager::copy_worktree_include_files(&validated_project, &validated_worktree)
+    })
+    .await
+    {
+        Ok(Ok(result)) => Ok(IpcResult::success(result)),
+        Ok(Err(e)) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+        Err(join_err) => Ok(IpcResult::error(
+            format!("worktree_copy_include_files join failed: {join_err}"),
+            "INTERNAL_ERROR",
+        )),
+    }
+}
+
 /// Worktree info for IPC response
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1127,7 +1170,17 @@ pub async fn browser_tab_reload(
     }
 }
 
-/// Open DevTools for a browser tab
+/// Open DevTools for a browser tab.
+///
+/// Debug-gated: the real implementation calls `BrowserTabManager::open_devtools`
+/// (which opens the webview inspector). In release builds the command is a
+/// stub that returns `Ok(IpcResult::error("DevTools disabled in production",
+/// ...))` so the browser-tab devtools path is fully blocked in prod — mirrors
+/// the existing `toggle_devtools` cfg-gate pattern in `lib.rs`. P13: the
+/// `BrowserTabManager::open_devtools` method only exists in debug builds (no
+/// release stub → no dead_code). The TS side also hides the Debug Console
+/// button in prod, so a user never reaches the release stub.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn browser_tab_open_devtools(
     tab_id: String,
@@ -1139,70 +1192,39 @@ pub async fn browser_tab_open_devtools(
     }
 }
 
-/// Inject annotation overlay script into a browser tab
+#[cfg(not(debug_assertions))]
 #[tauri::command]
-pub async fn browser_tab_inject_annotation(
+pub async fn browser_tab_open_devtools(
+    _tab_id: String,
+    _browser_manager: State<'_, Arc<BrowserTabManager>>,
+) -> Result<IpcResult<()>, String> {
+    Ok(IpcResult::error(
+        "DevTools disabled in production".to_string(),
+        "BROWSER_TAB_OPEN_DEVTOOLS_DISABLED",
+    ))
+}
+
+
+/// Inject agentation toolbar into a browser tab webview (on-demand).
+/// Called from the browser controls UI button.
+#[tauri::command]
+pub async fn browser_tab_inject_agentation(
     tab_id: String,
-    mode: String,
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
-    match browser_manager.inject_annotation_script(&tab_id, &mode) {
+    if !browser_manager.is_agentation_enabled() {
+        log::info!("[BrowserTab] Agentation injection rejected — feature disabled for tab={}", tab_id);
+        return Ok(IpcResult::error(
+            "Agentation is disabled".to_string(),
+            "AGENTATION_DISABLED",
+        ));
+    }
+    match browser_manager.inject_agentation_toolbar(&tab_id) {
         Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_ANNOTATION_FAILED")),
+        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_AGENTATION_FAILED")),
     }
 }
 
-/// Remove annotation overlay from a browser tab
-#[tauri::command]
-pub async fn browser_tab_remove_annotation_overlay(
-    tab_id: String,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<IpcResult<()>, String> {
-    match browser_manager.remove_annotation_overlay(&tab_id) {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(
-            e,
-            "BROWSER_TAB_REMOVE_ANNOTATION_OVERLAY_FAILED",
-        )),
-    }
-}
-
-/// Inject annotation markers into a browser tab webview
-#[tauri::command]
-pub async fn browser_tab_inject_annotation_markers(
-    tab_id: String,
-    annotations_json: String,
-    selected_id: Option<String>,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<IpcResult<()>, String> {
-    match browser_manager.inject_annotation_markers(
-        &tab_id,
-        &annotations_json,
-        selected_id.as_deref(),
-    ) {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(
-            e,
-            "BROWSER_TAB_INJECT_ANNOTATION_MARKERS_FAILED",
-        )),
-    }
-}
-
-/// Update annotation marker selection in a browser tab webview
-#[tauri::command]
-pub async fn browser_tab_update_annotation_marker_selection(
-    tab_id: String,
-    selected_id: Option<String>,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<IpcResult<()>, String> {
-    match browser_manager.update_annotation_marker_selection(&tab_id, selected_id.as_deref()) {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(
-            e,
-            "BROWSER_TAB_UPDATE_MARKER_SELECTION_FAILED",
-        )),
-    }
-}
 
 /// Report URL from browser tab webview (called by injected JS poller)
 #[tauri::command]
@@ -1211,11 +1233,10 @@ pub async fn browser_tab_report_url(
     url: String,
     app_handle: AppHandle,
     webview: Webview,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
+    _browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     validate_browser_tab_caller(&webview, &tab_id)?;
     log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
-    browser_manager.invalidate_annotation_injected(&tab_id);
     app_handle
         .emit(
             "browser-tab-navigated",
@@ -1234,52 +1255,19 @@ pub async fn browser_tab_report_loaded(
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     validate_browser_tab_caller(&webview, &tab_id)?;
-    log::debug!("[BrowserTab] Loaded report: tab={}", tab_id);
-    browser_manager.invalidate_annotation_injected(&tab_id);
+    log::info!("[BrowserTab] Loaded report: tab={} agentation_enabled={}", tab_id, browser_manager.is_agentation_enabled());
+    // Inject agentation toolbar after page load (the library accesses
+    // document.head at module top-level, so it must run after DOM ready).
+    if browser_manager.is_agentation_enabled() {
+        log::info!("[BrowserTab] Injecting agentation toolbar for tab={}", tab_id);
+        if let Err(e) = browser_manager.inject_agentation_toolbar(&tab_id) {
+            log::warn!("[BrowserTab] Agentation toolbar injection failed for tab={}: {}", tab_id, e);
+        }
+    }
     app_handle
         .emit(
             "browser-tab-loaded",
             serde_json::json!({ "browserTabId": tab_id }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-/// Report region captured from browser tab webview (called by injected annotation overlay)
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn browser_tab_report_region_captured(
-    tab_id: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    viewport_width: f64,
-    viewport_height: f64,
-    app_handle: AppHandle,
-    webview: Webview,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    log::debug!(
-        "[BrowserTab] Region captured: tab={} x={} y={} w={} h={}",
-        tab_id,
-        x,
-        y,
-        width,
-        height
-    );
-    app_handle
-        .emit(
-            "browser-tab-region-captured",
-            serde_json::json!({
-                "browserTabId": tab_id,
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
-                "viewportWidth": viewport_width,
-                "viewportHeight": viewport_height,
-            }),
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -1299,92 +1287,6 @@ pub async fn browser_tab_report_title(
         .emit(
             "browser-tab-title-changed",
             serde_json::json!({ "browserTabId": tab_id, "title": title }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-/// Report element captured from browser tab webview (called by injected annotation overlay)
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn browser_tab_report_element_captured(
-    tab_id: String,
-    url: String,
-    title: String,
-    viewport_width: f64,
-    viewport_height: f64,
-    tag_name: String,
-    selector: String,
-    selector_confidence: String,
-    attributes: serde_json::Value,
-    text_content: String,
-    text_truncated: bool,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    app_handle: AppHandle,
-    webview: Webview,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-
-    let attributes = attributes.as_object().cloned().ok_or_else(|| {
-        "Browser tab report element captured rejected: attributes must be an object".to_string()
-    })?;
-
-    log::debug!(
-        "[BrowserTab] Element captured: tab={} tag={} selector=<redacted>",
-        tab_id,
-        tag_name
-    );
-    app_handle
-        .emit(
-            "browser-tab-element-captured",
-            serde_json::json!({
-                "browserTabId": tab_id,
-                "url": url,
-                "title": title,
-                "viewportWidth": viewport_width,
-                "viewportHeight": viewport_height,
-                "tagName": tag_name,
-                "selector": selector,
-                "selectorConfidence": selector_confidence,
-                "attributes": attributes,
-                "textContent": text_content,
-                "textTruncated": text_truncated,
-                "boundingBox": {
-                    "x": x,
-                    "y": y,
-                    "width": width,
-                    "height": height
-                }
-            }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-/// Report annotation marker clicked from browser tab webview
-#[tauri::command]
-pub async fn browser_tab_report_annotation_marker_clicked(
-    tab_id: String,
-    annotation_id: String,
-    app_handle: AppHandle,
-    webview: Webview,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    log::debug!(
-        "[BrowserTab] Annotation marker clicked: tab={} annotation_id={}",
-        tab_id,
-        annotation_id
-    );
-    app_handle
-        .emit(
-            "browser-tab-annotation-marker-clicked",
-            serde_json::json!({
-                "browserTabId": tab_id,
-                "annotationId": annotation_id,
-            }),
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -1669,7 +1571,11 @@ pub(crate) fn validated_search_root(scope_root: &str, search_root: &str) -> Resu
         .map(|path| path.to_string_lossy().to_string())
 }
 
-pub(crate) fn build_search_args(query: &str, root_path: &str, max_matches_per_file: usize) -> Vec<String> {
+pub(crate) fn build_search_args(
+    query: &str,
+    root_path: &str,
+    max_matches_per_file: usize,
+) -> Vec<String> {
     let mut args = vec![
         "--json".to_string(),
         "-F".to_string(),
@@ -3485,6 +3391,153 @@ pub async fn remote_sync_chat_history(
     Ok(IpcResult::success(()))
 }
 
+/// Mirror the desktop app-store MCP registry to the active project's
+/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap).
+///
+/// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
+/// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers` route
+/// reads `{project_root}/.termul/mcp-servers.json`. Without this bridge the web
+/// route never sees desktop-configured servers, so `McpBadge` stays hidden on
+/// web/mobile. Called best-effort after every desktop MCP save and on project
+/// switch — a sync failure is logged but never blocks the app-store save.
+///
+/// Resolves the active project root via the same chain `RemoteServerState::start`
+/// uses: the registry's default-project path (canonicalized), falling back to
+/// `default_project_root()` (`$TERMUL_PROJECT_ROOT` / `$HOME`) when the
+/// registry has no default (server stopped / never started). The write reuses
+/// `mcp_servers_api::registry_path` + `atomic_file::replace` so the sync writes
+/// the exact file the web route reads.
+#[tauri::command]
+pub async fn remote_sync_mcp_registry(
+    registry: serde_json::Value,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+) -> Result<IpcResult<()>, String> {
+    Ok(sync_mcp_registry_to_project_file(project_registry.inner(), registry).await)
+}
+
+/// Testable core of `remote_sync_mcp_registry`: writes `registry` to
+/// `{active_project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
+/// Extracted so a Rust unit test can exercise the write path without a Tauri
+/// `AppHandle` (CAP-7 regression guard).
+pub(crate) async fn sync_mcp_registry_to_project_file(
+    project_registry: &crate::web::ProjectRegistry,
+    registry: serde_json::Value,
+) -> IpcResult<()> {
+    log::info!("remote_sync_mcp_registry: start");
+
+    // Validate the payload is an array (mirrors `mcp_servers_api::put`).
+    if !registry.is_array() {
+        log::warn!("remote_sync_mcp_registry: rejected non-array payload");
+        return IpcResult::error("MCP registry must be a JSON array", "MCP_REGISTRY_INVALID");
+    }
+
+    // Serialize + enforce the 1 MiB ceiling (mirrors `mcp_servers_api::put`).
+    let bytes = match serde_json::to_vec(&registry) {
+        Ok(bytes) if bytes.len() <= crate::web::mcp_servers_api::MAX_REGISTRY_BYTES => bytes,
+        Ok(_) => {
+            log::warn!("remote_sync_mcp_registry: rejected payload over 1 MiB");
+            return IpcResult::error(
+                "MCP registry exceeds the 1 MiB limit",
+                "MCP_REGISTRY_TOO_LARGE",
+            );
+        }
+        Err(_) => {
+            log::warn!("remote_sync_mcp_registry: payload not serializable");
+            return IpcResult::error("MCP registry is not serializable", "MCP_REGISTRY_INVALID");
+        }
+    };
+
+    // Resolve the active project root (same chain as `RemoteServerState::start`):
+    // registry default → canonicalize; else `default_project_root()` → canonicalize.
+    // A present-but-invalid default path returns an error rather than silently
+    // falling back to the home directory (which the web route never reads).
+    let project_root = match project_registry.default_project_path() {
+        Some(p) => {
+            match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)) {
+                Ok(root) => root,
+                Err(e) => {
+                    log::error!(
+                        "remote_sync_mcp_registry: default project path '{}' \
+                     failed canonicalization: {}",
+                        p,
+                        e
+                    );
+                    return IpcResult::error(
+                        "No active project root available for MCP registry sync",
+                        "NO_ACTIVE_PROJECT_ROOT",
+                    );
+                }
+            }
+        }
+        None => {
+            log::warn!(
+                "remote_sync_mcp_registry: no active project path in registry; \
+                 falling back to default_project_root"
+            );
+            match crate::web::config::default_project_root() {
+                Some(raw) => match crate::web::config::resolve_and_validate_project_root(&raw) {
+                    Ok(root) => root,
+                    Err(e) => {
+                        log::error!(
+                            "remote_sync_mcp_registry: default project root '{}' \
+                             failed canonicalization: {}",
+                            raw.display(),
+                            e
+                        );
+                        return IpcResult::error(
+                            "No active project root available for MCP registry sync",
+                            "NO_ACTIVE_PROJECT_ROOT",
+                        );
+                    }
+                },
+                None => {
+                    log::error!(
+                        "remote_sync_mcp_registry: no active project root and \
+                         default_project_root unavailable"
+                    );
+                    return IpcResult::error(
+                        "No active project root available for MCP registry sync",
+                        "NO_ACTIVE_PROJECT_ROOT",
+                    );
+                }
+            }
+        }
+    };
+
+    let path = crate::web::mcp_servers_api::registry_path(&project_root);
+    let write_path = path.clone();
+    let bytes_len = bytes.len();
+    let write_result =
+        tokio::task::spawn_blocking(move || crate::acp::atomic_file::replace(&write_path, &bytes))
+            .await;
+    match write_result {
+        Ok(Ok(())) => {
+            log::info!(
+                "remote_sync_mcp_registry: success ({} bytes → {})",
+                bytes_len,
+                path.display()
+            );
+            IpcResult::success(())
+        }
+        Ok(Err(error)) => {
+            log::error!(
+                "remote_sync_mcp_registry: atomic write failed for {}: {}",
+                path.display(),
+                error
+            );
+            IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
+        }
+        Err(error) => {
+            log::error!(
+                "remote_sync_mcp_registry: write task panicked for {}: {}",
+                path.display(),
+                error
+            );
+            IpcResult::error("Failed to persist MCP registry", "MCP_REGISTRY_WRITE_ERROR")
+        }
+    }
+}
+
 /// Host-owned durable history state (CAP-2). `None` when the desktop could not
 /// open `SessionPersistence` at startup (degraded live-only mode); commands
 /// must treat absence as empty history, never crash.
@@ -3498,7 +3551,9 @@ pub struct DesktopChatHistoryList {
     pub legacy_import_complete: bool,
 }
 
-fn host_entry_to_desktop(entry: crate::acp::SessionIndexEntry) -> crate::acp::ChatHistoryIndexEntry {
+fn host_entry_to_desktop(
+    entry: crate::acp::SessionIndexEntry,
+) -> crate::acp::ChatHistoryIndexEntry {
     crate::acp::ChatHistoryIndexEntry {
         id: entry.session_id,
         agent_id: entry.runtime_agent_id.unwrap_or_default(),
@@ -3520,6 +3575,9 @@ fn host_entry_to_desktop(entry: crate::acp::SessionIndexEntry) -> crate::acp::Ch
             crate::acp::PersistedSessionStatus::Error => crate::acp::ChatHistoryStatus::Error,
             crate::acp::PersistedSessionStatus::Closed => crate::acp::ChatHistoryStatus::Closed,
         },
+        discovered: entry.discovered,
+        worktree_path: entry.worktree_path,
+        worktree_branch: entry.worktree_branch,
     }
 }
 
@@ -3552,7 +3610,7 @@ pub async fn acp_history_get(
     session_id: String,
     host: State<'_, HostHistoryStore>,
 ) -> Result<IpcResult<Option<serde_json::Value>>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] get start session_id={}", log_session_id);
     let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
         log::info!("[acp-history] get not_found session_id={}", log_session_id);
@@ -3561,8 +3619,7 @@ pub async fn acp_history_get(
     match persistence.session_payload_async(&session_id).await {
         Ok(payload) => {
             log::info!("[acp-history] get success session_id={}", log_session_id);
-            let value = serde_json::to_value(&payload)
-                .map_err(|error| error.to_string())?;
+            let value = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
             Ok(IpcResult::success(Some(value)))
         }
         Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
@@ -3572,6 +3629,57 @@ pub async fn acp_history_get(
         Err(error) => {
             log::error!(
                 "[acp-history] get failure session_id={} error={}",
+                log_session_id,
+                error
+            );
+            Ok(IpcResult::error(
+                error.to_string(),
+                "ACP_HISTORY_GET_FAILED",
+            ))
+        }
+    }
+}
+
+/// Tail-first variant of [`acp_history_get`]: fetches only the last `limit`
+/// messages + matching tool calls so the renderer can install the recent
+/// transcript immediately and lazy-load the full payload on scroll-up.
+/// `limit` is clamped to `[1, 500]` (defensive bounds — the live window is
+/// 300, and a tail fetch larger than the full payload is pointless).
+/// Mirrors `acp_history_get` but calls `session_payload_tail_async`.
+#[tauri::command]
+pub async fn acp_history_get_tail(
+    session_id: String,
+    limit: Option<u32>,
+    host: State<'_, HostHistoryStore>,
+) -> Result<IpcResult<Option<serde_json::Value>>, String> {
+    let log_session_id = crate::logging::redact_session_id(&session_id);
+    let limit = limit.unwrap_or(50).clamp(1, 500) as usize;
+    log::info!(
+        "[acp-history] get_tail start session_id={} limit={}",
+        log_session_id,
+        limit
+    );
+    let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
+        log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+        return Ok(IpcResult::success(None));
+    };
+    match persistence.session_payload_tail_async(&session_id, limit).await {
+        Ok(payload) => {
+            log::info!(
+                "[acp-history] get_tail success session_id={} messages={}",
+                log_session_id,
+                payload.messages.len()
+            );
+            let value = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
+            Ok(IpcResult::success(Some(value)))
+        }
+        Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+            log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+            Ok(IpcResult::success(None))
+        }
+        Err(error) => {
+            log::error!(
+                "[acp-history] get_tail failure session_id={} error={}",
                 log_session_id,
                 error
             );
@@ -3596,7 +3704,7 @@ pub async fn acp_history_save(
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] save start session_id={}", log_session_id);
     let task_store = store.inner().clone();
     let task_id = session_id.clone();
@@ -3632,7 +3740,7 @@ pub async fn acp_history_delete(
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] delete start session_id={}", log_session_id);
     match &host.0 {
         Some(persistence) => match persistence.delete_session(&session_id).await {
@@ -3783,6 +3891,21 @@ pub async fn git_stage(cwd: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
     crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
+}
+
+/// Stage a single hunk. `hunk_patch` is a unified-diff fragment
+/// (`--- a/<path>` / `+++ b/<path>` / `@@ … @@` / body) built by the
+/// renderer from the working-tree diff. See #257.
+#[tauri::command]
+pub async fn git_stage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+}
+
+/// Unstage a single hunk. `hunk_patch` is built from the staged diff and
+/// reverse-applied to the index. See #257.
+#[tauri::command]
+pub async fn git_unstage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
+    crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch)
 }
 
 /// Discard changes to a single file. Untracked files are deleted; tracked
@@ -4380,10 +4503,7 @@ pub async fn workspace_manifest_write(
             "WORKSPACE_MANIFEST_UNAVAILABLE",
         ));
     };
-    match service
-        .write(&project_id, based_revision, manifest)
-        .await
-    {
+    match service.write(&project_id, based_revision, manifest).await {
         Ok(outcome) => {
             // Boundary log emits project_id + revision + update_identity —
             // never the topology or claim. The service already logged it.
@@ -4477,13 +4597,17 @@ mod tests {
             project_id: Some("p-1".to_string()),
             cwd: "/work".to_string(),
             title: Some("Chat".to_string()),
+            title_source: None,
             created_at: 10,
             last_activity_at: 20,
             status: crate::acp::PersistedSessionStatus::Active,
             message_count: 3,
             tool_count: 1,
             last_seq: 5,
+            discovered: false,
             resume_eligible: true,
+            worktree_path: None,
+            worktree_branch: None,
         };
         let desktop = host_entry_to_desktop(entry);
         assert_eq!(desktop.id, "s-1");
@@ -4508,13 +4632,17 @@ mod tests {
             project_id: None,
             cwd: "/w".to_string(),
             title: None,
+            title_source: None,
             created_at: 1,
             last_activity_at: 2,
             status: crate::acp::PersistedSessionStatus::Error,
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
             resume_eligible: false,
+            worktree_path: None,
+            worktree_branch: None,
         };
         let desktop = host_entry_to_desktop(bare);
         assert_eq!(desktop.agent_id, "");
@@ -4524,7 +4652,10 @@ mod tests {
         );
         assert_eq!(desktop.title, "Untitled Chat");
         assert_eq!(desktop.project_id, "");
-        assert!(matches!(desktop.status, crate::acp::ChatHistoryStatus::Error));
+        assert!(matches!(
+            desktop.status,
+            crate::acp::ChatHistoryStatus::Error
+        ));
     }
 
     #[test]
@@ -4772,3 +4903,145 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod remote_sync_mcp_registry_tests {
+    use super::sync_mcp_registry_to_project_file;
+    use crate::web::mcp_servers_api::registry_path;
+    use crate::web::{ProjectRegistry, ProjectSummary};
+    use serde_json::json;
+    use std::path::Path;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Serializes tests that mutate `TERMUL_PROJECT_ROOT` (process-global env).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "termul-mcp-sync-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn registry_with_default(project_root: &Path) -> ProjectRegistry {
+        let reg = ProjectRegistry::new();
+        let project = ProjectSummary {
+            id: "p1".to_string(),
+            name: "P".to_string(),
+            color: "blue".to_string(),
+            path: Some(project_root.to_string_lossy().into_owned()),
+            is_archived: false,
+            is_default: false,
+        };
+        reg.set(vec![project], Some("p1".to_string()));
+        reg
+    }
+
+    #[tokio::test]
+    async fn writes_registry_to_project_mcp_servers_file() {
+        let dir = temp_dir("write");
+        let reg = registry_with_default(&dir);
+        let registry = json!([
+            {"id":"one","type":"stdio","name":"fs","command":"npx","enabled":true}
+        ]);
+
+        let result = sync_mcp_registry_to_project_file(&reg, registry).await;
+        assert!(result.success, "expected success, got {:?}", result.error);
+
+        // The sync must write the exact file the web `GET /mcp-servers` route
+        // reads (`{project_root}/.termul/mcp-servers.json`).
+        let file = registry_path(&dir);
+        let bytes = std::fs::read(&file).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value.as_array().map(Vec::len), Some(1));
+        assert_eq!(value[0]["name"], "fs");
+        assert_eq!(value[0]["command"], "npx");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn overwrites_previous_registry_atomically() {
+        let dir = temp_dir("overwrite");
+        let reg = registry_with_default(&dir);
+
+        // First write — one entry.
+        let one = json!([{"id":"a","type":"stdio","name":"a","command":"x","enabled":true}]);
+        let r1 = sync_mcp_registry_to_project_file(&reg, one).await;
+        assert!(r1.success, "first write failed: {:?}", r1.error);
+
+        // Second write — two entries. Must fully replace (not append).
+        let two = json!([
+            {"id":"b","type":"stdio","name":"b","command":"y","enabled":true},
+            {"id":"c","type":"stdio","name":"c","command":"z","enabled":false}
+        ]);
+        let r2 = sync_mcp_registry_to_project_file(&reg, two).await;
+        assert!(r2.success, "second write failed: {:?}", r2.error);
+
+        let file = registry_path(&dir);
+        let bytes = std::fs::read(&file).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let entries = value.as_array().unwrap();
+        assert_eq!(entries.len(), 2, "registry must be replaced, not appended");
+        assert_eq!(entries[0]["id"], "b");
+        assert_eq!(entries[1]["id"], "c");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rejects_non_array_payload_without_writing() {
+        let dir = temp_dir("reject");
+        let reg = registry_with_default(&dir);
+        let file = registry_path(&dir);
+        assert!(!file.exists(), "precondition: no file yet");
+
+        let result = sync_mcp_registry_to_project_file(&reg, json!({})).await;
+        assert!(!result.success);
+        assert_eq!(result.code.as_deref(), Some("MCP_REGISTRY_INVALID"));
+        assert!(!file.exists(), "non-array must not write a file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn falls_back_to_default_project_root_when_registry_has_no_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = temp_dir("fallback");
+        // Point TERMUL_PROJECT_ROOT at the temp dir so the fallback path
+        // resolves there instead of the real home directory.
+        let prev = std::env::var_os("TERMUL_PROJECT_ROOT");
+        std::env::set_var("TERMUL_PROJECT_ROOT", &dir);
+
+        let reg = ProjectRegistry::new(); // no default project set
+        let registry = json!([
+            {"id":"fb","type":"stdio","name":"fallback","command":"node","enabled":true}
+        ]);
+
+        let result = sync_mcp_registry_to_project_file(&reg, registry).await;
+        assert!(
+            result.success,
+            "fallback should succeed, got {:?}",
+            result.error
+        );
+
+        let file = registry_path(&dir);
+        let bytes = std::fs::read(&file).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value[0]["name"], "fallback");
+
+        // Restore the env var.
+        match prev {
+            Some(v) => std::env::set_var("TERMUL_PROJECT_ROOT", v),
+            None => std::env::remove_var("TERMUL_PROJECT_ROOT"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

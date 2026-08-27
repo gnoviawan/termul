@@ -46,6 +46,7 @@ import {
   loadSessionPayload,
   markSessionPayloadPinned,
   maxPayloadSeq,
+  normalizeCwdForScope,
   PERSISTED_TOOL_CALL_BYTE_BUDGET,
   PERSISTED_TOOL_CALLS_LIMIT,
   queueSessionPayloadDelete,
@@ -117,7 +118,9 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('agent', 'hi'), msg('user', 'Refactor auth')], 'fallback')).toBe(
       'Refactor auth'
     )
-    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(40)}…`)
+    expect(deriveTitle([msg('user', 'x'.repeat(60))], 'fallback')).toBe(`${'x'.repeat(48)}…`)
+    expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
+    expect(deriveTitle([msg('user', 'First line\nSecond line')], 'fallback')).toBe('First line')
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
   })
 
@@ -144,6 +147,114 @@ describe('pure history helpers', () => {
       'other-cwd'
     ])
     expect(scopeSessionIndex(entries, '', '/a')).toEqual([])
+  })
+
+  it('scopes with worktree-inclusive reachability from the root view', () => {
+    // Root view (activeWorktreeId=null): activeCwd is the project root. The
+    // sidebar must list root-cwd sessions AND the project's worktree-cwd
+    // sessions so a worktree chat stays reachable without a restart.
+    const root = entry('root', { cwd: '/project' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const otherProjectWt = entry('other-wt', {
+      projectId: 'project-2',
+      cwd: '/project/.termul/worktrees/wt'
+    })
+    const entries = [root, wtChat, otherProjectWt]
+
+    expect(
+      scopeSessionIndex(entries, 'project-1', '/project', ['/project/.termul/worktrees/wt']).map(
+        ({ id }) => id
+      )
+    ).toEqual(['root', 'wt-chat'])
+  })
+
+  it('keeps the active worktree session visible while it is active', () => {
+    // activeCwd is the worktree path: exact-cwd match returns the worktree
+    // chat; the root-cwd chat is not in the worktreePath set so it is hidden,
+    // matching the prior scoped-to-active-cwd behavior.
+    const root = entry('root', { cwd: '/project' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const entries = [root, wtChat]
+
+    expect(
+      scopeSessionIndex(entries, 'project-1', '/project/.termul/worktrees/wt', [
+        '/project/.termul/worktrees/wt'
+      ]).map(({ id }) => id)
+    ).toEqual(['wt-chat'])
+  })
+
+  it('does not surface another project worktree cwd and still falls back when empty', () => {
+    // A worktree path of a DIFFERENT project must not leak into the active
+    // project's scoping; and the worktree-inclusive set never duplicates an
+    // entry already matched by exact-cwd (filter, not concat).
+    const root = entry('root', { cwd: '/project' })
+    const wtChat = entry('wt-chat', { cwd: '/project/.termul/worktrees/wt' })
+    const foreignWt = entry('foreign', {
+      projectId: 'project-2',
+      cwd: '/other/.termul/worktrees/x'
+    })
+    const entries = [root, wtChat, foreignWt]
+
+    // Foreign worktree path is not in the active project's worktreePaths.
+    expect(
+      scopeSessionIndex(entries, 'project-1', '/project', ['/project/.termul/worktrees/wt']).map(
+        ({ id }) => id
+      )
+    ).toEqual(['root', 'wt-chat'])
+
+    // projectId-only fallback when the scoped set (exact + worktree) is empty.
+    expect(
+      scopeSessionIndex(entries, 'project-2', '/nowhere', ['/project/.termul/worktrees/wt']).map(
+        ({ id }) => id
+      )
+    ).toEqual(['foreign'])
+  })
+
+  it('normalizes Windows verbatim-prefix + separator forms before scoping', () => {
+    // Real runtime shapes on Windows: the host persists session cwds via Rust
+    // `Path::canonicalize` (verbatim `\\?\` prefix, backslashes), while the
+    // project store's worktree paths come from `worktreeApi.list` (forward
+    // slashes, no prefix). A raw `===`/`Set.has` would never equate them and
+    // the worktree chat would be hidden from the root view. Root sessions also
+    // appear in BOTH forms (471 unprefixed + 94 prefixed in real data).
+    const rootUnprefixed = entry('root-unprefixed', { cwd: 'E:\\project' })
+    const rootPrefixed = entry('root-prefixed', { cwd: '\\\\?\\E:\\project' })
+    const wtChat = entry('wt-chat', { cwd: '\\\\?\\E:\\project\\.termul\\worktrees\\wt' })
+    const entries = [rootUnprefixed, rootPrefixed, wtChat]
+
+    // Root view: activeCwd is the project root (store form, backslashes);
+    // worktreePaths is the store form (forward slashes, no prefix). Both root
+    // forms AND the worktree chat must be listed.
+    expect(
+      scopeSessionIndex(entries, 'project-1', 'E:\\project', ['E:/project/.termul/worktrees/wt'])
+        .map(({ id }) => id)
+        .sort()
+    ).toEqual(['root-prefixed', 'root-unprefixed', 'wt-chat'])
+
+    // Active-worktree view: activeCwd is the store worktree path (forward
+    // slashes); the prefixed-backslash session cwd must still match exactly.
+    expect(
+      scopeSessionIndex(entries, 'project-1', 'E:/project/.termul/worktrees/wt', [
+        'E:/project/.termul/worktrees/wt'
+      ]).map(({ id }) => id)
+    ).toEqual(['wt-chat'])
+  })
+
+  it('normalizes extended UNC verbatim prefix to match standard UNC paths', () => {
+    // Windows extended UNC verbatim prefix `\\?\UNC\server\share\…` and the
+    // standard UNC `\\server\share\…` must produce the same scope value so a
+    // UNC-rooted worktree chat is reachable regardless of which form the host
+    // canonicalized the cwd into.
+    const extended = '\\\\?\\UNC\\server\\share\\wt'
+    const standard = '\\\\server\\share\\wt'
+    expect(normalizeCwdForScope(extended)).toBe(normalizeCwdForScope(standard))
+
+    // Scoping matches an extended-UNC session cwd against a standard-UNC
+    // active cwd / worktree path from the root view.
+    const wtChat = entry('unc-wt', { cwd: extended })
+    expect(
+      scopeSessionIndex([wtChat], 'project-1', standard, [standard]).map(({ id }) => id)
+    ).toEqual(['unc-wt'])
   })
 
   it('preserves the existing browser summary wire shape', () => {
@@ -367,11 +478,16 @@ describe('provider routing', () => {
         messageCount: 3,
         toolCount: 1,
         lastSeq: 7,
+        discovered: true,
         resumeEligible: true
       }
     ])
     await expect(loadSessionIndex()).resolves.toEqual([
-      expect.objectContaining({ id: 'server-1', agentConfigId: 'cfg-server' })
+      expect.objectContaining({
+        id: 'server-1',
+        agentConfigId: 'cfg-server',
+        discovered: true
+      })
     ])
     expect(mockHistoryApi.list).not.toHaveBeenCalled()
 
@@ -635,6 +751,34 @@ describe('serialized save/delete/close barriers', () => {
     await flush()
     expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
     expect(flushed).toBe(true)
+  })
+
+  it('dedupes concurrent flushSessionHistory calls to a single backend flush', async () => {
+    // beforeunload + pagehide + closeAppWithPersistenceFlush can all fire on
+    // close; without memoization they would race 3× concurrent backend
+    // acp_history_flush calls. All three callers must await the SAME in-flight
+    // promise so exactly one backend flush is invoked.
+    let releaseFlush!: () => void
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve
+    })
+    mockHistoryApi.flush.mockReturnValue(flushGate)
+
+    const first = flushSessionHistory()
+    const second = flushSessionHistory()
+    const third = flushSessionHistory()
+    await flush()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
+
+    releaseFlush()
+    await Promise.all([first, second, third])
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(1)
+
+    // After the in-flight promise settles, a fresh flushSessionHistory can
+    // invoke the backend again (the memo is cleared, not pinned forever).
+    mockHistoryApi.flush.mockResolvedValue(undefined)
+    await flushSessionHistory()
+    expect(mockHistoryApi.flush).toHaveBeenCalledTimes(2)
   })
 
   it('serializes operations so a queued stale save lands before delete', async () => {

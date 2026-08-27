@@ -10,11 +10,12 @@ import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { extractSkillNames } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
@@ -79,7 +80,11 @@ export function AgentChatPanel({
   // Available skills (with paths) so retry can re-frame the wire from the
   // token names in the last user message (skill paths are not persisted with
   // the message — see the spec's Never: no new ContentBlock type).
-  const { skills: availableSkills } = useAgentSkills(session?.cwd)
+  // Skills live at {project.path}/.agents/skills/ which is gitignored and
+  // excluded from worktree symlinks, so resolve against the main project root
+  // — not session.cwd which may be a worktree path with no .agents/skills/.
+  const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
+  const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
   const imageCapable = useAcpStore((s) =>
     session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
   )
@@ -90,6 +95,10 @@ export function AgentChatPanel({
   )
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
   const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
+  const hasFileChanges = useMemo(
+    () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
+    [toolCalls]
+  )
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
   // The oldest pending permission for THIS session (resolve one to reveal the next).
   const pendingPermission = useAcpStore(
@@ -448,7 +457,7 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected.</span>
+            <span>Chat disconnected (read-only).</span>
             <button
               type="button"
               onClick={() => {
@@ -484,7 +493,7 @@ export function AgentChatPanel({
         onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
-      <PlanPanel entries={plan} />
+      <PlanPanel key={`plan-${session.id}`} entries={plan} />
       <ChatMessageList
         items={timeline}
         sessionId={session.id}
@@ -497,27 +506,32 @@ export function AgentChatPanel({
       {pendingQuestion && !isClosed ? (
         <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
       ) : (
-        <ChatInputBar
-          session={session}
-          busy={session.activeTurn}
-          disabled={isClosed}
-          imageCapable={imageCapable}
-          embedCapable={embedCapable}
-          onSend={handleSend}
-          onSendBlocks={handleSendBlocks}
-          onCancel={handleCancel}
-          queue={promptQueue}
-          onRemoveQueued={handleRemoveQueued}
-          onSendQueuedNow={handleSendQueuedNow}
-          commands={commands}
-          configOptions={session.configOptions}
-          modes={session.modes}
-          onSetConfig={handleSetConfig}
-          onSetMode={handleSetMode}
-          onSetModel={handleSetModel}
-          seedText={seed?.text}
-          seedNonce={seed?.nonce}
-        />
+        <>
+          <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
+          <ChatInputBar
+            session={session}
+            projectRoot={skillsProjectRoot}
+            busy={session.activeTurn}
+            disabled={isClosed}
+            imageCapable={imageCapable}
+            embedCapable={embedCapable}
+            onSend={handleSend}
+            onSendBlocks={handleSendBlocks}
+            onCancel={handleCancel}
+            queue={promptQueue}
+            onRemoveQueued={handleRemoveQueued}
+            onSendQueuedNow={handleSendQueuedNow}
+            commands={commands}
+            configOptions={session.configOptions}
+            modes={session.modes}
+            onSetConfig={handleSetConfig}
+            onSetMode={handleSetMode}
+            onSetModel={handleSetModel}
+            seedText={seed?.text}
+            seedNonce={seed?.nonce}
+            compactTop={hasFileChanges}
+          />
+        </>
       )}
       {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>

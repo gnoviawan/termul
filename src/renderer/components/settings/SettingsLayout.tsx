@@ -176,10 +176,10 @@ export function SettingsLayout({
   }
 
   return (
-    <div className="flex-1 flex min-h-0 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-60 flex-shrink-0 border-r border-border bg-card/50 flex flex-col">
-        <div className="p-3 border-b border-border">
+    <div className="flex flex-1 min-h-0 flex-col overflow-hidden md:flex-row">
+      {/* Sidebar — top bar on mobile, left sidebar on desktop */}
+      <aside className="flex flex-shrink-0 flex-col border-b border-border bg-card/50 md:w-60 md:border-b-0 md:border-r">
+        <div className="border-b border-border p-3 md:border-b">
           <div className="relative">
             <Search
               size={14}
@@ -191,14 +191,14 @@ export function SettingsLayout({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search settings..."
               aria-label="Search settings"
-              className="w-full bg-secondary/50 border border-border rounded-md pl-8 pr-8 py-1.5 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-8 text-sm text-foreground outline-none transition-shadow focus:ring-2 focus:ring-primary focus:border-transparent"
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
                 aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
               >
                 <X size={14} />
               </button>
@@ -206,11 +206,14 @@ export function SettingsLayout({
           </div>
         </div>
 
-        <nav aria-label="Settings categories" className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <nav
+          aria-label="Settings categories"
+          className="flex flex-1 space-y-0.5 overflow-x-auto p-2 md:flex-col md:overflow-y-auto"
+        >
           {isSearching ? (
             results.length === 0 ? (
               <p className="px-3 py-4 text-xs text-muted-foreground">
-                No settings match “{query.trim()}”.
+                No settings match "{query.trim()}".
               </p>
             ) : (
               results.map((result) => (
@@ -218,7 +221,7 @@ export function SettingsLayout({
                   key={`${result.categoryId}-${result.label}`}
                   type="button"
                   onClick={() => scrollToSection(result.categoryId, result.anchorId)}
-                  className="w-full flex flex-col items-start gap-0.5 text-left rounded-md px-3 py-2 text-sm text-foreground hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-colors"
+                  className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 >
                   <span className="font-medium">{result.label}</span>
                   <span className="text-2xs text-muted-foreground">
@@ -239,14 +242,14 @@ export function SettingsLayout({
                   onClick={() => scrollToSection(category.id)}
                   onKeyDown={(e) => handleCategoryKeyDown(e, index)}
                   className={cn(
-                    'w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                    'flex flex-shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary md:w-full',
                     isActive
-                      ? 'bg-primary/10 text-primary font-medium'
+                      ? 'bg-primary/10 font-medium text-primary'
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                   )}
                 >
                   {category.icon && (
-                    <span className="flex-shrink-0 flex items-center">{category.icon}</span>
+                    <span className="flex flex-shrink-0 items-center">{category.icon}</span>
                   )}
                   <span className="truncate">{category.label}</span>
                 </button>
@@ -255,12 +258,12 @@ export function SettingsLayout({
           )}
         </nav>
 
-        {sidebarFooter && <div className="p-2 border-t border-border">{sidebarFooter}</div>}
+        {sidebarFooter && <div className="border-t border-border p-2">{sidebarFooter}</div>}
       </aside>
 
       {/* Content */}
-      <div ref={contentRef} className="flex-1 overflow-y-auto p-6 pb-32 min-w-0">
-        <div className="max-w-4xl mx-auto space-y-8">{children}</div>
+      <div ref={contentRef} className="min-w-0 flex-1 overflow-y-auto p-6 pb-32">
+        <div className="mx-auto max-w-4xl space-y-8">{children}</div>
       </div>
     </div>
   )

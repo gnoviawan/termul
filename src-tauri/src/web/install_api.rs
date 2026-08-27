@@ -54,7 +54,7 @@ pub async fn install(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer) {
+    if let Some(forbidden) = check_local_only::<InstallOutcome>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/acp/install") {
         return (StatusCode::OK, Json(forbidden));
     }
     let req: InstallRequest = match serde_json::from_slice(&body) {
@@ -62,7 +62,7 @@ pub async fn install(
         Err(error) => {
             warn!(
                 target: "termul::web::install_api",
-                session = crate::logging::session_id(),
+                session = crate::logging::run_id(),
                 error = %error,
                 "install: payload validation failed (deny_unknown_fields or malformed JSON)"
             );
@@ -88,7 +88,7 @@ pub async fn install(
         Ok(outcome) => {
             info!(
                 target: "termul::web::install_api",
-                session = crate::logging::session_id(),
+                session = crate::logging::run_id(),
                 agent = %req.agent_id,
                 "install: success"
             );
@@ -98,7 +98,7 @@ pub async fn install(
             let code = error.code();
             warn!(
                 target: "termul::web::install_api",
-                session = crate::logging::session_id(),
+                session = crate::logging::run_id(),
                 agent = %req.agent_id,
                 code,
                 msg = %error.message,
@@ -176,44 +176,46 @@ mod tests {
             .await
             .expect("open install store");
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: Some(store),
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: Some(store),
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState {
-            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-        }
+        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -267,6 +269,45 @@ mod tests {
         let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
         assert!(!body.success);
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED past the
+    /// loopback guard on `/acp/install` (proven by the request reaching
+    /// validation, not `FORBIDDEN`). Mirrors the refusal test with the flag on.
+    #[tokio::test]
+    async fn install_admits_non_loopback_peer_when_opt_in() {
+        let dir = TempDir::new("install-opt-in");
+        let mut state = state_with_store(dir.path()).await;
+        state.allow_remote_writes = true;
+        // An over-serialized body carrying an excluded field surfaces as
+        // VALIDATION_ERROR ONLY if the guard admitted the peer — a refused
+        // peer would return FORBIDDEN before any validation.
+        let resp = test_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/acp/install")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
+                    .body(Body::from(
+                        br#"{"agentId":"opencode","extra":"junk"}"#.to_vec(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<InstallOutcome> = body_as_json(resp.into_body()).await;
+        assert!(
+            body.success || body.code.as_deref() != Some("FORBIDDEN"),
+            "opt-in must admit non-loopback peer past the guard (got code={:?})",
+            body.code
+        );
+        assert_eq!(
+            body.code.as_deref(),
+            Some(code::VALIDATION_ERROR),
+            "admitted peer reaches validation, not the guard"
+        );
     }
 
     // ---- deny_unknown_fields rejection ----

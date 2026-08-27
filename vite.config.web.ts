@@ -117,7 +117,47 @@ export default defineConfig({
     outDir: 'dist-web',
     emptyOutDir: true,
     rolldownOptions: {
-      input: path.resolve(__dirname, 'index.html')
+      input: path.resolve(__dirname, 'index.html'),
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /node_modules[\\/](react|react-dom|scheduler)\//,
+              priority: 30
+            },
+            {
+              name: 'radix-vendor',
+              test: /node_modules[\\/]@radix-ui\//,
+              priority: 25
+            },
+            {
+              name: 'framer-vendor',
+              test: /node_modules[\\/]framer-motion\//,
+              priority: 20
+            },
+            {
+              name: 'entry-vendor',
+              test: /node_modules[\\/]/,
+              tags: ['$initial'],
+              priority: 15
+            },
+            {
+              // App-internal shared modules (stores/hooks/lib) that are in the
+              // initial/entry chunk peel into a sibling chunk loaded in parallel
+              // with the entry — same codeSplitting technique as `entry-vendor`,
+              // applied to app-internal shared code so the entry chunk holds only
+              // the UI shell + lazy wrappers. NOT lazy-loading (loads
+              // synchronously); the UI shell (App/WorkspaceLayout/PaneContent/
+              // AgentLauncher) stays in the entry per the spec's first-paint intent.
+              name: 'app-shared',
+              test: /src[\\/]renderer[\\/](stores|hooks|lib)[\\/]/,
+              tags: ['$initial'],
+              priority: 12
+            }
+          ]
+        }
+      }
     },
     target: 'esnext'
   }

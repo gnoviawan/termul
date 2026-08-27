@@ -167,6 +167,7 @@ describe('acp-api web path (injected WS transport)', () => {
       resumeSession: vi.fn(),
       closeSession: vi.fn(),
       listSessions: vi.fn(),
+      registerDiscoveredSession: vi.fn(),
       sendPrompt,
       sendPromptBlocks: vi.fn(),
       cancelPrompt: vi.fn(),

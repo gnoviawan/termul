@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { ActivityRail } from './ActivityRail'
 
@@ -50,6 +51,7 @@ describe('ActivityRail', () => {
       mockUpdatePanelVisibility
     )
     useSSHPanelStore.setState({ isVisible: true })
+    useSettingsModalStore.setState({ view: null })
   })
 
   function renderRail() {
@@ -66,13 +68,12 @@ describe('ActivityRail', () => {
     expect(screen.queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /file explorer/i })).not.toBeInTheDocument()
   })
-
-  it('navigates to preferences on click', () => {
+  it('opens the app preferences modal on click', () => {
     renderRail()
 
     fireEvent.click(screen.getByRole('button', { name: 'Open preferences' }))
 
-    expect(mockNavigate).toHaveBeenCalledWith('/preferences')
+    expect(useSettingsModalStore.getState().view).toBe('app')
   })
 
   it('exposes the keyboard shortcuts trigger', () => {

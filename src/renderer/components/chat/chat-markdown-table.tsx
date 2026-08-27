@@ -60,7 +60,12 @@ function TableFullscreen({
 
   return (
     <>
-      <IconActionButton label="View fullscreen" onClick={() => setOpen(true)} disabled={disabled}>
+      <IconActionButton
+        label="View fullscreen"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        size="sm"
+      >
         <Maximize2 />
       </IconActionButton>
       {open
@@ -84,7 +89,7 @@ function TableFullscreen({
                 role="presentation"
               >
                 <div className="flex items-center justify-end p-4">
-                  <IconActionGroup className="gap-0.5 px-1 py-0.5">
+                  <IconActionGroup className="gap-0.5" dense>
                     {showCopy ? (
                       <TableCopyDropdown>
                         <Copy />
@@ -95,7 +100,7 @@ function TableFullscreen({
                         <Download />
                       </TableDownloadDropdown>
                     ) : null}
-                    <IconActionButton label="Exit fullscreen" onClick={close}>
+                    <IconActionButton label="Exit fullscreen" onClick={close} size="sm">
                       <X />
                     </IconActionButton>
                   </IconActionGroup>
@@ -135,7 +140,7 @@ function ChatMarkdownTableComponent({
 
   return (
     <div
-      className="my-2 min-w-0 overflow-hidden rounded-md border border-border/50"
+      className="my-1 min-w-0 overflow-hidden rounded-md border border-border/40"
       data-streamdown="table-wrapper"
     >
       {toolbar ? (
@@ -143,7 +148,7 @@ function ChatMarkdownTableComponent({
           className="flex justify-end border-b border-border/40 px-1 py-0.5"
           data-streamdown="table-toolbar"
         >
-          <IconActionGroup className="gap-0.5 px-1 py-0.5">
+          <IconActionGroup className="gap-0.5" dense>
             {showCopy ? (
               <TableCopyDropdown>
                 <Copy />

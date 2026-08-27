@@ -15,14 +15,14 @@ sections_completed:
     'codebase_discovery_logging',
     'anti_patterns',
   ]
-status: 'complete'
+status: 'legacy_reference'
 rule_count: 76
-optimized_for_llm: true
+optimized_for_llm: false
 ---
 
-# Project Context for AI Agents
+# Legacy Project Context Reference
 
-_This file contains critical rules and patterns that AI agents must follow when implementing code in this project. Focus on unobvious details that agents might otherwise miss. Logging is mandatory when adding a feature; ADRs are recommended (not mandatory). For the dual-target (desktop ↔ termul-server) architecture and responsive web/mobile UI, see the Remote Parity and UI/Responsive sections._
+> Legacy/reference snapshot only. This document may contain stale versions, paths, and implementation details. Do not treat it as agent instructions or required preflight. The canonical repository instructions are in [`../AGENTS.md`](../AGENTS.md); verify technical facts against current source, manifests, and CI configuration.
 
 ---
 
@@ -174,32 +174,6 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
 
 ---
 
-## Usage Guidelines
+## Legacy status
 
-### Preflight Checklist
-
-1. Read this file before implementing any code.
-2. Decide whether the change belongs in `src/renderer/`, `src/shared/`, or `src-tauri/` (and if `src-tauri/`, whether it affects the shared `web/` module or `server_main.rs`).
-3. Respect the Tauri-first + shared-live architecture; do not reintroduce Electron-era patterns.
-4. Use the codebase-memory MCP graph (`search_graph` → `trace_path` → `get_code_snippet`) to understand existing code before writing.
-5. Keep native/plugin access behind `src/renderer/lib/tauri-*.ts` facades (Biome-enforced); add web-mode fallbacks for new facades.
-6. Check desktop↔`termul-server` parity: update the Tauri command, the `web/*` route, and the renderer facade together; mind the kill-all split (`serve_router` vs `serve`).
-7. Make UI responsive/mobile-friendly and `isTauriContext()`-gated; don't assume native chrome.
-8. Follow strict TypeScript + Biome rules (no semicolons, single quotes, no trailing commas, 2-space, lineWidth 100).
-9. Add colocated `*.test.ts` / `*.test.tsx` (Vitest + jsdom); for server changes, test the route + `IpcResult` contract.
-10. Add structured logs for any new feature/flow — Rust desktop via the `log` facade, `termul-server` via `tracing`, renderer via `src/renderer/lib/log-api.ts` (not raw `console.*`). Log failures with context; never swallow errors silently. (ADRs recommended for significant architectural changes — `docs/adr/`.)
-11. Run `bun run lint`, `bun run typecheck`, `bun run test`, and `cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test` before considering the change complete.
-
-**For AI Agents:**
-
-- Read this file before implementing any code. Follow all rules exactly as documented.
-- Prefer the more restrictive option when in doubt.
-- Use the codebase-memory MCP graph for discovery; update this file if new patterns emerge.
-
-**For Humans:**
-
-- Keep this file lean and focused on agent needs. Update when the stack or architecture changes.
-- Review quarterly for outdated rules. Remove rules that become obvious over time.
-- Re-index the codebase-memory MCP graph when structure changes materially; discover the project key via `list_projects` / `index_status` (it is machine-specific).
-
-Last Updated: 2026-07-19
+This file is retained for historical architecture and migration context. It is not an instruction source and is not maintained as a current stack, CI, or repository-policy inventory. Use `../AGENTS.md` for current agent instructions and `index.md` to locate deeper documentation.

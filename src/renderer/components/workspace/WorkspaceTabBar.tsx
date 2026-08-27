@@ -1,20 +1,17 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import {
-  Edit2,
   GitBranch,
   Globe,
   History,
   Loader2,
   Maximize2,
   Minimize2,
-  Skull,
   Terminal as TerminalIcon,
   X as XIcon
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
-import { ContextMenu } from '@/components/ContextMenu'
 import { AgentBadge } from '@/components/chat/AgentBadge'
 import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
 import { isAgentConnected } from '@/components/chat/is-agent-connected'
@@ -24,7 +21,6 @@ import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
-import { useAnnotationStore } from '@/stores/annotation-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
@@ -34,6 +30,7 @@ import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace
 import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
+import { TabContextMenu } from './tab-context-menu'
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
@@ -78,10 +75,6 @@ function TerminalTabInline({
 }: TerminalTabInlineProps): React.JSX.Element {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(terminal.name)
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -109,8 +102,18 @@ function TerminalTabInline({
     setIsEditing(false)
   }, [terminal.name])
 
+  const handleRenameFromMenu = useCallback(() => {
+    setEditName(terminal.name)
+    setIsEditing(true)
+  }, [terminal.name])
+
   return (
-    <>
+    <TabContextMenu
+      kind="terminal"
+      onClose={onClose}
+      onRename={handleRenameFromMenu}
+      isClosing={isClosing}
+    >
       <div
         draggable={!isEditing}
         onDragStart={onDragStart}
@@ -125,11 +128,6 @@ function TerminalTabInline({
           if (!isClosing) {
             onClose()
           }
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setContextMenu({ x: e.clientX, y: e.clientY })
         }}
         className={cn(
           'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent',
@@ -196,44 +194,7 @@ function TerminalTabInline({
           {isClosing ? <Loader2 size={11} className="animate-spin" /> : <XIcon size={11} />}
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: 'Rename',
-              icon: <Edit2 size={12} />,
-              onClick: () => {
-                setEditName(terminal.name)
-                setIsEditing(true)
-              }
-            },
-            {
-              label: 'Close',
-              icon: <XIcon size={12} />,
-              onClick: () => {
-                if (!isClosing) {
-                  onClose()
-                }
-              }
-            },
-            {
-              label: 'Kill Process',
-              icon: <Skull size={12} />,
-              onClick: () => {
-                if (!isClosing) {
-                  onClose()
-                }
-              },
-              variant: 'danger'
-            }
-          ]}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }
 
@@ -340,10 +301,6 @@ function BrowserTabInline({
   onDragLeave,
   onDrop
 }: BrowserTabInlineProps): React.JSX.Element {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
   const browserTab = useBrowserSessionStore((state) => state.getTab(tab.browserTabId))
   const label = (() => {
     if (!browserTab) return 'Browser'
@@ -360,7 +317,7 @@ function BrowserTabInline({
   })()
 
   return (
-    <>
+    <TabContextMenu kind="browser" onClose={onClose}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -373,11 +330,6 @@ function BrowserTabInline({
           e.preventDefault()
           e.stopPropagation()
           onClose()
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setContextMenu({ x: e.clientX, y: e.clientY })
         }}
         className={cn(
           'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent',
@@ -409,22 +361,7 @@ function BrowserTabInline({
           <XIcon size={11} />
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: 'Close',
-              icon: <XIcon size={12} />,
-              onClick: onClose
-            }
-          ]}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }
 
@@ -453,17 +390,12 @@ function GitTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
-
   const totalChanges = useGitStatusStore(
     (state: GitStatusState) => (state.statuses[tab.cwd] || []).length
   )
 
   return (
-    <>
+    <TabContextMenu kind="git" onClose={onClose}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -471,10 +403,6 @@ function GitTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setContextMenu({ x: e.clientX, y: e.clientY })
-        }}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
@@ -509,22 +437,7 @@ function GitTabInline({
           <XIcon size={10} />
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: 'Close',
-              icon: <XIcon size={12} />,
-              onClick: onClose
-            }
-          ]}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }
 
@@ -553,13 +466,8 @@ function GitHistoryTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
-
   return (
-    <>
+    <TabContextMenu kind="git-history" onClose={onClose}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -567,10 +475,6 @@ function GitHistoryTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setContextMenu({ x: e.clientX, y: e.clientY })
-        }}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
           isActive
@@ -593,22 +497,7 @@ function GitHistoryTabInline({
           <XIcon size={10} />
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: 'Close',
-              icon: <XIcon size={12} />,
-              onClick: onClose
-            }
-          ]}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }
 
@@ -637,11 +526,6 @@ function AgentChatTabInline({
   onDragLeave: () => void
   onDrop: (e: React.DragEvent) => void
 }) {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number
-    y: number
-  } | null>(null)
-
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
@@ -659,7 +543,7 @@ function AgentChatTabInline({
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 
   return (
-    <>
+    <TabContextMenu kind="agent-chat" onClose={onClose}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -667,10 +551,6 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setContextMenu({ x: e.clientX, y: e.clientY })
-        }}
         aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
@@ -714,22 +594,7 @@ function AgentChatTabInline({
           <XIcon size={10} />
         </button>
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          items={[
-            {
-              label: 'Close',
-              icon: <XIcon size={12} />,
-              onClick: onClose
-            }
-          ]}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+    </TabContextMenu>
   )
 }
 
@@ -1140,7 +1005,6 @@ export function WorkspaceTabBar({
                       }}
                       onClose={() => {
                         useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-                        useAnnotationStore.getState().clearAnnotationsForTab(tab.browserTabId)
                         useWorkspaceStore.getState().closeTab(paneId, tab.id)
                       }}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}

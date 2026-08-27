@@ -1,13 +1,14 @@
-import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, Pencil, RotateCcw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, PenTool, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   browserTabGoBack,
   browserTabGoForward,
+  browserTabInjectAgentation,
   browserTabOpenDevtools,
   browserTabReload
 } from '@/lib/browser-api'
-import { cn } from '@/lib/utils'
+import { logFrontendError } from '@/lib/log-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserControlsProps {
@@ -18,9 +19,6 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
   const tabUrl = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url ?? '')
   const tabLoading = useBrowserSessionStore(
     (state) => state.tabs.get(browserTabId)?.loading ?? false
-  )
-  const tabAnnotationMode = useBrowserSessionStore(
-    (state) => state.tabs.get(browserTabId)?.annotationMode ?? false
   )
   const [inputUrl, setInputUrl] = useState(tabUrl || '')
 
@@ -50,10 +48,25 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
     [handleNavigate]
   )
 
-  const handleToggleAnnotationMode = useCallback(() => {
-    const currentMode = tabAnnotationMode
-    useBrowserSessionStore.getState().setAnnotationMode(browserTabId, !currentMode)
-  }, [browserTabId, tabAnnotationMode])
+  const handleInjectAgentation = useCallback(() => {
+    browserTabInjectAgentation(browserTabId)
+      .then((result) => {
+        if (!result.success) {
+          logFrontendError({
+            level: 'warn',
+            message: `Toolbar injection failed: ${result.error ?? 'unknown'} [${result.code ?? 'NO_CODE'}]`,
+            source: 'BrowserControls'
+          })
+        }
+      })
+      .catch((e) => {
+        logFrontendError({
+          level: 'warn',
+          message: `Toolbar injection error: ${e instanceof Error ? e.message : String(e)}`,
+          source: 'BrowserControls'
+        })
+      })
+  }, [browserTabId])
 
   if (!tabUrl) return <></>
 
@@ -97,38 +110,33 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
             placeholder="Enter URL..."
           />
         </div>
+        {!import.meta.env.PROD && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
+                className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Open debug console"
+                title="Debug Console"
+              >
+                <Bug size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Debug Console</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => browserTabOpenDevtools(browserTabId).catch(console.error)}
+              onClick={handleInjectAgentation}
               className="p-1.5 rounded shrink-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Open debug console"
-              title="Debug Console"
+              aria-label="Inject agentation toolbar"
+              title="Agentation Toolbar"
             >
-              <Bug size={14} />
+              <PenTool size={14} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Debug Console</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleToggleAnnotationMode}
-              aria-pressed={tabAnnotationMode}
-              className={cn(
-                'p-1.5 rounded shrink-0 transition-all motion-safe:transition-[background-color,color,transform,box-shadow] motion-safe:duration-150 motion-safe:hover:scale-110 motion-safe:active:scale-95',
-                tabAnnotationMode
-                  ? 'bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30 shadow-sm shadow-primary/20'
-                  : 'hover:bg-secondary text-muted-foreground hover:text-foreground'
-              )}
-              aria-label={tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
-            >
-              <Pencil size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {tabAnnotationMode ? 'Disable annotation mode' : 'Enable annotation mode'}
-          </TooltipContent>
+          <TooltipContent side="bottom">Agentation Toolbar</TooltipContent>
         </Tooltip>
       </div>
     </div>

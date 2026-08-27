@@ -8,7 +8,10 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-/// Resolve the default project-root boundary for the fs_api routes (PR-S4).
+/// Resolve the default project-root boundary for the routes that enforce it
+/// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
+/// intentionally unconfined (ADR-007); this boundary applies to the
+/// operation routes via `git_api::ensure_within_project_boundary`.
 ///
 /// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
 /// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
@@ -94,10 +97,10 @@ pub fn resolve_and_validate_project_root(raw: &Path) -> Result<PathBuf, String> 
     let canonical = raw
         .canonicalize()
         .map_err(|e| format!("project root '{}' is not accessible: {e}", raw.display()))?;
-    // 2) Must be a directory. A file is a valid fs target for the
-    //    boundary check, but it would make the fs_api routes useless
-    //    (`mkdir` cannot create children inside a file, `ls`/`browse`
-    //    cannot list a file), so fail fast at startup instead.
+    // 2) Must be a directory. The `/fs/*` routes default-navigation and the
+    //    `/git/*` containment both expect a directory root; a file would make
+    //    `mkdir` unable to create children, `ls`/`browse` unable to list, so
+    //    fail fast at startup instead.
     if !canonical.is_dir() {
         return Err(format!(
             "project root '{}' is not a directory",
@@ -159,11 +162,15 @@ pub struct ServerConfig {
     /// Last-subscriber disconnect grace before pending permissions are denied.
     /// The original per-ticket timeout continues running during this grace.
     pub permission_reconnect_grace_secs: u64,
-    /// PR-S4: project-root boundary enforced by the fs_api routes. Requests
-    /// whose canonicalized target path resolves outside this root are
-    /// refused with `code: "OUTSIDE_ROOT"` (or `PATH_TRAVERSAL` for explicit
-    /// `..` components). Defaults to the user's home directory when unset
-    /// (see [`default_project_root`]).
+    /// Project-root boundary for the routes that explicitly enforce it
+    /// (`/git/*`, `/skills`, `/search/content` via
+    /// `git_api::ensure_within_project_boundary` — refuses paths outside this
+    /// root with `code: "OUTSIDE_ROOT"`, or `PATH_TRAVERSAL` for explicit `..`
+    /// components). The `/fs/*` routes are intentionally NOT confined to this
+    /// root (ADR-007 breadth policy: the directory picker + editor navigate
+    /// outside the project); `/fs/*` writes reject only `..` traversal.
+    /// Defaults to the user's home directory when unset (see
+    /// [`default_project_root`]).
     pub project_root: PathBuf,
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
     /// standalone `termul-server` binary loads this at startup and seeds the
@@ -190,6 +197,24 @@ pub struct ServerConfig {
     /// reads this field; it constructs its own `AcpCatalogService` under
     /// `<app_data_dir>/acp-catalog`.
     pub acp_catalog_dir: Option<PathBuf>,
+    /// Issue #613: server-side generic key-value store file for the web
+    /// client (terminal layout, settings, editor state, command history,
+    /// snapshots, SSH profiles, …). `None` means "use
+    /// `<service_account_state_dir>/store.json`" — resolved at serve time in
+    /// `serve_router`, so the desktop shared-live path gets a durable store
+    /// too (no per-browser localStorage fallback).
+    pub store_file: Option<PathBuf>,
+    /// Operator opt-in: admit non-loopback peers on the loopback-guarded
+    /// write routes (`/fs/*` writes, `/git/*` writes, `/worktree/*` writes,
+    /// `/workspace/*` write+delete, `/log/frontend-error`,
+    /// `/projects/default`, `/acp/install`). Default `false` keeps the
+    /// CWE-306 loopback guard on for any `0.0.0.0` bind. Only the standalone
+    /// `termul-server` honors `--allow-remote-writes` /
+    /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
+    /// always sets this `false` (LAN clients remain view-only for
+    /// mutations). Gating on web auth is deliberately avoided — web auth is
+    /// a placeholder until Epic 2.
+    pub allow_remote_writes: bool,
 }
 
 impl ServerConfig {
@@ -267,7 +292,7 @@ impl ServerConfig {
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
-        let mut permission_reconnect_grace_secs: u64 = 15;
+        let mut permission_reconnect_grace_secs: u64 = 60;
         // PR-S4: when `--project-root` is absent, fall back to the env var or
         // the user's home directory via `default_project_root()`. The
         // resolved value is run through `resolve_and_validate_project_root`
@@ -290,6 +315,14 @@ impl ServerConfig {
         // CAP-6 / Story 8: acp-catalog root override. Same pattern as
         // `workspace_manifests_dir` — `None` means resolve at startup.
         let mut acp_catalog_dir: Option<PathBuf> = None;
+        // Issue #613: server-side generic key-value store file override.
+        // `None` means resolve `<service_account_state_dir>/store.json` at
+        // serve time (the desktop shared-live path never sets this).
+        let mut store_file: Option<PathBuf> = None;
+        // Operator opt-in for non-loopback fs/git/workspace write peers
+        // (CWE-306 guard relaxation). CLI flag wins over env; an
+        // unset/invalid env var stays `false` (lenient — no fatal startup).
+        let mut allow_remote_writes = false;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -391,8 +424,10 @@ impl ServerConfig {
                     // the path exists, is accessible, and is a directory at
                     // parse time so the server doesn't start successfully
                     // and only surface the error as a per-request
-                    // `OUTSIDE_ROOT` on every /fs/* call (hard to diagnose
-                    // post-mortem). The canonical absolute form is stored
+                    // `OUTSIDE_ROOT` on the containment-enforcing routes
+                    // (`/git/*`, `/skills`, `/search/content` — NOT `/fs/*`,
+                    // which is unconfined per ADR-007). Hard to diagnose
+                    // post-mortem. The canonical absolute form is stored
                     // so the boundary check is stable.
                     let validated = resolve_and_validate_project_root(Path::new(trimmed))
                         .map_err(ParseCliError::Message)?;
@@ -437,6 +472,23 @@ impl ServerConfig {
                         ));
                     }
                     acp_catalog_dir = Some(PathBuf::from(trimmed));
+                }
+                "--store-file" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --store-file".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --store-file '': must be a non-empty path".into(),
+                        ));
+                    }
+                    store_file = Some(PathBuf::from(trimmed));
+                }
+                "--allow-remote-writes" => {
+                    // Bare flag (no value). CLI wins over the env var; the
+                    // env is read below only when the flag is absent.
+                    allow_remote_writes = true;
                 }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
@@ -498,6 +550,32 @@ impl ServerConfig {
             }),
         };
 
+        // Issue #613: optional $TERMUL_STORE_FILE env default when
+        // --store-file is absent (mirrors the $TERMUL_PROJECTS_FILE env
+        // pattern). An unset/empty env var means "resolve the default at
+        // serve time".
+        let store_file = match store_file {
+            Some(p) => Some(p),
+            None => std::env::var("TERMUL_STORE_FILE").ok().and_then(|v| {
+                let t = v.trim();
+                (!t.is_empty()).then(|| PathBuf::from(t))
+            }),
+        };
+
+        // Operator opt-in env fallback: only consulted when the CLI flag
+        // was absent (CLI sets `allow_remote_writes = true` and wins). Only
+        // `"true"`/`"1"` (case-insensitive) enable; any other value
+        // (including a typo) stays `false` — lenient, no fatal startup.
+        if !allow_remote_writes {
+            allow_remote_writes = matches!(
+                std::env::var("TERMUL_SERVER_ALLOW_REMOTE_WRITES")
+                    .ok()
+                    .map(|v| v.trim().to_ascii_lowercase())
+                    .as_deref(),
+                Some("true") | Some("1")
+            );
+        }
+
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
                 "could not determine sessions directory: set --sessions-dir or $TERMUL_SESSIONS_DIR"
@@ -522,6 +600,8 @@ impl ServerConfig {
             sessions_dir: Some(sessions_dir),
             workspace_manifests_dir,
             acp_catalog_dir,
+            store_file,
+            allow_remote_writes,
         })
     }
 }
@@ -647,6 +727,8 @@ mod tests {
             sessions_dir: None,
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
+            store_file: None,
+            allow_remote_writes: false,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -664,6 +746,8 @@ mod tests {
             sessions_dir: None,
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
+            store_file: None,
+            allow_remote_writes: false,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -682,8 +766,8 @@ mod tests {
             "default permission-timeout is 60s (Story 1.7 / FR14)"
         );
         assert_eq!(
-            cfg.permission_reconnect_grace_secs, 15,
-            "default reconnect grace is 15s"
+            cfg.permission_reconnect_grace_secs, 60,
+            "default reconnect grace is 60s (CAP-4: mobile wake + reconnect chain)"
         );
         // PR-S4: project_root defaults to $HOME / $USERPROFILE when the env var
         // is unset. The CI hosts in this repo all set $HOME, so the resolved
@@ -859,6 +943,35 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn from_args_accepts_store_file() {
+        let cfg = ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"])
+            .expect("parse");
+        assert_eq!(
+            cfg.store_file,
+            Some(PathBuf::from("/var/lib/termul/store.json"))
+        );
+        // Other defaults stay intact.
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+    }
+
+    #[test]
+    fn from_args_missing_store_file_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--store-file"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_empty_store_file() {
+        assert!(matches!(
+            ServerConfig::from_args(["--store-file", ""]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
     // Patch 15: `service_account_state_dir` filters out empty env var values
     // so an empty `XDG_STATE_HOME` / `HOME` / `LOCALAPPDATA` does not produce
     // a relative `./termul` dir.
@@ -875,6 +988,8 @@ mod tests {
             sessions_dir: None,
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
+            store_file: None,
+            allow_remote_writes: false,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved
@@ -886,6 +1001,78 @@ mod tests {
             resolved.is_absolute(),
             "service_account_state_dir must resolve to an absolute path, got: {}",
             resolved.display()
+        );
+    }
+
+    // --- allow_remote_writes opt-in (CWE-306 guard relaxation) ---
+
+    // `from_args` reads `TERMUL_SERVER_ALLOW_REMOTE_WRITES` from the real
+    // process env. These env-mutating tests are NOT parallel-safe, so
+    // serialize them with a shared lock (mirrors `acp::host_mcp::child`'s
+    // `ENV_LOCK` pattern). The lock also protects `from_args_defaults_to_guarded`,
+    // which reads the same env var without mutating it — without the lock a
+    // sibling test's `set_var` can flip its assertion spuriously.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_remote_writes_env() {
+        std::env::remove_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES");
+    }
+
+    #[test]
+    fn from_args_defaults_to_guarded() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+        assert!(
+            !cfg.allow_remote_writes,
+            "default must keep the loopback write guard ON"
+        );
+    }
+
+    #[test]
+    fn from_args_flag_enables() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
+        assert!(cfg.allow_remote_writes, "--allow-remote-writes sets the flag");
+    }
+
+    #[test]
+    fn from_args_env_enables_true() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "true");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            cfg.allow_remote_writes,
+            "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true must enable"
+        );
+    }
+
+    #[test]
+    fn from_args_invalid_env_stays_guarded() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "yes");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            !cfg.allow_remote_writes,
+            "env value 'yes' must NOT enable (only 'true'/'1')"
+        );
+    }
+
+    #[test]
+    fn from_args_cli_wins_over_env_false() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_remote_writes_env();
+        std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "false");
+        let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
+        clear_remote_writes_env();
+        assert!(
+            cfg.allow_remote_writes,
+            "CLI --allow-remote-writes must win over env=false"
         );
     }
 }

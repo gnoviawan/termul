@@ -16,14 +16,21 @@ async function fixtureFile(root: string, relativePath: string, content = 'artifa
   return path
 }
 
-async function prepare(platform: string, paths: string[], root: string) {
+async function prepare(
+  platform: string,
+  paths: string[],
+  root: string,
+  options: { version?: string; tag?: string } = {}
+) {
+  const version = options.version ?? '1.2.3'
+  const tag = options.tag ?? 'v1.2.3'
   const artifactsPath = join(root, `${platform}-paths.json`)
   const outputPath = join(root, `${platform}-output`)
   await writeFile(artifactsPath, JSON.stringify(paths))
   const manifest = await preparePlatformArtifacts({
     platform,
-    version: '1.2.3',
-    tag: 'v1.2.3',
+    version,
+    tag,
     artifactsPath,
     outputPath
   })
@@ -79,6 +86,22 @@ describe('preparePlatformArtifacts', () => {
     expect(manifest.platforms['windows-x86_64-nsis'].url).toMatch(/_x64-setup\.exe$/)
   })
 
+  test('collects NSIS-only Windows paths (prerelease --bundles nsis, no MSI)', async () => {
+    const root = await fixtureDir()
+    const exe = await fixtureFile(root, 'bundle/nsis/Termul.Manager_1.2.3_x64-setup.exe')
+    const exeSig = await fixtureFile(
+      root,
+      'bundle/nsis/Termul.Manager_1.2.3_x64-setup.exe.sig',
+      'nsis-signature'
+    )
+
+    const { manifest } = await prepare('windows-x64', [exe, exeSig], root)
+    expect(manifest.platforms['windows-x86_64'].url).toMatch(/_x64-setup\.exe$/)
+    expect(manifest.platforms['windows-x86_64'].signature).toBe('nsis-signature')
+    expect(manifest.platforms['windows-x86_64-nsis'].url).toMatch(/_x64-setup\.exe$/)
+    expect(manifest.platforms['windows-x86_64-msi']).toBeUndefined()
+  })
+
   test('collects Linux AppImage, deb, and rpm paths', async () => {
     const root = await fixtureDir()
     const paths = []
@@ -120,6 +143,100 @@ describe('preparePlatformArtifacts', () => {
 
     await expect(prepare('windows-x64', [msi, first, second], root)).rejects.toThrow(
       'windows-x64 must have exactly one msi updater signature'
+    )
+  })
+
+  test('normalizes productName spaces to dots in Windows MSI and NSIS release asset names', async () => {
+    const root = await fixtureDir()
+    const msi = await fixtureFile(root, 'bundle/msi/Termul Manager_0.4.10_x64_en-US.msi')
+    const msiSig = await fixtureFile(
+      root,
+      'bundle/msi/Termul Manager_0.4.10_x64_en-US.msi.sig',
+      'msi-signature'
+    )
+    const exe = await fixtureFile(root, 'bundle/nsis/Termul Manager_0.4.10_x64-setup.exe')
+    const exeSig = await fixtureFile(
+      root,
+      'bundle/nsis/Termul Manager_0.4.10_x64-setup.exe.sig',
+      'nsis-signature'
+    )
+
+    const { manifest, outputPath } = await prepare(
+      'windows-x64',
+      [msi, msiSig, exe, exeSig],
+      root,
+      {
+        version: '0.4.10',
+        tag: 'v0.4.10'
+      }
+    )
+
+    const msiName = 'Termul.Manager_0.4.10_x64_en-US.msi'
+    const exeName = 'Termul.Manager_0.4.10_x64-setup.exe'
+    expect(manifest.assetNames).toContain(msiName)
+    expect(manifest.assetNames).toContain(`${msiName}.sig`)
+    expect(manifest.assetNames).toContain(exeName)
+    expect(manifest.assetNames).toContain(`${exeName}.sig`)
+    expect(manifest.platforms['windows-x86_64-msi'].url).toBe(
+      `https://github.com/gnoviawan/termul/releases/download/v0.4.10/${msiName}`
+    )
+    expect(manifest.platforms['windows-x86_64'].url).toBe(
+      manifest.platforms['windows-x86_64-msi'].url
+    )
+    expect(manifest.platforms['windows-x86_64-msi'].url).not.toMatch(/%20/)
+    expect(manifest.platforms['windows-x86_64-nsis'].url).toBe(
+      `https://github.com/gnoviawan/termul/releases/download/v0.4.10/${exeName}`
+    )
+    expect(manifest.platforms['windows-x86_64-nsis'].url).not.toMatch(/%20/)
+    expect(await readFile(join(outputPath, 'assets', msiName), 'utf8')).toBe('artifact')
+    expect(await readFile(join(outputPath, 'assets', `${msiName}.sig`), 'utf8')).toBe(
+      'msi-signature'
+    )
+    expect(await readFile(join(outputPath, 'assets', exeName), 'utf8')).toBe('artifact')
+    expect(await readFile(join(outputPath, 'assets', `${exeName}.sig`), 'utf8')).toBe(
+      'nsis-signature'
+    )
+  })
+
+  test('normalizes only the productName space in Linux rpm release asset names', async () => {
+    const root = await fixtureDir()
+    const paths: string[] = []
+    for (const [bundle, name] of [
+      ['appimage', 'Termul Manager_0.4.10_amd64.AppImage'],
+      ['deb', 'Termul Manager_0.4.10_amd64.deb'],
+      ['rpm', 'Termul Manager-0.4.10-1.x86_64.rpm']
+    ]) {
+      paths.push(await fixtureFile(root, `bundle/${bundle}/${name}`))
+      paths.push(await fixtureFile(root, `bundle/${bundle}/${name}.sig`, `${bundle}-signature`))
+    }
+
+    const { manifest, outputPath } = await prepare('linux-x64', paths, root, {
+      version: '0.4.10',
+      tag: 'v0.4.10'
+    })
+
+    const appimageName = 'Termul.Manager_0.4.10_amd64.AppImage'
+    const debName = 'Termul.Manager_0.4.10_amd64.deb'
+    const rpmName = 'Termul.Manager-0.4.10-1.x86_64.rpm'
+    for (const name of [appimageName, debName, rpmName]) {
+      expect(manifest.assetNames).toContain(name)
+      expect(manifest.assetNames).toContain(`${name}.sig`)
+    }
+    expect(manifest.platforms['linux-x86_64-appimage'].url).toBe(
+      `https://github.com/gnoviawan/termul/releases/download/v0.4.10/${appimageName}`
+    )
+    expect(manifest.platforms['linux-x86_64-appimage'].url).not.toMatch(/%20/)
+    expect(manifest.platforms['linux-x86_64-deb'].url).toBe(
+      `https://github.com/gnoviawan/termul/releases/download/v0.4.10/${debName}`
+    )
+    expect(manifest.platforms['linux-x86_64-deb'].url).not.toMatch(/%20/)
+    expect(manifest.platforms['linux-x86_64-rpm'].url).toBe(
+      `https://github.com/gnoviawan/termul/releases/download/v0.4.10/${rpmName}`
+    )
+    expect(manifest.platforms['linux-x86_64-rpm'].url).not.toMatch(/%20/)
+    expect(await readFile(join(outputPath, 'assets', rpmName), 'utf8')).toBe('artifact')
+    expect(await readFile(join(outputPath, 'assets', `${rpmName}.sig`), 'utf8')).toBe(
+      'rpm-signature'
     )
   })
 })

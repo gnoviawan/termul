@@ -50,7 +50,7 @@ interface ComposerMenuProps {
    * `aria-controls`/`aria-activedescendant` on it so assistive tech can track
    * the highlighted option while keyboard focus stays in the textarea.
    */
-  inputRef?: RefObject<HTMLTextAreaElement | null>
+  inputRef?: RefObject<HTMLElement | null>
 }
 
 interface FlatRow {

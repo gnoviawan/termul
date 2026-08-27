@@ -47,11 +47,11 @@ pub struct FrontendErrorRequest {
 /// Loopback-only (refused from non-loopback peers). Returns `IpcBody::ok(())`
 /// on success; logging failures are swallowed (best-effort, no loop).
 pub async fn frontend_error(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<FrontendErrorRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer) {
+    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/log/frontend-error") {
         return (StatusCode::OK, Json(forbidden));
     }
 
@@ -91,27 +91,28 @@ mod tests {
 
     fn test_state() -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(
-                std::env::temp_dir()
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::env::temp_dir()),
-            )),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry: Arc::new(ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(
+            std::env::temp_dir()
+                .canonicalize()
+                .unwrap_or_else(|_| std::env::temp_dir()),
+        )),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),  }
     }
 
     fn test_router(state: AppState) -> axum::Router {

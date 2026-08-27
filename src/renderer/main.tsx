@@ -32,7 +32,6 @@
 import { createRoot } from 'react-dom/client'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import App from './App'
-import { preloadCommonLanguages } from './hooks/use-codemirror'
 import { installGlobalErrorForwarding } from './lib/log-api'
 import './index.css'
 // Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
@@ -46,11 +45,6 @@ import 'streamdown/styles.css'
  * - Browser/web context: render App without ever loading TauriApp
  */
 const root = createRoot(document.getElementById('root')!)
-
-// Prime CodeMirror language caches (js/ts/json) so the first open of these
-// common file types doesn't pay the dynamic-import latency. Fire-and-forget;
-// runs in parallel with React bootstrap (issue #378). Does not pull Tauri.
-preloadCommonLanguages()
 
 // Forward uncaught renderer errors + unhandled rejections to the backend log
 // file so production crashes are diagnosable (issue #244). Runs in BOTH modes:
@@ -72,3 +66,21 @@ if (isTauriContext()) {
 } else {
   root.render(<App />)
 }
+
+// Prime CodeMirror language caches (js/ts/json) so the first open of these
+// common file types doesn't pay the dynamic-import latency. Fire-and-forget;
+// deferred until after first paint + browser idle (requestIdleCallback, with a
+// setTimeout fallback for browsers without it) so it never competes with first
+// contentful paint (issue #378). Dynamic import keeps CodeMirror core out of the
+// entry chunk's critical path.
+const runIdle = (fn: () => void): void => {
+  const fallback = window.setTimeout
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(fn, { timeout: 2000 })
+  } else {
+    fallback(fn, 1_000)
+  }
+}
+runIdle(() => {
+  void import('./hooks/use-codemirror').then((m) => m.preloadCommonLanguages())
+})

@@ -52,6 +52,13 @@ pub struct SessionPayloadMetadata {
     pub message_count: u64,
     pub last_seq: u64,
     pub status: PersistedSessionStatus,
+    /// Worktree the chat runs in (CAP-4/6). Carried through the materialized
+    /// payload so history reopen + post-reload resume preserve the worktree
+    /// binding the agent reattaches to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 /// The renderer `ChatMessage` shape. camelCase keys; `seq` always present
@@ -106,8 +113,12 @@ pub fn materialize_session_payload(
         // separately-read metadata) so the payload can never advertise a
         // `lastSeq` that disagrees with the messages it carries when a writer
         // lands an event between the metadata read and the replay.
-        last_seq: records.last().map_or(metadata.last_seq, |record| record.seq),
+        last_seq: records
+            .last()
+            .map_or(metadata.last_seq, |record| record.seq),
         status: metadata.status.clone(),
+        worktree_path: metadata.worktree_path.clone(),
+        worktree_branch: metadata.worktree_branch.clone(),
     };
     MaterializedSessionPayload {
         metadata: payload_metadata,
@@ -116,7 +127,7 @@ pub fn materialize_session_payload(
 }
 
 /// Fold seq-sorted durable records into renderer bubbles.
-fn fold_messages(records: &[PersistedEventRecord]) -> Vec<MaterializedChatMessage> {
+pub(crate) fn fold_messages(records: &[PersistedEventRecord]) -> Vec<MaterializedChatMessage> {
     let mut messages: Vec<MaterializedChatMessage> = Vec::new();
     // Role of the agent/thought run still open for coalescing (`None` after a
     // user bubble, a split, or before the first chunk).
@@ -249,12 +260,16 @@ mod tests {
             project_id: Some("project-1".to_string()),
             cwd: "/work/project".to_string(),
             title: Some("Chat title".to_string()),
+            title_source: None,
             created_at: 100,
             last_activity_at: 900,
             status: PersistedSessionStatus::Active,
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            discovered: false,
+            worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
+            worktree_branch: Some("chat/abc123".to_string()),
         }
     }
 
@@ -363,11 +378,7 @@ mod tests {
                 "snapshot:agent:11",
             ]
         );
-        let seqs: Vec<u64> = payload
-            .messages
-            .iter()
-            .map(|message| message.seq)
-            .collect();
+        let seqs: Vec<u64> = payload.messages.iter().map(|message| message.seq).collect();
         assert_eq!(seqs, vec![1, 2, 4, 6, 10, 11]);
         let timestamps: Vec<u64> = payload
             .messages
@@ -376,7 +387,10 @@ mod tests {
             .collect();
         assert_eq!(timestamps, vec![101, 102, 104, 106, 110, 111]);
         // Text coalescing within a run (appendBlocks semantics).
-        assert_eq!(payload.messages[1].blocks, vec![json!({"type":"text","text":"Hello "})]);
+        assert_eq!(
+            payload.messages[1].blocks,
+            vec![json!({"type":"text","text":"Hello "})]
+        );
         assert_eq!(
             payload.messages[3].blocks,
             vec![json!({"type":"text","text":"world!"})]
@@ -406,6 +420,8 @@ mod tests {
                 "messageCount": 0,
                 "lastSeq": 0,
                 "status": "active",
+                "worktreePath": "/work/project/.termul/worktrees/chat/abc123",
+                "worktreeBranch": "chat/abc123",
             })
         );
     }
@@ -490,7 +506,11 @@ mod tests {
 
     #[test]
     fn tool_call_update_never_splits_the_open_run() {
-        let records = vec![chunk(1, "agent", "a"), tool_call_update(2), chunk(3, "agent", "b")];
+        let records = vec![
+            chunk(1, "agent", "a"),
+            tool_call_update(2),
+            chunk(3, "agent", "b"),
+        ];
         let payload = materialize_session_payload(&metadata(), &records);
         assert_eq!(payload.messages.len(), 1);
         assert_eq!(payload.messages[0].id, "snapshot:agent:1");
@@ -589,5 +609,21 @@ mod tests {
         let first = serde_json::to_value(materialize_session_payload(&meta, &records)).unwrap();
         let second = serde_json::to_value(materialize_session_payload(&meta, &records)).unwrap();
         assert_eq!(first, second, "materialization must be deterministic");
+    }
+
+    #[test]
+    fn materialized_payload_preserves_worktree_binding() {
+        // CAP-4/6: the worktree path + branch must survive materialization
+        // so history reopen and post-reload resume reattach to the bound
+        // worktree (not the project root) and the indicator can render.
+        let payload = materialize_session_payload(&metadata(), &[]);
+        assert_eq!(
+            payload.metadata.worktree_path.as_deref(),
+            Some("/work/project/.termul/worktrees/chat/abc123")
+        );
+        assert_eq!(
+            payload.metadata.worktree_branch.as_deref(),
+            Some("chat/abc123")
+        );
     }
 }

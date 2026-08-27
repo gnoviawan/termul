@@ -187,6 +187,7 @@ function VirtualizedTimeline({
           attentionRequired={item.attentionRequired}
           hasFinalResponse={item.hasFinalResponse}
           shouldAnimateEnter={shouldAnimateEnter}
+          filePathContext={filePathContext}
         />
       )
     }
@@ -195,6 +196,7 @@ function VirtualizedTimeline({
         <ToolCallCard
           toolCall={item.tool}
           animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
+          filePathContext={filePathContext}
         />
       )
     }

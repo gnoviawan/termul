@@ -1,8 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { GlobalContextMenu } from '@/components/GlobalContextMenu'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -15,6 +18,7 @@ import { useCwd } from './hooks/use-cwd'
 import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
+import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
@@ -23,11 +27,14 @@ import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
 import { initNotificationPermissions } from './lib/tauri-notification-api'
-import AppPreferences from './pages/AppPreferences'
-import NotFound from './pages/NotFound'
-import ProjectSettings from './pages/ProjectSettings'
-import WorkspaceDashboard from './pages/WorkspaceDashboard'
-import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
+
+const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
+const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
+const NotFound = lazy(() => import('./pages/NotFound'))
+
+function RouteFallback(): React.JSX.Element {
+  return <Skeleton className="h-full w-full" />
+}
 
 // PRODUCTION GUARDRAIL: This branch targets xterm 6.1-beta (the line VS Code
 // ships in production). The 6.1 beta track includes memory leak fixes
@@ -37,7 +44,7 @@ import WorkspaceSnapshots from './pages/WorkspaceSnapshots'
 // See _bmad-output/implementation-artifacts/spec-gh133-xterm-6-1-upgrade-memory-leak-fix.md.
 
 import { isWindows } from '@/lib/platform'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTauriContext, primeServerCapability } from '@/lib/tauri-runtime'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
@@ -47,6 +54,7 @@ import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
+import { usePreventNativeContextMenu } from './hooks/use-prevent-native-context-menu'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
@@ -92,18 +100,32 @@ const queryClient = new QueryClient()
 // initialization or a check-renderer-whitelist CI job). Do not rely on comments alone.
 
 // Component to handle app-level effects like auto-save.
-// Mirrors TauriApp.tsx AppEffects mount order (lines 63-100) for the portable
-// subset. Native-only effects (usePreventDefaultContextMenu, showWindow,
-// useWindowState) are intentionally NOT ported — they would break the browser
-// (right-click dev menu, no native window). usePreventAltMenu stays (web-only).
+// Mirrors TauriApp.tsx AppEffects mount order for the portable subset.
+// Native-only effects (usePreventDevToolsShortcuts, showWindow, useWindowState)
+// are intentionally NOT ported — they would break the browser (web cannot
+// block its own devtools; no native window). The global context menu is
+// mounted on both surfaces via <GlobalContextMenu> in the root render.
+// usePreventNativeContextMenu is ported for parity (portal regression defense).
+// usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
+  // One-shot: prime the server write-admission capability cache from
+  // `GET /health` so write-gated web surfaces (e.g. the worktree picker) reflect
+  // the server's actual admission policy instead of a hostname guess. No-op on
+  // desktop (`isTauriContext()` → cache seeded admitted, no fetch). Runs once
+  // on web mount; a failed fetch leaves the cache fail-closed (false) and a
+  // later re-prime can retry.
+  useEffect(() => {
+    primeServerCapability()
+  }, [])
+
   useTerminalAutoSave()
   useTerminalRestore()
   useCrashRecovery()
   useTerminalDetachedOutput()
   useCwd()
   useGitBranch()
+  useProjectGitBranch()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
@@ -125,6 +147,12 @@ function AppEffects(): null {
   useAcpSessionResume()
   useAcpMcp()
   usePreventFileDropNavigation()
+  // Suppress the native browser context menu app-wide (BUBBLE phase) for web
+  // parity — portaled overlays (toasts, modals) outside
+  // <GlobalContextMenu>'s Radix trigger subtree would show the browser's
+  // native Inspect menu. Bubble — not capture — so the Radix trigger
+  // (composeEventHandlers, defaultPrevented check) still opens the global menu.
+  usePreventNativeContextMenu()
 
   // Initialize notification permissions once at app startup so the OS (or
   // browser) permission prompt appears early, not on first terminal exit. On
@@ -144,13 +172,33 @@ const router = createHashRouter(
       path: '/',
       element: <WorkspaceLayout />,
       children: [
-        { index: true, element: <WorkspaceDashboard /> },
-        { path: 'snapshots', element: <WorkspaceSnapshots /> },
-        { path: 'settings', element: <ProjectSettings /> },
-        { path: 'preferences', element: <AppPreferences /> }
+        {
+          index: true,
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <WorkspaceDashboard />
+            </Suspense>
+          )
+        },
+        { path: 'c/:sessionId', element: <ChatRoute /> },
+        {
+          path: 'snapshots',
+          element: (
+            <Suspense fallback={<RouteFallback />}>
+              <WorkspaceSnapshots />
+            </Suspense>
+          )
+        }
       ]
     },
-    { path: '*', element: <NotFound /> }
+    {
+      path: '*',
+      element: (
+        <Suspense fallback={<RouteFallback />}>
+          <NotFound />
+        </Suspense>
+      )
+    }
   ],
   {
     future: {
@@ -164,24 +212,26 @@ const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={80} skipDelayDuration={300}>
-        <ErrorBoundary context="App Root">
-          <AppEffects />
-          <Toaster />
-          <Sonner />
-          {/* Web/remote mode only: in-app directory picker registered with
-              dialogApi so NewProjectModal's Browse button works without a native
-              dialog.open (Story: Web/remote project creation). Desktop never
-              mounts it. */}
-          {!isTauriContext() && <DirectoryPicker />}
-          <RouterProvider router={router} future={{ v7_startTransition: true }} />
-          <WhatsNewModal
-            isOpen={whatsNew.isOpen}
-            version={whatsNew.version}
-            notes={whatsNew.notes}
-            htmlUrl={whatsNew.htmlUrl}
-            onClose={whatsNew.close}
-          />
-        </ErrorBoundary>
+        <GlobalContextMenu>
+          <ErrorBoundary context="App Root">
+            <AppEffects />
+            <Toaster />
+            <Sonner />
+            {/* Web/remote mode only: in-app directory picker registered with
+                dialogApi so NewProjectModal's Browse button works without a native
+                dialog.open (Story: Web/remote project creation). Desktop never
+                mounts it. */}
+            {!isTauriContext() && <DirectoryPicker />}
+            <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <WhatsNewModal
+              isOpen={whatsNew.isOpen}
+              version={whatsNew.version}
+              notes={whatsNew.notes}
+              htmlUrl={whatsNew.htmlUrl}
+              onClose={whatsNew.close}
+            />
+          </ErrorBoundary>
+        </GlobalContextMenu>
       </TooltipProvider>
     </QueryClientProvider>
   )

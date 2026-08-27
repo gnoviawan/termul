@@ -254,6 +254,26 @@ describe('MobileFileExplorer', () => {
     expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-1')
   })
 
+  it('restores a canonical-cased persisted folder against a config-cased root (case-insensitive isWithinRoot)', async () => {
+    // The persisted folder is canonical casing (`E:/proj/sub`, written from a
+    // server-canonicalized entry.path) while the active root is config casing
+    // (`e:/proj`). A case-sensitive isWithinRoot would reject it and clamp to
+    // root on reload; the case-insensitive form restores the subfolder.
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: 'E:/proj/sub' })
+    mockExplorerState.rootPath = 'e:/proj'
+    mockExplorerState.directoryContents = new Map([
+      ['e:/proj', [entry('sub', 'directory', 'E:/proj/sub')]],
+      ['E:/proj/sub', []]
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-1')
+  })
+
   it('restores the new project folder after a project switch', async () => {
     mockProjectId = 'proj-1'
     mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/sub' })
@@ -300,6 +320,36 @@ describe('MobileFileExplorer', () => {
     expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
   })
 
+  it('navigates back to the parent (not root) when the stored root path casing differs from canonical entry paths', async () => {
+    // The store holds the config casing (`e:/proj`), but the server
+    // canonicalizes entry paths to on-disk casing (`E:/proj/...`). A
+    // case-sensitive within-root comparison clamps back to root; the
+    // case-insensitive comparison form returns the immediate parent.
+    mockExplorerState.rootPath = 'e:/proj'
+    mockExplorerState.directoryContents = new Map([
+      ['e:/proj', [entry('sub', 'directory', 'E:/proj/sub')]],
+      ['E:/proj/sub', [entry('child', 'directory', 'E:/proj/sub/child')]],
+      ['E:/proj/sub/child', []]
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    // Drill two levels deep using the canonical entry paths.
+    fireEvent.click(await screen.findByText('sub'))
+    fireEvent.click(await screen.findByText('child'))
+    expect(await screen.findByRole('heading', { name: 'child' })).toBeInTheDocument()
+
+    // Back must return the immediate parent (`sub`), not clamp to root (`proj`).
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    // One level below root → back stays enabled (proves we are not clamped).
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+  })
+
   it('preserves a Windows drive-root path when navigating back', async () => {
     mockExplorerState.rootPath = 'C:/'
     mockExplorerState.directoryContents = new Map([
@@ -317,6 +367,49 @@ describe('MobileFileExplorer', () => {
 
     expect(await screen.findByText('child')).toBeInTheDocument()
     expect(mockToggleDirectory).not.toHaveBeenCalledWith('C:')
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('returns the immediate parent (not root) when navigating back from a depth-2 path under a Windows drive root', async () => {
+    // `parentOf("C:/Users/Alice/project")` must yield `C:/Users/Alice` and
+    // never clamp to the `C:/` drive root. The drive-root identity
+    // (`comparePath("C:/")` = `c:`, trailing slash stripped by
+    // `pathIdentity`) makes `rootPrefix` `c:/` — not `c://` — so the slice +
+    // identity re-check walks one level at a time down to the root.
+    mockExplorerState.rootPath = 'C:/'
+    mockExplorerState.directoryContents = new Map([
+      ['C:/', [entry('Users', 'directory', 'C:/Users')]],
+      ['C:/Users', [entry('Alice', 'directory', 'C:/Users/Alice')]],
+      ['C:/Users/Alice', [entry('project', 'directory', 'C:/Users/Alice/project')]],
+      ['C:/Users/Alice/project', []]
+    ])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    // Drill two levels below the drive root using canonical entry paths.
+    fireEvent.click(await screen.findByText('Users'))
+    fireEvent.click(await screen.findByText('Alice'))
+    fireEvent.click(await screen.findByText('project'))
+    expect(await screen.findByRole('heading', { name: 'project' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Back returns the immediate parent `Alice`, not the drive root.
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'Alice' })).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Back again returns `Users` (still not clamped to the drive root).
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+    // Final back lands on the drive root and disables the button.
+    fireEvent.click(screen.getByLabelText('Back to parent folder'))
+    expect(await screen.findByRole('heading', { name: 'C:' })).toBeInTheDocument()
     expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
   })
 

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { BrowserControls } from './BrowserControls'
@@ -9,7 +9,8 @@ vi.mock('@/lib/browser-api', () => ({
   browserTabGoBack: vi.fn().mockResolvedValue({ success: true }),
   browserTabGoForward: vi.fn().mockResolvedValue({ success: true }),
   browserTabReload: vi.fn().mockResolvedValue({ success: true }),
-  browserTabOpenDevtools: vi.fn().mockResolvedValue({ success: true })
+  browserTabOpenDevtools: vi.fn().mockResolvedValue({ success: true }),
+  browserTabInjectAgentation: vi.fn().mockResolvedValue({ success: true })
 }))
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -25,112 +26,64 @@ describe('BrowserControls', () => {
     useBrowserSessionStore.setState({ tabs: new Map() })
   })
 
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('renders nothing when tab has no URL', () => {
     useBrowserSessionStore.getState().createTab('tab-1', '')
-    useBrowserSessionStore.setState((state) => {
-      const next = new Map(state.tabs)
-      const tab = next.get('tab-1')
-      if (tab) {
-        next.set('tab-1', { ...tab, url: '' })
-      }
-      return { tabs: next }
-    })
-
     const { container } = renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-    expect(container.innerHTML).toBe('')
+    expect(container.firstChild).toBeNull()
   })
 
-  it('renders annotation toggle button', () => {
+  it('renders agentation toolbar button', () => {
+    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
+    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
+    expect(screen.getByLabelText('Inject agentation toolbar')).toBeTruthy()
+  })
+
+  it('calls browserTabInjectAgentation on PenTool button click', async () => {
+    const { browserTabInjectAgentation } = await import('@/lib/browser-api')
     useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
     renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
-    const toggleBtn = screen.getByLabelText('Enable annotation mode')
-    expect(toggleBtn).toBeInTheDocument()
-    expect(toggleBtn.getAttribute('aria-pressed')).toBe('false')
-  })
+    const btn = screen.getByLabelText('Inject agentation toolbar')
+    fireEvent.click(btn)
 
-  it('shows active state when annotation mode is enabled', () => {
-    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-    useBrowserSessionStore.getState().setAnnotationMode('tab-1', true)
-
-    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-
-    const toggleBtn = screen.getByLabelText('Disable annotation mode')
-    expect(toggleBtn).toBeInTheDocument()
-    expect(toggleBtn.getAttribute('aria-pressed')).toBe('true')
-  })
-
-  it('toggles annotation mode on button click', () => {
-    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-
-    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-
-    const toggleBtn = screen.getByLabelText('Enable annotation mode')
-    fireEvent.click(toggleBtn)
-
-    const tab = useBrowserSessionStore.getState().tabs.get('tab-1')
-    expect(tab?.annotationMode).toBe(true)
-  })
-
-  it('toggles annotation mode off when already active', () => {
-    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-    useBrowserSessionStore.getState().setAnnotationMode('tab-1', true)
-
-    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-
-    const toggleBtn = screen.getByLabelText('Disable annotation mode')
-    fireEvent.click(toggleBtn)
-
-    const tab = useBrowserSessionStore.getState().tabs.get('tab-1')
-    expect(tab?.annotationMode).toBe(false)
-  })
-
-  it('has active visual styling when annotation mode is on', () => {
-    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-    useBrowserSessionStore.getState().setAnnotationMode('tab-1', true)
-
-    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-
-    const toggleBtn = screen.getByLabelText('Disable annotation mode')
-    // Active state should have ring and shadow classes
-    expect(toggleBtn.className).toContain('ring-2')
-    expect(toggleBtn.className).toContain('ring-primary/30')
+    expect(browserTabInjectAgentation).toHaveBeenCalledWith('tab-1')
   })
 
   it('renders browser navigation and debug button', () => {
     useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
     renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
-    expect(screen.getByTitle('Back')).toBeInTheDocument()
-    expect(screen.getByTitle('Forward')).toBeInTheDocument()
-    expect(screen.getByTitle('Reload')).toBeInTheDocument()
-    expect(screen.getByTitle('Debug Console')).toBeInTheDocument()
+    expect(screen.getByTitle('Back')).toBeTruthy()
+    expect(screen.getByTitle('Forward')).toBeTruthy()
+    expect(screen.getByTitle('Reload')).toBeTruthy()
+  })
+
+  // P12: the Debug Console button is hidden in production builds.
+  it('hides the Debug Console button when import.meta.env.PROD is true', () => {
+    vi.stubEnv('PROD', true)
+    useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
+    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
+    expect(screen.queryByLabelText('Open debug console')).toBeNull()
+    vi.unstubAllEnvs()
   })
 
   it('renders URL input with current tab URL', () => {
     useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com/page')
-
     renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
-    const input = screen.getByPlaceholderText('Enter URL...') as HTMLInputElement
-    expect(input.value).toBe('https://example.com/page')
+    const input = screen.getByPlaceholderText('Enter URL...')
+    expect((input as HTMLInputElement).value).toBe('https://example.com/page')
   })
 
   it('shows loading spinner when tab is loading', () => {
     useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-    useBrowserSessionStore.setState((state) => {
-      const next = new Map(state.tabs)
-      const tab = next.get('tab-1')
-      if (tab) {
-        next.set('tab-1', { ...tab, loading: true })
-      }
-      return { tabs: next }
-    })
+    useBrowserSessionStore.getState().setLoading('tab-1', true)
+    const { container } = renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
-    renderWithProvider(<BrowserControls browserTabId="tab-1" />)
-
-    // The Loader2 icon should have animate-spin class
-    const loader = document.querySelector('.animate-spin')
-    expect(loader).toBeTruthy()
+    expect(container.querySelector('.animate-spin')).toBeTruthy()
   })
 })

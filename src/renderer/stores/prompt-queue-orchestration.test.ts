@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { AcpTransportError } from '@/lib/acp-transport'
 import {
   ACP_TURN_IN_PROGRESS_CODE,
   appendQueuedPrompt,
@@ -15,6 +16,23 @@ describe('prompt-queue-orchestration', () => {
     expect(isPromptTurnInProgressError(new Error(`${ACP_TURN_IN_PROGRESS_CODE}: session s1`))).toBe(
       true
     )
+    expect(isPromptTurnInProgressError(new Error('network failed'))).toBe(false)
+  })
+
+  it('matches the web/WS rate_limited turn-in-progress form', () => {
+    // The WS relay maps the same turn-busy condition to `WsErrorCode::RateLimited`
+    // and the transport surfaces it as `AcpTransportError('rate_limited', …)`.
+    // `runPromptTurn` must recover this form just like the IPC `ACP_TURN_IN_PROGRESS` string.
+    expect(
+      isPromptTurnInProgressError(
+        new AcpTransportError('rate_limited', 'a prompt turn is already in progress')
+      )
+    ).toBe(true)
+    // Unrelated transient codes must NOT be misclassified as turn-busy.
+    expect(isPromptTurnInProgressError(new AcpTransportError('closed', 'transport gone'))).toBe(
+      false
+    )
+    expect(isPromptTurnInProgressError(new AcpTransportError('timeout', 'slow link'))).toBe(false)
     expect(isPromptTurnInProgressError(new Error('network failed'))).toBe(false)
   })
 

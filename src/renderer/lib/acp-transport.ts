@@ -51,8 +51,11 @@ import type {
   SpawnAgentResult,
   StopReason
 } from '@/lib/acp-api'
+import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
@@ -79,6 +82,13 @@ export class AcpTransportError extends Error {
     this.name = 'AcpTransportError'
     this.code = code
   }
+}
+
+export function isTransientAcpTransportError(error: unknown): error is AcpTransportError {
+  return (
+    error instanceof AcpTransportError &&
+    (error.code === 'closed' || error.code === 'timeout' || error.code === 'agent_crashed')
+  )
 }
 
 export interface AcpTransport {
@@ -118,13 +128,27 @@ export interface AcpTransport {
     agentId: AgentId,
     cwd: string,
     mcpServers?: McpServer[],
-    options?: { ephemeral?: boolean; projectId?: string }
+    options?: {
+      ephemeral?: boolean
+      projectId?: string
+      /** Worktree path + branch (CAP-3) — desktop-only; ignored on the WS path. */
+      worktreePath?: string
+      worktreeBranch?: string
+    }
   ): Promise<NewSessionOutcome>
   loadSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
+  registerDiscoveredSession(input: {
+    sessionId: SessionId
+    agentId: AgentId
+    cwd: string
+    title?: string | null
+    updatedAt?: number
+    projectId?: string
+  }): Promise<PersistedSessionSummary>
   sendPrompt(
     agentId: AgentId,
     sessionId: SessionId,
@@ -156,9 +180,9 @@ export interface AcpTransport {
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>
   /** Web/remote: fetch the full stored transcript for a session (server mode). */
-  getSessionPayload?(
-    sessionId: SessionId
-  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null>
+  getSessionPayload?(sessionId: SessionId): Promise<SessionPayload | null>
+  /** Tail-first variant of `getSessionPayload`: fetches only the last `limit` messages. */
+  getSessionPayloadTail?(sessionId: SessionId, limit: number): Promise<SessionPayload | null>
   onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
@@ -247,7 +271,9 @@ function createTauriAcpTransport(): AcpTransport {
         cwd,
         mcpServers,
         ...(options?.ephemeral ? { ephemeral: true } : {}),
-        ...(options?.projectId ? { projectId: options.projectId } : {})
+        ...(options?.projectId ? { projectId: options.projectId } : {}),
+        ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
+        ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
       }),
     loadSession: (agentId, sessionId, cwd) =>
       invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd }),
@@ -261,6 +287,8 @@ function createTauriAcpTransport(): AcpTransport {
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
+    registerDiscoveredSession: (input) =>
+      invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
     sendPrompt: (agentId, sessionId, text, _turnId) =>
       invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text }),
     sendPromptBlocks: (agentId, sessionId, content, _turnId) =>
@@ -361,16 +389,16 @@ const SEND_PROMPT_GRACE_MS = 10_000
 const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
+/** Bounded application round-trip check used for browser resume signals. */
+const RESUME_VALIDATION_TIMEOUT_MS = 5_000
 /**
- * How long the page must stay hidden before a return triggers a proactive
- * reconnect. Mobile browsers suspend JS in backgrounded tabs, so the server's
- * keepalive Ping goes un-ponged and the server tears the socket down at its
- * ~75s Pong-timeout (`web/ws.rs::PONG_TIMEOUT`) — but the client only learns
- * this when `onclose` is finally delivered on resume (late, or never on a
- * half-open link). 30s sits between the server's 20s Ping interval and its 75s
- * Pong-timeout: long enough to ride out a brief tab switch without a needless
- * reconnect, short enough that a real background/idle triggers recovery before
- * the user sees a dead chat. Tunable.
+ * Hidden duration above which the client skips round-trip validation and goes
+ * directly to {@link WsAcpTransport.forceReconnect}. At 30s of hidden time
+ * the heartbeat is throttled or paused by the OS, so the server will kill the
+ * socket within ~45s (75s `PONG_TIMEOUT` minus 30s already elapsed). A ping
+ * validation round-trip would waste `RESUME_VALIDATION_TIMEOUT_MS` on a link
+ * that is dead or about to die. 30s is 40% of the 75s server timeout —
+ * principled, not a workaround.
  */
 const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
@@ -424,6 +452,8 @@ export class WsAcpTransport implements AcpTransport {
   private disposed = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** Prevent duplicate reconnect notifications while retries are still active. */
+  private reconnecting = false
   /** Application-level heartbeat timer (`setInterval`) — cleared on close /
    * dispose / force-reconnect. `null` while no socket is live. */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -435,6 +465,11 @@ export class WsAcpTransport implements AcpTransport {
   /** Bound DOM-listener refs so `dispose()` can detach them. */
   private visibilityHandler: (() => void) | null = null
   private focusHandler: (() => void) | null = null
+  private pageShowHandler: (() => void) | null = null
+  private resumeHandler: (() => void) | null = null
+  private onlineHandler: (() => void) | null = null
+  /** Coalesces overlapping foreground/pageshow/resume/online health checks. */
+  private resumeValidation: Promise<void> | null = null
   private readonly pending = new Map<string, Pending>()
   private readonly listeners = new Map<string, Set<EventListener>>()
   /** Per-session last contiguous delivered seq. */
@@ -741,17 +776,24 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('open_persisted_session', { sessionId, lastSeq })
   }
 
-  async getSessionPayload(
-    sessionId: SessionId
-  ): Promise<import('@/lib/acp-history-persistence').SessionPayload | null> {
+  async getSessionPayload(sessionId: SessionId): Promise<SessionPayload | null> {
     try {
-      return await this.request<import('@/lib/acp-history-persistence').SessionPayload>(
-        'get_session_payload',
-        { sessionId }
-      )
+      return await this.request<SessionPayload>('get_session_payload', { sessionId })
     } catch (err) {
       // `not_found` → the session is absent from the cache (web shows "chat
       // unavailable"); other errors propagate.
+      if (err instanceof AcpTransportError && err.code === 'not_found') return null
+      throw err
+    }
+  }
+
+  async getSessionPayloadTail(sessionId: SessionId, limit: number): Promise<SessionPayload | null> {
+    try {
+      return await this.request<SessionPayload>('get_session_payload_tail', {
+        sessionId,
+        limit
+      })
+    } catch (err) {
       if (err instanceof AcpTransportError && err.code === 'not_found') return null
       throw err
     }
@@ -775,10 +817,17 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     cwd: string,
     mcpServers?: McpServer[],
-    options?: { ephemeral?: boolean; projectId?: string }
+    options?: {
+      ephemeral?: boolean
+      projectId?: string
+      worktreePath?: string
+      worktreeBranch?: string
+    }
   ): Promise<NewSessionOutcome> {
     // Web/remote: the host attributes the session to a project by resolving
     // `cwd` against its registry (CAP-2), so no explicit projectId is sent.
+    // Worktree fields are desktop-only (CAP-3) and ignored on the WS path —
+    // the host-owned durable record keys state isolation on `cwd` regardless.
     const outcome = await this.request<NewSessionOutcome>('create_session', {
       agentId,
       cwd,
@@ -849,6 +898,17 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
   }
 
+  async registerDiscoveredSession(input: {
+    sessionId: SessionId
+    agentId: AgentId
+    cwd: string
+    title?: string | null
+    updatedAt?: number
+    projectId?: string
+  }): Promise<PersistedSessionSummary> {
+    return this.request<PersistedSessionSummary>('register_discovered_session', input)
+  }
+
   async sendPrompt(
     agentId: AgentId,
     sessionId: SessionId,
@@ -862,7 +922,7 @@ export class WsAcpTransport implements AcpTransport {
     // block differences (issue: the echo rendered a second user bubble because
     // the optimistic id (`newId('msg')`) never matched the echo's `turn:<uuid>`).
     // Fall back to a fresh UUID for callers that omit it (backward-compat / tests).
-    const id = turnId ?? crypto.randomUUID()
+    const id = turnId ?? randomUUID()
     return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId: id })
   }
 
@@ -873,7 +933,7 @@ export class WsAcpTransport implements AcpTransport {
     turnId?: string
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId)
-    const id = turnId ?? crypto.randomUUID()
+    const id = turnId ?? randomUUID()
     return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId: id })
   }
 
@@ -934,14 +994,17 @@ export class WsAcpTransport implements AcpTransport {
     if (this.disposed) return
     await new Promise<void>((resolve, reject) => {
       let settled = false
+      let authTimer: ReturnType<typeof setTimeout> | null = null
       const settleOk = () => {
         if (settled) return
         settled = true
+        if (authTimer) clearTimeout(authTimer)
         resolve()
       }
       const settleErr = (err: Error) => {
         if (settled) return
         settled = true
+        if (authTimer) clearTimeout(authTimer)
         reject(err)
       }
 
@@ -965,11 +1028,16 @@ export class WsAcpTransport implements AcpTransport {
       }
 
       ws.onerror = () => {
+        if (this.socket !== ws) return
         this.rejectAllPending('closed', 'WebSocket error')
         settleErr(new AcpTransportError('closed', 'WebSocket error'))
       }
 
       ws.onclose = () => {
+        if (this.socket !== ws) {
+          settleErr(new AcpTransportError('closed', 'superseded WebSocket closed before auth'))
+          return
+        }
         this.socket = null
         this.authed = false
         this.clearHeartbeat()
@@ -978,7 +1046,7 @@ export class WsAcpTransport implements AcpTransport {
         settleErr(new AcpTransportError('closed', 'WebSocket closed before auth'))
       }
 
-      setTimeout(() => {
+      authTimer = setTimeout(() => {
         if (!this.authed) {
           try {
             ws.close()
@@ -1000,35 +1068,104 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /**
-   * Attach `visibilitychange` + `focus` listeners (web only) so a return from a
-   * backgrounded mobile tab proactively reconnects instead of waiting for an
-   * `onclose` the suspended browser delivers late or never. Idempotent; detached
-   * in {@link dispose}. `visibilitychange` is the primary signal (it carries
-   * hidden/visible timing); `focus` is a fallback for platforms where
-   * `visibilitychange` is unreliable.
+   * CAP-3: send an id-less `background`/`foreground` WS control frame so the
+   * server extends (background) or resets (foreground, or any normal frame)
+   * its keepalive watchdog ceiling. Fire-and-forget — no reply, no
+   * request/reply correlation id. Guarded to a live, authenticated socket;
+   * never throws (a failed lifecycle signal is harmless — the watchdog closes
+   * a dead socket on the next ping tick and the reconnect path engages).
+   */
+  private sendLifecycleSignal(type: 'background' | 'foreground'): void {
+    if (this.disposed) return
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN || !this.authed) return
+    try {
+      socket.send(JSON.stringify({ type }))
+    } catch (err) {
+      // Never rethrow out of a browser lifecycle event listener, but emit a
+      // durable boundary log (per AGENTS.md) so a dead/closed socket here is
+      // observable. Safe context only — no frame payload, secrets, or creds.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.sendLifecycleSignal',
+        message: `failed to send a background/foreground lifecycle signal: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      })
+    }
+  }
+
+  /**
+   * Attach browser lifecycle listeners so every resume signal validates the
+   * application round trip instead of trusting `readyState === OPEN`.
    */
   private attachVisibilityListeners(): void {
     if (this.visibilityHandler || typeof document === 'undefined') return
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
         this.lastHiddenAt = Date.now()
+        // CAP-3: signal the server to extend its keepalive watchdog to the
+        // 5-min background ceiling before the tab suspends (the OS will
+        // throttle/pause this transport's timers).
+        this.sendLifecycleSignal('background')
         return
       }
-      // visible — a backgrounded tab returning to the foreground.
-      this.maybeReconnectOnReturn()
+      // CAP-3: signal the server to resume the normal 75s watchdog ceiling
+      // (a no-op if the socket is already dead — sendLifecycleSignal guards on
+      // readyState === OPEN). Then CAP-2's stale-threshold branching decides
+      // whether to validate the round trip or force-reconnect.
+      this.sendLifecycleSignal('foreground')
+      // CAP-2: Skip round-trip ping validation on long background returns.
+      // After VISIBILITY_STALE_THRESHOLD_MS, the heartbeat is throttled and
+      // the server will kill the socket within ~45s, so a ping wastes up to
+      // 5s on a dead/dying link. Go directly to reconnect with backoff reset.
+      const hiddenFor = this.lastHiddenAt != null ? Date.now() - this.lastHiddenAt : 0
+      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
+        this.lastHiddenAt = null
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.visibilityStale',
+          message: `visibility return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
+        })
+        this.forceReconnect('visibility return: long background')
+      } else {
+        this.validateOnResume('visibility return')
+      }
     }
     const onFocus = (): void => {
-      // Fallback: focus implies the window is active again. Only acts when we
-      // previously recorded a hide, so normal interaction is a no-op.
-      this.maybeReconnectOnReturn()
+      if (this.lastHiddenAt == null) return
+      // Same stale-threshold check as the visibility handler: if the tab was
+      // hidden long enough for the server to kill (or be about to kill) the
+      // socket, skip the ping round-trip and force-reconnect directly.
+      const hiddenFor = Date.now() - this.lastHiddenAt
+      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.focusStale',
+          message: `focus return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
+        })
+        this.lastHiddenAt = null
+        this.forceReconnect('window focus: long background')
+      } else {
+        this.validateOnResume('window focus')
+      }
     }
+    const onPageShow = (): void => this.validateOnResume('pageshow')
+    const onResume = (): void => this.validateOnResume('browser resume')
+    const onOnline = (): void => this.validateOnResume('network online')
     this.visibilityHandler = onVisibility
     this.focusHandler = onFocus
+    this.pageShowHandler = onPageShow
+    this.resumeHandler = onResume
+    this.onlineHandler = onOnline
     document.addEventListener('visibilitychange', onVisibility)
     // `focus`/`blur` for tab/window backgrounding are window-level events and do
     // NOT bubble — attach to `window`, not `document` (a document-level listener
     // would never fire for window focus changes, making the fallback dead code).
     window.addEventListener('focus', onFocus)
+    window.addEventListener('pageshow', onPageShow)
+    document.addEventListener('resume', onResume)
+    window.addEventListener('online', onOnline)
   }
 
   /** Detach the visibility/focus listeners (called from {@link dispose}). */
@@ -1041,27 +1178,65 @@ export class WsAcpTransport implements AcpTransport {
       window.removeEventListener('focus', this.focusHandler)
       this.focusHandler = null
     }
+    if (this.pageShowHandler && typeof window !== 'undefined') {
+      window.removeEventListener('pageshow', this.pageShowHandler)
+      this.pageShowHandler = null
+    }
+    if (this.resumeHandler && typeof document !== 'undefined') {
+      document.removeEventListener('resume', this.resumeHandler)
+      this.resumeHandler = null
+    }
+    if (this.onlineHandler && typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onlineHandler)
+      this.onlineHandler = null
+    }
   }
 
-  /**
-   * On a return-to-foreground, if the page was hidden past the staleness
-   * threshold OR the socket is not OPEN, force a reconnect. The existing
-   * `reconnect()` + `subscribeSession(lastSeq)` cursor path then replays missed
-   * events from the server's per-session event log and resumes streaming — no
-   * manual page reload. Consumes `lastHiddenAt` so a `focus` following a
-   * `visibilitychange` (or vice-versa) does not double-trigger.
-   */
-  private maybeReconnectOnReturn(): void {
-    if (this.disposed) return
-    const hiddenAt = this.lastHiddenAt
+  private validateOnResume(reason: string): void {
+    if (
+      this.disposed ||
+      this.connecting ||
+      this.reconnecting ||
+      this.reconnectTimer ||
+      this.resumeValidation
+    ) {
+      return
+    }
     this.lastHiddenAt = null
-    if (hiddenAt == null) return // never recorded a hide — nothing to recover
-    const hiddenFor = Date.now() - hiddenAt
-    const socketDown = this.socket?.readyState !== WebSocket.OPEN
-    if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS || socketDown) {
-      this.forceReconnect(
-        socketDown ? 'socket closed while page was hidden' : 'visibility return after idle'
-      )
+    const validation = this.validateRoundTrip(reason).finally(() => {
+      if (this.resumeValidation === validation) this.resumeValidation = null
+    })
+    this.resumeValidation = validation
+  }
+
+  private async validateRoundTrip(reason: string): Promise<void> {
+    try {
+      if (this.socket?.readyState !== WebSocket.OPEN || !this.authed) {
+        throw new AcpTransportError('closed', 'socket is not authenticated and open')
+      }
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new AcpTransportError('timeout', 'resume health check timed out')),
+          RESUME_VALIDATION_TIMEOUT_MS
+        )
+        void this.request<void>('ping', {}).then(
+          () => {
+            clearTimeout(timer)
+            resolve()
+          },
+          (error) => {
+            clearTimeout(timer)
+            reject(error)
+          }
+        )
+      })
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.resumeValidation',
+        message: `${reason}: ACP round-trip validation failed: ${String(error)}`
+      })
+      this.forceReconnect(`${reason}: health validation failed`)
     }
   }
 
@@ -1072,23 +1247,42 @@ export class WsAcpTransport implements AcpTransport {
    * Pong-timeout, and the client's `onclose` may not have fired yet (or the
    * link is half-open and still reports OPEN). Tears down the suspect socket
    * (detaching its handlers so its eventual close does not double-trigger
-   * `scheduleReconnect`/`rejectAllPending`), then reuses `scheduleReconnect()`
-   * so the existing backoff + `reconnect()` + cursor-resubscribe +
-   * `onReconnectStateChange` machinery runs unchanged.
+   * `scheduleReconnect`/`rejectAllPending`), cancels any pending reconnect
+   * timer (which may carry elevated backoff from prior failures), resets
+   * exponential backoff to zero (the visibility-triggered path must recover
+   * within the server's grace window), then reuses `scheduleReconnect()` so
+   * the `reconnect()` + cursor-resubscribe + `onReconnectStateChange`
+   * machinery runs unchanged.
    */
   private forceReconnect(reason: string): void {
     if (this.disposed) return
-    const old = this.socket
-    this.socket = null
-    this.authed = false
-    this.connecting = null
-    this.rejectAllPending('closed', reason)
-    this.clearHeartbeat()
+    // An active reconnect that has already progressed past socket creation
+    // (in-flight `reconnect()` with no pending timer) means the socket is
+    // being re-established — don't interfere. A pending timer or an in-flight
+    // `connect()` that hasn't opened a socket yet are both safe to cancel:
+    // `scheduleReconnect` queued a future attempt (possibly with elevated
+    // backoff from prior failures), or `connect()` created a socket that the
+    // OS hasn't opened yet (half-open during background throttling).
+    if (this.reconnecting && !this.reconnectTimer && !this.connecting) return
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    this.discardSocket(reason)
+    // Clear any in-flight connect attempt — the old socket is gone, so the
+    // pending Promise will reject via the detached handlers. Setting to null
+    // allows `connect()` to start a fresh attempt from `scheduleReconnect`.
+    this.connecting = null
     this.reconnectAttempt = 0
+    this.scheduleReconnect()
+  }
+
+  private discardSocket(reason: string): void {
+    const old = this.socket
+    this.socket = null
+    this.authed = false
+    this.rejectAllPending('closed', reason)
+    this.clearHeartbeat()
     if (old) {
       // Detach so the old socket's close does not double-fire scheduleReconnect
       // / rejectAllPending on an already-tearing-down transport.
@@ -1101,7 +1295,6 @@ export class WsAcpTransport implements AcpTransport {
         /* ignore — already closed */
       }
     }
-    this.scheduleReconnect()
   }
 
   /**
@@ -1154,7 +1347,10 @@ export class WsAcpTransport implements AcpTransport {
     // the store can flip `transportReconnecting` immediately — the UI overlay
     // should appear as soon as the WS drop is detected, not after the backoff
     // delay. The listener is a no-op on Tauri desktop (never set).
-    this.onReconnectStateChange?.(true)
+    if (!this.reconnecting) {
+      this.reconnecting = true
+      this.onReconnectStateChange?.(true)
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       void this.reconnect()
@@ -1164,12 +1360,13 @@ export class WsAcpTransport implements AcpTransport {
   private async reconnect(): Promise<void> {
     try {
       await this.connect()
-      this.reconnectAttempt = 0
       const prioritized = this.reconnectPriorityProvider?.() ?? []
       const ordered = [
         ...prioritized.filter((sid) => this.subscribed.has(sid)),
         ...[...this.subscribed].filter((sid) => !prioritized.includes(sid))
       ]
+      const failedSessions: string[] = []
+      const obsoleteSessions: string[] = []
       for (const sid of ordered) {
         const last = this.lastSeq.get(sid)
         // Force re-subscribe after reconnect; pass an explicit boundary.
@@ -1177,16 +1374,45 @@ export class WsAcpTransport implements AcpTransport {
         // log + continue so remaining sessions still recover.
         try {
           await this.subscribeSession(sid, last ?? 0, true)
-        } catch (err) {
-          console.error('[acp-transport] resubscribe failed for session', sid, err)
+        } catch (error) {
+          if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
+            this.subscribed.delete(sid)
+            this.lastSeq.delete(sid)
+            this.seenTurnIds.delete(sid)
+            obsoleteSessions.push(sid)
+          } else {
+            failedSessions.push(sid)
+          }
         }
       }
+      if (obsoleteSessions.length > 0) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.reconnect',
+          message: `Dropped obsolete ACP subscription session ids: ${obsoleteSessions.join(', ')}`
+        })
+      }
+      if (failedSessions.length > 0) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.reconnect',
+          message: `ACP subscription recovery failed for session ids: ${failedSessions.join(', ')}`
+        })
+        throw new AcpTransportError('closed', 'required ACP subscriptions did not recover')
+      }
+      this.reconnectAttempt = 0
       // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and all
       // sessions are re-subscribed so the overlay stays visible for the
       // full reconnect window (drop → backoff → reopen → resubscribe).
+      this.reconnecting = false
       this.onReconnectStateChange?.(false)
     } catch (err) {
-      console.error('[acp-transport] reconnect failed', err)
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.reconnect',
+        message: `ACP reconnect failed: ${String(err)}`
+      })
+      this.discardSocket('reconnect attempt failed')
       this.scheduleReconnect()
     }
   }
@@ -1241,6 +1467,13 @@ export class WsAcpTransport implements AcpTransport {
         // + authed — it refreshes the server keepalive watchdog through proxies
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
         this.startHeartbeat()
+        // CAP-3: if the tab is already hidden when auth completes (e.g. a
+        // reconnect that finished while backgrounded), the hide event fired
+        // before we were authed and was a no-op. Re-sync the server's watchdog
+        // to the 5-min background ceiling now that this connection is live.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+          this.sendLifecycleSignal('background')
+        }
       } catch (err) {
         try {
           this.socket?.close()
@@ -1369,7 +1602,7 @@ export class WsAcpTransport implements AcpTransport {
   /** Send a request assuming the socket is already OPEN (used during auth handshake). */
   private sendWhenOpen<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const id = crypto.randomUUID()
+      const id = randomUUID()
       const frame: WsRequest = { id, type, payload }
       const payloadRecord =
         payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null

@@ -473,6 +473,31 @@
   }
 }
 
+/* Chat composer (Tiptap) editable surface + empty-state placeholder.
+   `@tiptap/extension-placeholder` sets `data-placeholder` + the `is-empty`
+   class on the empty `<p>` node, but ships no CSS — the app must render the
+   hint via `::before { content: attr(data-placeholder) }`. Applies to both
+   the agent launcher and the existing-chat ChatInputBar (both share
+   ChatComposerEditor).
+
+   The min-height is applied to the ProseMirror element itself (not a wrapper)
+   via the `--composer-min-h` CSS variable set inline by ChatComposerEditor.
+   This makes the full area clickable — the caret appears wherever the user
+   clicks, eliminating the dead space below short/empty text that occurred
+   when min-height was on the outer wrapper. */
+@layer components {
+  [data-composer-editor="true"] {
+    min-height: var(--composer-min-h, auto);
+  }
+  [data-composer-editor="true"] p.is-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    float: left;
+    pointer-events: none;
+    height: 0;
+  }
+}
+
 /* Agent chat markdown prose (ref: key-agent-chat-pane mockup) */
 @layer components {
   .chat-prose {
@@ -764,6 +789,14 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
+  /* Streamdown code-block action buttons: pin to 24px so the size="sm"
+     IconActionButton stays compact even when streamdown's own CSS sizes
+     the action slot. Mirrors the table-toolbar override below. */
+  .chat-streamdown [data-streamdown="code-block-actions"] button {
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+  }
 
   /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
   .chat-streamdown [data-streamdown="table-toolbar"] .relative {
@@ -790,6 +823,34 @@
     opacity: 0.5;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+  /* Fullscreen table toolbar is portaled to document.body, so it's outside
+     .chat-streamdown — scope by the data attribute instead. Mirrors the
+     in-page table-toolbar override for compact 24px dropdown triggers. */
+  [data-streamdown="table-fullscreen"] button {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  [data-streamdown="table-fullscreen"] button:hover {
+    color: hsl(var(--foreground));
+  }
+  [data-streamdown="table-fullscreen"] button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  [data-streamdown="table-fullscreen"] button svg {
     display: block;
     width: 0.875rem;
     height: 0.875rem;

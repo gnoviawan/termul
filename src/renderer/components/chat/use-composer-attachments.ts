@@ -1,4 +1,4 @@
-import { type ClipboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
@@ -9,6 +9,7 @@ import {
   writeBytesToTempFile
 } from '@/lib/composer-attachments-io'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import {
   basename,
   guessMimeType,
@@ -19,10 +20,9 @@ import {
   type PendingAttachment,
   uint8ToBase64
 } from './chat-attachments'
-import type { MentionMatch } from './mention-menu-model'
 
 function attachmentId(): string {
-  return `att-${crypto.randomUUID()}`
+  return `att-${randomUUID()}`
 }
 
 /** Read a browser image File into an inline base64 `image` attachment. */
@@ -221,10 +221,11 @@ export interface ComposerAttachments {
   addFiles: (files: FileList | File[]) => Promise<void>
   /** Picker channel (OS file dialog): real filesystem paths. */
   pickFiles: () => Promise<void>
-  /** Mention channel (@-picker): stage a `file-ref` by absolute path. */
-  addFileRef: (match: MentionMatch) => void
-  /** Paste handler for a composer textarea — images from clipboard, incl. screenshots. */
-  handlePaste: (e: ClipboardEvent<HTMLElement>) => void
+  /** Paste handler for the composer — images from clipboard, incl. screenshots.
+   *  Accepts the DOM `ClipboardEvent` the Tiptap editor's `handlePaste` editorProp
+   *  passes (the pre-refactor textarea's React event was structurally compatible;
+   *  only `clipboardData` + `preventDefault()` are read, both native). */
+  handlePaste: (e: ClipboardEvent) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
   /**
@@ -373,37 +374,11 @@ export function useComposerAttachments(opts: {
     if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
   }, [disabled, imageCapable, addFiles])
 
-  /**
-   * Stage a `file-ref` attachment from an @-mention pick (ADR 0003). The
-   * attachment is staged synchronously so it is send-safe immediately; for
-   * images a thumbnail is read in the background and patched onto the card.
-   */
-  const addFileRef = useCallback(
-    (match: MentionMatch) => {
-      if (disabled) return
-      const id = attachmentId()
-      const name = match.name
-      const mimeType = guessMimeType(name)
-      setAttachments((prev) => [
-        ...prev,
-        { kind: 'file-ref', id, name, mimeType, path: match.absPath }
-      ])
-      if (isImageMime(mimeType)) {
-        void (async () => {
-          const previewUrl = await readThumbnail(match.absPath, mimeType)
-          if (previewUrl) {
-            setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, previewUrl } : a)))
-          }
-        })()
-      }
-    },
-    [disabled]
-  )
-
   const handlePaste = useCallback(
-    (e: ClipboardEvent<HTMLElement>) => {
+    (e: ClipboardEvent) => {
       if (disabled) return
       const data = e.clipboardData
+      if (!data) return
       const files = dataTransferFiles(data)
       if (files.length > 0) {
         // addFiles surfaces capability/size errors via toast.
@@ -481,7 +456,6 @@ export function useComposerAttachments(opts: {
     attachments,
     addFiles,
     pickFiles,
-    addFileRef,
     handlePaste,
     removeAttachment,
     clearAttachments,

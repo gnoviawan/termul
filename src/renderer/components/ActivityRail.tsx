@@ -7,13 +7,13 @@ import {
   Palette,
   SlidersHorizontal
 } from 'lucide-react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { TermulMark } from '@/components/TermulMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 
 const railButtonClass =
@@ -74,8 +74,7 @@ export function ActivityRail({
 }: ActivityRailProps = {}): React.JSX.Element {
   const isSSHPanelVisible = useSSHPanelVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
-  const navigate = useNavigate()
-  const location = useLocation()
+  const settingsView = useSettingsModalView()
 
   const handleToggleSSHPanel = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
     e.stopPropagation()
@@ -200,18 +199,16 @@ export function ActivityRail({
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            navigate('/preferences')
+            useSettingsModalStore.getState().openApp()
           }}
           className={railButtonClass}
           title="Preferences"
           aria-label="Open preferences"
-          aria-current={location.pathname === '/preferences' ? 'page' : undefined}
+          aria-pressed={settingsView === 'app'}
         >
           <SlidersHorizontal
             size={18}
-            className={
-              location.pathname === '/preferences' ? 'text-foreground' : 'text-muted-foreground'
-            }
+            className={settingsView === 'app' ? 'text-foreground' : 'text-muted-foreground'}
           />
         </button>
 

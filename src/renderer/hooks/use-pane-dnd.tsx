@@ -36,12 +36,27 @@ interface PaneDndContextValue {
 
 const PaneDndContext = createContext<PaneDndContextValue | null>(null)
 
+const noop = (): void => {}
+const noopPane = (): void => {}
+
+const fallbackContext: PaneDndContextValue = {
+  isDragging: false,
+  dragPayload: null,
+  previewTarget: null,
+  setPreviewTarget: noop,
+  clearPreviewTarget: noopPane,
+  reorderPreview: null,
+  setReorderPreview: noop,
+  clearReorderPreview: noop,
+  startTabDrag: noop,
+  startFileDrag: noop,
+  handleDrop: noop,
+  handleTabReorder: noop
+}
+
 export function usePaneDnd(): PaneDndContextValue {
   const ctx = useContext(PaneDndContext)
-  if (!ctx) {
-    throw new Error('usePaneDnd must be used within a PaneDndProvider')
-  }
-  return ctx
+  return ctx ?? fallbackContext
 }
 
 interface PaneDndProviderProps {

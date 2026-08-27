@@ -12,6 +12,11 @@ export const SESSION_INDEX_KEY = 'acp/sessions/index'
 export const WIPE_MIGRATION_KEY = 'acp/sessions/migrated-v2'
 export const INACTIVE_PAYLOAD_CACHE_BUDGET = 3
 
+/** Default tail message count for lazy-load chat history open. Smaller than
+ * `MAX_LIVE_WINDOW_MESSAGES` (300) — only the recent transcript is needed
+ * for the user to read + chat; the full payload loads on scroll-up. */
+export const HISTORY_TAIL_MESSAGE_LIMIT = 50
+
 export function sessionPayloadKey(id: string): string {
   return `acp/sessions/${id}`
 }
@@ -34,6 +39,15 @@ export interface SessionIndexEntry {
    */
   lastSeq?: number
   status: SessionStatus
+  /** Agent-owned metadata mirror created from ACP `session/list`; no local transcript. */
+  discovered?: boolean
+  /**
+   * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
+   * pre-feature sessions. Powers the CAP-6 indicator + the deleted-worktree
+   * fallback; state isolation still keys on `cwd`.
+   */
+  worktreePath?: string
+  worktreeBranch?: string
 }
 
 export interface SessionPayload {
@@ -215,9 +229,12 @@ export function toPersistedSessionSummaries(
     lastActivityAt: entry.lastActivityAt,
     status: entry.status === 'initializing' ? 'active' : entry.status,
     messageCount: entry.messageCount,
+    discovered: entry.discovered,
     toolCount: 0,
     lastSeq: entry.lastSeq ?? 0,
-    resumeEligible: Boolean(entry.agentConfigId || entry.agentId)
+    resumeEligible: Boolean(entry.agentConfigId || entry.agentId),
+    worktreePath: entry.worktreePath,
+    worktreeBranch: entry.worktreeBranch
   }))
 }
 
@@ -228,7 +245,11 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
       .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
       .join(' ')
       .trim()
-    if (text.length > 0) return text.length > 40 ? `${text.slice(0, 40)}…` : text
+    const firstLine = text.split(/\r?\n/, 1)[0].trim()
+    if (firstLine.length > 0) {
+      const characters = Array.from(firstLine)
+      return characters.length > 48 ? `${characters.slice(0, 48).join('')}…` : firstLine
+    }
   }
   return fallbackTitle
 }
@@ -260,36 +281,91 @@ export function groupSessionsByRecency<T extends { lastActivityAt: number }>(
 export function scopeSessionIndex(
   entries: SessionIndexEntry[],
   projectId: string,
-  cwd: string
+  cwd: string,
+  worktreePaths: string[] = []
 ): SessionIndexEntry[] {
   if (!projectId || !cwd) return []
-  const exact = entries.filter((entry) => entry.projectId === projectId && entry.cwd === cwd)
-  return exact.length > 0 ? exact : entries.filter((entry) => entry.projectId === projectId)
+  // ADR 0002 scoping with worktree-inclusive reachability: in addition to an
+  // exact-cwd match, a session whose cwd is one of the active project's
+  // registered worktree paths stays listed. This keeps a worktree chat
+  // reachable from the project root view and across restarts where
+  // `activeWorktreeId` is null (the sidebar would otherwise hide it because
+  // its cwd differs from the root). Falls back to projectId-only matching when
+  // the scoped set is empty, preserving the prior drift-tolerant behavior.
+  //
+  // `normalizeCwdForScope` is required: the host persists session cwds via Rust
+  // `Path::canonicalize`, which on Windows yields the verbatim `\\?\` prefix
+  // with backslash separators (`\\?\E:\…\wt`), while the project store's
+  // worktree paths come from `worktreeApi.list` in forward-slash form
+  // (`E:/…/wt`). A raw `===`/`Set.has` never equates the two and would
+  // silently hide worktree chats from the root view.
+  const normalizedCwd = normalizeCwdForScope(cwd)
+  const worktreePathSet =
+    worktreePaths.length > 0 ? new Set(worktreePaths.map(normalizeCwdForScope)) : null
+  const scoped = entries.filter((entry) => {
+    if (entry.projectId !== projectId) return false
+    const entryCwd = normalizeCwdForScope(entry.cwd)
+    if (entryCwd === normalizedCwd) return true
+    return worktreePathSet?.has(entryCwd) ?? false
+  })
+  return scoped.length > 0 ? scoped : entries.filter((entry) => entry.projectId === projectId)
+}
+
+// Canonicalize a cwd/path for comparison: strip the Windows verbatim `\\?\`
+// prefix, collapse the extended UNC verbatim prefix `\\?\UNC\` to `//` so it
+// matches standard UNC `\\server\share`, unify separators to `/`, and trim
+// trailing slashes. Shared between `scopeSessionIndex` (session cwd vs project
+// worktree paths) and the launcher's worktree-registration dedup (new worktree
+// path vs already-stored paths), so a trailing-slash or verbatim-prefix form
+// mismatch can't defeat either check. No lowercasing — preserves case-sensitive
+// matching on POSIX where the prefix and backslashes never occur (the transform
+// is a no-op there).
+export function normalizeCwdForScope(p: string): string {
+  if (!p) return p
+  return (
+    p
+      // Extended UNC verbatim prefix `\\?\UNC\server\share` → `//server/share`:
+      // collapse to `//` BEFORE the generic verbatim-prefix strip so extended and
+      // standard UNC (`\\server\share`) normalize identically.
+      .replace(/^\\\\\?\\UNC\\/i, '//')
+      .replace(/^\\\\\?\\/, '')
+      .replace(/\\/g, '/')
+      .replace(/\/+$/, '')
+  )
 }
 
 function historyMode(): 'server' | 'live_only' | 'tauri_store' | undefined {
   return getAcpTransport().historyMode?.()
 }
 
+export function fromPersistedSessionSummary(entry: PersistedSessionSummary): SessionIndexEntry {
+  return {
+    id: entry.sessionId,
+    agentId: entry.runtimeAgentId ?? '',
+    agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
+      ? entry.stableAgentNamespace.slice('config:'.length)
+      : undefined,
+    title: entry.title ?? 'Untitled Chat',
+    cwd: entry.cwd,
+    projectId: entry.projectId ?? '',
+    createdAt: entry.createdAt,
+    lastActivityAt: entry.lastActivityAt,
+    messageCount: entry.messageCount,
+    lastSeq: entry.lastSeq,
+    status: entry.status,
+    discovered:
+      entry.discovered ??
+      (entry.messageCount === 0 && entry.toolCount === 0 && entry.lastSeq === 0),
+    worktreePath: entry.worktreePath,
+    worktreeBranch: entry.worktreeBranch
+  }
+}
+
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   const transport = getAcpTransport()
   const mode = transport.historyMode?.()
   if (mode === 'server' && transport.listPersistedSessions) {
-    return (await transport.listPersistedSessions()).map((entry) => ({
-      id: entry.sessionId,
-      agentId: entry.runtimeAgentId ?? '',
-      agentConfigId: entry.stableAgentNamespace?.startsWith('config:')
-        ? entry.stableAgentNamespace.slice('config:'.length)
-        : undefined,
-      title: entry.title ?? 'Untitled Chat',
-      cwd: entry.cwd,
-      projectId: entry.projectId ?? '',
-      createdAt: entry.createdAt,
-      lastActivityAt: entry.lastActivityAt,
-      messageCount: entry.messageCount,
-      lastSeq: entry.lastSeq,
-      status: entry.status
-    }))
+    return (await transport.listPersistedSessions()).map(fromPersistedSessionSummary)
   }
   if (mode === 'live_only') return []
   return (await acpHistoryApi.list()).sessions
@@ -309,6 +385,16 @@ const deletedSessionIds = new Set<string>()
 let historyDrain: Promise<void> | null = null
 let pendingGenericWrite: Promise<void> = Promise.resolve()
 let pendingGenericWriteCount = 0
+/**
+ * Memoized in-flight backend `acp_history_flush` promise. `beforeunload` +
+ * `pagehide` + `closeAppWithPersistenceFlush` can all fire on close,
+ * previously triggering 3× concurrent backend flush calls (race + the
+ * Windows `Access is denied` os-error-5 failure). Concurrent callers await
+ * the SAME promise so exactly one `acpHistoryApi.flush()` reaches the
+ * backend. Mirrors the `waitForPendingSessionIndexWrite` in-flight-promise
+ * pattern already in this file.
+ */
+let pendingHistoryFlush: Promise<void> | null = null
 
 async function drainHistoryOperations(): Promise<void> {
   while (pendingHistoryOperations.size > 0) {
@@ -399,6 +485,7 @@ export function _resetPendingIndexWriteTrackerForTesting(): void {
   historyDrain = null
   pendingGenericWrite = Promise.resolve()
   pendingGenericWriteCount = 0
+  pendingHistoryFlush = null
 }
 
 export async function saveSessionIndex(_entries: SessionIndexEntry[]): Promise<void> {
@@ -463,6 +550,46 @@ export async function loadSessionPayload(id: string): Promise<SessionPayload | n
   return payload
 }
 
+/**
+ * Tail-first variant of {@link loadSessionPayload}: fetches only the last
+ * `limit` messages + matching tool calls so the renderer can install the
+ * recent transcript immediately and lazy-load the full payload on scroll-up.
+ *
+ * Cache-first: if the full payload is already cached (instant second open),
+ * slices the tail from it — no IPC. Otherwise fetches via the transport/API
+ * tail method. NEVER writes to `payloadCache` — the cache is for full
+ * payloads only, and `loadOlderMessages` expects to find (or fetch) the full
+ * payload on a cache miss.
+ */
+export async function loadSessionPayloadTail(
+  id: string,
+  limit: number = HISTORY_TAIL_MESSAGE_LIMIT
+): Promise<SessionPayload | null> {
+  // Cache-first: slice the tail from a cached full payload (instant re-open).
+  const cached = payloadCache.get(id)
+  if (cached) {
+    touchPayload(id, cached)
+    if (cached.messages.length <= limit) return cached
+    const tailStart = cached.messages.length - limit
+    return {
+      ...cached,
+      messages: cached.messages.slice(tailStart),
+      toolCalls: cached.toolCalls?.filter(
+        (tc) =>
+          typeof tc.seq !== 'number' || tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
+      )
+    }
+  }
+  // Transport tail (web/remote) → API tail (desktop) → null.
+  const transport = getAcpTransport()
+  const mode = transport.historyMode?.()
+  if (mode === 'server' && transport.getSessionPayloadTail) {
+    return transport.getSessionPayloadTail(id, limit)
+  }
+  if (mode === 'live_only') return null
+  return acpHistoryApi.getTail(id, limit)
+}
+
 export async function saveSessionPayload(id: string, payload: SessionPayload): Promise<void> {
   // CAP-2: the host event/session layer is now the sole author of durable
   // history in every mode (desktop shared-live included). Renderer payload
@@ -483,8 +610,28 @@ export async function deleteSessionPayload(id: string): Promise<void> {
 export async function flushSessionHistory(): Promise<void> {
   const mode = historyMode()
   if (mode === 'server' || mode === 'live_only') return
-  await waitForPendingSessionIndexWrite()
-  await acpHistoryApi.flush()
+  // Memoize the in-flight flush promise so `beforeunload` + `pagehide` +
+  // `closeAppWithPersistenceFlush` (which can all fire on close) await the
+  // SAME backend `acp_history_flush` call instead of racing 3× concurrent
+  // flushes (the race produced the Windows `Access is denied` os-error-5
+  // failure). A later caller attaches to the in-flight promise and resolves
+  // with it; the promise is cleared on settle so a fresh flush after close
+  // is not deduped against a stale one.
+  if (pendingHistoryFlush) return pendingHistoryFlush
+  const flushPromise = (async () => {
+    await waitForPendingSessionIndexWrite()
+    await acpHistoryApi.flush()
+  })()
+  pendingHistoryFlush = flushPromise
+  try {
+    await flushPromise
+  } finally {
+    // Clear so a subsequent close-path flush (e.g. a second window close
+    // after the first settled) can invoke the backend again.
+    if (pendingHistoryFlush === flushPromise) {
+      pendingHistoryFlush = null
+    }
+  }
 }
 
 export function _clearPayloadCacheForTesting(): void {

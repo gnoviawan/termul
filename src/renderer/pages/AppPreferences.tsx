@@ -14,11 +14,9 @@ import {
   Palette,
   RotateCcw,
   Sliders,
-  Terminal,
-  X
+  Terminal
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
@@ -28,6 +26,7 @@ import {
   SettingsLayout,
   SettingsSection
 } from '@/components/settings/SettingsLayout'
+import { SettingsModal } from '@/components/settings/SettingsModal'
 import { useResetAppSettings, useUpdateAppSetting } from '@/hooks/use-app-settings'
 import {
   useResetAllShortcuts,
@@ -63,6 +62,7 @@ import {
   useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
@@ -234,8 +234,9 @@ const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   }
 ]
 
-export default function AppPreferences(): React.JSX.Element {
-  const navigate = useNavigate()
+export function AppPreferencesModal(): React.JSX.Element {
+  const isOpen = useSettingsModalStore((state) => state.view === 'app')
+  const close = useSettingsModalStore((state) => state.close)
   const isAurUpdater = isAurUpdateMode()
   const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
@@ -460,39 +461,24 @@ export default function AppPreferences(): React.JSX.Element {
 
   return (
     <>
-      <main className="flex-1 flex flex-col min-w-0 h-full relative">
-        {/* Header */}
-        <div className="h-16 flex items-center justify-between px-8 border-b border-border bg-card flex-shrink-0">
-          <div>
-            <h1 className="text-xl font-semibold text-foreground leading-tight">
-              Application Preferences
-            </h1>
-            <p className="text-xs text-muted-foreground">Configure global application settings</p>
-          </div>
-          <button
-            onClick={() => {
-              navigate('/')
-            }}
-            className="group flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            title="Close"
-            aria-label="Close preferences"
-          >
-            <X size={18} className="text-muted-foreground group-hover:text-foreground" />
-          </button>
-        </div>
-
+      <SettingsModal
+        isOpen={isOpen}
+        onClose={close}
+        title="Application Preferences"
+        subtitle="Configure global application settings"
+      >
         {/* Content */}
         <SettingsLayout categories={APP_PREF_CATEGORIES} searchIndex={APP_PREF_SEARCH_INDEX}>
           {/* Terminal Appearance Section */}
           <SettingsSection id="appearance">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Terminal Appearance</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Customize the look and feel of your terminal.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 {/* UI Zoom Level (whole interface) */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
@@ -662,14 +648,14 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* Default Shell Section */}
           <SettingsSection id="shell">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Default Shell</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Set the default shell for new terminals.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
                     Shell
@@ -710,14 +696,14 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* Terminal Behavior Section */}
           <SettingsSection id="behavior">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Behavior</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Configure terminal cleanup and editor auto-save behavior.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
                     Open Terminal Links In
@@ -861,14 +847,14 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* New Project Defaults Section */}
           <SettingsSection id="project-defaults">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">New Project Defaults</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Set default options for new projects.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
                     Default Color
@@ -902,8 +888,8 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* AI Agents Section */}
           <SettingsSection id="ai-agents">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <div className="flex items-center gap-2">
                   <Bot size={18} className="text-primary" />
                   <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
@@ -913,7 +899,7 @@ export default function AppPreferences(): React.JSX.Element {
                   automatically.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <AcpAgentsSettings />
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
@@ -1095,8 +1081,8 @@ export default function AppPreferences(): React.JSX.Element {
           </SettingsSection>
 
           <SettingsSection id="mcp-servers">
-            <div className="flex flex-col gap-6 border-b border-border pb-6 lg:flex-row lg:items-start">
-              <div className="w-full pt-1 lg:w-1/3">
+            <div className="flex flex-col gap-6 border-b border-border pb-6 md:flex-row md:items-start">
+              <div className="w-full pt-1 md:w-1/3">
                 <div className="flex items-center gap-2">
                   <Network size={18} className="text-primary" />
                   <h2 className="text-lg font-medium text-foreground">MCP Servers</h2>
@@ -1105,7 +1091,7 @@ export default function AppPreferences(): React.JSX.Element {
                   Configure global MCP servers for capability-aware injection into new chats.
                 </p>
               </div>
-              <div className="w-full lg:w-2/3">
+              <div className="w-full md:w-2/3">
                 <McpServersSettings />
               </div>
             </div>
@@ -1113,8 +1099,8 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* Keyboard Shortcuts Section */}
           <SettingsSection id="shortcuts">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <div className="flex items-center gap-2">
                   <Keyboard size={18} className="text-primary" />
                   <h2 className="text-lg font-medium text-foreground">Keyboard Shortcuts</h2>
@@ -1130,7 +1116,7 @@ export default function AppPreferences(): React.JSX.Element {
                   Reset all shortcuts
                 </button>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 {Object.values(shortcuts).map((shortcut) => (
                   <ShortcutRecorder
                     key={shortcut.id}
@@ -1146,8 +1132,8 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* Updates Section */}
           <SettingsSection id="updates">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <div className="flex items-center gap-2">
                   <Download size={18} className="text-primary" />
                   <h2 className="text-lg font-medium text-foreground">Updates</h2>
@@ -1156,7 +1142,7 @@ export default function AppPreferences(): React.JSX.Element {
                   Manage application updates and version information.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 {/* Current Version */}
                 <div>
                   <label className="block text-sm font-medium text-secondary-foreground mb-2">
@@ -1374,8 +1360,8 @@ export default function AppPreferences(): React.JSX.Element {
           </SettingsSection>
 
           <SettingsSection id="diagnostics">
-            <div className="flex items-start gap-6 border-b border-border pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <div className="flex items-center gap-2">
                   <FileText size={18} className="text-primary" />
                   <h2 className="text-lg font-medium text-foreground">Diagnostics & Logs</h2>
@@ -1384,7 +1370,7 @@ export default function AppPreferences(): React.JSX.Element {
                   Export or copy application logs to troubleshoot issues.
                 </p>
               </div>
-              <div className="w-2/3 space-y-4">
+              <div className="w-full space-y-4 md:w-full md:w-2/3">
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
@@ -1448,14 +1434,14 @@ export default function AppPreferences(): React.JSX.Element {
 
           {/* Reset Section */}
           <SettingsSection id="reset">
-            <div className="flex items-start gap-6 pb-6">
-              <div className="w-1/3 pt-1">
+            <div className="flex flex-col items-start gap-6 pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
                 <h2 className="text-lg font-medium text-foreground">Reset Settings</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Restore all settings to their default values.
                 </p>
               </div>
-              <div className="w-2/3">
+              <div className="w-full md:w-2/3">
                 <button
                   onClick={() => setIsResetDialogOpen(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-card hover:bg-secondary border border-border rounded-lg text-sm text-foreground transition-colors"
@@ -1467,7 +1453,7 @@ export default function AppPreferences(): React.JSX.Element {
             </div>
           </SettingsSection>
         </SettingsLayout>
-      </main>
+      </SettingsModal>
 
       {/* Reset Confirmation Dialog */}
       <ConfirmDialog

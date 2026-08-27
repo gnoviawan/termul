@@ -32,15 +32,33 @@ const createMockTerminal = (hasSelectionValue = false, selectionText = '') => ({
 import { useTerminalClipboard } from './use-terminal-clipboard'
 
 describe('useTerminalClipboard', () => {
+  let originalClipboardDesc: PropertyDescriptor | undefined
+
   beforeEach(() => {
     vi.clearAllMocks()
     capturedSelectionCallback = null
     // Default hasImage to false so existing text-paste tests work unchanged
     mockClipboardApi.hasImage.mockResolvedValue({ success: true, data: false })
+    // F2: pasteFromClipboard's non-secure-context guard returns early when
+    // navigator.clipboard is undefined (the jsdom default). These tests
+    // exercise the secure-context paste logic via the mocked clipboardApi, so
+    // stub navigator.clipboard defined to bypass the guard and reach the mock.
+    originalClipboardDesc = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {},
+      configurable: true,
+      writable: true
+    })
   })
 
   afterEach(() => {
     cleanup()
+    if (originalClipboardDesc) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboardDesc)
+    } else {
+      // @ts-expect-error removing the own prop we added; restores prototype lookup
+      delete navigator.clipboard
+    }
   })
 
   describe('initialization', () => {

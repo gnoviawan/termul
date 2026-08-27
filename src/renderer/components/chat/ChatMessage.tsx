@@ -29,10 +29,16 @@ import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
-import { parseSkillSegments, replaceSkillTokensInline } from '@/lib/skill-tokens'
-import { stripEmptyFences } from '@/lib/strip-empty-fences'
+import {
+  parseFileSegments,
+  parseSkillSegments,
+  replaceFileTokensInline,
+  replaceSkillTokensInline
+} from '@/lib/skill-tokens'
+import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import {
   blockData,
   blockDisplayName,
@@ -49,6 +55,7 @@ import { ChatMarkdownCode } from './chat-markdown-code'
 import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-links'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
+import { FileChip } from './FileChip'
 import { MessageActions } from './MessageActions'
 import { SkillChip } from './SkillChip'
 
@@ -63,22 +70,60 @@ function blocksToText(blocks: ContentBlock[]): string {
 }
 
 /**
- * Render a user message's text, swapping inline skill tokens for read-only
- * `SkillChip` pills. Plain text (no tokens) renders verbatim with
- * `whitespace-pre-wrap` to preserve the original spacing. `MessageActions`
- * still receives the raw token text so editing re-seeds the composer with the
- * tokens (chips re-render inline) and copy degrades gracefully (private-use
- * sentinels are invisible in most fonts).
+ * Render a user message's text, swapping inline skill AND file tokens for
+ * read-only `SkillChip`/`FileChip` pills. Skill tokens (`\uE000..\uE001`) and
+ * file tokens (`\uE006..\uE007`) use distinct sentinel pairs, so the skill
+ * walk leaves file tokens in its text segments (and vice versa). We parse
+ * skill segments first, then walk each text segment for file tokens — both
+ * pill types render at their correct positions when both are inline together.
+ * Plain text (no tokens) renders verbatim with `whitespace-pre-wrap` to
+ * preserve the original spacing. `MessageActions` still receives the raw
+ * token text so editing re-seeds the composer with the tokens (chips
+ * re-render inline) and copy degrades gracefully (private-use sentinels are
+ * invisible in most fonts).
  */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
-  const segments = parseSkillSegments(text)
+  const skillSegments = parseSkillSegments(text)
+  // Flatten: skill segments + file tokens extracted from each text segment.
+  type FlatSeg =
+    | { kind: 'text'; text: string }
+    | { kind: 'skill'; name: string }
+    | { kind: 'file'; display: string }
+  const flat: FlatSeg[] = []
+  let hasPills = false
+  for (const seg of skillSegments) {
+    if (seg.kind === 'skill') {
+      flat.push({ kind: 'skill', name: seg.name })
+      hasPills = true
+      continue
+    }
+    // Text segment: walk for file tokens (\uE006..\uE007). Skill tokens
+    // are invisible to this walk (already extracted above), so file tokens
+    // land in the text segments alongside plain text.
+    const fileSegs = parseFileSegments(seg.text)
+    if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
+      // No file tokens in this text segment — keep it as one text span.
+      flat.push({ kind: 'text', text: seg.text })
+      continue
+    }
+    for (const fseg of fileSegs) {
+      if (fseg.kind === 'file') {
+        flat.push({ kind: 'file', display: fseg.display })
+        hasPills = true
+      } else {
+        flat.push({ kind: 'text', text: fseg.text })
+      }
+    }
+  }
   return (
     <BubbleContent className="whitespace-pre-wrap break-words">
-      {segments.length === 0
+      {!hasPills && flat.length === 0
         ? text
-        : segments.map((seg, i) =>
+        : flat.map((seg, i) =>
             seg.kind === 'skill' ? (
               <SkillChip key={`skill-${i}`} name={seg.name} />
+            ) : seg.kind === 'file' ? (
+              <FileChip key={`file-${i}`} name={seg.display} />
             ) : (
               <span key={`text-${i}`}>{seg.text}</span>
             )
@@ -236,7 +281,18 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
 const CODE_PLUGIN = codePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
 const MERMAID_PLUGIN = mermaidPlugin
+/**
+ * Base plugin set used while the agent message is still streaming. The
+ * `termul-plan` renderer is deliberately absent here so an in-flight turn
+ * never renders a duplicate inline plan (the live sticky `PlanPanel` covers
+ * the streaming turn). Historical (non-streaming) messages swap in
+ * `STREAMDOWN_PLUGINS_WITH_PLAN` via the `plugins` prop on `AgentProse`.
+ */
 const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
+const STREAMDOWN_PLUGINS_WITH_PLAN = {
+  ...STREAMDOWN_PLUGINS,
+  renderers: [{ language: 'termul-plan', component: TermulPlanRenderer }]
+}
 
 // Copy on code blocks, plus download (save an agent-generated file); no line
 // numbers (chat snippets are short). Mermaid keeps its interactive controls.
@@ -358,9 +414,11 @@ function AgentProse({
               props.className,
               'cursor-pointer appearance-none text-left font-medium text-primary underline'
             )}
-            title="Ctrl/Cmd-click to open in editor"
+            title="Open in editor"
             onClick={(event) => {
-              if (!event.ctrlKey && !event.metaKey) return
+              if (event.button !== 0 || event.shiftKey) return
+              const selection = window.getSelection()
+              if (selection && !selection.isCollapsed) return
               event.preventDefault()
               void openFilePathFromTerminal(candidate, context)
                 .then((result) => {
@@ -391,7 +449,11 @@ function AgentProse({
         caret="block"
         animated={reduced ? false : STREAMDOWN_ANIMATED}
         parseIncompleteMarkdown
-        plugins={STREAMDOWN_PLUGINS}
+        // The `termul-plan` renderer is attached only to historical
+        // (non-streaming) messages so an in-flight turn never renders a
+        // duplicate inline plan — the live sticky `PlanPanel` owns the
+        // streaming turn.
+        plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
         remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
         controls={STREAMDOWN_CONTROLS}
         components={
@@ -531,7 +593,7 @@ function ChatMessageComponent({
                 // Copy a display-safe string: tokens become `(name)` so the
                 // clipboard never carries private-use sentinels. Edit keeps the
                 // raw token text so the composer re-seeds with chips inline.
-                text={replaceSkillTokensInline(text)}
+                text={replaceFileTokensInline(replaceSkillTokensInline(text))}
                 align="end"
                 pinned={actionsPinned}
                 onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
@@ -544,7 +606,7 @@ function ChatMessageComponent({
   }
 
   const streaming = message.streaming && isLast
-  const proseText = stripEmptyFences(text, streaming)
+  const proseText = normalizePlanFenceBoundary(stripEmptyFences(text, streaming))
   const proseDelay = nextDelay()
   const mediaDelay = hasMedia ? nextDelay() : null
   const actionsDelay = nextDelay()

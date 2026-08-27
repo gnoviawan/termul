@@ -10,7 +10,9 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import {
@@ -21,14 +23,8 @@ import {
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
-import { FileTreeContextMenu } from './FileTreeContextMenu'
+import { FileTreeContextMenuContent } from './FileTreeContextMenu'
 import { FileTreeNodeWrapper } from './FileTreeNode'
-
-interface ContextMenuState {
-  x: number
-  y: number
-  entry: DirectoryEntry
-}
 
 interface InlineInputState {
   parentPath: string
@@ -85,7 +81,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     resetSearch
   } = useFileExplorerActions()
 
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [inlineInput, setInlineInput] = useState<InlineInputState | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState<DirectoryEntry | null>(null)
@@ -362,14 +357,18 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, entry: DirectoryEntry) => {
-      e.preventDefault()
+      // F1: no preventDefault() — Radix's `<ContextMenuTrigger asChild>` composes
+      // this handler ahead of its own handleOpen (checkForDefaultPrevented: true);
+      // a preventDefault here would make Radix skip opening the menu. Radix's
+      // own handleContextMenu already suppresses the native menu.
       e.stopPropagation()
       // If right-clicking on an unselected item, select only that item
-      // If right-clicking on a selected item, keep the current selection
+      // If right-clicking on a selected item, keep the current selection.
+      // Stopping propagation also keeps the global `GlobalContextMenu` trigger
+      // from firing over the file tree.
       if (!selectedPaths.has(entry.path)) {
         selectPath(entry.path)
       }
-      setContextMenu({ x: e.clientX, y: e.clientY, entry })
     },
     [selectPath, selectedPaths]
   )
@@ -439,9 +438,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         e.preventDefault()
         let targetPath: string | undefined
-        if (contextMenu?.entry) {
-          targetPath = contextMenu.entry.path
-        } else if (selectedPaths.size === 1) {
+        if (selectedPaths.size === 1) {
           const [selectedPath] = [...selectedPaths]
           let isDirectory = false
           outer: for (const [, entries] of directoryContents) {
@@ -513,7 +510,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       // Escape: Clear selection
       if (e.key === 'Escape') {
         clearSelection()
-        setContextMenu(null)
         return
       }
     }
@@ -527,19 +523,16 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     paste,
     selectedPaths,
     directoryContents,
-    contextMenu,
     clearSelection,
     rootPath
   ])
 
   const handleNewFile = useCallback((dirPath: string) => {
-    setContextMenu(null)
     setInlineInput({ parentPath: dirPath, type: 'file', mode: 'create' })
     setInputValue('')
   }, [])
 
   const handleNewFolder = useCallback((dirPath: string) => {
-    setContextMenu(null)
     setInlineInput({ parentPath: dirPath, type: 'folder', mode: 'create' })
     setInputValue('')
   }, [])
@@ -659,7 +652,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
           return
         }
         revealTreePath(result.dir)
-        setContextMenu(null)
         setInlineInput({ parentPath: result.dir, type, mode: 'create' })
         setInputValue('')
       } finally {
@@ -675,7 +667,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   }, [refreshTree])
 
   const handleRename = useCallback((entry: DirectoryEntry) => {
-    setContextMenu(null)
     const normalizedPath = entry.path.replace(/\\/g, '/')
     const lastSlash = normalizedPath.lastIndexOf('/')
     const parentPath =
@@ -690,12 +681,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   }, [])
 
   const handleDelete = useCallback((entry: DirectoryEntry) => {
-    setContextMenu(null)
     setDeleteConfirm(entry)
   }, [])
 
   const handleCopyPath = useCallback((path: string) => {
-    setContextMenu(null)
     void clipboardApi.writeText(path)
   }, [])
 
@@ -957,7 +946,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   // Open terminal in directory
   const handleOpenInTerminal = useCallback((dirPath: string) => {
-    setContextMenu(null)
     const activeProjectId = useProjectStore.getState().activeProjectId
     if (!activeProjectId) {
       toast.error('No active project')
@@ -975,7 +963,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   // Open with external app
   const handleOpenWithExternal = useCallback(async (filePath: string) => {
-    setContextMenu(null)
     const result = await openerApi.openWithExternalApp(filePath)
     if (!result.success) {
       toast.error(`Failed to open file: ${result.error}`)
@@ -984,7 +971,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   // Show in file manager
   const handleShowInFileManager = useCallback(async (path: string) => {
-    setContextMenu(null)
     const result = await openerApi.revealInFileManager(path)
     if (!result.success) {
       toast.error(`Failed to reveal in file manager: ${result.error}`)
@@ -993,20 +979,17 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   // Copy handler
   const handleCopy = useCallback(() => {
-    setContextMenu(null)
     copySelected()
   }, [copySelected])
 
   // Cut handler
   const handleCut = useCallback(() => {
-    setContextMenu(null)
     cutSelected()
   }, [cutSelected])
 
   // Paste handler
   const handlePaste = useCallback(
     async (destinationPath: string) => {
-      setContextMenu(null)
       await paste(destinationPath)
     },
     [paste]
@@ -1014,9 +997,52 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
   // Duplicate handler
   const handleDuplicate = useCallback(async () => {
-    setContextMenu(null)
     await duplicateSelected()
   }, [duplicateSelected])
+
+  // Per-node Radix context-menu content. `FileTreeNode` wraps each node row in
+  // `<ContextMenu><ContextMenuTrigger asChild>{row}</ContextMenuTrigger>{...}</ContextMenu>`;
+  // this callback supplies the declarative `<ContextMenuContent>` for a given
+  // entry (icons on every item, desktop-only reveal/external-open gated by
+  // `isTauriContext()`). The selection count + clipboard presence are captured
+  // fresh on every render so the menu reflects the current multi-select state.
+  const renderFileTreeContextMenu = useCallback(
+    (entry: DirectoryEntry) => (
+      <FileTreeContextMenuContent
+        entry={entry}
+        onNewFile={handleNewFile}
+        onNewFolder={handleNewFolder}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        onCopyPath={handleCopyPath}
+        onCopy={handleCopy}
+        onCut={handleCut}
+        onPaste={handlePaste}
+        onDuplicate={handleDuplicate}
+        onOpenInTerminal={handleOpenInTerminal}
+        onOpenWithExternal={handleOpenWithExternal}
+        onShowInFileManager={handleShowInFileManager}
+        selectedCount={selectedPaths.size}
+        hasClipboardContent={clipboard !== null}
+      />
+    ),
+    [
+      handleNewFile,
+      handleNewFolder,
+      handleRename,
+      handleDelete,
+      handleCopyPath,
+      handleCopy,
+      handleCut,
+      handlePaste,
+      handleDuplicate,
+      handleOpenInTerminal,
+      handleOpenWithExternal,
+      handleShowInFileManager,
+      selectedPaths,
+      clipboard
+    ]
+  )
 
   if (!isVisible) return <></>
 
@@ -1031,6 +1057,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       <div className="flex items-center justify-between px-3 h-10 border-b border-border flex-shrink-0 rounded-t-xl">
         <span className="text-xs tracking-wider text-sidebar-foreground uppercase">Explorer</span>
         <div className="flex items-center gap-1">
+          {!isTauriContext() && (
+            <FileExplorerToggleButton className="[&_svg]:size-3.5 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-primary cursor-pointer" />
+          )}
           <button
             type="button"
             onClick={() => void startHeaderCreate('file')}
@@ -1139,6 +1168,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               onSelect={handleSelect}
               onContextMenu={handleContextMenu}
               onClick={handleNodeClick}
+              renderContextMenu={renderFileTreeContextMenu}
             />
           ))}
 
@@ -1394,30 +1424,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         aria-valuemin={220}
         aria-valuemax={560}
       />
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <FileTreeContextMenu
-          entry={contextMenu.entry}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-          onNewFile={handleNewFile}
-          onNewFolder={handleNewFolder}
-          onRename={handleRename}
-          onDelete={handleDelete}
-          onCopyPath={handleCopyPath}
-          onCopy={handleCopy}
-          onCut={handleCut}
-          onPaste={handlePaste}
-          onDuplicate={handleDuplicate}
-          onOpenInTerminal={handleOpenInTerminal}
-          onOpenWithExternal={handleOpenWithExternal}
-          onShowInFileManager={handleShowInFileManager}
-          selectedCount={selectedPaths.size}
-          hasClipboardContent={clipboard !== null}
-        />
-      )}
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (

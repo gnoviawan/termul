@@ -1,6 +1,12 @@
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { getLanguageForFile, tokenizeLine } from '@/lib/diff-syntax-highlight'
+import { buildHunkPatches, type HunkPatch } from '@/lib/build-hunk-patch'
+import {
+  getLanguageForFile,
+  isParserReady,
+  preloadParser,
+  tokenizeLine
+} from '@/lib/diff-syntax-highlight'
 import {
   type GitDiffViewMode,
   type ParsedDiffLine,
@@ -14,7 +20,20 @@ interface GitDiffViewProps {
   diff: string
   mode: GitDiffViewMode
   filePath?: string
+  /**
+   * Which side of the diff is displayed: working-tree changes (`unstaged`,
+   * hunk action stages) or staged changes (`staged`, hunk action unstages).
+   * When omitted, no per-hunk action is rendered.
+   */
+  diffSide?: 'unstaged' | 'staged'
+  /** Per-hunk stage callback. Receives a single-hunk patch built from `diff`. */
+  onStageHunk?: (patch: string) => void
+  /** Per-hunk unstage callback. */
+  onUnstageHunk?: (patch: string) => void
 }
+
+/** Which side a hunk action should target for the given diff side. */
+type HunkAction = 'stage' | 'unstage'
 
 function lineClass(kind: ParsedDiffLine['kind']): string {
   return cn(
@@ -193,7 +212,41 @@ function computeInlineWordDiffRanges(
   return result
 }
 
-function InlineDiff({ diff, language }: { diff: string; language: string }): React.JSX.Element {
+function HunkActionBar({
+  action,
+  onAction
+}: {
+  action: HunkAction
+  onAction?: () => void
+}): React.JSX.Element | null {
+  if (!onAction) return null
+  const label = action === 'stage' ? 'Stage hunk' : 'Unstage hunk'
+  return (
+    <button
+      type="button"
+      onClick={onAction}
+      className="ml-2 inline-flex items-center rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      title={label}
+      aria-label={label}
+    >
+      {label}
+    </button>
+  )
+}
+
+function InlineDiff({
+  diff,
+  language,
+  hunkByIndex,
+  action,
+  onAction
+}: {
+  diff: string
+  language: string
+  hunkByIndex: Map<number, HunkPatch>
+  action?: HunkAction
+  onAction?: (patch: string) => void
+}): React.JSX.Element {
   const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
   const wordDiffRanges = useMemo(() => computeInlineWordDiffRanges(lines), [lines])
 
@@ -250,6 +303,20 @@ function InlineDiff({ diff, language }: { diff: string; language: string }): Rea
                   changedRanges={changedRanges}
                   kind={line.kind as 'deletion' | 'addition' | 'context'}
                 />
+              ) : line.kind === 'header' && line.raw.startsWith('@@') ? (
+                <span className="flex items-center">
+                  <span className="flex-1">{line.raw}</span>
+                  {action ? (
+                    <HunkActionBar
+                      action={action}
+                      onAction={
+                        hunkByIndex.has(i) && onAction
+                          ? () => onAction(hunkByIndex.get(i)!.patch)
+                          : undefined
+                      }
+                    />
+                  ) : null}
+                </span>
               ) : (
                 line.raw || ' '
               )}
@@ -310,7 +377,19 @@ function SplitCell({
   )
 }
 
-function SplitDiff({ diff, language }: { diff: string; language: string }): React.JSX.Element {
+function SplitDiff({
+  diff,
+  language,
+  hunkByRowIndex,
+  action,
+  onAction
+}: {
+  diff: string
+  language: string
+  hunkByRowIndex: Map<number, HunkPatch>
+  action?: HunkAction
+  onAction?: (patch: string) => void
+}): React.JSX.Element {
   const rows = useMemo(() => parseUnifiedDiffSplit(diff), [diff])
 
   const splitWordDiffRanges = useMemo(() => {
@@ -333,8 +412,26 @@ function SplitDiff({ diff, language }: { diff: string; language: string }): Reac
     <div className="p-4 font-mono text-xs" style={{ tabSize: 4, MozTabSize: 4 }}>
       {rows.map((row, i) =>
         row.fullWidth ? (
-          <div key={i} className={lineClass(row.fullWidth.kind)}>
-            {row.fullWidth.raw}
+          <div
+            key={i}
+            className={cn(
+              lineClass(row.fullWidth.kind),
+              row.fullWidth.kind === 'header' &&
+                row.fullWidth.raw.startsWith('@@') &&
+                'flex items-center'
+            )}
+          >
+            <span className="flex-1 whitespace-pre-wrap break-words">{row.fullWidth.raw}</span>
+            {row.fullWidth.kind === 'header' &&
+            row.fullWidth.raw.startsWith('@@') &&
+            action &&
+            hunkByRowIndex.has(i) &&
+            onAction ? (
+              <HunkActionBar
+                action={action}
+                onAction={() => onAction(hunkByRowIndex.get(i)!.patch)}
+              />
+            ) : null}
           </div>
         ) : (
           <div key={i} className="grid grid-cols-2 gap-0 border-b border-border/20">
@@ -357,14 +454,19 @@ function SplitDiff({ diff, language }: { diff: string; language: string }): Reac
   )
 }
 
-export function GitDiffView({ diff, mode, filePath }: GitDiffViewProps): React.JSX.Element {
+export function GitDiffView({
+  diff,
+  mode,
+  filePath,
+  diffSide,
+  onStageHunk,
+  onUnstageHunk
+}: GitDiffViewProps): React.JSX.Element {
   const language = useMemo(() => (filePath ? getLanguageForFile(filePath) : ''), [filePath])
 
   useEffect(() => {
     if (language) {
-      void import('@/lib/diff-syntax-highlight').then((mod) => {
-        void mod.preloadParser(filePath ?? '')
-      })
+      void preloadParser(filePath ?? '')
     }
   }, [language, filePath])
 
@@ -374,13 +476,11 @@ export function GitDiffView({ diff, mode, filePath }: GitDiffViewProps): React.J
     let mounted = true
     const checkReady = (): void => {
       if (!mounted) return
-      void import('@/lib/diff-syntax-highlight').then((mod) => {
-        if (mod.isParserReady(language)) {
-          setRenderTick((n) => n + 1)
-        } else {
-          setTimeout(checkReady, 50)
-        }
-      })
+      if (isParserReady(language)) {
+        setRenderTick((n) => n + 1)
+      } else {
+        setTimeout(checkReady, 50)
+      }
     }
     setTimeout(checkReady, 50)
     return () => {
@@ -388,8 +488,51 @@ export function GitDiffView({ diff, mode, filePath }: GitDiffViewProps): React.J
     }
   }, [language])
 
+  // Per-hunk stage/unstage (#257). Build single-hunk patches and index them
+  // by line/row so each rendered `@@` header can look up its patch.
+  const hunks = useMemo(() => buildHunkPatches(diff, filePath ?? ''), [diff, filePath])
+  const hunkByInlineIndex = useMemo(() => {
+    const m = new Map<number, HunkPatch>()
+    for (const h of hunks) m.set(h.headerIndex, h)
+    return m
+  }, [hunks])
+  const hunkBySplitRowIndex = useMemo(() => {
+    const m = new Map<number, HunkPatch>()
+    const rows = parseUnifiedDiffSplit(diff)
+    let hunkIdx = 0
+    rows.forEach((row, i) => {
+      if (row.fullWidth?.raw.startsWith('@@') && hunks[hunkIdx]) {
+        m.set(i, hunks[hunkIdx])
+        hunkIdx += 1
+      }
+    })
+    return m
+  }, [diff, hunks])
+
+  // The displayed side decides whether a hunk action stages or unstages.
+  const action: HunkAction | undefined =
+    diffSide === 'unstaged' ? 'stage' : diffSide === 'staged' ? 'unstage' : undefined
+  const onAction =
+    action === 'stage' ? onStageHunk : action === 'unstage' ? onUnstageHunk : undefined
+
   if (mode === 'split') {
-    return <SplitDiff diff={diff} language={language} />
+    return (
+      <SplitDiff
+        diff={diff}
+        language={language}
+        hunkByRowIndex={hunkBySplitRowIndex}
+        action={action}
+        onAction={onAction}
+      />
+    )
   }
-  return <InlineDiff diff={diff} language={language} />
+  return (
+    <InlineDiff
+      diff={diff}
+      language={language}
+      hunkByIndex={hunkByInlineIndex}
+      action={action}
+      onAction={onAction}
+    />
+  )
 }

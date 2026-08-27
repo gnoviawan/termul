@@ -357,6 +357,13 @@ impl RemoteServerState {
             // from the config here — `None` degrades nothing on this path.
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
+            // Issue #613: `None` → resolve `<service_account_state_dir>/store.json`
+            // at serve time (the shared-live host gets a durable store too).
+            store_file: None,
+            // Desktop shared-live LAN clients stay view-only for mutations
+            // (CWE-306 guard stays on); only the standalone `termul-server`
+            // honors the `--allow-remote-writes` opt-in.
+            allow_remote_writes: false,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -381,6 +388,10 @@ impl RemoteServerState {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            // Desktop shared-live: the cloudflared tunnel forwards public
+            // traffic to a loopback source, so the guard denies ALL writes
+            // before peer evaluation regardless of allow_remote_writes.
+            true,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;

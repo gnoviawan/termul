@@ -1,41 +1,68 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { fileToken } from '@/lib/skill-tokens'
 import type { MentionMatch } from './mention-menu-model'
-import { __resetMentionFileCache, useComposerMentions } from './use-composer-mentions'
+import { useComposerMentions } from './use-composer-mentions'
 
-const { mockReadDir, mockChangeCb, mockApi } = vi.hoisted(() => {
-  const changeCb = { current: null as null | ((event: { path: string }) => void) }
+const { mockApi, batchCbs, doneCbs, mockIsTauri, mockLog, mockUuid } = vi.hoisted(() => {
+  const batch: Array<(e: never) => void> = []
+  const done: Array<(e: never) => void> = []
   return {
-    mockReadDir: vi.fn(),
-    mockChangeCb: changeCb,
+    batchCbs: batch,
+    doneCbs: done,
     mockApi: {
-      onFileChanged: vi.fn((cb: (event: { path: string }) => void) => {
-        changeCb.current = cb
-        return () => {}
+      searchFileNamesStreamStart: vi.fn(),
+      searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
+      onSearchFileNamesBatch: vi.fn((cb: (e: never) => void) => {
+        batch.push(cb)
+        return () => {
+          const i = batch.indexOf(cb)
+          if (i >= 0) batch.splice(i, 1)
+        }
       }),
-      onFileCreated: vi.fn(() => () => {}),
-      onFileDeleted: vi.fn(() => () => {})
-    }
+      onSearchFileNamesDone: vi.fn((cb: (e: never) => void) => {
+        done.push(cb)
+        return () => {
+          const i = done.indexOf(cb)
+          if (i >= 0) done.splice(i, 1)
+        }
+      })
+    },
+    mockIsTauri: vi.fn(() => true),
+    mockLog: vi.fn(async () => {}),
+    mockUuid: vi.fn(() => 'inst')
   }
 })
 
-vi.mock('@tauri-apps/plugin-fs', () => ({ readDir: mockReadDir }))
 vi.mock('@/lib/api', () => ({ filesystemApi: mockApi }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauri }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
+vi.mock('@/lib/uuid', () => ({ randomUUID: mockUuid }))
 
-// Minimal fake project tree. `node_modules` is present at the root to verify
-// the walk skips it (never enqueued, so readDir is never called for it).
-const TREE: Record<string, Array<{ name: string; isDirectory: boolean }>> = {
-  '/work': [
-    { name: 'src', isDirectory: true },
-    { name: 'a.ts', isDirectory: false },
-    { name: 'node_modules', isDirectory: true }
-  ],
-  '/work/src': [
-    { name: 'auth.ts', isDirectory: false },
-    { name: 'chat', isDirectory: true }
-  ],
-  '/work/src/chat': [{ name: 'ChatInputBar.tsx', isDirectory: false }]
+interface BatchEvent {
+  searchId: string
+  files: Array<{ path: string; ignored: boolean }>
+  truncated?: boolean
 }
+interface DoneEvent {
+  searchId: string
+  truncated: boolean
+  totalFiles: number
+  code?: string
+  error?: string
+}
+
+const emitBatch = (e: BatchEvent) =>
+  act(() => {
+    for (const cb of [...batchCbs]) (cb as (e: BatchEvent) => void)(e)
+  })
+const emitDone = (e: DoneEvent) =>
+  act(() => {
+    for (const cb of [...doneCbs]) (cb as (e: DoneEvent) => void)(e)
+  })
+const advance = (ms: number) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
 
 const match = (relPath: string, ignored = false): MentionMatch => ({
   relPath,
@@ -60,122 +87,310 @@ function renderMentions(overrides: Partial<Parameters<typeof useComposerMentions
 
 describe('useComposerMentions', () => {
   beforeEach(() => {
-    mockReadDir.mockReset()
-    mockReadDir.mockImplementation(async (dir: string) => TREE[dir] ?? [])
-    mockApi.onFileChanged.mockClear()
-    mockApi.onFileCreated.mockClear()
-    mockApi.onFileDeleted.mockClear()
-    mockChangeCb.current = null
-    __resetMentionFileCache()
+    vi.useFakeTimers()
+    mockApi.searchFileNamesStreamStart.mockReset()
+    mockApi.searchFileNamesStreamStart.mockResolvedValue({ success: true as const })
+    mockApi.searchFileNamesStreamCancel.mockReset()
+    mockApi.searchFileNamesStreamCancel.mockResolvedValue({ success: true as const })
+    mockApi.onSearchFileNamesBatch.mockClear()
+    mockApi.onSearchFileNamesDone.mockClear()
+    batchCbs.length = 0
+    doneCbs.length = 0
+    mockIsTauri.mockReset()
+    mockIsTauri.mockReturnValue(true)
+    mockLog.mockReset()
+    mockLog.mockResolvedValue(undefined)
+    mockUuid.mockReset()
+    mockUuid.mockReturnValue('inst')
   })
 
-  it('walks the project tree and filters by basename on a non-empty @filter', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('subscribes once per mount and unlistens on unmount', () => {
+    const { unmount } = renderMentions()
+    expect(mockApi.onSearchFileNamesBatch).toHaveBeenCalledTimes(1)
+    expect(mockApi.onSearchFileNamesDone).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(batchCbs).toHaveLength(0)
+    expect(doneCbs).toHaveLength(0)
+  })
+
+  it('fires a debounced stream on @query and maps SearchFileHit -> MentionMatch', async () => {
     const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
+    act(() => result.current.update('@rea', 4))
     expect(result.current.menuOpen).toBe(true)
-    expect(result.current.filter).toBe('auth')
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
+    expect(result.current.filter).toBe('rea')
+    // During the debounce window no search has started yet.
+    expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(false)
+
+    await advance(90)
+    expect(mockApi.searchFileNamesStreamStart).toHaveBeenCalledWith(
+      'search-inst-1',
+      '/work',
+      '/work',
+      'rea',
+      false
+    )
+    expect(result.current.loading).toBe(true)
+
+    emitBatch({
+      searchId: 'search-inst-1',
+      files: [
+        { path: 'src/auth.ts', ignored: false },
+        { path: 'build/x.ts', ignored: true }
+      ]
+    })
+    expect(result.current.sections).toHaveLength(1)
     const items = result.current.sections[0].items
-    expect(items).toHaveLength(1)
+    expect(items).toHaveLength(2)
     expect(items[0].label).toBe('auth.ts')
     expect(items[0].description).toBe('src/auth.ts')
+    expect(items[0].payload.absPath).toBe('/work/src/auth.ts')
+    expect(items[0].ignored).toBe(false)
+    expect(items[1].label).toBe('x.ts')
+    expect(items[1].ignored).toBe(true)
+
+    emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 2 })
+    expect(result.current.loading).toBe(false)
   })
 
-  it('skips commonly-ignored directories during the walk', async () => {
+  it('caps accumulated matches at MAX_RESULTS=100', async () => {
     const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    // node_modules is listed under /work but must never be walked into.
-    expect(mockReadDir).not.toHaveBeenCalledWith('/work/node_modules')
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    const files = Array.from({ length: 150 }, (_, i) => ({
+      path: `f${i}.ts`,
+      ignored: false
+    }))
+    emitBatch({ searchId: 'search-inst-1', files })
+    expect(result.current.sections[0].items).toHaveLength(100)
   })
 
-  it('shows recents on a bare @ with empty filter', () => {
+  it('fires no search on a bare @ (empty filter) and renders Recents', () => {
     const { result } = renderMentions({
       recents: [match('src/recent.ts'), match('README.md')]
     })
     act(() => result.current.update('@', 1))
     expect(result.current.menuOpen).toBe(true)
+    expect(result.current.filter).toBe('')
+    expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(false)
     expect(result.current.sections).toHaveLength(1)
     expect(result.current.sections[0].id).toBe('recents')
     expect(result.current.sections[0].items).toHaveLength(2)
   })
 
-  it('does not walk when disabled', () => {
+  it('does not search when disabled', async () => {
     const { result } = renderMentions({ disabled: true })
-    act(() => result.current.update('@auth', 5))
-    expect(mockReadDir).not.toHaveBeenCalled()
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(false)
   })
 
-  it('select splices the @token, stages the file-ref, and closes the menu', () => {
+  it('cancels the previous stream and id-gates stale batches on rapid typing', async () => {
+    const { result } = renderMentions()
+    // r -> re -> rea
+    act(() => result.current.update('@r', 2))
+    await advance(180)
+    const firstSid = 'search-inst-1'
+    expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
+      firstSid,
+      '/work',
+      '/work',
+      'r',
+      false
+    )
+
+    act(() => result.current.update('@re', 3))
+    // New keystroke cancels the in-flight stream before scheduling the next.
+    expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith(firstSid)
+    await advance(180)
+    const secondSid = 'search-inst-2'
+    expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
+      secondSid,
+      '/work',
+      '/work',
+      're',
+      false
+    )
+
+    act(() => result.current.update('@rea', 4))
+    expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith(secondSid)
+    await advance(90)
+    const thirdSid = 'search-inst-3'
+    expect(mockApi.searchFileNamesStreamStart).toHaveBeenLastCalledWith(
+      thirdSid,
+      '/work',
+      '/work',
+      'rea',
+      false
+    )
+
+    // Stale batch from the cancelled second search must be ignored.
+    emitBatch({
+      searchId: secondSid,
+      files: [{ path: 'stale.ts', ignored: false }]
+    })
+    expect(result.current.sections).toHaveLength(0)
+
+    // Current batch is accepted.
+    emitBatch({
+      searchId: thirdSid,
+      files: [{ path: 'src/real.ts', ignored: false }]
+    })
+    expect(result.current.sections).toHaveLength(1)
+    expect(result.current.sections[0].items[0].label).toBe('real.ts')
+
+    emitDone({ searchId: thirdSid, truncated: false, totalFiles: 1 })
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('ignores stale done events from a cancelled search', async () => {
+    const { result } = renderMentions()
+    act(() => result.current.update('@re', 3))
+    await advance(180)
+    // Cancel by typing a new query.
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    // A late done for the cancelled search must not drop loading of the active one.
+    emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 0 })
+    expect(result.current.loading).toBe(true)
+    emitBatch({
+      searchId: 'search-inst-2',
+      files: [{ path: 'real.ts', ignored: false }]
+    })
+    expect(result.current.sections).toHaveLength(1)
+    emitDone({ searchId: 'search-inst-2', truncated: false, totalFiles: 1 })
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('skips search entirely on web (!isTauriContext) and shows Recents', async () => {
+    mockIsTauri.mockReturnValue(false)
+    const { result } = renderMentions({
+      recents: [match('src/recent.ts')]
+    })
+    // No subscription attempted on web.
+    expect(mockApi.onSearchFileNamesBatch).not.toHaveBeenCalled()
+    expect(mockApi.onSearchFileNamesDone).not.toHaveBeenCalled()
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(false)
+    // Bare @ still shows recents on web.
+    act(() => result.current.update('@', 1))
+    expect(result.current.sections).toHaveLength(1)
+    expect(result.current.sections[0].id).toBe('recents')
+  })
+
+  it('drops loading synchronously and logs when the stream start fails', async () => {
+    mockApi.searchFileNamesStreamStart.mockResolvedValue({
+      success: false as const,
+      code: 'SEARCH_FILENAMES_STREAM_ERROR',
+      error: 'boom'
+    })
+    const { result } = renderMentions()
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    expect(mockLog).toHaveBeenCalledTimes(1)
+    expect(result.current.loading).toBe(false)
+    expect(result.current.sections).toHaveLength(0)
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'useComposerMentions',
+        message: expect.stringContaining('SEARCH_FILENAMES_STREAM_ERROR')
+      })
+    )
+  })
+
+  it('drops loading and logs when done carries an error code (e.g. RG_SPAWN_FAILED)', async () => {
+    const { result } = renderMentions()
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    emitBatch({
+      searchId: 'search-inst-1',
+      files: [{ path: 'src/auth.ts', ignored: false }]
+    })
+    expect(result.current.sections).toHaveLength(1)
+    emitDone({
+      searchId: 'search-inst-1',
+      truncated: false,
+      totalFiles: 1,
+      code: 'RG_SPAWN_FAILED',
+      error: 'rg missing'
+    })
+    expect(result.current.loading).toBe(false)
+    expect(result.current.sections).toHaveLength(0)
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'useComposerMentions',
+        message: expect.stringContaining('RG_SPAWN_FAILED')
+      })
+    )
+  })
+
+  it('select splices a file token IN at the caret (no hoist), records the recent, and closes the menu', async () => {
     const { result, onStageFileRef } = renderMentions()
-    act(() => result.current.update('@auth', 5))
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    emitBatch({
+      searchId: 'search-inst-1',
+      files: [{ path: 'src/auth.ts', ignored: false }]
+    })
     const picked = match('src/auth.ts')
     let outcome: { value: string; caret: number } | null = null
     act(() => {
-      outcome = result.current.select('@auth', 5, picked)
+      outcome = result.current.select('@rea', 4, picked)
     })
-    expect(outcome).toEqual({ value: '', caret: 0 })
+    // The @rea filter text is removed and a file token is spliced IN at the
+    // caret (the token carries display + absPath split by the unit separator).
+    // The caret lands after the token + trailing space.
+    const expectedToken = fileToken('auth.ts', '/work/src/auth.ts')
+    expect(outcome).toEqual({
+      value: `${expectedToken} `,
+      caret: expectedToken.length + 1
+    })
+    // onStageFileRef still fires (for recents), but the host no longer hoists.
     expect(onStageFileRef).toHaveBeenCalledWith(picked)
     expect(result.current.menuOpen).toBe(false)
   })
 
-  it('reuses the cache on a second menu open (no re-walk)', async () => {
-    const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    const callsAfterFirst = mockReadDir.mock.calls.length
-    expect(callsAfterFirst).toBeGreaterThan(0)
-
-    act(() => result.current.reset())
-    act(() => result.current.update('@chat', 5))
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    expect(mockReadDir.mock.calls.length).toBe(callsAfterFirst)
-    const items = result.current.sections[0].items
-    expect(items.some((i) => i.label === 'ChatInputBar.tsx')).toBe(true)
+  it('cancels an in-flight stream on unmount', async () => {
+    const { result, unmount } = renderMentions()
+    act(() => result.current.update('@rea', 4))
+    await advance(90)
+    expect(result.current.loading).toBe(true)
+    unmount()
+    expect(mockApi.searchFileNamesStreamCancel).toHaveBeenCalledWith('search-inst-1')
   })
 
-  it('re-walks after a file-change invalidation', async () => {
-    const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    const callsAfterFirst = mockReadDir.mock.calls.length
+  it('uses instance-unique search ids so two hook instances never collide', async () => {
+    // Distinct per-instance prefixes (randomUUID) keep the composer's
+    // `search-<inst>-<n>` namespace disjoint from another hook instance and
+    // from the file-explorer store's `search-<n>` namespace, so broadcast
+    // batch/done events cannot update the wrong consumer.
+    mockUuid.mockReturnValueOnce('a').mockReturnValueOnce('b')
+    const first = renderMentions()
+    act(() => first.result.current.update('@rea', 4))
+    await advance(90)
+    const firstSid = mockApi.searchFileNamesStreamStart.mock.calls[0][0] as string
 
-    act(() => mockChangeCb.current?.({ path: '/work/new.ts' }))
-    act(() => result.current.update('@auth', 5))
-    await waitFor(() => expect(mockReadDir.mock.calls.length).toBeGreaterThan(callsAfterFirst))
-  })
+    const second = renderMentions()
+    act(() => second.result.current.update('@rea', 4))
+    await advance(90)
+    const secondSid = mockApi.searchFileNamesStreamStart.mock.calls[1][0] as string
 
-  it('ignores file-change events outside the project root', async () => {
-    const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    const callsAfterFirst = mockReadDir.mock.calls.length
-
-    act(() => mockChangeCb.current?.({ path: '/other/x.ts' }))
-    act(() => result.current.update('@auth', 5))
-    // Event was outside /work, so the cache stays warm and no re-walk happens.
-    expect(mockReadDir.mock.calls.length).toBe(callsAfterFirst)
-  })
-
-  it('re-walks when a change lands during an in-flight walk', async () => {
-    let resolveFirst: () => void = () => {}
-    mockReadDir.mockReset()
-    mockReadDir.mockImplementationOnce(
-      () =>
-        new Promise<Array<{ name: string; isDirectory: boolean }>>((resolve) => {
-          resolveFirst = () => resolve(TREE['/work'] ?? [])
-        })
-    )
-    mockReadDir.mockImplementation(async (dir: string) => TREE[dir] ?? [])
-
-    const { result } = renderMentions()
-    act(() => result.current.update('@auth', 5))
-    // Walk is in flight (readDir for /work pending). Fire a change under /work
-    // before it resolves — the result is stale and must be discarded.
-    act(() => mockChangeCb.current?.({ path: '/work/new.ts' }))
-    act(() => resolveFirst())
-    await waitFor(() => expect(result.current.sections).toHaveLength(1))
-    const workCalls = mockReadDir.mock.calls.filter((c) => c[0] === '/work').length
-    expect(workCalls).toBeGreaterThanOrEqual(2)
+    expect(firstSid).not.toBe(secondSid)
+    expect(firstSid).toBe('search-a-1')
+    expect(secondSid).toBe('search-b-1')
+    // A batch for the first instance must not land in the second.
+    emitBatch({ searchId: firstSid, files: [{ path: 'a.ts', ignored: false }] })
+    expect(first.result.current.sections).toHaveLength(1)
+    expect(second.result.current.sections).toHaveLength(0)
+    first.unmount()
+    second.unmount()
   })
 })

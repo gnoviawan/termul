@@ -131,14 +131,21 @@ pub struct McpToolInfo {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum ProbeStatus {
+    #[serde(rename = "connected")]
     Connected,
+    #[serde(rename = "disconnected")]
     Disconnected,
+    /// The server requires OAuth authentication. The renderer should show a
+    /// "Connect" button that starts the OAuth flow (see `mcp_oauth.rs`).
+    #[serde(rename = "authRequired")]
+    AuthRequired,
 }
 
 /// Probe result. On `Disconnected`, `error` carries a short, value-free message
-/// (no env/header values, tokens, or credentials).
+/// (no env/header values, tokens, or credentials). On `AuthRequired`, the
+/// `www_authenticate_header` carries the raw header so the renderer can
+/// extract the `resource_metadata` URL and start the OAuth flow.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
@@ -147,6 +154,11 @@ pub struct ProbeResult {
     pub tools: Vec<McpToolInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Present only when `status == AuthRequired`. The raw `WWW-Authenticate`
+    /// header value from the `401` response (never carries tokens/credentials —
+    /// it's the challenge, not the credential).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub www_authenticate_header: Option<String>,
 }
 
 impl ProbeResult {
@@ -155,6 +167,7 @@ impl ProbeResult {
             status: ProbeStatus::Connected,
             tools,
             error: None,
+            www_authenticate_header: None,
         }
     }
 
@@ -163,6 +176,16 @@ impl ProbeResult {
             status: ProbeStatus::Disconnected,
             tools: Vec::new(),
             error: Some(error.into()),
+            www_authenticate_header: None,
+        }
+    }
+
+    fn auth_required(www_authenticate_header: String) -> Self {
+        Self {
+            status: ProbeStatus::AuthRequired,
+            tools: Vec::new(),
+            error: None,
+            www_authenticate_header: Some(www_authenticate_header),
         }
     }
 }
@@ -263,6 +286,11 @@ pub async fn probe(server: McpServerConfig) -> ProbeResult {
             server = %name,
             transport = %transport,
             "MCP probe disconnected"
+        ),
+        ProbeStatus::AuthRequired => tracing::info!(
+            server = %name,
+            transport = %transport,
+            "MCP probe: server requires OAuth authentication"
         ),
     }
     outcome
@@ -366,14 +394,118 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
         }
         config = config.custom_headers(headers);
     }
+    // If the server has a stored OAuth token, inject it as a Bearer auth
+    // header so the probe succeeds without re-prompting. This is the
+    // "connect once, use forever" path — after the OAuth flow completes and
+    // the token is persisted, every subsequent probe loads and uses it.
+    let stored_token = match crate::acp::mcp_oauth::get_valid_token(url).await {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::warn!(
+                server = %server.name,
+                transport,
+                "MCP probe: token lookup failed (url redacted): {e}"
+            );
+            None
+        }
+    };
+    if let Some(ref token) = stored_token {
+        config = config.auth_header(crate::acp::mcp_oauth::bearer_header(token));
+    }
+
+    // Pre-flight: check for OAuth requirement ONLY when we don't have a
+    // stored token. If we have a token, skip the pre-flight (it would send
+    // an unauthenticated request, get 401, and wrongly return authRequired).
+    if stored_token.is_none() {
+        // Forward the server's configured headers so a server that requires
+        // an API-key or tenant header (and returns a Bearer challenge when
+        // it is absent) is not misdetected as needing OAuth.
+        if let Some(www_auth_header) = check_oauth_required(url, &server.headers).await {
+            if crate::acp::mcp_oauth::is_auth_required(&www_auth_header) {
+                tracing::info!(
+                    server = %server.name,
+                    transport,
+                    "MCP probe: server requires OAuth authentication"
+                );
+                return ProbeResult::auth_required(www_auth_header);
+            }
+        }
+    }
+
     let client = StreamableHttpClientTransport::from_config(config);
     let running = match serve_client(ClientInfo::default(), client).await {
         Ok(service) => service,
-        Err(error) => return ProbeResult::disconnected(format!("initialize failed: {error}")),
+        Err(error) => {
+            // Fallback: if the pre-flight didn't catch it but serve_client
+            // still reports "Auth required", detect it here. This catches
+            // servers that respond differently to the pre-flight POST vs the
+            // rmcp client's initialize handshake.
+            let error_str = error.to_string();
+            if error_str.to_lowercase().contains("auth required")
+                || error_str.contains("AuthRequired")
+            {
+                // We don't have the WWW-Authenticate header here, but the
+                // renderer can still show a Connect button. The OAuth flow
+                // will discover the resource_metadata URL from the server.
+                tracing::info!(
+                    server = %server.name,
+                    transport,
+                    "MCP probe: server requires OAuth (detected from serve_client error)"
+                );
+                return ProbeResult::auth_required(String::new());
+            }
+            return ProbeResult::disconnected(format!("initialize failed: {error}"));
+        }
     };
     drive_running(running).await
 }
 
+/// Pre-flight check: send a raw HTTP request to the MCP server URL and check
+/// for a `401` response with a `WWW-Authenticate: Bearer` header. Returns the
+/// header value if the server requires OAuth, or `None` if the server is
+/// reachable without auth (or unreachable for non-auth reasons). This avoids
+/// the rmcp worker swallowing the `AuthRequired` error into a generic
+/// "Transport channel closed".
+async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .ok()?;
+    // Send an empty JSON-RPC initialize request — the server will respond
+    // with 401 if OAuth is required before any protocol negotiation.
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "id": 0,
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "termul-probe", "version": "0.1" }
+        }
+    });
+    let mut request = client.post(url).json(&body);
+    // Forward configured headers so the pre-flight matches what the real
+    // rmcp client would send (a server may return a Bearer challenge only
+    // when an API-key header is absent — sending it avoids a false
+    // authRequired).
+    for pair in headers {
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(pair.name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(&pair.value),
+        ) {
+            request = request.header(name, value);
+        }
+    }
+    let response = request.send().await.ok()?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        if let Some(header) = response.headers().get(reqwest::header::WWW_AUTHENTICATE) {
+            if let Ok(value) = header.to_str() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
 /// Drive an initialized rmcp client service: list all tools (paginated), then
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.

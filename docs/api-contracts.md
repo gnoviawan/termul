@@ -346,6 +346,40 @@ ACP agent chat uses Tauri events under the `acp:` namespace (see `src-tauri/src/
 
 See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent vendor expectations.
 
+#### Persisted plan snapshot (`termul-plan` fence)
+
+When a turn ends (`_onPromptComplete` in `src/renderer/stores/acp-store.ts`), the renderer
+snapshots the live `plans[sessionId]` onto the just-finished assistant message's `blocks` as
+a fenced code block with language `termul-plan`:
+
+````md
+```termul-plan
+[{"content":"Read AC file","status":"completed","priority":"high"},{"content":"Fix bug","status":"in_progress","priority":"high"}]
+```
+````
+
+The fence JSON is `JSON.stringify(PlanEntry[])` — shape 1:1 with `PlanEntry`
+(`src/renderer/lib/acp-api.ts`). One fence per assistant message (last write wins; a prior
+fence on the same message is replaced). The snapshot rides on the existing `ChatMessage.blocks`
+persistence path (no new schema field).
+
+On `openHistorySession`, the renderer scans assistant messages in reverse for the
+fence, parses the JSON, and repopulates `plans[sessionId]` before any new `acp:plan_update`
+would arrive — so a reopened chat shows the prior plan immediately. Malformed JSON is dropped
+from the plan store (logged `source: 'planRehydrate'`); the agent can still emit a fresh plan.
+
+> **Cache-only rehydration:** The fence lives in the renderer's in-memory `messages` projection
+> and the `payloadCache` (updated on `_onPromptComplete`). The durable store (CAP-2 host-owned
+> history) does not contain the fence — cross-restart rehydrate does not work. In-session
+> rehydrate (switching away and back) works via the cache update. Fixing cross-restart requires
+> a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
+
+The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
+`TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
+`PlanPanel`. The live streaming turn shows the sticky `PlanPanel` pinned in `AgentChatPanel`
+instead — the inline renderer is gated to `!streaming` so an in-flight turn never renders a
+duplicate plan UI.
+
 ### `acp:usage_update`
 
 **Purpose:** Agent-reported context-window utilization for a session (ACP `sessionUpdate: "usage_update"`; requires the protocol `unstable_session_usage` feature).
@@ -378,6 +412,17 @@ See `docs/acp-agent-plan-compliance.md` for registry compliance tiers and agent 
 ### `acp_send_prompt` errors
 
 When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
+
+### `acp_send_prompt` durability ordering
+
+Desktop prompt persistence mirrors the WS `send_prompt` handler (`src-tauri/src/web/ws.rs`) so a transport failure can never erase an accepted user message. Before dispatching through `AcpManager::send_prompt`, the command:
+
+1. verifies authoritative session ownership (`AcpManager::owns_session`) — rejects a cross-agent session id before any durable write;
+2. resolves the ephemeral flag (`AcpManager::is_ephemeral_session`) — backend-ephemeral utility sessions are skipped (no durable history or sidebar row);
+3. for non-ephemeral sessions, persists the accepted prompt through `WsRelaySink::persist_user_prompt` (the relay sequence authority + durability barrier) with the same payload shape as the web path (`{agentId, sessionId, turnId, content}`; `turnId` is `null` on the desktop path);
+4. only then dispatches through `AcpManager::send_prompt`.
+
+A persistence failure rejects dispatch (the prompt is not erased) and is logged with session context only — never prompt content. This establishes first-message title provenance on restore: a reopened chat materializes the user bubble (from the durable `user_prompt` record) and derives the title, even for agents (e.g. OpenCode) that do not reliably send a live `session_info_update` title.
 
 ## Notes
 

@@ -3,11 +3,13 @@ import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { skillToken } from '@/lib/skill-tokens'
+import { fileToken, skillToken } from '@/lib/skill-tokens'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
 
 const T = skillToken
+
+const FT = fileToken
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
 const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
@@ -41,7 +43,8 @@ vi.mock('streamdown', async () => {
     caret,
     animated,
     linkSafety,
-    components
+    components,
+    plugins
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -49,6 +52,7 @@ vi.mock('streamdown', async () => {
     animated?: boolean | AnimateOptions
     linkSafety?: LinkSafety
     components?: Record<string, unknown>
+    plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
@@ -62,6 +66,9 @@ vi.mock('streamdown', async () => {
     const animatedDuration = animatedConfig ? String(animatedConfig.duration ?? '') : ''
     const animatedStagger = animatedConfig ? String(animatedConfig.stagger ?? '') : ''
     const animatedEasing = animatedConfig?.easing ?? ''
+    const rendererLanguages = (plugins?.renderers ?? [])
+      .flatMap((r) => (Array.isArray(r.language) ? r.language : [r.language]))
+      .join(',')
 
     return (
       <div
@@ -73,6 +80,7 @@ vi.mock('streamdown', async () => {
         data-animated-easing={animatedEasing}
         data-caret={caret}
         data-custom-table={Boolean(CustomTable)}
+        data-renderer-languages={rendererLanguages}
       >
         <button
           type="button"
@@ -260,6 +268,24 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
   })
 
+  it('wires the termul-plan renderer only for non-streaming (historical) messages', () => {
+    // Streaming message: the sticky PlanPanel covers the live turn; the
+    // inline renderer is deliberately absent so no duplicate plan UI shows.
+    const { unmount: unmountStreaming } = render(
+      <ChatMessage message={agentMessage(true)} isLast />
+    )
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-renderer-languages', '')
+    unmountStreaming()
+
+    // Historical message: the termul-plan renderer is attached so a
+    // persisted snapshot fence renders an inline read-only PlanPanel.
+    render(<ChatMessage message={agentMessage(false)} isLast />)
+    expect(screen.getByTestId('streamdown')).toHaveAttribute(
+      'data-renderer-languages',
+      'termul-plan'
+    )
+  })
+
   it('stops the Streamdown caret when a newer timeline item follows', () => {
     render(<ChatMessage message={agentMessage(true)} isLast={false} />)
 
@@ -278,22 +304,32 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.animate-caret-blink')).toBeInTheDocument()
   })
 
-  it('opens file citations only on Ctrl/Cmd-click', async () => {
+  it('opens file citations on regular click (no Ctrl/Cmd gate)', async () => {
     const message: ChatMessageType = {
       ...agentMessage(false),
       blocks: [{ type: 'text', text: 'FILE_PATH:src/renderer/App.tsx:42' }]
     }
     render(<ChatMessage message={message} filePathContext={{ cwd: '/project' }} />)
 
-    const filePathLink = screen.getByTitle('Ctrl/Cmd-click to open in editor')
+    const filePathLink = screen.getByTitle('Open in editor')
     fireEvent.click(filePathLink)
-    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
-
-    fireEvent.click(filePathLink, { ctrlKey: true })
     await act(async () => undefined)
     expect(openFilePathFromTerminal).toHaveBeenCalledWith('src/renderer/App.tsx:42', {
       cwd: '/project'
     })
+  })
+
+  it('does not open file citations on shift-click (allow text selection)', async () => {
+    const message: ChatMessageType = {
+      ...agentMessage(false),
+      blocks: [{ type: 'text', text: 'FILE_PATH:src/renderer/App.tsx:42' }]
+    }
+    render(<ChatMessage message={message} filePathContext={{ cwd: '/project' }} />)
+
+    const filePathLink = screen.getByTitle('Open in editor')
+    fireEvent.click(filePathLink, { shiftKey: true })
+    await act(async () => undefined)
+    expect(openFilePathFromTerminal).not.toHaveBeenCalled()
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {
@@ -349,6 +385,59 @@ describe('ChatMessage', () => {
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No chip rendered: the chip's Sparkles icon is absent.
       expect(container.querySelector('.lucide-sparkles')).toBeNull()
+    })
+  })
+
+  describe('user message with inline file chips', () => {
+    function userMessage(text: string): ChatMessageType {
+      return {
+        id: 'user-1',
+        role: 'user',
+        blocks: [{ type: 'text', text }],
+        streaming: false,
+        timestamp: 0
+      }
+    }
+
+    it('renders inline file chips for token text in a user bubble', () => {
+      const text = `fix this ${FT('auth.ts', '/work/src/auth.ts')} bug`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      // The file chip name renders as a visible inline pill; the File icon
+      // (lucide-file) is the chip-specific marker.
+      expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      // The plain text segments render too.
+      expect(screen.getByText(/fix this/)).toBeInTheDocument()
+      expect(screen.getByText(/bug/)).toBeInTheDocument()
+    })
+
+    it('renders plain user text verbatim (no chip parsing) when there are no tokens', () => {
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage('just plain text')} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('just plain text')).toBeInTheDocument()
+      // No file chip rendered: the File icon is absent.
+      expect(container.querySelector('.lucide-file')).toBeNull()
+    })
+
+    it('renders file + skill chips together (both inline, visually distinct)', () => {
+      const text = `use ${T('git-worktree')} on ${FT('auth.ts', '/work/src/auth.ts')}`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('git-worktree')).toBeInTheDocument()
+      expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      // Both icons present — skill (Sparkles) + file (File).
+      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
+      expect(container.querySelector('.lucide-file')).not.toBeNull()
     })
   })
 })

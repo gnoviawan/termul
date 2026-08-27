@@ -14,7 +14,7 @@ interface SlashCommandMenuProps {
   sections: SlashSection[]
   onSelect: (item: SlashItem) => void
   /** The composer textarea that owns this listbox (for aria-controls/activedescendant). */
-  inputRef?: RefObject<HTMLTextAreaElement | null>
+  inputRef?: RefObject<HTMLElement | null>
 }
 
 function itemKey(item: SlashItem): string {

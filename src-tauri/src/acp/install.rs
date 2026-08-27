@@ -634,7 +634,7 @@ impl AcpInstallService {
         let archive_host = archive_host_for_log(archive_url);
         log::info!(
             "[acp-install] {} install start agent={} target={} archive_host={}",
-            crate::logging::session_id(),
+            crate::logging::run_id(),
             agent_id_log,
             platform_arch,
             archive_host
@@ -670,7 +670,7 @@ impl AcpInstallService {
                 let _ = std::fs::remove_dir_all(&tmp_dir);
                 log::error!(
                     "[acp-install] {} install failure agent={} code={} msg={}",
-                    crate::logging::session_id(),
+                    crate::logging::run_id(),
                     agent_id_log,
                     e.code,
                     e.message
@@ -685,7 +685,7 @@ impl AcpInstallService {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             log::error!(
                 "[acp-install] {} extract failure agent={} code={} msg={}",
-                crate::logging::session_id(),
+                crate::logging::run_id(),
                 agent_id_log,
                 e.code,
                 e.message
@@ -698,7 +698,7 @@ impl AcpInstallService {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             log::error!(
                 "[acp-install] {} cmd resolution failure agent={} msg={}",
-                crate::logging::session_id(),
+                crate::logging::run_id(),
                 agent_id_log,
                 e
             );
@@ -778,7 +778,7 @@ impl AcpInstallService {
             Ok(Err(e)) => {
                 log::error!(
                     "[acp-install] {} manifest persist failed (stale audit record): {e}",
-                    crate::logging::session_id()
+                    crate::logging::run_id()
                 );
                 return Err(InstallError::new(
                     code::INSTALL_FAILED,
@@ -788,7 +788,7 @@ impl AcpInstallService {
             Err(e) => {
                 log::error!(
                     "[acp-install] {} manifest persist task failed: {e}",
-                    crate::logging::session_id()
+                    crate::logging::run_id()
                 );
                 return Err(InstallError::new(
                     code::INSTALL_FAILED,
@@ -800,7 +800,7 @@ impl AcpInstallService {
         let elapsed = started.elapsed();
         log::info!(
             "[acp-install] {} install success agent={} bytes={} duration_ms={}",
-            crate::logging::session_id(),
+            crate::logging::run_id(),
             agent_id_log,
             bytes_len,
             elapsed.as_millis()
@@ -854,7 +854,7 @@ impl AcpInstallService {
         // (see the doc comment above).
         log::info!(
             "[acp-install] {} uninstall agent={}",
-            crate::logging::session_id(),
+            crate::logging::run_id(),
             sanitize_agent_id_log(agent_id)
         );
         Ok(())

@@ -9,6 +9,7 @@ import {
   onBrowserTabLoaded,
   onBrowserTabNavigated
 } from '@/lib/browser-api'
+import { logFrontendError } from '@/lib/log-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 
 interface BrowserBounds {
@@ -52,21 +53,28 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     }, 6000)
   }, [browserTabId, clearLoadingTimeout])
 
-  const updateBounds = useCallback(() => {
+  const updateBounds = useCallback((): Promise<void> => {
     const el = containerRef.current
-    if (!el || !createdRef.current) return
+    if (!el || !createdRef.current) return Promise.resolve()
     const bounds = getElementBounds(el)
-    browserTabResize(browserTabId, bounds)
+    return browserTabResize(browserTabId, bounds)
       .then((result) => {
         if (!result.success) {
-          console.error('[BrowserWebview] resize failed:', result.error)
+          void logFrontendError({
+            message: `browserTabResize failed for tab ${browserTabId}: ${result.error}`,
+            source: 'useBrowserWebview'
+          })
         }
       })
       .catch((err) => {
-        console.error('[BrowserWebview] resize error:', err)
+        void logFrontendError({
+          message: `browserTabResize rejected for tab ${browserTabId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          source: 'useBrowserWebview'
+        })
       })
   }, [browserTabId])
-
   // Create / destroy webview lifecycle
   useEffect(() => {
     mountedRef.current = true
@@ -83,32 +91,116 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     browserTabCreate(browserTabId, urlRef.current, bounds)
       .then((result) => {
         if (!mountedRef.current || mountToken !== mountTokenRef.current) {
-          browserTabDestroy(browserTabId).catch(console.error)
+          browserTabDestroy(browserTabId).catch((e) => {
+            void logFrontendError({
+              message: `browserTabDestroy after stale mount for tab ${browserTabId}: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+              source: 'useBrowserWebview'
+            })
+          })
           return
         }
         if (result.success) {
           createdRef.current = true
-          if (visibilityRef.current) {
-            browserTabShow(browserTabId)
-              .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+          // Resync bounds after creation. The container was measured once at
+          // call time (before browserTabCreate above), but the pane layout can
+          // still be mid-transition — pane wrappers use `transition-all
+          // duration-150` (PaneContent) — or otherwise unsettled when the
+          // async create resolves. Without a re-measure the native webview
+          // keeps stale creation bounds and overflows into the adjacent pane
+          // (issue #644). Poll across frames until the rect stops changing
+          // (or a frame budget elapses) so we adopt *settled*, not transient,
+          // bounds — then reveal. Mirrors ConnectedTerminal's
+          // waitForStableLayout approach for the same class of race.
+          const MAX_RESYNC_WAIT_FRAMES = 30 // ~0.5s at 60fps; covers the 150ms transition
+          let prev: BrowserBounds | null = null
+          let frames = 0
+          const resyncAndShow = async (): Promise<void> => {
+            if (!mountedRef.current || mountToken !== mountTokenRef.current) return
+            const elNow = containerRef.current
+            if (!elNow) return
+            const next = getElementBounds(elNow)
+            // Wait until the full rect (position + size) is stable across two
+            // consecutive frames: a same-size container can still MOVE during a
+            // layout transition (sidebar toggle, gutter drag), so x/y must
+            // settle too, not just width/height.
+            const stable =
+              prev !== null &&
+              prev.x === next.x &&
+              prev.y === next.y &&
+              prev.width === next.width &&
+              prev.height === next.height
+            prev = next
+            frames += 1
+            if (!stable && frames < MAX_RESYNC_WAIT_FRAMES) {
+              requestAnimationFrame(() => {
+                void resyncAndShow()
               })
-              .catch(console.error)
-          } else {
-            browserTabHide(browserTabId)
-              .then((r) => {
-                if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
-              })
-              .catch(console.error)
+              return
+            }
+            // Settled (or budget exhausted): resync via the shared helper so the
+            // result.success branch is inspected (no silent failure), then
+            // reveal. Await the resize before showing so the webview is never
+            // revealed at stale creation bounds.
+            await updateBounds()
+            if (visibilityRef.current) {
+              browserTabShow(browserTabId)
+                .then((r) => {
+                  if (!r.success) {
+                    void logFrontendError({
+                      message: `browserTabShow failed for tab ${browserTabId}: ${r.error}`,
+                      source: 'useBrowserWebview'
+                    })
+                  }
+                })
+                .catch((err) => {
+                  void logFrontendError({
+                    message: `browserTabShow rejected for tab ${browserTabId}: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                    source: 'useBrowserWebview'
+                  })
+                })
+            } else {
+              browserTabHide(browserTabId)
+                .then((r) => {
+                  if (!r.success) {
+                    void logFrontendError({
+                      message: `browserTabHide failed for tab ${browserTabId}: ${r.error}`,
+                      source: 'useBrowserWebview'
+                    })
+                  }
+                })
+                .catch((err) => {
+                  void logFrontendError({
+                    message: `browserTabHide rejected for tab ${browserTabId}: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                    source: 'useBrowserWebview'
+                  })
+                })
+            }
           }
+          requestAnimationFrame(() => {
+            void resyncAndShow()
+          })
         } else {
-          console.error('[BrowserWebview] create failed:', result.error)
+          void logFrontendError({
+            message: `browserTabCreate failed for tab ${browserTabId}: ${result.error ?? 'unknown'} [${result.code ?? 'NO_CODE'}]`,
+            source: 'useBrowserWebview'
+          })
           clearLoadingTimeout()
           useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
-        console.error('[BrowserWebview] create error:', err)
+        void logFrontendError({
+          message: `browserTabCreate rejected for tab ${browserTabId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          source: 'useBrowserWebview'
+        })
         clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })
@@ -120,13 +212,23 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       browserTabDestroy(browserTabId)
         .then((result) => {
           if (!result.success) {
-            console.error('[BrowserWebview] destroy failed:', result.error)
+            void logFrontendError({
+              message: `browserTabDestroy failed for tab ${browserTabId}: ${result.error ?? 'unknown'}`,
+              source: 'useBrowserWebview'
+            })
           }
         })
-        .catch(console.error)
+        .catch((e) => {
+          void logFrontendError({
+            message: `browserTabDestroy rejected for tab ${browserTabId}: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            source: 'useBrowserWebview'
+          })
+        })
       createdRef.current = false
     }
-  }, [browserTabId, clearLoadingTimeout, armLoadingTimeout])
+  }, [browserTabId, clearLoadingTimeout, armLoadingTimeout, updateBounds])
 
   // Show / hide on visibility change
   useEffect(() => {
@@ -136,15 +238,39 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
       updateBounds()
       browserTabShow(browserTabId)
         .then((r) => {
-          if (!r.success) console.error('[BrowserWebview] show failed:', r.error)
+          if (!r.success) {
+            void logFrontendError({
+              message: `browserTabShow failed for tab ${browserTabId}: ${r.error}`,
+              source: 'useBrowserWebview'
+            })
+          }
         })
-        .catch(console.error)
+        .catch((err) => {
+          void logFrontendError({
+            message: `browserTabShow rejected for tab ${browserTabId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            source: 'useBrowserWebview'
+          })
+        })
     } else {
       browserTabHide(browserTabId)
         .then((r) => {
-          if (!r.success) console.error('[BrowserWebview] hide failed:', r.error)
+          if (!r.success) {
+            void logFrontendError({
+              message: `browserTabHide failed for tab ${browserTabId}: ${r.error}`,
+              source: 'useBrowserWebview'
+            })
+          }
         })
-        .catch(console.error)
+        .catch((err) => {
+          void logFrontendError({
+            message: `browserTabHide rejected for tab ${browserTabId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            source: 'useBrowserWebview'
+          })
+        })
     }
   }, [isVisible, browserTabId, updateBounds])
 
@@ -158,13 +284,21 @@ export function useBrowserWebview(browserTabId: string, isVisible: boolean, url:
     browserTabNavigate(browserTabId, url)
       .then((result) => {
         if (!result.success) {
-          console.error('[BrowserWebview] navigate failed:', result.error)
+          void logFrontendError({
+            message: `browserTabNavigate failed for tab ${browserTabId}: ${result.error}`,
+            source: 'useBrowserWebview'
+          })
           clearLoadingTimeout()
           useBrowserSessionStore.getState().setLoading(browserTabId, false)
         }
       })
       .catch((err) => {
-        console.error('[BrowserWebview] navigate error:', err)
+        void logFrontendError({
+          message: `browserTabNavigate rejected for tab ${browserTabId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          source: 'useBrowserWebview'
+        })
         clearLoadingTimeout()
         useBrowserSessionStore.getState().setLoading(browserTabId, false)
       })

@@ -14,8 +14,11 @@
  * normalize it (toast, etc.).
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { webServerMcpOAuth } from '@/lib/web-server-api'
 
 // --- Identifiers -----------------------------------------------------------
 
@@ -126,12 +129,22 @@ export type ToolCallContent =
   | { type: 'terminal'; terminalId?: string }
   | { type: string; [k: string]: unknown }
 
+/** A file location affected by a tool call (ACP `ToolCallLocation`). */
+export interface ToolCallLocation {
+  path: string
+  line?: number
+}
+
 export interface ToolCall {
   toolCallId: string
   title?: string
   kind?: ToolKind
   status?: ToolCallStatus
   content?: ToolCallContent[]
+  /** File locations affected by this tool call (ACP `locations` field).
+   * Agents populate this for "follow-along" features — it is the canonical
+   * path source, ahead of the `rawInput` heuristic and diff-content fallback. */
+  locations?: ToolCallLocation[]
   rawInput?: unknown
   rawOutput?: unknown
   /** Client-side arrival time (stamped in the store for timeline ordering). */
@@ -147,6 +160,7 @@ export interface ToolCallUpdate {
   kind?: ToolKind
   status?: ToolCallStatus
   content?: ToolCallContent[]
+  locations?: ToolCallLocation[]
   rawInput?: unknown
   rawOutput?: unknown
   [k: string]: unknown
@@ -221,7 +235,7 @@ export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 // --- MCP client probe (on-demand `initialize` + `tools/list`) -------------
 
 /** Per-server probe status (Termul's own client connection, not the agent's). */
-export type ProbeStatus = 'connected' | 'disconnected'
+export type ProbeStatus = 'connected' | 'disconnected' | 'authRequired'
 
 /** A tool exposed by a probed MCP server (`tools/list` output, UI subset). */
 export interface McpToolInfo {
@@ -229,11 +243,14 @@ export interface McpToolInfo {
   description?: string
 }
 
-/** Probe result. On `disconnected`, `error` is a short, value-free message. */
+/** Probe result. On `disconnected`, `error` is a short, value-free message.
+ * On `authRequired`, `wwwAuthenticateHeader` carries the raw WWW-Authenticate
+ * header so the frontend can detect OAuth and start the connect flow. */
 export interface ProbeResult {
   status: ProbeStatus
   tools: McpToolInfo[]
   error?: string
+  wwwAuthenticateHeader?: string
 }
 /** Wire type forwarded verbatim to the backend `acp_new_session` command. */
 export type McpServer = McpServerConfig
@@ -538,6 +555,76 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
   const { listMcpTools: canonicalList } = await import('@/lib/acp-mcp-probe')
   return canonicalList(server)
 }
+// --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
+
+/** Start the OAuth flow for an MCP server URL. On desktop, opens the system
+ * browser and waits for the callback (the Tauri command blocks until the
+ * token is stored). On web, opens a blank window first (preserves transient
+ * user activation for the popup), navigates it to the auth URL once returned,
+ * then polls the status endpoint until the token is stored. Throws on
+ * failure (discovery, registration, timeout). */
+export async function startMcpOAuth(serverUrl: string): Promise<void> {
+  if (isTauriContext()) {
+    await invoke('acp_mcp_oauth_start', { serverUrl })
+    return
+  }
+  // Web path: open a blank window BEFORE the async request so the browser
+  // does not block the popup (transient user activation window). Navigate it
+  // once the auth URL is returned.
+  const popup = window.open('about:blank', '_blank', 'noopener')
+  if (!popup) {
+    throw new Error('Popup blocked — allow popups for this site to start OAuth')
+  }
+  let authUrl: string
+  try {
+    const result = await webServerMcpOAuth.start(serverUrl)
+    if (!result.success) {
+      throw new Error(result.error ?? 'OAuth start failed')
+    }
+    authUrl = result.data.authUrl
+  } catch (err) {
+    popup.close()
+    throw err
+  }
+  popup.location.href = authUrl
+  // Wait for OAuth completion by polling the status endpoint until the token
+  // is stored. The OAuth callback redirect processes on the server side; once
+  // `hasToken` is true, the flow is complete.
+  const POLL_INTERVAL_MS = 1000
+  const POLL_TIMEOUT_MS = 300_000 // 5 min — matches OAUTH_FLOW_TIMEOUT_SECS
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    const status = await webServerMcpOAuth.status(serverUrl)
+    if (status.success && status.data?.hasToken) {
+      return
+    }
+  }
+  throw new Error('OAuth flow timed out — user did not complete authorization in time')
+}
+
+/** Check whether a stored OAuth token exists for a server URL. */
+export async function hasMcpOAuthToken(serverUrl: string): Promise<boolean> {
+  if (isTauriContext()) {
+    return invoke<boolean>('acp_mcp_oauth_has_token', { serverUrl })
+  }
+  const result = await webServerMcpOAuth.status(serverUrl)
+  return result.success && result.data ? result.data.hasToken : false
+}
+
+/** Delete the stored OAuth token for a server URL (the "Disconnect" action).
+ * On web, inspects the IpcResult and throws when `success: false`. On desktop,
+ * the Tauri invoke path propagates failures as before. */
+export async function disconnectMcpOAuth(serverUrl: string): Promise<void> {
+  if (isTauriContext()) {
+    await invoke('acp_mcp_oauth_disconnect', { serverUrl })
+    return
+  }
+  const result = await webServerMcpOAuth.disconnect(serverUrl)
+  if (!result.success) {
+    throw new Error(result.error ?? 'OAuth disconnect failed')
+  }
+}
 
 export interface AcpRegistrySnapshot {
   agents: unknown
@@ -565,7 +652,13 @@ export async function acpNewSession(
   agentId: AgentId,
   cwd: string,
   mcpServers?: McpServer[],
-  options?: { ephemeral?: boolean; projectId?: string }
+  options?: {
+    ephemeral?: boolean
+    projectId?: string
+    /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
+    worktreePath?: string
+    worktreeBranch?: string
+  }
 ): Promise<NewSessionOutcome> {
   return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
 }
@@ -603,6 +696,17 @@ export async function acpListSessions(
   cursor?: string
 ): Promise<ListSessionsResponse> {
   return getAcpTransport().listSessions(agentId, cwd, cursor)
+}
+
+export async function acpRegisterDiscoveredSession(input: {
+  sessionId: SessionId
+  agentId: AgentId
+  cwd: string
+  title?: string | null
+  updatedAt?: number
+  projectId?: string
+}): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
+  return getAcpTransport().registerDiscoveredSession(input)
 }
 
 export async function acpSendPrompt(
@@ -751,6 +855,9 @@ export const acpApi = {
   probeRuntime: acpProbeRuntime,
   probeMcpServer,
   listMcpTools,
+  startMcpOAuth,
+  hasMcpOAuthToken,
+  disconnectMcpOAuth,
   fetchRegistrySnapshot: acpFetchRegistrySnapshot,
   onEvent: onAcpEvent
 }

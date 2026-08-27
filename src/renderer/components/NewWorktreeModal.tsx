@@ -6,6 +6,7 @@ import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
 import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Worktree } from '@/types/project'
 
@@ -222,7 +223,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
       if (result.success && result.data) {
         const newWorktree: Worktree = {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           name: result.data.name,
           branch: result.data.branch,
           path: result.data.path,

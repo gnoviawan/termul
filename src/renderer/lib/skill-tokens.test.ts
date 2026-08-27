@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractSkillNames,
+  FILE_TOKEN_END,
+  FILE_TOKEN_SEP,
+  FILE_TOKEN_START,
+  fileToken,
+  insertFileToken,
   insertSkillToken,
+  parseFileSegments,
   parseSkillSegments,
+  removeFileTokenBeforeCaret,
   removeSkillTokenBeforeCaret,
+  replaceFileTokensInline,
   replaceSkillTokensInline,
   SKILL_PAD_CHAR,
   SKILL_PAD_END,
@@ -294,6 +302,197 @@ describe('skillToken', () => {
     const pad = SKILL_PAD_CHAR.repeat(3)
     expect(skillToken('git-worktree', pad)).toBe(
       `${SKILL_TOKEN_START}git-worktree${SKILL_TOKEN_END}${SKILL_PAD_START}${pad}${SKILL_PAD_END}`
+    )
+  })
+})
+
+// ============================================================================
+// File-mention pill token model
+// ============================================================================
+
+const FT = (display: string, absPath: string): string => fileToken(display, absPath)
+
+describe('parseFileSegments', () => {
+  it('returns no segments for an empty value', () => {
+    expect(parseFileSegments('')).toEqual([])
+  })
+
+  it('returns a single text segment for plain text with no tokens', () => {
+    expect(parseFileSegments('hello world')).toEqual([{ kind: 'text', text: 'hello world' }])
+  })
+
+  it('parses a lone token into a single file segment', () => {
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(parseFileSegments(t)).toEqual([
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: t }
+    ])
+  })
+
+  it('parses text + token + text in order', () => {
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(parseFileSegments(`fix this ${t} bug`)).toEqual([
+      { kind: 'text', text: 'fix this ' },
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: t },
+      { kind: 'text', text: ' bug' }
+    ])
+  })
+
+  it('parses adjacent tokens with no text between them', () => {
+    const t1 = FT('auth.ts', '/work/src/auth.ts')
+    const t2 = FT('util.ts', '/work/src/util.ts')
+    expect(parseFileSegments(`${t1}${t2}`)).toEqual([
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: t1 },
+      { kind: 'file', display: 'util.ts', absPath: '/work/src/util.ts', raw: t2 }
+    ])
+  })
+
+  it('parses a token at the start and a token at the end', () => {
+    const t1 = FT('auth.ts', '/work/src/auth.ts')
+    const t2 = FT('util.ts', '/work/src/util.ts')
+    expect(parseFileSegments(`${t1} middle ${t2}`)).toEqual([
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: t1 },
+      { kind: 'text', text: ' middle ' },
+      { kind: 'file', display: 'util.ts', absPath: '/work/src/util.ts', raw: t2 }
+    ])
+  })
+
+  it('handles slash-containing paths', () => {
+    const t = FT('src/deep/path/file.ts', '/work/src/deep/path/file.ts')
+    expect(parseFileSegments(t)).toEqual([
+      {
+        kind: 'file',
+        display: 'src/deep/path/file.ts',
+        absPath: '/work/src/deep/path/file.ts',
+        raw: t
+      }
+    ])
+  })
+
+  it('treats an unterminated start sentinel as plain text', () => {
+    expect(parseFileSegments(`hello ${FILE_TOKEN_START}auth.ts`)).toEqual([
+      { kind: 'text', text: `hello ${FILE_TOKEN_START}auth.ts` }
+    ])
+  })
+
+  it('treats a token with no separator as plain text', () => {
+    const malformed = `${FILE_TOKEN_START}auth.ts${FILE_TOKEN_END}`
+    expect(parseFileSegments(`fix ${malformed}`)).toEqual([
+      { kind: 'text', text: `fix ${malformed}` }
+    ])
+  })
+
+  it('treats a token with empty display or path as plain text', () => {
+    const emptyDisplay = `${FILE_TOKEN_START}${FILE_TOKEN_SEP}/work/auth.ts${FILE_TOKEN_END}`
+    const emptyPath = `${FILE_TOKEN_START}auth.ts${FILE_TOKEN_SEP}${FILE_TOKEN_END}`
+    expect(parseFileSegments(emptyDisplay)).toEqual([{ kind: 'text', text: emptyDisplay }])
+    expect(parseFileSegments(emptyPath)).toEqual([{ kind: 'text', text: emptyPath }])
+  })
+
+  it('coexists with skill tokens: file tokens are invisible to parseSkillSegments and vice versa', () => {
+    const st = skillToken('git-worktree')
+    const ft = FT('auth.ts', '/work/src/auth.ts')
+    const value = `use ${st} on ${ft}`
+    // The skill walk treats the file token as plain text (correct).
+    expect(parseSkillSegments(value)).toEqual([
+      { kind: 'text', text: 'use ' },
+      { kind: 'skill', name: 'git-worktree', raw: st, padding: '' },
+      {
+        kind: 'text',
+        text: ` on ${ft}`
+      }
+    ])
+    // The file walk treats the skill token as plain text (correct).
+    expect(parseFileSegments(value)).toEqual([
+      { kind: 'text', text: `use ${st} on ` },
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: ft }
+    ])
+  })
+})
+
+describe('replaceFileTokensInline', () => {
+  it('returns the value unchanged when there are no tokens', () => {
+    expect(replaceFileTokensInline('hello world')).toBe('hello world')
+  })
+
+  it('replaces a single token with (display)', () => {
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(replaceFileTokensInline(`fix this ${t} bug`)).toBe('fix this (auth.ts) bug')
+  })
+
+  it('preserves inline duplicates', () => {
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(replaceFileTokensInline(`${t} and again ${t}`)).toBe('(auth.ts) and again (auth.ts)')
+  })
+
+  it('replaces slash-containing display paths', () => {
+    const t = FT('src/deep/file.ts', '/work/src/deep/file.ts')
+    expect(replaceFileTokensInline(`see ${t}`)).toBe('see (src/deep/file.ts)')
+  })
+
+  it('leaves skill tokens untouched', () => {
+    const st = skillToken('git-worktree')
+    const ft = FT('auth.ts', '/work/src/auth.ts')
+    expect(replaceFileTokensInline(`use ${st} on ${ft}`)).toBe(`use ${st} on (auth.ts)`)
+  })
+
+  it('leaves malformed tokens as plain text', () => {
+    const malformed = `${FILE_TOKEN_START}auth.ts${FILE_TOKEN_END}`
+    expect(replaceFileTokensInline(`fix ${malformed}`)).toBe(`fix ${malformed}`)
+  })
+})
+
+describe('insertFileToken', () => {
+  it('splices a token at the caret with a trailing space', () => {
+    const value = 'fix this '
+    const { value: next, caret } = insertFileToken(
+      value,
+      value.length,
+      'auth.ts',
+      '/work/src/auth.ts'
+    )
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(next).toBe(`fix this ${t} `)
+    expect(caret).toBe(next.length)
+  })
+
+  it('removes the deleteBefore chars preceding the caret', () => {
+    const value = 'fix @auth'
+    // caret at end; deleteBefore removes the @auth filter (5 chars).
+    const { value: next, caret } = insertFileToken(
+      value,
+      value.length,
+      'auth.ts',
+      '/work/src/auth.ts',
+      5
+    )
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    expect(next).toBe(`fix ${t} `)
+    expect(caret).toBe(next.length)
+  })
+})
+
+describe('removeFileTokenBeforeCaret', () => {
+  it('removes the whole token + trailing space when caret is after the space', () => {
+    const t = FT('auth.ts', '/work/src/auth.ts')
+    const value = `fix ${t} bug`
+    // caret right after the trailing space following the token.
+    const caret = `fix ${t} `.length
+    expect(removeFileTokenBeforeCaret(value, caret)).toEqual({
+      removed: true,
+      value: 'fix bug',
+      caret: 4
+    })
+  })
+
+  it('returns removed:false when caret is not after a token', () => {
+    expect(removeFileTokenBeforeCaret('hello world', 5)).toEqual({ removed: false })
+  })
+})
+
+describe('fileToken', () => {
+  it('encodes display + absPath split by the unit separator', () => {
+    expect(fileToken('auth.ts', '/work/src/auth.ts')).toBe(
+      `${FILE_TOKEN_START}auth.ts${FILE_TOKEN_SEP}/work/src/auth.ts${FILE_TOKEN_END}`
     )
   })
 })

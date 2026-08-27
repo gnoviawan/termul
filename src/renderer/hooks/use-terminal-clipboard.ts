@@ -1,6 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { clipboardApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 
 export interface UseTerminalClipboardOptions {
   terminal: Terminal | null
@@ -18,6 +19,12 @@ export interface UseTerminalClipboardReturn {
 const MAX_CLIPBOARD_SIZE = 10 * 1024 * 1024
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
+
+// F2: warn once when the menu/toolbar paste path is gated off in a non-secure
+// context (the Async Clipboard API is unavailable and a click can't trigger a
+// paste event). The Ctrl+V keydown path is unaffected (it returns true to
+// native xterm paste before reaching this hook's readText).
+let warnedNonSecureMenuPaste = false
 
 function normalizePasteText(text: string): string {
   return text.replace(/\r?\n/g, '\r')
@@ -100,6 +107,25 @@ export function useTerminalClipboard(
 
     const currentTerminal = terminalRef.current
     if (!currentTerminal) return
+
+    // F2: the menu/toolbar "Paste" path calls readText() directly. In a
+    // non-secure context the Async Clipboard API is undefined and a click
+    // can't produce the paste event the facade's fallback waits on — so
+    // readText would hang 5s then READ_ERROR. Fail fast (no-op) instead.
+    // The Ctrl+V keydown path is unaffected (it returns true to native
+    // xterm paste in ConnectedTerminal before reaching this hook).
+    if (typeof navigator !== 'undefined' && typeof navigator.clipboard === 'undefined') {
+      if (!warnedNonSecureMenuPaste) {
+        warnedNonSecureMenuPaste = true
+        void logFrontendError({
+          level: 'warn',
+          message:
+            'Menu/toolbar paste unavailable in non-secure context (no navigator.clipboard); use Ctrl+V',
+          source: 'use-terminal-clipboard'
+        })
+      }
+      return
+    }
 
     isPastingRef.current = true
 

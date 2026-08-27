@@ -64,6 +64,31 @@ impl<T> IpcBody<T> {
 pub struct SetDefaultProjectRequest {
     pub project_id: String,
 }
+/// `POST /projects` request body — create / upsert a VFS root (Option B: the
+/// standalone server is a first-class project-list authority). The operator /
+/// web client supplies the identity + display fields + canonical path; the
+/// server canonicalizes + validates the path. Mirrors the
+/// `add_project` WS request payload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertProjectRequest {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub color: String,
+    #[serde(default)]
+    pub is_archived: bool,
+}
+
+/// `PUT /projects/{id}` request body — patch a root's display fields. All
+/// fields optional (partial update). Mirrors the `update_project` WS request.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequest {
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub is_archived: Option<bool>,
+}
 
 /// `GET /projects` → the synced project list mirror.
 ///
@@ -106,11 +131,41 @@ pub async fn set_default_project(
     // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
     // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
     // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
-    if !peer.ip().is_loopback() {
+    let is_loopback = peer.ip().is_loopback();
+    // Deployment-mode deny FIRST: shared-live (cloudflared tunnel) cannot
+    // distinguish forwarded public traffic from genuine local callers, so
+    // refuse all host-state writes on this path before peer/flag evaluation.
+    if state.shared_live_writes_denied {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+        );
+        return Json(IpcBody::<()>::err(
+            "shared-live deployment mode denies all remote writes".to_string(),
+            "FORBIDDEN",
+        ));
+    }
+    if !is_loopback && !state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
         return Json(IpcBody::<()>::err(
             format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
             "FORBIDDEN",
         ));
+    }
+    if !is_loopback && state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route = "/projects/default",
+            peer = %peer,
+            "remote-write guard ADMITTED (--allow-remote-writes)",
+        );
     }
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).
@@ -202,6 +257,321 @@ pub async fn set_default_project(
     Json(IpcBody::ok(()))
 }
 
+/// Loopback / `--allow-remote-writes` guard shared by the project mutation
+/// routes. Mirrors `set_default_project`'s write-guard posture (CWE-306):
+/// shared-live deployment mode denies ALL writes; otherwise loopback is
+/// admitted, and a non-loopback peer requires `--allow-remote-writes`. Returns
+/// `Some(error_response)` when the peer is refused.
+fn check_project_write_guard<T>(
+    state: &AppState,
+    peer: SocketAddr,
+    route: &str,
+) -> Option<Json<IpcBody<T>>> {
+    let is_loopback = peer.ip().is_loopback();
+    if state.shared_live_writes_denied {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route,
+            peer = %peer,
+            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
+        );
+        return Some(Json(IpcBody::<T>::err(
+            "shared-live deployment mode denies all remote writes".to_string(),
+            "FORBIDDEN",
+        )));
+    }
+    if !is_loopback && !state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route,
+            peer = %peer,
+            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
+        );
+        return Some(Json(IpcBody::<T>::err(
+            format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
+            "FORBIDDEN",
+        )));
+    }
+    if !is_loopback && state.allow_remote_writes {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            route,
+            peer = %peer,
+            "remote-write guard ADMITTED (--allow-remote-writes)",
+        );
+    }
+    None
+}
+
+/// `POST /projects` → create / upsert a VFS root (Option B).
+///
+/// Canonicalizes + validates the path, upserts into `FileProjectRegistry`
+/// (VPS, with rollback on failure) + the in-memory `ProjectRegistry`, and
+/// broadcasts `projects_changed`. Desktop-hosted mode has no file registry —
+/// it upserts the in-memory mirror + broadcasts only (the desktop renderer
+/// is the source of truth there, but a web-client upsert still lands in the
+/// mirror so the creating client sees it). Returns the upserted
+/// `ProjectSummary`.
+pub async fn create_project(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<UpsertProjectRequest>,
+) -> impl IntoResponse {
+    if let Some(err) = check_project_write_guard(&state, peer, "/projects") {
+        return err;
+    }
+    let root = crate::acp::VfsRoot {
+        id: req.id.clone(),
+        name: req.name.clone(),
+        path: std::path::PathBuf::from(req.path.clone()),
+        color: req.color.clone(),
+        is_archived: req.is_archived,
+        mcp_servers: Vec::new(),
+    };
+    // VPS persistence (with rollback). Desktop-hosted: registry_persistence is None.
+    if let (Some(file_registry), Some(path)) =
+        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
+    {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            // Capture the old root (if replacing) so the in-memory-set failure
+            // path can roll the file back (P1: no split-brain).
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == req.id)
+                .cloned();
+            match file_registry.upsert_root(root.clone()) {
+                Ok(()) => match file_registry.save_atomic(path) {
+                    Ok(()) => Ok((old_root, ())),
+                    Err(error) => {
+                        // Roll back to the old root (or remove if it was new).
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        } else {
+                            let _ = file_registry.remove_root(&req.id);
+                        }
+                        Err(error)
+                    }
+                },
+                Err(error) => Err(error),
+            }
+        };
+        if let Err(error) = persistence_result {
+            tracing::error!(
+                target: "termul::web::projects_api",
+                project_id = %req.id,
+                error = %error,
+                "create_project: persistence failed (rolled back)"
+            );
+            return Json(IpcBody::<crate::web::project_registry::ProjectSummary>::err(
+                format!("failed to persist project: {error}"),
+                "PERSIST_FAILED",
+            ));
+        }
+    } else {
+        // Desktop-hosted / no file registry: validate the path canonicalizes
+        // before mirroring (fail-first, same posture as VPS `upsert_root`).
+        if let Err(reason) = crate::acp::project_registry::validate_root_path_pub(
+            std::path::Path::new(&req.path),
+        ) {
+            tracing::warn!(
+                target: "termul::web::projects_api",
+                project_id = %req.id,
+                "create_project: invalid root path"
+            );
+            return Json(IpcBody::<crate::web::project_registry::ProjectSummary>::err(
+                format!("invalid root path: {reason}"),
+                "VALIDATION_ERROR",
+            ));
+        }
+    }
+    // Mirror into the in-memory registry (the web client reads `GET /projects`).
+    let summary = crate::web::project_registry::ProjectSummary {
+        id: req.id.clone(),
+        name: req.name,
+        color: req.color,
+        path: Some(req.path),
+        is_archived: req.is_archived,
+        is_default: false,
+    };
+    state.registry.upsert(summary.clone());
+    broadcast_projects_changed(&state.relay, None);
+    tracing::info!(
+        target: "termul::web::projects_api",
+        project_id = %req.id,
+        "create_project: project upserted + broadcast"
+    );
+    Json(IpcBody::<crate::web::project_registry::ProjectSummary> {
+        success: true,
+        data: Some(summary),
+        error: None,
+        code: None,
+    })
+}
+
+/// `PUT /projects/{id}` → patch a project's display fields (Option B).
+pub async fn update_project(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    axum::extract::Path(project_id): axum::extract::Path<String>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> impl IntoResponse {
+    if let Some(err) = check_project_write_guard(&state, peer, "/projects/{id}") {
+        return err;
+    }
+    // VPS persistence (with rollback).
+    if let (Some(file_registry), Some(path)) =
+        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
+    {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == project_id)
+                .cloned();
+            if !file_registry.update_root(
+                &project_id,
+                req.name.clone(),
+                req.color.clone(),
+                req.is_archived,
+            ) {
+                None
+            } else {
+                match file_registry.save_atomic(path) {
+                    Ok(()) => Some(Ok((old_root, ()))),
+                    Err(error) => {
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        }
+                        Some(Err(error))
+                    }
+                }
+            }
+        };
+        match persistence_result {
+            None => {
+                tracing::warn!(
+                    target: "termul::web::projects_api",
+                    project_id = %project_id,
+                    "update_project: project not found"
+                );
+                return Json(IpcBody::<()>::err(
+                    format!("project '{project_id}' not found"),
+                    "NOT_FOUND",
+                ));
+            }
+            Some(Err(error)) => {
+                tracing::error!(
+                    target: "termul::web::projects_api",
+                    project_id = %project_id,
+                    error = %error,
+                    "update_project: persistence failed (rolled back)"
+                );
+                return Json(IpcBody::<()>::err(
+                    format!("failed to persist project: {error}"),
+                    "PERSIST_FAILED",
+                ));
+            }
+            Some(Ok(_)) => {}
+        }
+    }
+    // Mirror into the in-memory registry.
+    if !state
+        .registry
+        .update(&project_id, req.name, req.color, req.is_archived)
+    {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            project_id = %project_id,
+            "update_project: project not found in in-memory registry"
+        );
+        return Json(IpcBody::<()>::err(
+            format!("project '{project_id}' not found"),
+            "NOT_FOUND",
+        ));
+    }
+    broadcast_projects_changed(&state.relay, None);
+    tracing::info!(
+        target: "termul::web::projects_api",
+        project_id = %project_id,
+        "update_project: project updated + broadcast"
+    );
+    Json(IpcBody::ok(()))
+}
+
+/// `DELETE /projects/{id}` → remove a VFS root (Option B).
+pub async fn remove_project(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    axum::extract::Path(project_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if let Some(err) = check_project_write_guard(&state, peer, "/projects/{id}") {
+        return err;
+    }
+    // VPS persistence (with rollback).
+    if let (Some(file_registry), Some(path)) =
+        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
+    {
+        let persistence_result = {
+            let mut file_registry = file_registry.lock();
+            let old_root = file_registry
+                .roots()
+                .iter()
+                .find(|r| r.id == project_id)
+                .cloned();
+            if !file_registry.remove_root(&project_id) {
+                None
+            } else {
+                match file_registry.save_atomic(path) {
+                    Ok(()) => Some(Ok(old_root)),
+                    Err(error) => {
+                        if let Some(old) = old_root {
+                            let _ = file_registry.upsert_root(old);
+                        }
+                        Some(Err(error))
+                    }
+                }
+            }
+        };
+        match persistence_result {
+            None => {
+                tracing::warn!(
+                    target: "termul::web::projects_api",
+                    project_id = %project_id,
+                    "remove_project: project not found"
+                );
+                return Json(IpcBody::<()>::err(
+                    format!("project '{project_id}' not found"),
+                    "NOT_FOUND",
+                ));
+            }
+            Some(Err(error)) => {
+                tracing::error!(
+                    target: "termul::web::projects_api",
+                    project_id = %project_id,
+                    error = %error,
+                    "remove_project: persistence failed (rolled back)"
+                );
+                return Json(IpcBody::<()>::err(
+                    format!("failed to persist project removal: {error}"),
+                    "PERSIST_FAILED",
+                ));
+            }
+            Some(Ok(_)) => {}
+        }
+    }
+    // Mirror into the in-memory registry.
+    state.registry.remove(&project_id);
+    broadcast_projects_changed(&state.relay, None);
+    tracing::info!(
+        target: "termul::web::projects_api",
+        project_id = %project_id,
+        "remove_project: project removed + broadcast"
+    );
+    Json(IpcBody::ok(()))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,23 +588,24 @@ mod tests {
 
     fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay: Arc::new(WsRelaySink::new()),
-            registry,
-            registry_persistence: None,
-            projects_file: None,
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay: Arc::new(WsRelaySink::new()),
+        registry,
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Same as `state_with` but wires a VPS-mode `FileProjectRegistry` + path
@@ -246,23 +617,24 @@ mod tests {
         projects_file: std::path::PathBuf,
     ) -> AppState {
         let pty = test_pty_manager();
-        AppState {
-            acp: Arc::new(AcpManager::new(vec![])),
-            terminal_events: pty.terminal_events(),
-            cwd_tracker: pty.cwd_tracker(),
-            git_tracker: pty.git_tracker(),
-            exit_code_tracker: pty.exit_code_tracker(),
-            pty,
-            relay,
-            registry,
-            registry_persistence: Some(file_registry),
-            projects_file: Some(Arc::new(projects_file)),
-            history_mode: crate::web::ws::HistoryMode::LiveOnly,
-            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-            workspace_manifest: None,
-            acp_catalog: None,
-            acp_install: None,
-        }
+        AppState { acp: Arc::new(AcpManager::new(vec![])),
+        terminal_events: pty.terminal_events(),
+        cwd_tracker: pty.cwd_tracker(),
+        git_tracker: pty.git_tracker(),
+        exit_code_tracker: pty.exit_code_tracker(),
+        pty,
+        relay,
+        registry,
+        registry_persistence: Some(file_registry),
+        projects_file: Some(Arc::new(projects_file)),
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+        oauth_base_url: "http://127.0.0.1".to_string(),
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {
@@ -755,5 +1127,264 @@ mod tests {
             registry.snapshot().default_project_id.as_deref(),
             Some("p-1")
         );
+    }
+
+    /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
+    /// `/projects/default` (the inline guard honors the opt-in) and the host
+    /// default is actually mutated. Mirrors the refusal test with the flag on.
+    #[tokio::test]
+    async fn set_default_project_admits_non_loopback_peer_when_opt_in() {
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set(
+            vec![
+                summary("p-1", Some("/a"), false, true),
+                summary("p-2", Some("/b"), false, false),
+            ],
+            Some("p-1".to_string()),
+        );
+        let mut state = state_with(Arc::clone(&registry));
+        state.allow_remote_writes = true;
+        let app = axum::Router::new()
+            .route("/projects/default", axum::routing::post(set_default_project))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects/default")
+                    .header("content-type", "application/json")
+                    // A LAN peer (10.0.0.5), not loopback.
+                    .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({ "projectId": "p-2" }).to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
+        assert!(
+            parsed.success,
+            "opt-in must admit non-loopback peer: {:?}",
+            parsed.error
+        );
+        // The host default flipped to p-2.
+        assert_eq!(
+            registry.snapshot().default_project_id.as_deref(),
+            Some("p-2")
+        );
+    }
+
+    /// Option B — `POST /projects` (VPS mode) creates a new VFS root, persists
+    /// it to the `FileProjectRegistry` file, and mirrors it into the in-memory
+    /// registry. The file + `GET /projects` both reflect the new project after
+    /// the request succeeds.
+    #[tokio::test]
+    async fn create_project_http_persists_to_file_registry_vps_mode() {
+        let dir = tempdir_like("http-create-vps");
+        let root_a = dir.join("proj-a");
+        std::fs::create_dir_all(&root_a).expect("mkdir root-a");
+        let file = dir.join("projects.json");
+        let file_registry = Arc::new(parking_lot::Mutex::new(FileProjectRegistry::empty()));
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+
+        let app = axum::Router::new()
+            .route("/projects", axum::routing::post(create_project))
+            .with_state(state_with_persistence(
+                Arc::clone(&registry),
+                file_registry,
+                relay,
+                file.clone(),
+            ));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "new-proj",
+                            "name": "New Project",
+                            "path": root_a,
+                            "color": "blue",
+                            "isArchived": false
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<ProjectSummary> = serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success, "create_project succeeds: {parsed:?}");
+        assert_eq!(parsed.data.as_ref().unwrap().id, "new-proj");
+
+        // File persistence: the on-disk file carries the new root.
+        let reloaded = FileProjectRegistry::load(&file).expect("reload");
+        assert_eq!(reloaded.roots().len(), 1);
+        assert_eq!(reloaded.roots()[0].id, "new-proj");
+        assert_eq!(reloaded.roots()[0].name, "New Project");
+
+        // In-memory mirror: GET /projects reflects the new project.
+        let snap = registry.snapshot();
+        assert_eq!(snap.projects.len(), 1);
+        assert_eq!(snap.projects[0].id, "new-proj");
+
+        cleanup(&dir);
+    }
+
+    /// Option B — `DELETE /projects/{id}` (VPS mode) removes the root from the
+    /// file + in-memory registry and clears a dangling default.
+    #[tokio::test]
+    async fn remove_project_http_persists_and_clears_default() {
+        let dir = tempdir_like("http-remove-vps");
+        let root_a = dir.join("proj-a");
+        std::fs::create_dir_all(&root_a).expect("mkdir root-a");
+        let file = dir.join("projects.json");
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: root_a,
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![],
+            }],
+            Some("p-1".to_string()),
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        seed_from_file(&registry, &file_registry.lock());
+
+        let app = axum::Router::new()
+            .route(
+                "/projects/{projectId}",
+                axum::routing::delete(remove_project),
+            )
+            .with_state(state_with_persistence(
+                Arc::clone(&registry),
+                file_registry,
+                relay,
+                file.clone(),
+            ));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/projects/p-1")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success, "remove_project succeeds: {parsed:?}");
+
+        // File persistence: the root is gone + default cleared.
+        let reloaded = FileProjectRegistry::load(&file).expect("reload");
+        assert!(reloaded.roots().is_empty());
+        assert!(reloaded.default_project_id().is_none());
+
+        // In-memory mirror: the project is removed.
+        assert!(registry.snapshot().projects.is_empty());
+
+        cleanup(&dir);
+    }
+
+    /// Option B — `PUT /projects/{id}` (VPS mode) patches the display fields
+    /// and persists to the file.
+    #[tokio::test]
+    async fn update_project_http_persists_renamed_and_archived() {
+        let dir = tempdir_like("http-update-vps");
+        let root_a = dir.join("proj-a");
+        std::fs::create_dir_all(&root_a).expect("mkdir root-a");
+        let file = dir.join("projects.json");
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: root_a,
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![],
+            }],
+            Some("p-1".to_string()),
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        seed_from_file(&registry, &file_registry.lock());
+
+        let app = axum::Router::new()
+            .route(
+                "/projects/{projectId}",
+                axum::routing::put(update_project),
+            )
+            .with_state(state_with_persistence(
+                Arc::clone(&registry),
+                file_registry,
+                relay,
+                file.clone(),
+            ));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/projects/p-1")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Renamed",
+                            "color": "green",
+                            "isArchived": true
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success, "update_project succeeds: {parsed:?}");
+
+        // File persistence: renamed + archived + default cleared.
+        let reloaded = FileProjectRegistry::load(&file).expect("reload");
+        assert_eq!(reloaded.roots()[0].name, "Renamed");
+        assert_eq!(reloaded.roots()[0].color, "green");
+        assert!(reloaded.roots()[0].is_archived);
+        assert!(reloaded.default_project_id().is_none(), "archived default cleared");
+
+        // In-memory mirror.
+        let snap = registry.snapshot();
+        assert_eq!(snap.projects[0].name, "Renamed");
+        assert!(snap.projects[0].is_archived);
+
+        cleanup(&dir);
     }
 }

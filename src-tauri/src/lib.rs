@@ -3,6 +3,7 @@ mod acp;
 mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
+mod agentation;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -16,10 +17,19 @@ mod secure_storage;
 // verification — runs under the spec's default `cargo test` gate. Only the
 // standalone binary wiring (server_main.rs) is gated by `standalone-server`.
 pub mod server_update;
+// Guided setup + background launch for the standalone `termul-server`. Like
+// `server_update`, the library module is intentionally NOT feature-gated so
+// its test suite runs under the spec's default `cargo test` gate; only the
+// standalone binary wiring (server_main.rs `--onboard` branch) is gated by
+// `standalone-server`.
+pub mod onboard;
 mod shell_paths;
+// Desktop-side channel manifest fetch for the insider/nightly updater path.
+// Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 mod skills;
 mod ssh;
 mod trackers;
+mod updater_api;
 pub mod web;
 mod worktree;
 
@@ -36,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_store::StoreExt;
 
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -131,6 +142,11 @@ pub use acp::{
     AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, FileProjectRegistry,
     SessionPersistence, WorkspaceManifestService,
 };
+// Host-injected `plan` MCP tool: the `--internal-mcp-plan-server`
+// subcommand branch in `main.rs` + `server_main.rs` reaches `host_mcp::CHILD_ARG`
+// + `host_mcp::child::run()` through this re-export (the `acp` module itself is
+// private). See `acp/host_mcp/mod.rs` + spec `spec-acp-host-todo-plan-tool.md`.
+pub use acp::host_mcp;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's
@@ -648,13 +664,13 @@ fn build_app_menu<R: tauri::Runtime>(
             .quit()
             .build()?;
 
-        return MenuBuilder::new(app)
+        MenuBuilder::new(app)
             .item(&app_menu)
             .item(&edit_menu)
             .item(&view_menu)
             .item(&window_menu)
             .item(&help_menu)
-            .build();
+            .build()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1036,8 +1052,48 @@ pub fn run() {
 
             // Create Browser Tab Manager
             let browser_tab_manager =
-                Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
-            app.manage(browser_tab_manager);
+            Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
+            app.manage(browser_tab_manager.clone());
+
+            // Load persisted agentation enabled preference (issue #451 CodeRabbit).
+            // Falls back to true (enabled by default) when no stored value exists.
+            if let Ok(store) = handle.store("settings.json") {
+                let enabled = store
+                    .get("agentation/enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                browser_tab_manager.set_agentation_enabled(enabled);
+                log::info!("[agentation] loaded persisted enabled={}", enabled);
+            }
+            // Start the agentation annotation service (issue #451, Epic 1).
+            // Spawns the axum HTTP/SSE server on a dynamic port and opens SQLite.
+            // The endpoint is wired to BrowserTabManager for toolbar injection.
+            {
+                let app_data = handle
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("agentation: app_data_dir: {e}"))?;
+                let db_path = agentation::db_path(&app_data);
+                match tauri::async_runtime::block_on(agentation::AgentationService::start(&db_path)) {
+                    Ok(service) => {
+                        let port = service.http_port();
+                        let endpoint = format!("http://127.0.0.1:{port}");
+
+                        // Wire the endpoint into the browser tab manager
+                        if let Some(bt_manager) =
+                            app.try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
+                        {
+                            bt_manager.set_agentation_endpoint(endpoint);
+                        }
+
+                        app.manage(service);
+                        log::info!("[agentation] service started");
+                    }
+                    Err(e) => {
+                        log::error!("[agentation] failed to start service: {e}");
+                    }
+                }
+            }
 
             // Desktop renderer chat history lives outside tauri-plugin-store so
             // loading unrelated preferences never materializes full transcripts
@@ -1492,17 +1548,12 @@ pub fn run() {
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
             commands::browser_tab_open_devtools,
-            commands::browser_tab_inject_annotation,
-            commands::browser_tab_remove_annotation_overlay,
-            commands::browser_tab_inject_annotation_markers,
-            commands::browser_tab_update_annotation_marker_selection,
             // Browser tab URL sync commands (called by injected JS)
             commands::browser_tab_report_url,
             commands::browser_tab_report_loaded,
-            commands::browser_tab_report_region_captured,
-            commands::browser_tab_report_element_captured,
             commands::browser_tab_report_title,
-            commands::browser_tab_report_annotation_marker_clicked,
+            // Agentation toolbar injection (on-demand)
+            commands::browser_tab_inject_agentation,
             // Worktree commands
             commands::worktree_list,
             commands::worktree_create,
@@ -1517,6 +1568,9 @@ pub fn run() {
             commands::worktree_restore,
             commands::worktree_merge_preview,
             commands::worktree_merge_execute,
+            // Worktree-isolated agent chat (CAP-2 base resolution + CAP-5 include carry-over)
+            commands::worktree_resolve_base_branch,
+            commands::worktree_copy_include_files,
             // Filesystem/search commands
             commands::search_get_rg_info,
             commands::search_content,
@@ -1560,6 +1614,8 @@ pub fn run() {
             commands::git_get_diff,
             commands::git_stage,
             commands::git_unstage,
+            commands::git_stage_hunk,
+            commands::git_unstage_hunk,
             commands::git_discard,
             commands::git_get_log,
             commands::git_commit,
@@ -1590,6 +1646,7 @@ pub fn run() {
             acp::commands::acp_close_session,
             acp::commands::acp_dispose_ephemeral_session,
             acp::commands::acp_list_sessions,
+            acp::commands::acp_register_discovered_session,
             acp::commands::acp_send_prompt,
             acp::commands::acp_cancel_prompt,
             acp::commands::acp_set_config_option,
@@ -1605,6 +1662,9 @@ pub fn run() {
             acp::commands::acp_set_session_reopen_timeout,
             acp::commands::acp_set_first_prompt_warmup_timeout,
             acp::commands::acp_probe_mcp_server,
+            acp::commands::acp_mcp_oauth_start,
+            acp::commands::acp_mcp_oauth_has_token,
+            acp::commands::acp_mcp_oauth_disconnect,
             // CAP-6 / Story 8: ACP catalog (host-owned resolution).
             acp::commands::acp_list_catalog,
             acp::commands::acp_set_catalog_opt_in,
@@ -1612,6 +1672,9 @@ pub fn run() {
             acp::commands::acp_install_agent,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
+            // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
+            // reqwest for the insider/nightly paths).
+            updater_api::updater_fetch_channel_manifest,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
@@ -1622,10 +1685,12 @@ pub fn run() {
             commands::remote_sync_projects,
             commands::set_host_default_project,
             commands::remote_sync_chat_history,
+            commands::remote_sync_mcp_registry,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,
             commands::acp_history_save,
+            commands::acp_history_get_tail,
             commands::acp_history_delete,
             commands::acp_history_flush,
             commands::acp_history_mark_legacy_import_complete,
@@ -1637,6 +1702,18 @@ pub fn run() {
             commands::workspace_manifest_get,
             commands::workspace_manifest_write,
             commands::workspace_manifest_delete,
+            // Agentation annotation service (issue #451, Epic 1)
+            agentation::agentation_create_session,
+            agentation::agentation_list_sessions,
+            agentation::agentation_get_session,
+            agentation::agentation_get_pending,
+            agentation::agentation_get_all_pending,
+            agentation::agentation_acknowledge,
+            agentation::agentation_resolve,
+            agentation::agentation_dismiss,
+            agentation::agentation_reply,
+            agentation::agentation_set_enabled,
+            agentation::agentation_is_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

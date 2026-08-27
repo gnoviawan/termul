@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ShimmerText } from '@/components/ui/shimmer-text'
+import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
 import { CHEVRON_TRANSITION } from './chat-motion'
@@ -19,6 +20,8 @@ interface TurnActivityProps {
   attentionRequired: boolean
   hasFinalResponse: boolean
   shouldAnimateEnter: (id: string) => boolean
+  /** Filesystem roots used for "Open file" actions on file tool calls. */
+  filePathContext?: FilePathResolutionContext
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */
@@ -28,7 +31,8 @@ export function TurnActivity({
   durationMs,
   attentionRequired,
   hasFinalResponse,
-  shouldAnimateEnter
+  shouldAnimateEnter,
+  filePathContext
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
@@ -76,6 +80,7 @@ export function TurnActivity({
                     key={item.key}
                     toolCall={item.tool}
                     animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
+                    filePathContext={filePathContext}
                   />
                 )
               }
@@ -95,6 +100,7 @@ export function TurnActivity({
                   showHeader={false}
                   isLast={active && index === items.length - 1}
                   animateEnter={shouldAnimateEnter(item.message.id)}
+                  filePathContext={filePathContext}
                 />
               )
             })}

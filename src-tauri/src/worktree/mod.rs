@@ -78,7 +78,7 @@ pub struct SymlinkResult {
 // Data Types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeEntry {
     pub name: String,
@@ -87,7 +87,7 @@ pub struct GitWorktreeEntry {
     pub head_commit: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchEntry {
     pub name: String,
@@ -98,7 +98,7 @@ pub struct BranchEntry {
     pub has_other_worktree: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirtyStatus {
     pub modified: usize,
@@ -171,6 +171,48 @@ pub struct MergePreview {
     pub total_changes: usize,
     pub detection_mode: String,
     pub has_auto_resolvable: bool,
+}
+
+// ============================================================================
+// Base Branch Resolution + Worktree-Include Carry-Over (CAP-2 / CAP-5)
+// ============================================================================
+
+/// Origin-aware default base branch + detached-HEAD guard for worktree
+/// creation (CAP-2). `current_branch` is `None` when the repo is in detached
+/// HEAD — the launcher must then force a base-branch pick before allowing a
+/// worktree launch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseBranchInfo {
+    /// The branch `chat/{id}` should be created from: origin/HEAD → main →
+    /// master → current branch (last resort).
+    pub default_base: String,
+    /// Current checked-out branch, or `None` on detached HEAD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_branch: Option<String>,
+    /// `true` when `git rev-parse --abbrev-ref HEAD` returns `HEAD`.
+    pub is_detached: bool,
+}
+
+/// Per-file skip reason for the `.worktree-include` carry-over (CAP-5).
+/// Surfaced to the renderer so the launcher can log per-file decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncludeSkipReason {
+    pub path: String,
+    pub reason: String,
+}
+
+/// Result of `copy_worktree_include_files` (CAP-5). `ran` is the number of
+/// patterns that matched at least one file; `copied` is files actually
+/// copied; `skipped` carries per-file reasons (symlink, path-escape,
+/// already-present).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncludeCopyResult {
+    pub ran: usize,
+    pub copied: usize,
+    pub skipped: Vec<IncludeSkipReason>,
 }
 
 // ============================================================================
@@ -1303,8 +1345,297 @@ impl WorktreeManager {
 
         let ours_norm = normalize(ours);
         let theirs_norm = normalize(theirs);
-        
+
         ours_norm == theirs_norm && !ours_norm.is_empty()
+    }
+
+    // ========================================================================
+    // CAP-2: Origin-aware default base branch resolution + detached-HEAD guard
+    // ========================================================================
+
+    /// Resolve the default base branch for a new `chat/{id}` worktree.
+    ///
+    /// Order: `refs/remotes/origin/HEAD` → `main` → `master` → current branch.
+    /// `is_detached` is `true` when `git rev-parse --abbrev-ref HEAD` returns
+    /// `HEAD` (the launcher must then force a base-branch pick).
+    pub fn resolve_default_base_branch(project_path: &str) -> Result<BaseBranchInfo, WorktreeError> {
+        let (current_stdout, _) = run_git(
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            Some(project_path),
+        )?;
+        let current_raw = current_stdout.trim().to_string();
+        let is_detached = current_raw == "HEAD";
+        let current_branch = if is_detached { None } else { Some(current_raw.clone()) };
+
+        // 1. origin/HEAD (symbolic-ref --short). `symbolic-ref --short` returns
+        // the remote-tracking short name (e.g. `origin/main`); strip the
+        // `origin/` qualifier so the result lives in the local-branch
+        // namespace the launcher's base picker compares against.
+        let origin_default = run_git(
+            &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            Some(project_path),
+        )
+        .map(|(out, _)| out.trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string());
+
+        // 2/3. main / master if they exist as local branches
+        let has_branch = |name: &str| -> bool {
+            run_git(&["rev-parse", "--verify", &format!("refs/heads/{name}")], Some(project_path))
+                .map(|(o, _)| o.trim().to_string())
+                .is_ok_and(|s| !s.is_empty())
+        };
+
+        let default_base = origin_default
+            .or_else(|| if has_branch("main") { Some("main".to_string()) } else { None })
+            .or_else(|| if has_branch("master") { Some("master".to_string()) } else { None })
+            .or_else(|| current_branch.clone())
+            // Final fallback: the detached raw value ("HEAD") is meaningless as
+            // a base; fall back to "main" as a safe default the launcher can
+            // override via the explicit CAP-2 picker.
+            .unwrap_or_else(|| "main".to_string());
+
+        Ok(BaseBranchInfo {
+            default_base,
+            current_branch,
+            is_detached,
+        })
+    }
+
+    // ========================================================================
+    // CAP-5: `.worktree-include` carry-over (bb pattern, symlink/escape defenses)
+    // ========================================================================
+
+    /// Copy untracked files listed in `.worktree-include` into a fresh worktree.
+    ///
+    /// Defenses (bb `copyWorktreeIncludeFiles`): skip symlinks, verify the
+    /// destination realpath is inside the worktree realpath (path-escape
+    /// defense), `COPYFILE_EXCL` (skip already-present), mkdir parent only
+    /// inside the worktree. Returns `{ ran, copied, skipped }` with per-file
+    /// skip reasons. Missing `.worktree-include` is a no-op (`ran=0`).
+    pub fn copy_worktree_include_files(
+        project_path: &str,
+        worktree_path: &str,
+    ) -> Result<IncludeCopyResult, WorktreeError> {
+        let include_path = Path::new(project_path).join(".worktree-include");
+        if !include_path.exists() {
+            log::debug!(
+                "[worktree-include] no .worktree-include at {}, skipping carry-over",
+                include_path.display()
+            );
+            return Ok(IncludeCopyResult {
+                ran: 0,
+                copied: 0,
+                skipped: Vec::new(),
+            });
+        }
+
+        let content = std::fs::read_to_string(&include_path)
+            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        let patterns: Vec<String> = content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect();
+
+        if patterns.is_empty() {
+            log::debug!(
+                "[worktree-include] {} has no patterns, skipping carry-over",
+                include_path.display()
+            );
+            return Ok(IncludeCopyResult {
+                ran: 0,
+                copied: 0,
+                skipped: Vec::new(),
+            });
+        }
+
+        let project_root = Path::new(project_path);
+        let worktree_root = Path::new(worktree_path);
+        let worktree_real = worktree_root
+            .canonicalize()
+            .map_err(|e| WorktreeError::IoError(format!("worktree realpath: {e}")))?;
+
+        let mut result = IncludeCopyResult {
+            ran: 0,
+            copied: 0,
+            skipped: Vec::new(),
+        };
+
+        // Compile all patterns once (avoid O(patterns × files) re-walks per
+        // pattern). Invalid patterns are warned and skipped.
+        let compiled: Vec<regex::Regex> = patterns
+            .iter()
+            .filter_map(|p| match glob_to_regex(p) {
+                Ok(re) => Some(re),
+                Err(error) => {
+                    log::warn!("[worktree-include] invalid pattern '{p}': {error}");
+                    None
+                }
+            })
+            .collect();
+        if compiled.is_empty() {
+            log::debug!(
+                "[worktree-include] {} has no valid patterns, skipping carry-over",
+                include_path.display()
+            );
+            return Ok(result);
+        }
+        let mut matched = vec![false; compiled.len()];
+
+        // Directories pruned at descent time (never recursed into).
+        const PRUNE_DIRS: &[&str] = &[".git", ".termul", "node_modules", "target", "dist"];
+
+        // Single recursive walk: each file is tested against every compiled
+        // pattern (the first match copies it once; later matches only mark the
+        // pattern as ran).
+        let mut stack: Vec<std::path::PathBuf> = vec![project_root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(error) => {
+                    log::debug!(
+                        "[worktree-include] skip unreadable dir {}: {error}",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                let ft = match entry.file_type() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+
+                // Defense 1: symlinks (source side). On Unix `file_type()`
+                // reports `is_symlink()` without following; on Windows the
+                // `symlink_metadata` check is authoritative. A symlink is never
+                // recursed into or copied — if a pattern matches its path it
+                // is recorded as a symlink skip so the user sees the carry-over
+                // declined it.
+                let is_symlink = ft.is_symlink()
+                    || std::fs::symlink_metadata(&entry_path)
+                        .map(|m| m.file_type().is_symlink())
+                        .unwrap_or(false);
+                if is_symlink {
+                    let rel_str = match entry_path.strip_prefix(project_root) {
+                        Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                        Err(_) => continue,
+                    };
+                    if compiled.iter().any(|re| re.is_match(&rel_str)) {
+                        log::debug!("[worktree-include] skip symlink '{}'", rel_str);
+                        result.skipped.push(IncludeSkipReason {
+                            path: rel_str,
+                            reason: "symlink".to_string(),
+                        });
+                    }
+                    continue;
+                }
+
+                if ft.is_dir() {
+                    let name = entry_path.file_name().and_then(|n| n.to_str());
+                    // Skip the worktree itself (compare canonicalized paths so a
+                    // differently-spelled entry to the same worktree still
+                    // prunes), repo metadata, and build/dep trees.
+                    if name.is_some_and(|n| PRUNE_DIRS.contains(&n))
+                        || entry_path
+                            .canonicalize()
+                            .map(|p| p == worktree_real)
+                            .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    stack.push(entry_path);
+                    continue;
+                }
+                if !ft.is_file() {
+                    continue;
+                }
+                let rel_str = match entry_path.strip_prefix(project_root) {
+                    Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                let mut hit = false;
+                for (i, re) in compiled.iter().enumerate() {
+                    if re.is_match(&rel_str) {
+                        matched[i] = true;
+                        hit = true;
+                    }
+                }
+                if !hit {
+                    continue;
+                }
+                let dest = worktree_root.join(&rel_str);
+
+                // Defense 2: path-escape — the destination parent MUST
+                // canonicalize to a real path inside the worktree. Reject
+                // (skip) when canonicalization fails; never fall back to the
+                // non-canonical parent, which could write outside the worktree.
+                let dest_parent_real = match dest.parent().map(std::path::Path::canonicalize) {
+                    Some(Ok(p)) => p,
+                    _ => {
+                        log::warn!("[worktree-include] skip path-escape '{}'", rel_str);
+                        result.skipped.push(IncludeSkipReason {
+                            path: rel_str.clone(),
+                            reason: "path-escape".to_string(),
+                        });
+                        continue;
+                    }
+                };
+                let dest_real = dest_parent_real.join(dest.file_name().unwrap_or_default());
+                if !dest_real.starts_with(&worktree_real) {
+                    log::warn!("[worktree-include] skip path-escape '{}'", rel_str);
+                    result.skipped.push(IncludeSkipReason {
+                        path: rel_str.clone(),
+                        reason: "path-escape".to_string(),
+                    });
+                    continue;
+                }
+
+                // Defense 3: COPYFILE_EXCL — skip if already present.
+                if dest.exists() {
+                    result.skipped.push(IncludeSkipReason {
+                        path: rel_str.clone(),
+                        reason: "already-present".to_string(),
+                    });
+                    continue;
+                }
+
+                // mkdir parent (only inside the worktree).
+                if let Some(parent) = dest.parent() {
+                    if let Err(error) = std::fs::create_dir_all(parent) {
+                        result.skipped.push(IncludeSkipReason {
+                            path: rel_str.clone(),
+                            reason: format!("mkdir failed: {error}"),
+                        });
+                        continue;
+                    }
+                }
+
+                // Copy.
+                if let Err(error) = std::fs::copy(&entry_path, &dest) {
+                    result.skipped.push(IncludeSkipReason {
+                        path: rel_str.clone(),
+                        reason: format!("copy failed: {error}"),
+                    });
+                    continue;
+                }
+                log::debug!("[worktree-include] copied '{rel_str}'");
+                result.copied += 1;
+            }
+        }
+        result.ran = matched.iter().filter(|b| **b).count();
+
+        log::info!(
+            "[worktree-include] carry-over ran={} copied={} skipped={}",
+            result.ran,
+            result.copied,
+            result.skipped.len()
+        );
+        Ok(result)
     }
 }
 
@@ -1315,6 +1646,57 @@ struct ConflictBlock {
     /// Diff3 common-ancestor section when present; reserved for future suggestions.
     #[allow(dead_code)]
     base: String,
+}
+
+/// Convert a `.worktree-include` glob into a `Regex` for matching file paths
+/// relative to the project root (forward slashes). Supports:
+/// - `**` matches anything including `/`
+/// - `*` matches anything except `/`
+/// - `?` matches a single char (except `/`)
+/// - everything else is escaped literally.
+fn glob_to_regex(glob: &str) -> Result<regex::Regex, regex::Error> {
+    // Normalize: strip one leading slash so root-anchored patterns (e.g.
+    // `/foo`) match the relative walk paths (which have no leading slash).
+    // A trailing slash marks a recursive directory pattern (`foo/` matches
+    // `foo/bar`, `foo/baz/qux`, ...) — append `.*` so it matches descendants.
+    let trailing_dir = glob.ends_with('/');
+    let trimmed = glob
+        .strip_prefix('/')
+        .unwrap_or(glob)
+        .trim_end_matches('/');
+    let mut out = String::with_capacity(trimmed.len() + 8);
+    out.push('^');
+    let mut chars = trimmed.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => {
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    // `**/` -> match any path prefix (including empty)
+                    if chars.peek() == Some(&'/') {
+                        chars.next();
+                        out.push_str("(?:.*/)?");
+                    } else {
+                        out.push_str(".*");
+                    }
+                } else {
+                    out.push_str("[^/]*");
+                }
+            }
+            '?' => out.push_str("[^/]"),
+            '.' | '+' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '/' => out.push('/'),
+            other => out.push(other),
+        }
+    }
+    if trailing_dir {
+        out.push_str(".*");
+    }
+    out.push('$');
+    regex::Regex::new(&out)
 }
 
 /// Get an ISO 8601 timestamp string for the current time.
@@ -1793,6 +2175,204 @@ mod tests {
             !"/project/../other-worktree"
                 .contains(".termul/worktrees/")
         );
+    }
+
+    // --------------------------------------------------------------------
+    // CAP-2 / CAP-5 — worktree include carry-over + base-branch helpers
+    // --------------------------------------------------------------------
+
+    fn git_available() -> bool {
+        which_git().is_ok()
+    }
+
+    /// `glob_to_regex` matches exact filenames and simple wildcards.
+    #[test]
+    fn test_glob_to_regex_exact_and_wildcard() {
+        let exact = glob_to_regex(".env").unwrap();
+        assert!(exact.is_match(".env"));
+        assert!(!exact.is_match("config/.env"));
+        assert!(!exact.is_match("env"));
+
+        let star = glob_to_regex("*.env").unwrap();
+        assert!(star.is_match(".env"));
+        assert!(star.is_match("local.env"));
+        assert!(!star.is_match("config/local.env"));
+
+        let double = glob_to_regex("**/*.env").unwrap();
+        assert!(double.is_match(".env"));
+        assert!(double.is_match("config/local.env"));
+        assert!(double.is_match("a/b/c.env"));
+    }
+
+    #[test]
+    fn test_copy_worktree_include_files_no_include_file_is_noop() {
+        // No `.worktree-include` -> ran=0, copied=0, skipped=[]
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        let result = WorktreeManager::copy_worktree_include_files(
+            project.path().to_str().unwrap(),
+            worktree.path().to_str().unwrap(),
+        )
+        .expect("no-include path is a no-op, not an error");
+        assert_eq!(result.ran, 0);
+        assert_eq!(result.copied, 0);
+        assert!(result.skipped.is_empty());
+    }
+
+    #[test]
+    fn test_copy_worktree_include_files_copies_plain_file() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        // Source: an untracked .env in the project root.
+        std::fs::write(project.path().join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(project.path().join(".worktree-include"), ".env\n").unwrap();
+        let result = WorktreeManager::copy_worktree_include_files(
+            project.path().to_str().unwrap(),
+            worktree.path().to_str().unwrap(),
+        )
+        .expect("copy plain .env");
+        assert_eq!(result.ran, 1);
+        assert_eq!(result.copied, 1);
+        assert!(result.skipped.is_empty());
+        let copied = std::fs::read_to_string(worktree.path().join(".env")).unwrap();
+        assert_eq!(copied, "SECRET=1\n");
+    }
+
+    #[test]
+    fn test_copy_worktree_include_files_skips_symlink() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        // Real target + a symlink pointing outside.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("real.env"), "SECRET=outside\n").unwrap();
+        let link = project.path().join("linked.env");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path().join("real.env"), &link).unwrap();
+        #[cfg(windows)]
+        {
+            // Symlink creation on Windows requires elevated privileges; fall
+            // back to a junction-ish test by skipping when we cannot create
+            // one. The defense is still exercised on Unix CI.
+            let result = std::os::windows::fs::symlink_file(
+                outside.path().join("real.env"),
+                &link,
+            );
+            if result.is_err() {
+                return;
+            }
+        }
+        std::fs::write(project.path().join(".worktree-include"), "linked.env\n").unwrap();
+        let result = WorktreeManager::copy_worktree_include_files(
+            project.path().to_str().unwrap(),
+            worktree.path().to_str().unwrap(),
+        )
+        .expect("symlink skip");
+        assert_eq!(result.copied, 0);
+        assert!(result.skipped.iter().any(|s| s.reason == "symlink"));
+    }
+
+    #[test]
+    fn test_copy_worktree_include_files_skips_already_present() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join(".env"), "SECRET=1\n").unwrap();
+        // Pre-create the destination -> COPYFILE_EXCL semantics.
+        std::fs::write(worktree.path().join(".env"), "PRE-EXISTING\n").unwrap();
+        std::fs::write(project.path().join(".worktree-include"), ".env\n").unwrap();
+        let result = WorktreeManager::copy_worktree_include_files(
+            project.path().to_str().unwrap(),
+            worktree.path().to_str().unwrap(),
+        )
+        .expect("already-present skip");
+        assert_eq!(result.copied, 0);
+        assert!(result.skipped.iter().any(|s| s.reason == "already-present"));
+        // The pre-existing file is NOT overwritten.
+        let kept = std::fs::read_to_string(worktree.path().join(".env")).unwrap();
+        assert_eq!(kept, "PRE-EXISTING\n");
+    }
+
+    #[test]
+    fn test_copy_worktree_include_files_errors_when_worktree_dir_missing() {
+        let project = tempfile::tempdir().unwrap();
+        // Point worktree at a path that does not exist as a directory — the
+        // realpath canonicalize will fail and the helper returns an IoError,
+        // which is the path-escape / missing-worktree boundary.
+        std::fs::write(project.path().join("file.env"), "X\n").unwrap();
+        std::fs::write(project.path().join(".worktree-include"), "file.env\n").unwrap();
+        let missing_worktree = project.path().join(".termul").join("worktrees").join("missing");
+        let result = WorktreeManager::copy_worktree_include_files(
+            project.path().to_str().unwrap(),
+            missing_worktree.to_str().unwrap(),
+        );
+        assert!(result.is_err(), "missing worktree dir must error, not silently write outside");
+    }
+
+    #[test]
+    fn test_resolve_default_base_branch_falls_back_to_current_when_no_origin() {
+        if !git_available() {
+            eprintln!("skipped: git not available on PATH");
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        // git init + a commit on a branch named "feat/x" so rev-parse works.
+        let p = project.path();
+        let run = |args: &[&str]| {
+            let mut cmd = quiet_command("git");
+            cmd.args(args).current_dir(p);
+            let _ = cmd.output();
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t.test"]);
+        run(&["config", "user.name", "t"]);
+        // Rename the default branch to feat/x so current_branch is non-default.
+        run(&["checkout", "-b", "feat/x"]);
+        std::fs::write(p.join("a.txt"), "a\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "-m", "init", "--quiet"]);
+        let info = WorktreeManager::resolve_default_base_branch(p.to_str().unwrap())
+            .expect("resolve_default_base_branch on a fresh repo");
+        assert_eq!(info.current_branch.as_deref(), Some("feat/x"));
+        // No origin/HEAD and no main/master locally -> fall back to current.
+        assert_eq!(info.default_base, "feat/x");
+        assert!(!info.is_detached);
+    }
+
+    #[test]
+    fn test_resolve_default_base_branch_detached_head_flag() {
+        if !git_available() {
+            eprintln!("skipped: git not available on PATH");
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        let p = project.path();
+        let run = |args: &[&str]| {
+            let mut cmd = quiet_command("git");
+            cmd.args(args).current_dir(p);
+            let _ = cmd.output();
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "t@t.test"]);
+        run(&["config", "user.name", "t"]);
+        run(&["checkout", "-b", "main"]);
+        std::fs::write(p.join("a.txt"), "a\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "-m", "init", "--quiet"]);
+        // Detach HEAD at the commit.
+        let head = {
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(p)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&["checkout", &head]);
+        let info = WorktreeManager::resolve_default_base_branch(p.to_str().unwrap())
+            .expect("resolve_default_base_branch on detached HEAD");
+        assert!(info.is_detached);
+        assert!(info.current_branch.is_none());
+        // main exists locally -> default_base should be main (fallback chain).
+        assert_eq!(info.default_base, "main");
     }
 }
 

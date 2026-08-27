@@ -1,94 +1,70 @@
-import type { FileChangeEvent } from '@shared/types/ipc.types'
+import type { SearchFileHit } from '@shared/types/ipc.types'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
-import { readDir } from '@/lib/tauri-fs'
+import { logFrontendError } from '@/lib/log-api'
+import { insertFileToken } from '@/lib/skill-tokens'
+import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { basename } from './chat-attachments'
 import type { FileMentionMenuHandle } from './FileMentionMenu'
 import {
   activeMentionToken,
   buildMentionSections,
   type MentionMatch,
-  type MentionSection,
-  spliceMentionToken
+  type MentionSection
 } from './mention-menu-model'
 
 const MAX_RESULTS = 100
-/** Max projects kept in the module-level file cache (LRU-bounded). */
-const CACHE_MAX = 8
 
 /**
- * Directory basenames (and a few cruft files) skipped during the project file
- * walk. Mirrors the backend `COMMONLY_IGNORED_NAMES` so the mention picker
- * only surfaces source files — matching the file-explorer search — instead of
- * `node_modules` / `.git` / build artifacts. See ADR 0003.
+ * Debounce window in ms before firing a filename-search stream. Matches the
+ * file-explorer recipe: shorter queries (1-2 chars) get the longer window so
+ * rapid typing does not spawn a stream per keystroke; >=3 chars feel instant.
  */
-const SKIP_NAMES = new Set([
-  'node_modules',
-  '.git',
-  '.next',
-  '.cache',
-  '.turbo',
-  'dist',
-  'build',
-  '.output',
-  '.nuxt',
-  '.svelte-kit',
-  '__pycache__',
-  '.pytest_cache',
-  'venv',
-  'coverage',
-  '.nyc_output',
-  '.env',
-  'Thumbs.db',
-  'desktop.ini',
-  '.DS_Store'
-])
+const DEBOUNCE_SHORT = 90
+const DEBOUNCE_LONG = 180
+/** Queries of at least this many chars use the short debounce window. */
+const SHORT_QUERY_MIN = 3
+
+/** Normalize a search root to forward slashes without a trailing separator. */
+function normalizeRoot(root: string | null | undefined): string {
+  return root?.replace(/\\/g, '/').replace(/\/$/, '') ?? ''
+}
 
 /**
- * Module-level cache: `rootPath` -> forward-slash-relative file paths. Walked
- * lazily once per project on the first @-mention, then filtered in-memory per
- * keystroke. Invalidated on file-change events (piggybacking whatever watcher
- * the file-explorer has active) so newly added files appear on the next open.
+ * Cancel an in-flight filename search stream and surface failures. The facade
+ * resolves `{ success: false }` on cancel failure (and may reject on a
+ * transport fault); both are logged so the boundary is never silently swallowed
+ * (AGENTS.md logging rule).
  */
-const fileCache = new Map<string, string[]>()
-
-/** @internal Reset the project-file cache between tests. */
-export function __resetMentionFileCache(): void {
-  fileCache.clear()
+function cancelSearchStream(sid: string): void {
+  void filesystemApi
+    .searchFileNamesStreamCancel(sid)
+    .then((res) => {
+      if (res.success) return
+      logFrontendError({
+        level: 'warn',
+        message: `composer mention search cancel failed: code=${res.code ?? 'n/a'} error=${res.error ?? 'n/a'}`,
+        source: 'useComposerMentions'
+      })
+    })
+    .catch((err) => {
+      logFrontendError({
+        level: 'warn',
+        message: `composer mention search cancel rejected: ${err instanceof Error ? err.message : String(err)}`,
+        source: 'useComposerMentions'
+      })
+    })
 }
 
-/** Recursively walk `rootPath` via `readDir`, returning forward-slash-relative paths. */
-async function collectProjectFiles(rootPath: string): Promise<string[]> {
-  const root = rootPath.replace(/\\/g, '/').replace(/\/$/, '')
-  const files: string[] = []
-  const queue: string[] = [root]
-  while (queue.length > 0) {
-    const dir = queue.shift()
-    if (!dir) continue
-    let entries: Awaited<ReturnType<typeof readDir>>
-    try {
-      entries = await readDir(dir)
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (SKIP_NAMES.has(entry.name)) continue
-      const full = `${dir}/${entry.name}`.replace(/\/+/g, '/')
-      if (entry.isDirectory) queue.push(full)
-      else files.push(full.slice(root.length + 1))
-    }
-  }
-  return files
-}
-
-/** Build a {@link MentionMatch} from a relative path + the search root. */
-function toMentionMatch(relPath: string, rootPath: string): MentionMatch {
+/** Build a {@link MentionMatch} from a ripgrep `SearchFileHit` + search root. */
+function toMentionMatch(hit: SearchFileHit, root: string): MentionMatch {
   return {
-    relPath,
-    absPath: `${rootPath}/${relPath}`,
-    name: basename(relPath),
-    ignored: false
+    relPath: hit.path,
+    absPath: `${root}/${hit.path}`,
+    name: basename(hit.path),
+    ignored: hit.ignored
   }
 }
 
@@ -106,7 +82,7 @@ export interface ComposerMentions {
   /** The active @token query (empty for a bare `@`). */
   filter: string
   sections: MentionSection[]
-  /** True while the project file list is being walked (first open / re-walk). */
+  /** True while a filename-search stream is in flight for the current query. */
   loading: boolean
   menuRef: RefObject<FileMentionMenuHandle>
   /** Call on textarea input + selection change. */
@@ -127,104 +103,160 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const [filter, setFilter] = useState('')
   const [matches, setMatches] = useState<MentionMatch[]>([])
   const [loading, setLoading] = useState(false)
-  const [cacheReady, setCacheReady] = useState(false)
   const menuRef = useRef<FileMentionMenuHandle>(null)
   const onStageRef = useRef(onStageFileRef)
   onStageRef.current = onStageFileRef
-  // True when a file-change landed during an in-flight walk — the walk must
-  // discard its stale result and re-walk before caching.
-  const dirtyRef = useRef(false)
 
-  // Invalidate the cache when files under `rootPath` change so the next menu
-  // open re-walks. Events fire globally for every watched dir, so filter by
-  // path prefix to avoid dropping the cache on unrelated projects' changes.
+  const reqIdRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Per-hook-instance prefix so search ids never collide with another
+  // `useComposerMentions` instance or the file-explorer store's `search-N`
+  // namespace — broadcast batch/done events only reach this listener.
+  // Lazy-init so `randomUUID()` runs once per instance, not every render.
+  const instanceIdRef = useRef<string>('')
+  if (instanceIdRef.current === '') instanceIdRef.current = randomUUID()
+  // The search id (`search-${reqId}`) whose batch/done events are currently
+  // accepted. Stale events from a cancelled stream mismatch and are ignored.
+  const activeSearchIdRef = useRef<string | null>(null)
+  // Accumulator for the in-flight search's batches, capped at MAX_RESULTS.
+  const accumRef = useRef<MentionMatch[]>([])
+  // The mount-scoped batch listener can't close over `rootPath` (its effect has
+  // no deps), so it reads the current root through this ref. Updated in an
+  // effect, not during render, so the write can't leak from an uncommitted render.
+  const rootPathRef = useRef(rootPath)
   useEffect(() => {
-    if (!rootPath) return
-    const root = rootPath.replace(/\\/g, '/')
-    const invalidate = (event: FileChangeEvent) => {
-      if (!event.path.replace(/\\/g, '/').startsWith(root)) return
-      if (fileCache.delete(rootPath)) {
-        setCacheReady((r) => (r ? false : r))
-      } else {
-        // Cache not populated yet — flag the in-flight walk as stale so it
-        // re-walks before caching its (now-out-of-date) result.
-        dirtyRef.current = true
-      }
-    }
-    const u1 = filesystemApi.onFileChanged(invalidate)
-    const u2 = filesystemApi.onFileCreated(invalidate)
-    const u3 = filesystemApi.onFileDeleted(invalidate)
-    return () => {
-      u1()
-      u2()
-      u3()
-    }
+    rootPathRef.current = rootPath
   }, [rootPath])
 
-  // Walk the project tree lazily when the menu opens and the cache is empty.
-  // Re-walks after an invalidation (cacheReady flips back to false) while the
-  // menu is still open. Does NOT depend on `filter`, so typing does not cancel
-  // an in-flight walk. The module cache is LRU-bounded (CACHE_MAX) so opening
-  // many distinct projects does not grow memory unbounded.
+  // Subscribe to the filename-stream events once per mount (desktop only).
+  // Web (`!isTauriContext()`) never starts a stream and these return no-ops.
   useEffect(() => {
-    if (!menuOpen || !rootPath || disabled) return
-    if (fileCache.has(rootPath)) {
-      // Refresh LRU recency on hit (Map.set on an existing key keeps order).
-      const cached = fileCache.get(rootPath)
-      if (cached) {
-        fileCache.delete(rootPath)
-        fileCache.set(rootPath, cached)
+    if (!isTauriContext()) return
+    const unsubBatch = filesystemApi.onSearchFileNamesBatch((event) => {
+      if (event.searchId !== activeSearchIdRef.current) return
+      const root = normalizeRoot(rootPathRef.current)
+      const next = accumRef.current
+        .concat(event.files.map((f) => toMentionMatch(f, root)))
+        .slice(0, MAX_RESULTS)
+      accumRef.current = next
+      setMatches(next)
+    })
+    const unsubDone = filesystemApi.onSearchFileNamesDone((event) => {
+      if (event.searchId !== activeSearchIdRef.current) return
+      activeSearchIdRef.current = null
+      setLoading(false)
+      if (event.code || event.error) {
+        logFrontendError({
+          level: 'warn',
+          message:
+            `composer mention search done with error: code=${event.code ?? 'n/a'}` +
+            ` error=${event.error ?? 'n/a'}`,
+          source: 'useComposerMentions'
+        })
+        setMatches([])
       }
-      if (!cacheReady) setCacheReady(true)
-      return
-    }
-    let cancelled = false
-    setLoading(true)
-    const finish = (files: string[]) => {
-      if (cancelled) return
-      if (dirtyRef.current) {
-        // A change landed while this walk was in flight — discard the stale
-        // result and re-walk before caching.
-        dirtyRef.current = false
-        void collectProjectFiles(rootPath).then(finish)
-        return
+    })
+    return () => {
+      unsubBatch()
+      unsubDone()
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
       }
-      fileCache.set(rootPath, files)
-      if (fileCache.size > CACHE_MAX) {
-        const oldest = fileCache.keys().next().value
-        if (oldest !== undefined && oldest !== rootPath) fileCache.delete(oldest)
+      const sid = activeSearchIdRef.current
+      if (sid) {
+        activeSearchIdRef.current = null
+        cancelSearchStream(sid)
       }
       setLoading(false)
-      setCacheReady(true)
     }
-    void collectProjectFiles(rootPath).then(finish)
-    return () => {
-      cancelled = true
-    }
-  }, [menuOpen, rootPath, disabled, cacheReady])
+  }, [])
 
-  // Filter the cached file list in-memory per keystroke. The basename-contains
-  // match mirrors the old `rg --iglob **/*query*` behavior without the round-trip.
+  // Debounced per-keystroke stream: cancel any in-flight stream, bump the
+  // request id, and schedule a new start. Batches whose searchId != active
+  // are dropped by the listeners above. Mirrors `file-explorer-store.ts`.
   useEffect(() => {
-    if (!menuOpen || disabled || !rootPath || !cacheReady) {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    // Cancel any in-flight stream before considering a new one.
+    const prevSid = activeSearchIdRef.current
+    if (prevSid) {
+      activeSearchIdRef.current = null
+      cancelSearchStream(prevSid)
+    }
+
+    if (!menuOpen || disabled || !rootPath || !isTauriContext()) {
+      accumRef.current = []
       setMatches([])
+      setLoading(false)
       return
     }
     const f = filter.trim()
     if (f === '') {
+      // Bare `@`: no search, Recents render.
+      accumRef.current = []
       setMatches([])
+      setLoading(false)
       return
     }
-    const root = rootPath.replace(/\\/g, '/').replace(/\/$/, '')
-    const cached = fileCache.get(rootPath) ?? []
-    const lower = f.toLowerCase()
-    setMatches(
-      cached
-        .filter((p) => basename(p).toLowerCase().includes(lower))
-        .slice(0, MAX_RESULTS)
-        .map((p) => toMentionMatch(p, root))
+
+    const id = ++reqIdRef.current
+    const sid = `search-${instanceIdRef.current}-${id}`
+    accumRef.current = []
+    // Drop stale matches from the previous query so they don't flash during
+    // the debounce window before the first batch lands.
+    setMatches([])
+    timerRef.current = setTimeout(
+      () => {
+        timerRef.current = null
+        activeSearchIdRef.current = sid
+        const root = normalizeRoot(rootPath)
+        setLoading(true)
+        void filesystemApi
+          .searchFileNamesStreamStart(sid, root, root, f, false)
+          .then((res) => {
+            if (res.success) return
+            // Failed start: no stream will emit done — drop loading now and
+            // surface the failure so it is never silently swallowed.
+            if (activeSearchIdRef.current === sid) {
+              activeSearchIdRef.current = null
+              setLoading(false)
+              setMatches([])
+            }
+            logFrontendError({
+              level: 'warn',
+              message:
+                `composer mention search start failed: code=${res.code ?? 'n/a'}` +
+                ` error=${res.error ?? 'n/a'}`,
+              source: 'useComposerMentions'
+            })
+          })
+          .catch((err) => {
+            // Defense-in-depth: the facade resolves even on invoke failure, but
+            // a transport fault rejecting the promise must not pin `loading`.
+            if (activeSearchIdRef.current === sid) {
+              activeSearchIdRef.current = null
+              setLoading(false)
+              setMatches([])
+            }
+            logFrontendError({
+              level: 'warn',
+              message: `composer mention search start rejected: ${err instanceof Error ? err.message : String(err)}`,
+              source: 'useComposerMentions'
+            })
+          })
+      },
+      f.length >= SHORT_QUERY_MIN ? DEBOUNCE_SHORT : DEBOUNCE_LONG
     )
-  }, [menuOpen, filter, rootPath, disabled, cacheReady])
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [menuOpen, filter, rootPath, disabled])
 
   const update = useCallback((value: string, caret: number) => {
     const token = activeMentionToken(value, caret)
@@ -241,12 +273,24 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     ): { value: string; caret: number } | null => {
       const token = activeMentionToken(value, caret)
       if (!token) return null
-      const nextValue = spliceMentionToken(value, token)
+      // Splice a file token IN at the caret (instead of hoisting to the
+      // attachment bar). Removes the `@filter` text, inserts the token, and
+      // appends a trailing space so the caret lands in plain text. The token
+      // IS the staging — the wire builder extracts file paths from tokens at
+      // send time. `onStageRef` still fires so the host wrapper can record the
+      // mention in recents (the host wrapper no longer calls `addFileRef`).
+      const { value: nextValue, caret: nextCaret } = insertFileToken(
+        value,
+        token.end,
+        match.name,
+        match.absPath,
+        token.end - token.at
+      )
       setMenuOpen(false)
       setFilter('')
       setMatches([])
       onStageRef.current(match)
-      return { value: nextValue, caret: token.at }
+      return { value: nextValue, caret: nextCaret }
     },
     []
   )

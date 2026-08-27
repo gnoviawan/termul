@@ -2,24 +2,17 @@ import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { motion } from 'framer-motion'
 import { FolderKanban } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ActivityRail } from '@/components/ActivityRail'
-import { CommandHistoryModal } from '@/components/CommandHistoryModal'
-import { CommandPalette } from '@/components/CommandPalette'
+import { ChatRoute } from '@/components/ChatRoute'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
-import { FileExplorer } from '@/components/file-explorer/FileExplorer'
-import { GitPanel } from '@/components/git/GitPanel'
-import { MobileChatShell } from '@/components/mobile/MobileChatShell'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { ResizeEdges } from '@/components/ResizeEdges'
-import { SidebarTabs } from '@/components/SidebarTabs'
 import { StatusBar } from '@/components/StatusBar'
-import { SSHFileExplorer } from '@/components/ssh/SSHFileExplorer'
-import { SSHWorkspace } from '@/components/ssh/SSHWorkspace'
-import { ThemePicker } from '@/components/ThemePicker'
 import { TitleBar } from '@/components/TitleBar'
 import {
   FileExplorerToggleButton,
@@ -27,6 +20,7 @@ import {
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
 import {
@@ -65,11 +59,13 @@ import {
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
+import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -92,6 +88,7 @@ import {
   useProjects,
   useProjectsLoaded
 } from '@/stores/project-store'
+import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import {
   useActiveSSHProfile,
@@ -120,6 +117,44 @@ import {
   useWorkspaceStore
 } from '@/stores/workspace-store'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
+
+const SSHWorkspace = lazy(() =>
+  import('@/components/ssh/SSHWorkspace').then((m) => ({ default: m.SSHWorkspace }))
+)
+const CommandHistoryModal = lazy(() =>
+  import('@/components/CommandHistoryModal').then((m) => ({
+    default: m.CommandHistoryModal
+  }))
+)
+const CommandPalette = lazy(() =>
+  import('@/components/CommandPalette').then((m) => ({ default: m.CommandPalette }))
+)
+const GitPanel = lazy(() =>
+  import('@/components/git/GitPanel').then((m) => ({ default: m.GitPanel }))
+)
+const ThemePicker = lazy(() =>
+  import('@/components/ThemePicker').then((m) => ({ default: m.ThemePicker }))
+)
+const FileExplorer = lazy(() =>
+  import('@/components/file-explorer/FileExplorer').then((m) => ({ default: m.FileExplorer }))
+)
+const MobileChatShell = lazy(() =>
+  import('@/components/mobile/MobileChatShell').then((m) => ({ default: m.MobileChatShell }))
+)
+const SSHFileExplorer = lazy(() =>
+  import('@/components/ssh/SSHFileExplorer').then((m) => ({ default: m.SSHFileExplorer }))
+)
+const ProjectSettingsModal = lazy(() =>
+  import('@/pages/ProjectSettings').then((m) => ({ default: m.ProjectSettingsModal }))
+)
+const AppPreferencesModal = lazy(() =>
+  import('@/pages/AppPreferences').then((m) => ({ default: m.AppPreferencesModal }))
+)
+
+/** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
+function ShellSkeleton(): React.JSX.Element {
+  return <Skeleton className="h-full w-full" />
+}
 
 function getShortcutTargetContext(target: EventTarget | null): {
   isInEditor: boolean
@@ -150,7 +185,9 @@ const macOsTrafficLightClearance = 'w-[80px] shrink-0'
 function MacOsTitlebarStrip(): React.JSX.Element | null {
   const activeProject = useActiveProject()
 
-  if (!isMac) return null
+  // macOS desktop only — native traffic lights + drag region. Web (even on
+  // a Mac browser) falls through to the web TitleBar path instead.
+  if (!isMac || !isTauriContext()) return null
 
   return (
     <div
@@ -186,7 +223,13 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
 export default function WorkspaceLayout(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
+  const settingsModalView = useSettingsModalView()
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+
+  useEffect(() => {
+    setRouterNavigate(navigate)
+    return () => setRouterNavigate(null)
+  }, [navigate])
   // Agent chat entry point (moved from the pane tab bar to the Activity Rail).
   // The dialogs are owned here so the rail button can open them globally; the
 
@@ -779,16 +822,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const handleOpenProjectSettings = useCallback(() => {
     setIsCommandPaletteOpen(false)
-    navigate('/settings')
-  }, [navigate])
+    useSettingsModalStore.getState().openProject()
+  }, [])
 
   const handleOpenAppPreferences = useCallback(() => {
     setIsCommandPaletteOpen(false)
     if (useThemePickerStore.getState().isOpen) {
       useThemePickerStore.getState().cancel()
     }
-    navigate('/preferences')
-  }, [navigate])
+    useSettingsModalStore.getState().openApp()
+  }, [])
 
   const handleOpenCommandHistory = useCallback(() => {
     setIsCommandPaletteOpen(false)
@@ -856,32 +899,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandPaletteOpen(false)
     setIsShortcutMenuOpen(false)
     setIsCommandHistoryOpen(false)
+    // Close the settings modal too — the old code closed the /preferences
+    // route via navigate('/') before opening the theme picker. The route is
+    // gone, so close the modal via the store (EdgeCaseHunter #3).
+    useSettingsModalStore.getState().close()
   }, [])
 
   const handleToggleThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
-    if (location.pathname === '/preferences') {
-      navigate('/')
-    }
     closeThemePickerPeerOverlays()
     useThemePickerStore.getState().toggle(getEffectiveThemeId(colorTheme, appearanceMode))
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const handleOpenThemePicker = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
-    }
-    if (location.pathname === '/preferences') {
-      navigate('/')
     }
     closeThemePickerPeerOverlays()
     const store = useThemePickerStore.getState()
     if (!store.isOpen) {
       store.open(getEffectiveThemeId(colorTheme, appearanceMode))
     }
-  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme, location.pathname, navigate])
+  }, [appearanceMode, closeThemePickerPeerOverlays, colorTheme])
 
   const appDefaultShell = useDefaultShell()
   const maxTerminals = useMaxTerminalsPerProject()
@@ -913,7 +954,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/'
+  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(
@@ -990,7 +1031,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleNewBrowserTab = useCallback((paneId?: string) => {
     const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
     if (resolvedPaneId) {
-      const browserTabId = crypto.randomUUID()
+      const browserTabId = randomUUID()
       useBrowserSessionStore.getState().createTab(browserTabId)
       useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId)
     }
@@ -1018,7 +1059,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (resolvedPaneId && activeProject?.path) {
         useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
           type: 'git',
-          id: `git-${crypto.randomUUID()}`,
+          id: `git-${randomUUID()}`,
           cwd: activeProject.path
         })
       }
@@ -1044,7 +1085,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (!resolvedCwd) return
       useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
         type: 'git-history',
-        id: `git-history-${crypto.randomUUID()}`,
+        id: `git-history-${randomUUID()}`,
         cwd: resolvedCwd
       })
     },
@@ -1565,7 +1606,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const workspaceMain = (
     <>
       {activeSSHProfile ? (
-        <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+        <Suspense fallback={<ShellSkeleton />}>
+          <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} />
+        </Suspense>
       ) : projects.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 rounded-xl">
           <motion.div
@@ -1593,24 +1636,27 @@ export default function WorkspaceLayout(): React.JSX.Element {
       ) : (
         <>
           {isWorkspaceRoute ? (
-            <motion.div
-              key={fullscreenPaneId ? 'fullscreen' : 'normal'}
-              initial={{ opacity: 0.85, scale: 0.97 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="h-full min-h-0 flex-1 overflow-hidden"
-            >
-              <PaneRenderer
-                node={fullscreenPane ?? paneRoot}
-                onAddTerminal={handleAddTerminal}
-                onAddBrowserTab={handleNewBrowserTab}
-                onCloseTerminal={handleCloseTerminal}
-                onRenameTerminal={renameTerminal}
-                onCloseEditorTab={handleCloseEditorTab}
-                closingTerminalIds={closingTerminalIds}
-                defaultShell={activeProject?.defaultShell || appDefaultShell}
-              />
-            </motion.div>
+            <>
+              <ChatRoute />
+              <motion.div
+                key={fullscreenPaneId ? 'fullscreen' : 'normal'}
+                initial={{ opacity: 0.85, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="h-full min-h-0 flex-1 overflow-hidden"
+              >
+                <PaneRenderer
+                  node={fullscreenPane ?? paneRoot}
+                  onAddTerminal={handleAddTerminal}
+                  onAddBrowserTab={handleNewBrowserTab}
+                  onCloseTerminal={handleCloseTerminal}
+                  onRenameTerminal={renameTerminal}
+                  onCloseEditorTab={handleCloseEditorTab}
+                  closingTerminalIds={closingTerminalIds}
+                  defaultShell={activeProject?.defaultShell || appDefaultShell}
+                />
+              </motion.div>
+            </>
           ) : (
             <div className="relative flex-1 overflow-hidden bg-background rounded-xl">
               <div className="h-full w-full">
@@ -1632,38 +1678,46 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateProject={addProject}
       />
 
-      <ThemePicker />
+      {isThemePickerOpen && (
+        <Suspense fallback={null}>
+          <ThemePicker />
+        </Suspense>
+      )}
 
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        projects={projects}
-        onSwitchProject={selectProject}
-        onAddTerminal={() => handleAddTerminal(undefined)}
-        onShowAgentLauncher={() => {
-          const paneId = useWorkspaceStore.getState().activePaneId
-          if (paneId) {
-            useWorkspaceStore.getState().showAgentLauncher(paneId)
-          }
-        }}
-        onLaunchAgent={handleLaunchAgent}
-        onNewBrowserTab={handleNewBrowserTab}
-        onSaveSnapshot={handleOpenSnapshotModal}
-        onOpenProjectSettings={handleOpenProjectSettings}
-        onOpenAppPreferences={handleOpenAppPreferences}
-        onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
-        onOpenShortcutMenu={handleOpenShortcutMenu}
-        onOpenThemePicker={handleOpenThemePicker}
-        onSSHConnect={handleSSHConnect}
-        sshProfiles={sshProfiles.map((p) => ({
-          id: p.id,
-          name: p.name,
-          host: p.host,
-          username: p.username
-        }))}
-        getShortcutLabel={getShortcutLabel}
-        getProjectShortcutLabel={getProjectShortcutLabel}
-      />
+      {isCommandPaletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            isOpen={isCommandPaletteOpen}
+            onClose={() => setIsCommandPaletteOpen(false)}
+            projects={projects}
+            onSwitchProject={selectProject}
+            onAddTerminal={() => handleAddTerminal(undefined)}
+            onShowAgentLauncher={() => {
+              const paneId = useWorkspaceStore.getState().activePaneId
+              if (paneId) {
+                useWorkspaceStore.getState().showAgentLauncher(paneId)
+              }
+            }}
+            onLaunchAgent={handleLaunchAgent}
+            onNewBrowserTab={handleNewBrowserTab}
+            onSaveSnapshot={handleOpenSnapshotModal}
+            onOpenProjectSettings={handleOpenProjectSettings}
+            onOpenAppPreferences={handleOpenAppPreferences}
+            onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
+            onOpenShortcutMenu={handleOpenShortcutMenu}
+            onOpenThemePicker={handleOpenThemePicker}
+            onSSHConnect={handleSSHConnect}
+            sshProfiles={sshProfiles.map((p) => ({
+              id: p.id,
+              name: p.name,
+              host: p.host,
+              username: p.username
+            }))}
+            getShortcutLabel={getShortcutLabel}
+            getProjectShortcutLabel={getProjectShortcutLabel}
+          />
+        </Suspense>
+      )}
 
       <CreateSnapshotModal
         isOpen={isCreateSnapshotModalOpen}
@@ -1671,14 +1725,30 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onCreateSnapshot={handleCreateSnapshot}
       />
 
-      <CommandHistoryModal
-        isOpen={isCommandHistoryOpen}
-        onClose={() => setIsCommandHistoryOpen(false)}
-        entries={commandHistory}
-        allEntries={allCommandHistory}
-        onSelectCommand={handleInsertCommand}
-        onClearHistory={handleClearCommandHistory}
-      />
+      {isCommandHistoryOpen && (
+        <Suspense fallback={null}>
+          <CommandHistoryModal
+            isOpen={isCommandHistoryOpen}
+            onClose={() => setIsCommandHistoryOpen(false)}
+            entries={commandHistory}
+            allEntries={allCommandHistory}
+            onSelectCommand={handleInsertCommand}
+            onClearHistory={handleClearCommandHistory}
+          />
+        </Suspense>
+      )}
+
+      {settingsModalView === 'project' && (
+        <Suspense fallback={null}>
+          <ProjectSettingsModal />
+        </Suspense>
+      )}
+
+      {settingsModalView === 'app' && (
+        <Suspense fallback={null}>
+          <AppPreferencesModal />
+        </Suspense>
+      )}
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
@@ -1785,39 +1855,43 @@ export default function WorkspaceLayout(): React.JSX.Element {
   if (isMobileWebShell) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <MobileChatShell
-          onNewChat={handleOpenAgentChat}
-          canNewChat={Boolean(activeProject?.path)}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-          onOpenGitChanges={() => setGitSheetOpen(true)}
-          onOpenGitHistory={() => handleAddGitHistoryTab()}
-          onNewTerminal={() => handleAddTerminal(undefined)}
-          onCloseTerminal={handleCloseTerminal}
-          onRenameTerminal={renameTerminal}
-          onRestartTerminal={(terminalId) => {
-            // Restart: kill the PTY, close the old tab, then re-spawn.
-            const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId)
-            if (!terminal?.ptyId) return
-            const root = useWorkspaceStore.getState().root
-            const pane = findPaneContainingTab(root, `term-${terminalId}`)
-            void terminalApi.kill(terminal.ptyId).then(() => {
-              closeTerminal(terminalId, activeProjectId)
-              if (pane) {
-                useWorkspaceStore.getState().closeTab(pane.id, `term-${terminalId}`)
-              }
-              handleCreateTerminalInPane(
-                pane?.id ?? useWorkspaceStore.getState().activePaneId ?? '',
-                terminal.shell ?? undefined
-              )
-            })
-          }}
-        >
-          <PaneDndProvider>
-            <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-              {workspaceMain}
-            </main>
-          </PaneDndProvider>
-        </MobileChatShell>
+        <Suspense fallback={<ShellSkeleton />}>
+          <MobileChatShell
+            onNewChat={handleOpenAgentChat}
+            canNewChat={Boolean(activeProject?.path)}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenGitChanges={() => setGitSheetOpen(true)}
+            onOpenGitHistory={() => handleAddGitHistoryTab()}
+            onNewTerminal={() => handleAddTerminal(undefined)}
+            onCloseTerminal={handleCloseTerminal}
+            onRenameTerminal={renameTerminal}
+            onRestartTerminal={(terminalId) => {
+              // Restart: kill the PTY, close the old tab, then re-spawn.
+              const terminal = useTerminalStore
+                .getState()
+                .terminals.find((t) => t.id === terminalId)
+              if (!terminal?.ptyId) return
+              const root = useWorkspaceStore.getState().root
+              const pane = findPaneContainingTab(root, `term-${terminalId}`)
+              void terminalApi.kill(terminal.ptyId).then(() => {
+                closeTerminal(terminalId, activeProjectId)
+                if (pane) {
+                  useWorkspaceStore.getState().closeTab(pane.id, `term-${terminalId}`)
+                }
+                handleCreateTerminalInPane(
+                  pane?.id ?? useWorkspaceStore.getState().activePaneId ?? '',
+                  terminal.shell ?? undefined
+                )
+              })
+            }}
+          >
+            <PaneDndProvider>
+              <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+                {workspaceMain}
+              </main>
+            </PaneDndProvider>
+          </MobileChatShell>
+        </Suspense>
 
         {/* Mobile-only full-width Git Changes sheet. GitPanel branches on
             useMobileWebShell() internally to render a single-column stacked
@@ -1830,7 +1904,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
           <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
             {activeProject?.path ? (
-              <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+              <Suspense fallback={<ShellSkeleton />}>
+                <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+              </Suspense>
             ) : null}
           </SheetContent>
         </Sheet>
@@ -1864,9 +1940,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
             <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
               {/* Sidebar */}
-              {isSidebarVisible && (
+              {isSidebarVisible ? (
                 <div className="mr-2">
-                  <SidebarTabs
+                  <ProjectSidebar
                     projects={projects}
                     activeProjectId={activeProjectId}
                     onSelectProject={handleSelectProject}
@@ -1881,6 +1957,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     activeSSHProfileId={activeSSHProfileId}
                   />
                 </div>
+              ) : (
+                // Web-only slim edge toggle so a hidden sidebar stays
+                // re-openable. Desktop re-opens via the TitleBar toggle.
+                !isTauriContext() && (
+                  <div className="mr-2 flex items-start pt-0">
+                    <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                  </div>
+                )
               )}
 
               {/* Main Content and File Explorer Container */}
@@ -1897,7 +1981,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
                       {isExplorerVisible && activeProject?.path && (
                         <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                          <FileExplorer side="right" />
+                          <Suspense fallback={<ShellSkeleton />}>
+                            <FileExplorer side="right" />
+                          </Suspense>
                         </div>
                       )}
                       {activeSSHProfile && (
@@ -1907,28 +1993,36 @@ export default function WorkspaceLayout(): React.JSX.Element {
                             !(isExplorerVisible && activeProject?.path) && 'w-64'
                           )}
                         >
-                          <SSHFileExplorer
-                            connectionId={sshConn.connectionId ?? ''}
-                            isConnected={sshConn.isConnected}
-                            sftpReady={sshConn.sftpReady}
-                            entries={sshConn.entries}
-                            currentPath={sshConn.currentPath}
-                            expandedDirs={sshConn.expandedDirs}
-                            childEntries={sshConn.childEntries}
-                            loadingDirs={sshConn.loadingDirs}
-                            isLoadingRoot={sshConn.isLoadingRoot}
-                            profileName={activeSSHProfile.name}
-                            onConnect={sshConn.handleConnect}
-                            onBrowseFiles={sshConn.handleBrowseFiles}
-                            onToggleDir={sshConn.toggleDirectory}
-                            onLoadDir={sshConn.loadDirectory}
-                            onMkdir={handleSSHMkdir}
-                            onCreateFile={handleSSHCreateFile}
-                            onDelete={handleSSHDelete}
-                            onRename={handleSSHRename}
-                          />
+                          <Suspense fallback={<ShellSkeleton />}>
+                            <SSHFileExplorer
+                              connectionId={sshConn.connectionId ?? ''}
+                              isConnected={sshConn.isConnected}
+                              sftpReady={sshConn.sftpReady}
+                              entries={sshConn.entries}
+                              currentPath={sshConn.currentPath}
+                              expandedDirs={sshConn.expandedDirs}
+                              childEntries={sshConn.childEntries}
+                              loadingDirs={sshConn.loadingDirs}
+                              isLoadingRoot={sshConn.isLoadingRoot}
+                              profileName={activeSSHProfile.name}
+                              onConnect={sshConn.handleConnect}
+                              onBrowseFiles={sshConn.handleBrowseFiles}
+                              onToggleDir={sshConn.toggleDirectory}
+                              onLoadDir={sshConn.loadDirectory}
+                              onMkdir={handleSSHMkdir}
+                              onCreateFile={handleSSHCreateFile}
+                              onDelete={handleSSHDelete}
+                              onRename={handleSSHRename}
+                            />
+                          </Suspense>
                         </div>
                       )}
+                    </div>
+                  ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
+                    // Web-only slim edge toggle so a hidden file explorer
+                    // stays re-openable. Desktop re-opens via the TitleBar.
+                    <div className="flex-shrink-0 ml-2 flex items-start">
+                      <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </div>
                   ) : null}
                 </div>

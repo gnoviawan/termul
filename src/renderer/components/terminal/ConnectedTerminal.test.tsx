@@ -1065,6 +1065,29 @@ describe('ConnectedTerminal', () => {
   })
 
   describe('Clipboard functionality', () => {
+    // GH-588: the Ctrl+V handler degrades to native xterm paste when
+    // `navigator.clipboard` is undefined (non-secure context, HTTP+bare-IP).
+    // These tests exercise the secure-context path (navigator.clipboard
+    // available) so the handler calls the mocked `clipboardApi` facade; the
+    // non-secure branch is covered by its own test below. jsdom leaves
+    // `navigator.clipboard` undefined by default, so stub it as defined here.
+    let originalClipboardDescriptor: PropertyDescriptor | undefined
+    beforeEach(() => {
+      originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { readText: vi.fn(), writeText: vi.fn() },
+        configurable: true,
+        writable: true
+      })
+    })
+    afterEach(() => {
+      if (originalClipboardDescriptor) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor)
+      } else {
+        delete (navigator as { clipboard?: unknown }).clipboard
+      }
+    })
+
     it('should set up clipboard keyboard handlers', async () => {
       render(<ConnectedTerminal />)
 
@@ -1188,6 +1211,37 @@ describe('ConnectedTerminal', () => {
 
       // terminal.paste should NOT be called when pasteText is wired
       expect(mockTerminalInstance.paste).not.toHaveBeenCalled()
+    })
+
+    it('should let xterm handle Ctrl+V when navigator.clipboard is undefined (non-secure context, GH-588)', async () => {
+      // Simulate a non-secure context (HTTP+bare-IP): navigator.clipboard is
+      // unavailable. The handler must NOT preventDefault + pasteFromClipboard
+      // (the facade's paste-event fallback can't fire when the keydown
+      // suppresses the paste event it waits on). Instead it returns true so
+      // xterm's native paste (the browser paste event) handles it.
+      delete (navigator as { clipboard?: unknown }).clipboard
+      expect(typeof navigator.clipboard).toBe('undefined')
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'v',
+        ctrlKey: true,
+        bubbles: true
+      })
+
+      const result = handler(event)
+
+      // Returns true so xterm handles the paste natively (no preventDefault).
+      expect(result).toBe(true)
+      // The facade's readText is NOT called (native xterm paste handles it).
+      expect(vi.mocked(clipboardApi).readText).not.toHaveBeenCalled()
     })
 
     it('should select all on Ctrl+A', async () => {

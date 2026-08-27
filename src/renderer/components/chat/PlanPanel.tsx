@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { CheckCircle2, Circle, ListChecks, Loader2 } from 'lucide-react'
+import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from 'lucide-react'
+import { useId, useState } from 'react'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
@@ -105,7 +106,19 @@ function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
 /** Execution plan panel. Renders nothing when there are no entries. */
 export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
+  // Collapse state is component-local: it survives `entries` changes so
+  // mid-turn `acp:plan_update` events keep the user's collapse choice. Reset
+  // only on unmount or session switch (the panel is remounted per session).
+  const [collapsed, setCollapsed] = useState(false)
+  // Unique id per PlanPanel instance so the sticky panel and an inline
+  // historical renderer never collide on `id="plan-panel-body"`.
+  const bodyId = useId()
   const completed = entries.filter((e) => e.status === 'completed').length
+  const inProgressCount = entries.filter((e) => e.status === 'in_progress').length
+  const hasInProgress = inProgressCount > 0
+  const taskLabel = entries.length === 1 ? 'task' : 'tasks'
+  const inProgressLabel =
+    inProgressCount === 1 ? 'task in progress' : `${inProgressCount} tasks in progress`
 
   return (
     <AnimatePresence initial={false}>
@@ -119,60 +132,93 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
           className="shrink-0"
         >
           <div className={cn(CHAT_GUTTER_X, 'py-2')}>
-            <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50">
-              <div className="flex items-center gap-1.5 px-3 py-2 text-2xs font-semibold text-muted-foreground">
+            <section
+              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
+              aria-label="Execution plan"
+            >
+              <button
+                type="button"
+                onClick={() => setCollapsed((c) => !c)}
+                aria-expanded={!collapsed}
+                aria-controls={bodyId}
+                aria-label={`Plan, ${completed} of ${entries.length} ${taskLabel}${
+                  hasInProgress ? `, ${inProgressLabel}` : ''
+                }`}
+                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
                 <span className="text-balance">Plan</span>
+                {hasInProgress && (
+                  <Loader2
+                    size={12}
+                    className="ml-1 shrink-0 animate-spin text-warning motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="ml-auto tabular-nums text-muted-foreground/70">
                   {completed}
                   <span className="text-muted-foreground/40">/</span>
                   {entries.length}
                 </span>
-              </div>
-              <ScrollArea className="max-h-60 border-t border-border/40">
-                <Accordion
-                  type="single"
-                  collapsible
-                  className="flex flex-col gap-0.5 px-2.5 pb-2.5 pt-1.5"
-                >
-                  {entries.map((entry, i) => {
-                    const detail = getPlanDetail(entry)
-                    const entryValue = `entry-${getPlanEntryIdentity(entry)}`
-                    const motionProps = {
-                      initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' },
-                      animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' },
-                      transition: {
-                        ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
-                        delay: reduced ? 0 : Math.min(i, 8) * 0.08
+                <ChevronDown
+                  size={14}
+                  className={cn(
+                    'shrink-0 text-muted-foreground/60 transition-transform',
+                    collapsed ? '' : 'rotate-180'
+                  )}
+                  aria-hidden="true"
+                />
+              </button>
+              {!collapsed && (
+                <ScrollArea id={bodyId} className="max-h-60 border-t border-border/40">
+                  <Accordion
+                    type="single"
+                    collapsible
+                    className="flex flex-col gap-0.5 px-2.5 pb-2.5 pt-1.5"
+                  >
+                    {entries.map((entry, i) => {
+                      const detail = getPlanDetail(entry)
+                      const entryValue = `entry-${getPlanEntryIdentity(entry)}`
+                      const motionProps = {
+                        initial: reduced
+                          ? { opacity: 0 }
+                          : { opacity: 0, y: 6, filter: 'blur(4px)' },
+                        animate: reduced
+                          ? { opacity: 1 }
+                          : { opacity: 1, y: 0, filter: 'blur(0px)' },
+                        transition: {
+                          ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
+                          delay: reduced ? 0 : Math.min(i, 8) * 0.08
+                        }
                       }
-                    }
 
-                    return detail ? (
-                      <motion.div key={entryValue} {...motionProps}>
-                        <AccordionItem value={entryValue} className="border-0">
-                          <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
-                            <span className="flex min-w-0 flex-1 items-center gap-2">
-                              <EntryLabel entry={entry} />
-                            </span>
-                          </AccordionTrigger>
-                          <AccordionContent className="pl-8 pr-2 text-xs text-muted-foreground">
-                            {detail}
-                          </AccordionContent>
-                        </AccordionItem>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key={entryValue}
-                        {...motionProps}
-                        className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
-                      >
-                        <EntryLabel entry={entry} />
-                      </motion.div>
-                    )
-                  })}
-                </Accordion>
-              </ScrollArea>
-            </div>
+                      return detail ? (
+                        <motion.div key={entryValue} {...motionProps}>
+                          <AccordionItem value={entryValue} className="border-0">
+                            <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
+                              <span className="flex min-w-0 flex-1 items-center gap-2">
+                                <EntryLabel entry={entry} />
+                              </span>
+                            </AccordionTrigger>
+                            <AccordionContent className="pl-8 pr-2 text-xs text-muted-foreground">
+                              {detail}
+                            </AccordionContent>
+                          </AccordionItem>
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          key={entryValue}
+                          {...motionProps}
+                          className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
+                        >
+                          <EntryLabel entry={entry} />
+                        </motion.div>
+                      )
+                    })}
+                  </Accordion>
+                </ScrollArea>
+              )}
+            </section>
           </div>
         </motion.div>
       )}

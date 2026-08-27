@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { worktreeApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Worktree } from '@/types/project'
 
@@ -85,7 +86,7 @@ export function useWorktreeReconciler(projectId: string) {
 
       for (const wt of discovered) {
         const newWorktree: Worktree = {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           name: wt.name,
           branch: wt.branch,
           path: wt.path,

@@ -42,6 +42,16 @@ pub struct ChatHistoryIndexEntry {
     pub last_activity_at: u64,
     pub message_count: u64,
     pub status: ChatHistoryStatus,
+    #[serde(default)]
+    pub discovered: bool,
+    /// Worktree path the agent runs in (CAP-3). Additive: old entries
+    /// deserialize with `None` (the renderer-authored metadata payload omits
+    /// it for pre-feature sessions). Used by the CAP-4 relaunch lookup +
+    /// CAP-6 indicator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,6 +183,49 @@ impl ChatHistoryStore {
         let file = decode_payload_file(&bytes)?;
         validate_payload(&file.payload, Some(session_id))?;
         Ok(file.payload)
+    }
+
+    /// Tail-first variant of [`get`]: reads the full payload (same I/O), then
+    /// keeps only the last `limit` messages + the tool calls whose `seq` falls
+    /// within the tail message range. Returns the same `Value` shape so the
+    /// renderer can consume it identically to a full payload. The metadata's
+    /// `messageCount` reflects the tail slice.
+    pub fn get_tail(&self, session_id: &str, limit: usize) -> Result<Value> {
+        let payload = self.get(session_id)?;
+        let mut messages = payload
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if messages.len() <= limit {
+            return Ok(payload);
+        }
+        let tail = messages.split_off(messages.len() - limit);
+        let tail_len = tail.len();
+        let oldest_tail_seq = tail
+            .iter()
+            .filter_map(|m| m.get("seq").and_then(|s| s.as_u64()))
+            .min()
+            .unwrap_or(0);
+        let mut result = payload;
+        result["messages"] = serde_json::Value::Array(tail);
+        if let Some(metadata) = result.get_mut("metadata").and_then(|m| m.as_object_mut()) {
+            metadata.insert(
+                "messageCount".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(tail_len)),
+            );
+        }
+        if let Some(tool_calls) = result
+            .get_mut("toolCalls")
+            .and_then(|t| t.as_array_mut())
+        {
+            tool_calls.retain(|tc| {
+                tc.get("seq")
+                    .and_then(|s| s.as_u64())
+                    .is_some_and(|seq| seq >= oldest_tail_seq)
+            });
+        }
+        Ok(result)
     }
 
     /// Server-authoritative replay cursor (R2): the highest persisted event
@@ -489,10 +542,29 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 fn sync_if_present(path: &Path) -> Result<()> {
     match fs::OpenOptions::new().read(true).open(path) {
-        Ok(file) => Ok(file.sync_all()?),
+        Ok(file) => match file.sync_all() {
+            Ok(()) => Ok(()),
+            Err(error) => classify_sync_error(error),
+        },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Classify a `sync_all()` failure into a `Result`. On non-unix (Windows),
+/// `FlushFileBuffers` on a read-only handle can return `ERROR_ACCESS_DENIED`
+/// when a concurrent writer holds the file — a known Win32 quirk, not a real
+/// I/O failure — so it is mapped to `Ok` so the unload-path flush doesn't
+/// lose chat history. On unix, `PermissionDenied` is a real error and
+/// propagates.
+fn classify_sync_error(error: io::Error) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            return Ok(());
+        }
+    }
+    Err(error.into())
 }
 fn sync_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
@@ -696,5 +768,41 @@ mod tests {
         drop(store);
         assert!(ChatHistoryStore::open(root.clone()).unwrap().list().1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// `classify_sync_error` treats `PermissionDenied` from `sync_all()` as Ok
+    /// on non-unix (Windows `FlushFileBuffers`-on-read-only-handle quirk), and
+    /// as a real error on unix. This is the resilience fix for the unload-path
+    /// flush that lost chat history with `os error 5` on Windows.
+    #[test]
+    fn sync_if_present_treats_windows_permission_denied_as_ok() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied");
+        let classified = classify_sync_error(error);
+        #[cfg(not(unix))]
+        {
+            assert!(
+                classified.is_ok(),
+                "PermissionDenied must be benign on non-unix"
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                classified.is_err(),
+                "PermissionDenied must propagate as a real error on unix"
+            );
+        }
+    }
+
+    /// A non-benign I/O error (e.g. `UnexpectedEof`) must still propagate
+    /// through `classify_sync_error` on every platform — only
+    /// `PermissionDenied` is treated as Ok on non-unix.
+    #[test]
+    fn classify_sync_error_propagates_non_permission_errors() {
+        let error = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
+        assert!(
+            classify_sync_error(error).is_err(),
+            "non-PermissionDenied errors must propagate"
+        );
     }
 }

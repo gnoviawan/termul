@@ -7,25 +7,27 @@ import {
 } from '@/components/TitlebarPanelToggles'
 import { windowApi } from '@/lib/api'
 import { isMac } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useActiveProject } from '@/stores/project-store'
 
 const windowControlClass =
   'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer'
 
 /**
- * Slim window-control strip for Windows/Linux.
+ * Top-of-content titlebar strip.
  *
- * The app runs with `decorations: false` on Windows/Linux, so the in-app
- * minimize/maximize/close controls are required. The strip sits at the top of
- * the content column (right of the ActivityRail) and doubles as a window drag
- * region. On macOS this renders nothing — native traffic lights handle window
- * controls, and WorkspaceLayout provides a unified top drag strip instead.
+ * Three modes:
+ * - macOS desktop (Tauri): renders nothing — native traffic lights handle
+ *   window controls, and WorkspaceLayout renders a unified top drag strip.
+ * - Windows/Linux desktop (Tauri): the in-app minimize/maximize/close controls
+ *   are required (`decorations: false`); the sidebar and file-explorer
+ *   visibility toggles sit beside the OS controls.
+ * - Web (browser tab): renders only the centered active-project name. The
+ *   window controls are no-ops in a tab, and the panel toggles live in their
+ *   own panel headers (plus a slim edge toggle when hidden) — see
+ *   WorkspaceLayout, ProjectSidebar, and FileExplorer.
  *
- * Global actions (shortcuts, preferences) no longer live here; they moved to
- * the ActivityRail. The sidebar and file-explorer visibility toggles were
- * relocated back to this strip — left toggle at the far left, right toggle
- * just before the window controls — so they sit beside the OS window
- * controls instead of pinned to the bottom of the rail.
+ * Global actions (shortcuts, preferences) live in the ActivityRail.
  */
 export function TitleBar(): React.JSX.Element | null {
   const [isMaximized, setIsMaximized] = useState(false)
@@ -37,8 +39,23 @@ export function TitleBar(): React.JSX.Element | null {
     })
   }, [])
 
-  // macOS uses native traffic lights — no in-app window controls.
-  if (isMac) return null
+  // macOS desktop uses native traffic lights — no in-app window controls.
+  // Gate on Tauri so a Mac *browser* falls through to the web branch below.
+  if (isMac && isTauriContext()) return null
+
+  // Web (browser): no window controls and no panel toggles in the strip —
+  // the toggles live beside their panels. Keep the strip for the project name.
+  if (!isTauriContext()) {
+    return (
+      <header className="h-8 flex items-center bg-background select-none shrink-0 relative">
+        {activeProject && (
+          <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
+            {activeProject.name}
+          </span>
+        )}
+      </header>
+    )
+  }
 
   return (
     <header

@@ -1,12 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
 
+const mobileShellRef = vi.hoisted(() => ({ current: false }))
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => mobileShellRef.current
+}))
+
 function clickMenuOption(name: string): void {
   const dialog = screen.getByRole('dialog')
-  fireEvent.pointerDown(within(dialog).getByText(name))
+  fireEvent.click(within(dialog).getByText(name))
 }
 
 vi.mock('framer-motion', async () => {
@@ -180,6 +185,27 @@ describe('ModeChip pending selection', () => {
     expect(button.querySelector('svg')).toBeTruthy()
   })
 
+  it('scrolls agent mode options when the list exceeds the viewport', () => {
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+
+    expect(screen.getByTestId('mode-chip-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
+  })
+
+  it('scrolls config chip options even without maxVisibleOptions', () => {
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    expect(screen.getByTestId('config-chip-options')).toHaveClass(
+      'max-h-[180px]',
+      'overflow-y-auto'
+    )
+  })
+
   it('shows optimistic mode label while pending', async () => {
     let resolveSelect!: () => void
     const onSelect = vi.fn(
@@ -233,5 +259,130 @@ describe('ModeChip pending selection', () => {
       expect(screen.getByRole('button', { name: /^Agent$/ })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /^Agent$/ })).not.toHaveAttribute('aria-busy')
     })
+  })
+})
+
+describe('mobile modal selection', () => {
+  beforeEach(() => {
+    mobileShellRef.current = true
+  })
+  afterEach(() => {
+    mobileShellRef.current = false
+  })
+
+  it('opens a centered dialog with config chip options on mobile', () => {
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />)
+
+    // No dialog before opening.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    // Modal dialog opens (not a popover — Radix Dialog renders role=dialog).
+    const dialog = screen.getByRole('dialog', { name: 'Model' })
+    expect(within(dialog).getByTestId('config-chip-options')).toBeInTheDocument()
+    expect(within(dialog).getByText('Alpha')).toBeInTheDocument()
+  })
+
+  it('closes the modal and fires onSelect when an option is tapped', () => {
+    const onSelect = vi.fn(async () => undefined)
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    clickMenuOption('Beta')
+
+    expect(onSelect).toHaveBeenCalledWith('b')
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    // Modal closes after selection.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens a centered dialog with mode chip options on mobile', () => {
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Agent' })
+    expect(within(dialog).getByTestId('mode-chip-options')).toBeInTheDocument()
+    expect(within(dialog).getByText('Plan')).toBeInTheDocument()
+  })
+
+  it('renders the search input inside the modal when showSearch is true', () => {
+    // searchable + options count > maxVisibleOptions triggers showSearch
+    render(
+      <ConfigChip
+        option={option('a')}
+        disabled={false}
+        onSelect={vi.fn()}
+        searchable
+        maxVisibleOptions={2}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText('Search models')).toBeInTheDocument()
+  })
+
+  it('applies a horizontal margin and larger max-width on the mobile modal panel', () => {
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    const dialog = screen.getByRole('dialog')
+    // The dialog element (DialogContent) carries the margin + larger cap so it
+    // never bleeds edge-to-edge on mobile, unlike the desktop w-56 popover.
+    expect(dialog.className).toContain('w-[calc(100%-2rem)]')
+    expect(dialog.className).toContain('max-w-md')
+    expect(dialog.className).toContain('max-h-[80vh]')
+  })
+
+  it('closes the modal without firing onSelect on dismiss (Escape)', () => {
+    const onSelect = vi.fn(async () => undefined)
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('closes the modal without firing onSelect on dismiss (close button)', () => {
+    const onSelect = vi.fn(async () => undefined)
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    // The DialogContent close (X) button dismisses without selecting.
+    fireEvent.click(screen.getByRole('button', { name: /Close/ }))
+
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('does not open the modal when the chip is disabled', () => {
+    render(<ConfigChip option={option('a')} disabled onSelect={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('closes the mode-chip modal and fires onSelect when an option is tapped', () => {
+    const onSelect = vi.fn(async () => undefined)
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={onSelect} label="Agent" />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    clickMenuOption('Plan')
+
+    expect(onSelect).toHaveBeenCalledWith('plan')
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

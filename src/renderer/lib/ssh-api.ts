@@ -14,7 +14,29 @@ import type {
 } from '@shared/types/ssh.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+
+/** Web mode: SSH profiles live in the server-side store (issue #613). */
+const SSH_PROFILES_KEY = 'ssh/profiles'
+
+/**
+ * Web mode has no OS keychain — persist profile metadata without secrets,
+ * mirroring the desktop store (which never writes password/passphrase to disk
+ * and only records that a keychain credential exists).
+ */
+function toStoredProfile(profile: SSHProfile): SSHProfile {
+  const { password: _password, passphrase: _passphrase, ...rest } = profile
+  return { ...rest, hasStoredPassword: false, hasStoredPassphrase: false }
+}
+
+/** Read web profiles from the server-side store; first run = empty list. */
+async function readProfilesFromStore(): Promise<IpcResult<SSHProfile[]>> {
+  const result = await persistenceApi.read<SSHProfile[]>(SSH_PROFILES_KEY)
+  if (result.success) return { success: true, data: result.data }
+  if (result.code === 'KEY_NOT_FOUND') return { success: true, data: [] }
+  return result
+}
 
 const SSH_EVENTS = {
   CONNECTION_STATUS_CHANGED: 'ssh-connection-status-changed',
@@ -74,16 +96,44 @@ async function invokeIpc<T>(
 
 export function createSSHApi(): SSHApi {
   return {
-    // Profile management
+    // Profile management — CRUD works in web mode via the server-side store;
+    // connect/SFTP/port-forwarding remain desktop-only (`WEB_UNSUPPORTED`).
     async listProfiles(): Promise<IpcResult<SSHProfile[]>> {
+      if (!isTauriContext()) return readProfilesFromStore()
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
     },
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
+      if (!isTauriContext()) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const list = await readProfilesFromStore()
+          if (!list.success) return list
+          const updated = list.data.filter((p) => p.id !== profile.id)
+          updated.push(toStoredProfile(profile))
+
+          // webPersistenceApi supports CAS via an undocumented 3rd parameter `expected`
+          // We cast it to any to bypass the strict signature in ipc.types.ts
+          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          if (res.success || res.code !== 'STORE_CAS_FAILED') return res
+        }
+        return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
+      }
       return invokeIpc<void>(SSH_COMMANDS.SAVE_PROFILE, { profile })
     },
 
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
+      if (!isTauriContext()) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const list = await readProfilesFromStore()
+          if (!list.success) return list
+          const updated = list.data.filter((p) => p.id !== profileId)
+          if (updated.length === list.data.length) return { success: true, data: undefined }
+
+          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          if (res.success || res.code !== 'STORE_CAS_FAILED') return res
+        }
+        return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
+      }
       return invokeIpc<void>(SSH_COMMANDS.DELETE_PROFILE, { profileId })
     },
 

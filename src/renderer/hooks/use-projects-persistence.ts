@@ -3,8 +3,10 @@ import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
+import { randomUUID } from '@/lib/uuid'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
+import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -328,7 +330,7 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
     if (!storedByPath.has(gitWt.path)) {
       const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
       updatedWorktrees.push({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: gitWt.name,
         branch: gitWt.branch,
         path: gitWt.path,
@@ -542,10 +544,88 @@ export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
 
   useEffect(() => {
-    // Web/remote mode: the project list is a read-only mirror of the desktop's
-    // store; never persist from the browser (the stubbed plugin-store would
-    // silently drop writes, and edits belong on the desktop anyway).
-    if (!isTauriContext()) return
+    // Web/remote mode: the project list is persisted server-side (Option B:
+    // the standalone server is a first-class project-list authority, so
+    // web-client-created projects survive refresh). Diff the store and push
+    // individual add/update/remove mutations to the server — the server is
+    // the source of truth in VPS mode, and `projects_changed` broadcasts
+    // refetch `GET /projects` on all connected clients.
+    if (!isTauriContext()) {
+      const unsubscribe = useProjectStore.subscribe((state, prevState) => {
+        if (!state.isLoaded || !prevState.isLoaded) return
+        if (state.projects === prevState.projects) return
+
+        const prevById = new Map(prevState.projects.map((p) => [p.id, p]))
+        const nextById = new Map(state.projects.map((p) => [p.id, p]))
+
+        // New projects → addProject.
+        for (const project of state.projects) {
+          if (!prevById.has(project.id)) {
+            void webServerProjects
+              .addProject({
+                id: project.id,
+                name: project.name,
+                path: project.path ?? '',
+                color: project.color,
+                isArchived: project.isArchived ?? false
+              })
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server addProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server addProject error', err)
+              })
+          }
+        }
+
+        // Removed projects → removeProject.
+        for (const project of prevState.projects) {
+          if (!nextById.has(project.id)) {
+            void webServerProjects
+              .removeProject(project.id)
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server removeProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server removeProject error', err)
+              })
+          }
+        }
+
+        // Changed projects → updateProject (name/color/archived only).
+        for (const project of state.projects) {
+          const prev = prevById.get(project.id)
+          if (!prev) continue
+          if (
+            prev.name !== project.name ||
+            prev.color !== project.color ||
+            (prev.isArchived ?? false) !== (project.isArchived ?? false)
+          ) {
+            void webServerProjects
+              .updateProject(project.id, {
+                name: project.name,
+                color: project.color,
+                isArchived: project.isArchived ?? false
+              })
+              .then((result) => {
+                if (!result.success) {
+                  console.warn('[projects] server updateProject failed:', result.error)
+                }
+              })
+              .catch((err: unknown) => {
+                console.warn('[projects] server updateProject error', err)
+              })
+          }
+        }
+      })
+      return () => {
+        unsubscribe()
+      }
+    }
 
     // Subscribe to project store changes
     const unsubscribe = useProjectStore.subscribe((state, prevState) => {
@@ -591,6 +671,10 @@ export function useProjectsAutoSave(): void {
       // `projects_changed` so connected web clients refetch `GET /projects`.
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
       if (useRemoteStatusStore.getState().status?.running) {
+        const projectSwitched =
+          state.activeProjectId !== prevState.activeProjectId ||
+          state.projects.find((p) => p.isDefault === true)?.id !==
+            prevState.projects.find((p) => p.isDefault === true)?.id
         syncProjects(
           toProjectSummaries(state.projects, state.activeProjectId),
           state.activeProjectId || null
@@ -598,6 +682,18 @@ export function useProjectsAutoSave(): void {
           .then((result) => {
             if (!result.success) {
               console.warn('[projects] remote sync unsuccessful:', result.error)
+            }
+            // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
+            // project root) reflects the new default, mirror the MCP registry to
+            // the new project's `.termul/mcp-servers.json`. Best-effort +
+            // non-fatal — the action logs failures and never throws, so a
+            // switch still completes even if the sync write fails. Only on a
+            // real project switch (not a projects/groups-only mutation), and
+            // only when the upstream sync succeeded (a failed syncProjects
+            // leaves the backend on the old default — syncing then would write
+            // to the wrong project's file).
+            if (projectSwitched && result.success) {
+              void useAcpStore.getState().syncMcpRegistryToProjectFile()
             }
           })
           .catch((err: unknown) => {

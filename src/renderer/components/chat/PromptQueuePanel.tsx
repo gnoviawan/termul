@@ -49,22 +49,22 @@ const QueueMessageActions = memo(({ queueId, onRemove, onSendNow }: QueueMessage
   )
 
   return (
-    <QueueItemActions className="items-center gap-2">
+    <QueueItemActions className="items-center gap-1">
       <QueueItemAction
         aria-label="Send now"
         title="Send now"
         onClick={handleSendNow}
-        className="opacity-100 text-foreground hover:bg-foreground/10"
+        className="text-foreground hover:bg-foreground/10"
       >
-        <ArrowUp size={14} />
+        <ArrowUp size={13} />
       </QueueItemAction>
       <QueueItemAction
         aria-label="Remove from queue"
         title="Remove from queue"
         onClick={handleRemove}
-        className="opacity-100 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+        className="text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
       >
-        <Trash2 size={12} />
+        <Trash2 size={11} />
       </QueueItemAction>
     </QueueItemActions>
   )
@@ -80,7 +80,7 @@ export function PromptQueuePanel({
   if (items.length === 0) return null
 
   return (
-    <Queue className="mb-2">
+    <Queue className="-mb-6">
       <QueueSection defaultOpen>
         <QueueSectionTrigger>
           <QueueSectionLabel count={items.length} label="Queued" className="tabular-nums" />
@@ -95,8 +95,8 @@ export function PromptQueuePanel({
               const hasAttachments = preview.attachments.length > 0
 
               return (
-                <QueueItem key={item.id} className="px-0 py-0.5 hover:bg-transparent">
-                  <div className="ml-1 mr-0.5 flex items-center gap-2 rounded-md px-2.5 py-1.5 transition-colors hover:bg-muted">
+                <QueueItem key={item.id}>
+                  <div className="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted">
                     <QueueItemContent title={summary}>{summary}</QueueItemContent>
                     <QueueMessageActions
                       queueId={item.id}
@@ -105,7 +105,7 @@ export function PromptQueuePanel({
                     />
                   </div>
                   {hasAttachments && (
-                    <QueueItemAttachment>
+                    <QueueItemAttachment className="px-2">
                       {preview.attachments.map((attachment) =>
                         attachment.isImage && attachment.url ? (
                           <QueueItemImage

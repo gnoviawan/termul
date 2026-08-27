@@ -79,6 +79,11 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,26 +96,24 @@ jobs:
 
       - name: Generate SHA256SUMS
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release_metadata.outputs.tag }}
         run: |
-          cd release-assets
-          asset_count=0
-          : > ../SHA256SUMS.txt
-          while IFS= read -r -d '' asset; do
-            asset="${asset#./}"
-            sha256sum "$asset" >> ../SHA256SUMS.txt
-            asset_count=$((asset_count + 1))
-          done < <(
-            find . -maxdepth 1 -type f \
-              ! -name '*.sig' \
-              ! -name 'latest.json' \
-              ! -name 'SHA256SUMS.txt' \
-              -print0 | sort -z
-          )
+          # Published asset names are the source of truth: the installer
+          # looks checksums up by exact name, so every entry we write must
+          # match one. Fails loudly on any mismatch instead of shipping a
+          # SHA256SUMS.txt the installer cannot resolve (#546).
+          gh release view "$TAG" \
+            --repo gnoviawan/termul \
+            --json assets \
+            --jq '.assets[].name' > release-asset-names.txt
 
-          if [[ "$asset_count" -eq 0 ]]; then
-            echo "No binary release assets found to checksum." >&2
-            exit 1
-          fi
+          source scripts/release/homebrew.sh
+          generate_sha256sums \
+            release-assets \
+            release-asset-names.txt \
+            SHA256SUMS.txt
 
       - name: Upload SHA256SUMS
         env:

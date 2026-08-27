@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { clearChatRoute } from '@/lib/router-navigate'
+import { randomUUID } from '@/lib/uuid'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 
 export interface ProjectState {
@@ -57,10 +59,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   selectProject: (id: string): void => {
+    const prev = get().activeProjectId
     set((state) => ({
       activeProjectId: id,
       projects: state.projects.map((p) => ({ ...p, isActive: p.id === id }))
     }))
+    if (prev !== id) clearChatRoute()
   },
 
   addProject: (
@@ -70,19 +74,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     defaultShell?: string,
     envVars?: EnvVariable[]
   ): Project => {
+    const prev = get().activeProjectId
     const newProject: Project = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name,
       color,
       path,
       defaultShell,
-      envVars,
-      gitBranch: 'main'
+      envVars
+      // gitBranch intentionally omitted: a stale hardcoded 'main' here was
+      // shown in the status bar before the real branch was detected.
+      // `useProjectGitBranch` auto-detects the actual HEAD branch on project
+      // activation; the manual GitBranchPicker switch still updates it.
     }
     set((state) => ({
       projects: [...state.projects, newProject],
       activeProjectId: newProject.id
     }))
+    if (prev !== newProject.id) clearChatRoute()
     return newProject
   },
 
@@ -96,22 +105,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { projects, activeProjectId, groups } = get()
     const remaining = projects.filter((p) => p.id !== id)
 
-    // Also remove from any group it belongs to
     const updatedGroups = groups.map((g) => ({
       ...g,
       projectIds: g.projectIds.filter((pid) => pid !== id)
     }))
 
+    const wasActive = activeProjectId === id
     set({
       projects: remaining,
       groups: updatedGroups,
       activeProjectId:
-        activeProjectId === id && remaining.length > 0
-          ? remaining[0].id
-          : activeProjectId === id
-            ? ''
-            : activeProjectId
+        wasActive && remaining.length > 0 ? remaining[0].id : wasActive ? '' : activeProjectId
     })
+    if (wasActive) clearChatRoute()
   },
 
   archiveProject: (id: string): void => {
@@ -185,7 +191,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // Group Actions Implementation
   addGroup: (name: string): string => {
-    const id = crypto.randomUUID()
+    const id = randomUUID()
     const newGroup: ProjectGroup = {
       id,
       name,

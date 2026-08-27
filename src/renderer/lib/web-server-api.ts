@@ -15,18 +15,23 @@
  * sees a thrown exception from the network layer.
  */
 import type {
+  BranchInfo,
   DetectedShells,
   DirectoryEntry,
+  DirtyStatus,
   FileContent,
   FileInfo,
   GitCommit,
   GitCommitContext,
   GitStashInfo,
   GitStatusDetail,
-  IpcResult
+  IpcResult,
+  WorktreeInfo
 } from '@shared/types/ipc.types'
-import type { ProjectListPayload } from '@shared/types/web-projects.types'
+import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
+import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
+import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
  * Same-origin base for the embedded server. In web/remote mode the browser is
@@ -329,6 +334,45 @@ export const webServerProjects = {
    */
   async setDefaultProject(projectId: string): Promise<IpcResult<void>> {
     return postJson<void>('/projects/default', { projectId })
+  },
+
+  /**
+   * Create / upsert a project (Option B: the standalone server is a first-class
+   * project-list authority). Canonicalizes + validates the path on the server,
+   * persists to `FileProjectRegistry` (VPS), and broadcasts `projects_changed`.
+   * Mirrors the `add_project` WS request.
+   */
+  async addProject(params: {
+    id: string
+    name: string
+    path: string
+    color: string
+    isArchived?: boolean
+  }): Promise<IpcResult<ProjectSummary>> {
+    return postJson<ProjectSummary>('/projects', params)
+  },
+
+  /**
+   * Patch a project's display fields (name, color, archived). All fields
+   * optional (partial update). Mirrors the `update_project` WS request +
+   * `PUT /projects/{id}`.
+   */
+  async updateProject(
+    projectId: string,
+    patch: { name?: string; color?: string; isArchived?: boolean }
+  ): Promise<IpcResult<void>> {
+    return putJson<void>(`/projects/${encodeURIComponent(projectId)}`, patch)
+  },
+
+  /**
+   * Remove a project. Mirrors the `remove_project` WS request +
+   * `DELETE /projects/{id}`.
+   */
+  async removeProject(projectId: string): Promise<IpcResult<void>> {
+    const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
+      method: 'DELETE'
+    })
+    return parseBody<void>(res)
   }
 }
 
@@ -349,8 +393,6 @@ export const webServerMcpServers = {
  * data, throwing on `!res.success` so the renderer facade (`skills-api.ts`)
  * can branch `isTauriContext()` between `invoke(...)` and these HTTP impls.
  */
-import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
-
 export const webServerSkills = {
   async list(projectRoot?: string): Promise<AgentSkillSummary[]> {
     const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
@@ -464,5 +506,79 @@ export const webServerMcpProbe = {
     } finally {
       clearTimeout(timer)
     }
+  }
+}
+
+/**
+ * Worktree ops routed to `termul-server` (`/worktree/*`). CAP — Web worktree
+ * parity: each method mirrors a desktop `#[tauri::command] worktree_*` handler
+ * and returns the SAME `IpcResult<T>` contract (the renderer facade
+ * `worktree-api.ts` branches `isTauriContext()` between `invoke(...)` and these
+ * HTTP impls). Only the 7 launch-flow routes ship here; the 8 advanced ops
+ * stay `WEB_UNSUPPORTED` on web (deferred — see deferred-work.md).
+ */
+export const webServerWorktree = {
+  async list(projectPath: string): Promise<IpcResult<WorktreeInfo[]>> {
+    return postJson<WorktreeInfo[]>('/worktree/list', { projectPath })
+  },
+
+  async create(params: {
+    projectPath: string
+    name: string
+    branch: string
+    isNewBranch: boolean
+    startRef?: string
+    targetPath?: string
+  }): Promise<IpcResult<WorktreeInfo>> {
+    return postJson<WorktreeInfo>('/worktree/create', params)
+  },
+
+  async remove(
+    projectPath: string,
+    worktreePath: string,
+    force: boolean
+  ): Promise<IpcResult<void>> {
+    return postJson<void>('/worktree/remove', { projectPath, worktreePath, force })
+  },
+
+  async branches(projectPath: string): Promise<IpcResult<BranchInfo[]>> {
+    const encoded = encodeURIComponent(projectPath)
+    return getJson<BranchInfo[]>(`/worktree/branches?projectPath=${encoded}`)
+  },
+
+  async checkDirty(worktreePath: string): Promise<IpcResult<DirtyStatus>> {
+    const encoded = encodeURIComponent(worktreePath)
+    return getJson<DirtyStatus>(`/worktree/check-dirty?worktreePath=${encoded}`)
+  },
+
+  async resolveBaseBranch(projectPath: string): Promise<IpcResult<BaseBranchInfo>> {
+    return postJson<BaseBranchInfo>('/worktree/resolve-base-branch', { projectPath })
+  },
+
+  async copyIncludeFiles(
+    projectPath: string,
+    worktreePath: string
+  ): Promise<IpcResult<IncludeCopyResult>> {
+    return postJson<IncludeCopyResult>('/worktree/copy-include-files', {
+      projectPath,
+      worktreePath
+    })
+  }
+}
+/** MCP OAuth web parity — mirrors the desktop Tauri commands. */
+export const webServerMcpOAuth = {
+  /** Start the OAuth flow; returns the auth URL to redirect the browser to. */
+  async start(serverUrl: string): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
+    return postJson('/mcp-servers/oauth/start', { serverUrl })
+  },
+
+  /** Check whether a stored OAuth token exists for a server URL. */
+  async status(serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
+    return postJson('/mcp-servers/oauth/status', { serverUrl })
+  },
+
+  /** Delete the stored OAuth token for a server URL. */
+  async disconnect(serverUrl: string): Promise<IpcResult<void>> {
+    return postJson('/mcp-servers/oauth/disconnect', { serverUrl })
   }
 }

@@ -19,12 +19,12 @@ const state: {
     projectId: string
     status: 'initializing' | 'active' | 'error' | 'closed'
   }>
-  resumeLiveSession: ReturnType<typeof vi.fn>
+  openHistorySession: ReturnType<typeof vi.fn>
   flushLiveSessionSaves: ReturnType<typeof vi.fn>
   sessions: Record<string, { status: string }>
 } = {
   sessionIndex: [],
-  resumeLiveSession: vi.fn(),
+  openHistorySession: vi.fn(),
   flushLiveSessionSaves: vi.fn(),
   sessions: {}
 }
@@ -80,7 +80,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     events.length = 0
     transportMocks.fetchSessionCursor.mockReset()
     transportMocks.seedSessionCursor.mockReset()
-    state.resumeLiveSession.mockReset()
+    state.openHistorySession.mockReset()
     state.flushLiveSessionSaves.mockReset()
     state.sessionIndex = []
     state.sessions = {}
@@ -89,12 +89,14 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
   it('resumes a still-running turn with the server cursor + records succeeded', async () => {
     state.sessionIndex = [eligibleSession()]
     transportMocks.fetchSessionCursor.mockResolvedValue(7)
-    state.resumeLiveSession.mockResolvedValue(undefined)
+    state.openHistorySession.mockImplementation(async () => {
+      state.sessions = { s1: { status: 'active' } }
+    })
 
     renderHook(() => useAcpSessionResume())
 
     await waitFor(() => {
-      expect(state.resumeLiveSession).toHaveBeenCalledWith('s1', 'agent-1', '/repo')
+      expect(state.openHistorySession).toHaveBeenCalledWith('s1')
     })
     // R2: server-authoritative cursor seeded before resume (web parity).
     expect(transportMocks.fetchSessionCursor).toHaveBeenCalledWith('s1')
@@ -105,11 +107,11 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
   })
 
   it('records skipped (no throw) when the agent has exited / capability is absent', async () => {
-    // The backend `gate_resume_session` rejects (agent exited or no resume
-    // capability) → `resumeLiveSession` rejects → read-only local, no spawn.
+    // `openHistorySession` rejects (agent exited, no resume capability, or
+    // spawn failed) → read-only local, no spawn.
     state.sessionIndex = [eligibleSession()]
     transportMocks.fetchSessionCursor.mockResolvedValue(3)
-    state.resumeLiveSession.mockRejectedValue(new Error('resume not supported'))
+    state.openHistorySession.mockRejectedValue(new Error('resume not supported'))
 
     renderHook(() => useAcpSessionResume())
 
@@ -117,9 +119,24 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
       expect(events.some((e) => e.name === 'acp-resume-skipped')).toBe(true)
     })
     expect(events.some((e) => e.name === 'acp-resume-succeeded')).toBe(false)
-    expect(state.resumeLiveSession).toHaveBeenCalledTimes(1)
+    expect(state.openHistorySession).toHaveBeenCalledTimes(1)
     // Hook never throws on the bootstrap path (best-effort).
     expect(events.find((e) => e.name === 'acp-resume-skipped')?.terminalId).toBe('s1')
+  })
+
+  it('records skipped (not succeeded) when openHistorySession resolves but session stays closed (local strategy)', async () => {
+    state.sessionIndex = [eligibleSession()]
+    transportMocks.fetchSessionCursor.mockResolvedValue(0)
+    state.openHistorySession.mockResolvedValue(undefined)
+    state.sessions = { s1: { status: 'closed' } }
+
+    renderHook(() => useAcpSessionResume())
+
+    await waitFor(() => {
+      expect(events.some((e) => e.name === 'acp-resume-skipped')).toBe(true)
+    })
+    expect(events.some((e) => e.name === 'acp-resume-succeeded')).toBe(false)
+    expect(state.openHistorySession).toHaveBeenCalledTimes(1)
   })
 
   it('honors the project scope + skips closed chats', async () => {
@@ -129,19 +146,15 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
       eligibleSession({ id: 'closed', status: 'closed' })
     ]
     transportMocks.fetchSessionCursor.mockResolvedValue(0)
-    state.resumeLiveSession.mockResolvedValue(undefined)
+    state.openHistorySession.mockResolvedValue(undefined)
 
     renderHook(() => useAcpSessionResume())
 
     await waitFor(() => {
-      expect(state.resumeLiveSession).toHaveBeenCalledWith('in-project', 'agent-1', '/repo')
+      expect(state.openHistorySession).toHaveBeenCalledWith('in-project')
     })
-    expect(state.resumeLiveSession).toHaveBeenCalledTimes(1)
-    expect(state.resumeLiveSession).not.toHaveBeenCalledWith(
-      'other-project',
-      expect.anything(),
-      expect.anything()
-    )
+    expect(state.openHistorySession).toHaveBeenCalledTimes(1)
+    expect(state.openHistorySession).not.toHaveBeenCalledWith('other-project')
   })
 
   it('desktop transport (no cursor accessor) skips the seed but still resumes', async () => {
@@ -153,13 +166,15 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     // Re-import with the desktop transport in place.
     vi.resetModules()
     state.sessionIndex = [eligibleSession()]
-    state.resumeLiveSession.mockResolvedValue(undefined)
+    state.openHistorySession.mockImplementation(async () => {
+      state.sessions = { s1: { status: 'active' } }
+    })
 
     const { useAcpSessionResume: desktopHook } = await import('./use-acp-session-resume')
     renderHook(() => desktopHook())
 
     await waitFor(() => {
-      expect(state.resumeLiveSession).toHaveBeenCalledWith('s1', 'agent-1', '/repo')
+      expect(state.openHistorySession).toHaveBeenCalledWith('s1')
     })
     expect(events.find((e) => e.name === 'acp-resume-succeeded')?.terminalId).toBe('s1')
   })
@@ -168,7 +183,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     state.sessionIndex = []
     renderHook(() => useAcpSessionResume())
     await Promise.resolve()
-    expect(state.resumeLiveSession).not.toHaveBeenCalled()
+    expect(state.openHistorySession).not.toHaveBeenCalled()
     expect(events).toHaveLength(0)
   })
 })

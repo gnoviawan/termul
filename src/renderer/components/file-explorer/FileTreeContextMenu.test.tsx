@@ -1,8 +1,7 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ContextMenuItem } from '@/components/ContextMenu'
-import { FileTreeContextMenu } from '@/components/file-explorer/FileTreeContextMenu'
+import { FileTreeContextMenuContent } from '@/components/file-explorer/FileTreeContextMenu'
 
 const mockIsTauriContext = vi.hoisted(() => vi.fn())
 
@@ -10,19 +9,57 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
 }))
 
-// Stub ContextMenu so the test asserts the item labels that
-// FileTreeContextMenu builds — the real ContextMenu renders via a portal +
-// Radix positioning that is hard to assert in jsdom. Capturing the `items`
-// prop keeps the test focused on the gating logic.
-vi.mock('@/components/ContextMenu', () => ({
-  ContextMenu: ({ items }: { items: ContextMenuItem[] }) => (
-    <div data-testid="context-menu">
-      {items.map((item, i) => (
-        <span key={i}>{item.type === 'separator' ? '---' : item.label}</span>
-      ))}
-    </div>
-  )
-}))
+// Stub the Radix context-menu primitives so the test asserts the item labels
+// that `FileTreeContextMenuContent` builds declaratively. The real primitives
+// render via a portal + Radix positioning that is hard to assert in jsdom; the
+// flat stub renders `<ContextMenuContent>` children inline so `getByText` can
+// assert the capability-gated item set. The `ContextMenuTrigger` stub mirrors
+// Radix's checkForDefaultPrevented (F2) so F1-type regressions surface in any
+// trigger-based test that uses this mock. Mirrors the GlobalContextMenu stub.
+vi.mock('@/components/ui/context-menu', async () => {
+  const React = await import('react')
+  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
+    open: false,
+    setOpen: () => {}
+  })
+  return {
+    ContextMenu: ({ children }: { children: React.ReactNode }) => {
+      const [open, setOpen] = React.useState(false)
+      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
+    },
+    ContextMenuTrigger: ({
+      children,
+      asChild
+    }: {
+      children: React.ReactNode
+      asChild?: boolean
+    }) => {
+      const { setOpen } = React.useContext(MenuCtx)
+      const merged = (e: React.MouseEvent) => {
+        // F2: mirror Radix checkForDefaultPrevented — skip open if the child
+        // handler called preventDefault.
+        if (e.defaultPrevented) return
+        e.preventDefault()
+        setOpen(true)
+      }
+      if (asChild && React.isValidElement(children)) {
+        const child = children as React.ReactElement<{
+          onContextMenu?: (e: React.MouseEvent) => void
+        }>
+        return React.cloneElement(child, {
+          onContextMenu: (e: React.MouseEvent) => {
+            child.props.onContextMenu?.(e)
+            merged(e)
+          }
+        })
+      }
+      return <div onContextMenu={merged}>{children}</div>
+    },
+    ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    ContextMenuItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    ContextMenuSeparator: () => null
+  }
+})
 
 const fileEntry: DirectoryEntry = {
   name: 'file.txt',
@@ -44,11 +81,8 @@ const dirEntry: DirectoryEntry = {
 
 function renderMenu(entry: DirectoryEntry): void {
   render(
-    <FileTreeContextMenu
+    <FileTreeContextMenuContent
       entry={entry}
-      x={0}
-      y={0}
-      onClose={vi.fn()}
       onNewFile={vi.fn()}
       onNewFolder={vi.fn()}
       onRename={vi.fn()}

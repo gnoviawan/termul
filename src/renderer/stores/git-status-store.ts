@@ -3,6 +3,8 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { gitApi } from '@/lib/git-api'
 import { platform } from '@/lib/tauri-os'
+import { useProjectStore } from './project-store'
+import { useTerminalStore } from './terminal-store'
 
 /** Build the staged-aware diff cache key so the staged and unstaged rows of the
  * same file (porcelain `MM`) do not collide. */
@@ -35,6 +37,8 @@ export interface GitStatusState {
   stageFiles: (cwd: string, paths: string[]) => Promise<void>
   unstageFiles: (cwd: string, paths: string[]) => Promise<void>
   discardFiles: (cwd: string, paths: string[]) => Promise<void>
+  stageHunk: (cwd: string, path: string, hunkPatch: string) => Promise<void>
+  unstageHunk: (cwd: string, path: string, hunkPatch: string) => Promise<void>
   commit: (cwd: string, summary: string, description: string, amend: boolean) => Promise<void>
   push: (cwd: string) => Promise<void>
   stashSave: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<void>
@@ -168,6 +172,29 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
     }
   },
 
+  // Per-hunk stage/unstage (#257). Same refresh contract as the file-level
+  // mutations above: invalidate the cached diff for the file, then refresh
+  // status + commit context so the panel reflects the partial stage.
+  stageHunk: async (cwd, path, hunkPatch) => {
+    try {
+      await gitApi.stageHunk(cwd, path, hunkPatch)
+      invalidateFileDiffs(set, cwd, path)
+    } finally {
+      await get().refreshStatus(cwd)
+      await get().fetchCommitContext(cwd)
+    }
+  },
+
+  unstageHunk: async (cwd, path, hunkPatch) => {
+    try {
+      await gitApi.unstageHunk(cwd, path, hunkPatch)
+      invalidateFileDiffs(set, cwd, path)
+    } finally {
+      await get().refreshStatus(cwd)
+      await get().fetchCommitContext(cwd)
+    }
+  },
+
   discardFiles: async (cwd, paths) => {
     if (paths.length === 0) return
     try {
@@ -253,9 +280,6 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
 
 async function updateStoresWithBranch(cwd: string, branchName: string) {
   try {
-    const { useProjectStore } = await import('./project-store')
-    const { useTerminalStore } = await import('./terminal-store')
-
     const normalizePath = (p?: string) => (p ? p.replace(/\\/g, '/') : '')
     const normalizedCwd = normalizePath(cwd)
 

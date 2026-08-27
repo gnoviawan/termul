@@ -17,6 +17,8 @@ export interface StoredAgentConfig extends AgentConfig {
   id: string
   /** The template id this agent was created from (used to resolve an icon). */
   templateId?: string
+  /** Inline SVG markup for a custom (bundled or uploaded) agent icon. */
+  icon?: string
 }
 
 export interface AgentConfigValidation {
@@ -29,6 +31,23 @@ export function validateAgentConfig(cfg: Partial<AgentConfig>): AgentConfigValid
   const errors: string[] = []
   if (!cfg.name || cfg.name.trim().length === 0) errors.push('Name is required.')
   if (!cfg.command || cfg.command.trim().length === 0) errors.push('Command is required.')
+  if (cfg.args !== undefined) {
+    if (!Array.isArray(cfg.args)) {
+      errors.push('args must be an array.')
+    } else if (cfg.args.some((a) => typeof a !== 'string')) {
+      errors.push('args must be an array of strings.')
+    }
+  }
+  if (cfg.env !== undefined) {
+    if (typeof cfg.env !== 'object' || cfg.env === null || Array.isArray(cfg.env)) {
+      errors.push('env must be an object.')
+    } else if (Object.values(cfg.env).some((v) => typeof v !== 'string')) {
+      errors.push('env values must be strings.')
+    }
+  }
+  if (cfg.allowTerminal !== undefined && typeof cfg.allowTerminal !== 'boolean') {
+    errors.push('allowTerminal must be a boolean.')
+  }
   return { valid: errors.length === 0, errors }
 }
 
@@ -46,7 +65,65 @@ export function looksLikeSecretValue(value: string): boolean {
 export async function loadAgentConfigs(): Promise<StoredAgentConfig[]> {
   const res = await persistenceApi.read<StoredAgentConfig[]>(ACP_AGENTS_KEY)
   if (res.success) {
-    return Array.isArray(res.data) ? res.data : []
+    if (!Array.isArray(res.data)) return []
+    // Filter out malformed records before the configId backfill so a corrupt
+    // entry can never crash the load or the downstream merge
+    // (`resolveSupportedAcpAgents` calls `.startsWith` on `config.id`).
+    // Require the non-optional StoredAgentConfig primitives (id/name/command)
+    // to be non-empty strings after trimming — a whitespace-only value is
+    // meaningless and rejected. The map below trims the accepted identifiers
+    // and normalizes optional/legacy fields (args/env/allowTerminal/configId)
+    // to safe defaults instead of trusting persisted JSON shapes.
+    const clean = res.data.filter(
+      (c): c is StoredAgentConfig =>
+        c !== null &&
+        typeof c === 'object' &&
+        typeof c.id === 'string' &&
+        c.id.trim().length > 0 &&
+        typeof c.name === 'string' &&
+        c.name.trim().length > 0 &&
+        typeof c.command === 'string' &&
+        c.command.trim().length > 0
+    )
+    // Migration: backfill `configId = id` for persisted configs saved before
+    // configId was required (pre-feature catalog overrides + custom agents
+    // both need a non-empty configId on the spawn path). Validate the
+    // configId type before trimming — a non-string value (e.g. `123`) must
+    // not crash startup; treat it as missing and backfill from `id`. Trim
+    // accepted identifiers. For args/env, validate EVERY element/value is a
+    // string before retaining them; otherwise default to [] / {} rather than
+    // casting invalid data (a non-string arg element or env value would
+    // otherwise reach the Rust serde spawn path as a confusing type error).
+    return clean.map((cfg) => {
+      const id = cfg.id.trim()
+      const name = cfg.name.trim()
+      const command = cfg.command.trim()
+      const configId =
+        typeof cfg.configId === 'string' && cfg.configId.trim().length > 0
+          ? cfg.configId.trim()
+          : id
+      const args =
+        Array.isArray(cfg.args) && cfg.args.every((a) => typeof a === 'string') ? cfg.args : []
+      const env =
+        cfg.env !== null &&
+        typeof cfg.env === 'object' &&
+        !Array.isArray(cfg.env) &&
+        Object.values(cfg.env).every((v) => typeof v === 'string')
+          ? (cfg.env as Record<string, string>)
+          : {}
+      const icon = typeof cfg.icon === 'string' ? cfg.icon : undefined
+      return {
+        ...cfg,
+        id,
+        name,
+        command,
+        configId,
+        args,
+        env,
+        icon,
+        allowTerminal: typeof cfg.allowTerminal === 'boolean' ? cfg.allowTerminal : false
+      }
+    })
   }
   // A missing key is the normal empty state; any other failure is a real
   // storage/backend error and must not be silently collapsed to [].

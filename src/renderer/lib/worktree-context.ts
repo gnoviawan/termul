@@ -10,6 +10,19 @@ import { useProjectStore } from '@/stores/project-store'
 import type { Project, Worktree } from '@/types/project'
 
 /**
+ * Get the main project root path (ignoring any active worktree).
+ *
+ * Skills are stored at `{project.path}/.agents/skills/`, which is gitignored
+ * (`/.agents`) and excluded from worktree symlinks (`SYMLINK_EXCLUSION_LIST`).
+ * A worktree path therefore has no `.agents/skills/`, so skill discovery must
+ * always resolve against the main project root — never the worktree CWD.
+ */
+export function getProjectRootPath(projectId: string): string {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  return project?.path ?? ''
+}
+
+/**
  * Get the default CWD for a project, resolving from the active worktree if set.
  * Falls back to the project root path if no active worktree or worktree not found.
  */
