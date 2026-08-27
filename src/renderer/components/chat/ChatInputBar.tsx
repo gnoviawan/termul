@@ -95,6 +95,8 @@ interface ChatInputBarProps {
   queue?: QueuedPrompt[]
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
+  /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
+  compactTop?: boolean
 }
 
 export function ChatInputBar({
@@ -117,7 +119,8 @@ export function ChatInputBar({
   seedNonce,
   queue = [],
   onRemoveQueued,
-  onSendQueuedNow
+  onSendQueuedNow,
+  compactTop = false
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
@@ -609,9 +612,15 @@ export function ChatInputBar({
       }}
     />
   )
-
   return (
-    <div ref={rootRef} className={cn(CHAT_GUTTER_X, 'pb-2 pt-3')}>
+    <div
+      ref={rootRef}
+      className={cn(
+        CHAT_GUTTER_X,
+        compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
+        compactTop && 'relative z-10'
+      )}
+    >
       <div className="relative mx-auto w-full max-w-3xl">
         {disabled && (
           <div
