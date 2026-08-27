@@ -173,7 +173,7 @@ pub async fn acp_register_discovered_session(
         .map_err(|error| error.to_string())?;
     log::info!(
         "[acp-history] discovered session promoted session_id={} storage_key={}",
-        metadata.session_id,
+        crate::logging::redact_session_id(&metadata.session_id),
         metadata.storage_key
     );
     Ok(SessionIndexEntry::from(&metadata))
@@ -226,7 +226,7 @@ pub async fn acp_send_prompt(
         Err(error) => {
             log::warn!(
                 "[acp] failed to resolve ephemeral state for session {} (agent {}): {error}",
-                session_id.0,
+                crate::logging::redact_session_id(&session_id.0),
                 agent_id.0
             );
             return Err(error);
@@ -241,7 +241,7 @@ pub async fn acp_send_prompt(
             // — never the prompt content.
             log::warn!(
                 "[acp] failed to persist accepted prompt for session {} (agent {}): {error}",
-                session_id.0,
+                crate::logging::redact_session_id(&session_id.0),
                 agent_id.0
             );
             return Err(format!("failed to persist accepted prompt: {error}"));
@@ -509,7 +509,7 @@ pub async fn acp_install_agent(
         Err(error) => {
             log::warn!(
                 "[acp-install] {} install_agent validation failed: {error}",
-                crate::logging::session_id()
+                crate::logging::run_id()
             );
             return Ok(crate::commands::IpcResult::error(
                 format!("payload validation failed: {error}"),
@@ -520,13 +520,13 @@ pub async fn acp_install_agent(
     let agent_id_log = request.agent_id.clone();
     log::info!(
         "[acp-install] {} install_agent start agent={}",
-        crate::logging::session_id(),
+        crate::logging::run_id(),
         agent_id_log
     );
     let Some(service) = store.store().map(std::sync::Arc::clone) else {
         log::warn!(
             "[acp-install] {} install_agent unavailable (no host store)",
-            crate::logging::session_id()
+            crate::logging::run_id()
         );
         return Ok(crate::commands::IpcResult::error(
             "acp install store is unavailable",
@@ -537,7 +537,7 @@ pub async fn acp_install_agent(
         Ok(outcome) => {
             log::info!(
                 "[acp-install] {} install_agent success agent={}",
-                crate::logging::session_id(),
+                crate::logging::run_id(),
                 agent_id_log
             );
             Ok(crate::commands::IpcResult::success(outcome))
@@ -546,7 +546,7 @@ pub async fn acp_install_agent(
             let code = error.code();
             log::error!(
                 "[acp-install] {} install_agent failure agent={} code={} msg={}",
-                crate::logging::session_id(),
+                crate::logging::run_id(),
                 agent_id_log,
                 code,
                 error.message

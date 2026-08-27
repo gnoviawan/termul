@@ -199,13 +199,15 @@ impl HostPlanServer {
             Some(auth) => {
                 auth.real_session_id = Some(real_session_id.to_string());
                 log::debug!(
-                    "[host-mcp] bound token → session {real_session_id} (agent {})",
+                    "[host-mcp] bound token → session {} (agent {})",
+                    crate::logging::redact_session_id(real_session_id),
                     auth.agent_id
                 );
             }
             None => {
                 log::warn!(
-                    "[host-mcp] bind_session: unknown token (session {real_session_id} not registered)"
+                    "[host-mcp] bind_session: unknown token (session {} not registered)",
+                    crate::logging::redact_session_id(real_session_id)
                 );
             }
         }
@@ -219,7 +221,9 @@ impl HostPlanServer {
             .or_default()
             .insert(real_session_id.to_string());
         log::debug!(
-            "[host-mcp] registered active plan route for session {real_session_id} (agent {agent_id})"
+            "[host-mcp] registered active plan route for session {} (agent {})",
+            crate::logging::redact_session_id(real_session_id),
+            agent_id
         );
     }
 
@@ -233,7 +237,9 @@ impl HostPlanServer {
             }
         }
         log::debug!(
-            "[host-mcp] removed active plan route for session {real_session_id} (agent {agent_id})"
+            "[host-mcp] removed active plan route for session {} (agent {})",
+            crate::logging::redact_session_id(real_session_id),
+            agent_id
         );
     }
 
@@ -340,8 +346,8 @@ impl HostPlanServer {
         if auth.provisional_sid != req.session_id {
             log::warn!(
                 "[host-mcp] auth rejected (provisional sid mismatch): token has {}, frame has {}",
-                auth.provisional_sid,
-                req.session_id
+                crate::logging::redact_session_id(&auth.provisional_sid),
+                crate::logging::redact_session_id(&req.session_id)
             );
             return FrameReply::err("auth rejected");
         }
@@ -373,8 +379,8 @@ impl HostPlanServer {
                     log::info!(
                         "[host-mcp] rerouted stale binding for agent {} from session {} to active session {}",
                         auth.agent_id,
-                        bound_session_id,
-                        active_session_id
+                        crate::logging::redact_session_id(&bound_session_id),
+                        crate::logging::redact_session_id(&active_session_id)
                     );
                     active_session_id
                 }
@@ -382,7 +388,7 @@ impl HostPlanServer {
                     log::warn!(
                         "[host-mcp] rejected ambiguous stale binding for agent {} (bound session {}, {} active turns)",
                         auth.agent_id,
-                        bound_session_id,
+                        crate::logging::redact_session_id(&bound_session_id),
                         sessions.len()
                     );
                     return FrameReply::err("ambiguous active session");
@@ -391,7 +397,7 @@ impl HostPlanServer {
                     log::warn!(
                         "[host-mcp] rejected tool call for agent {} with no active turn (bound session {})",
                         auth.agent_id,
-                        bound_session_id
+                        crate::logging::redact_session_id(&bound_session_id)
                     );
                     return FrameReply::err("no active turn");
                 }
@@ -411,7 +417,7 @@ impl HostPlanServer {
                 emit_plan_update(&self.sinks, &agent_id, &session_id, entries);
                 log::info!(
                     "[host-mcp] emitted plan_update for session {} ({} entries)",
-                    session_id,
+                    crate::logging::redact_session_id(&session_id.0),
                     count
                 );
                 FrameReply::ok()
@@ -433,7 +439,8 @@ impl HostPlanServer {
                     .contains(&real_session_id)
                 {
                     log::debug!(
-                        "[host-mcp] title call no-op: session {real_session_id} already has a title"
+                        "[host-mcp] title call no-op: session {} already has a title",
+                        crate::logging::redact_session_id(&real_session_id)
                     );
                     return FrameReply::ok();
                 }

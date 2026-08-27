@@ -114,7 +114,7 @@ pub async fn agentation_get_session(
         .get_session_with_annotations(&session_id)
         .and_then(|s| serde_json::to_value(&s).ok())
         .ok_or_else(|| {
-            log::warn!("[Agentation] get_session: session not found: {session_id}");
+            log::warn!("[Agentation] get_session: session not found: {}", crate::logging::redact_session_id(&session_id));
             format!("Session not found: {session_id}")
         })
 }

@@ -388,7 +388,7 @@ impl SessionPersistence {
         log::info!(
             "[acp-history] session registered storage_key={} session_id={}",
             metadata.storage_key,
-            metadata.session_id
+            crate::logging::redact_session_id(&metadata.session_id)
         );
         Ok(metadata)
     }
@@ -481,7 +481,7 @@ impl SessionPersistence {
         log::info!(
             "[acp-history] discovered session registered storage_key={} session_id={}",
             metadata.storage_key,
-            metadata.session_id
+            crate::logging::redact_session_id(&metadata.session_id)
         );
         Ok(metadata)
     }
@@ -543,7 +543,7 @@ impl SessionPersistence {
         log::info!(
             "[acp-history] imported session registered storage_key={} session_id={}",
             metadata.storage_key,
-            metadata.session_id
+            crate::logging::redact_session_id(&metadata.session_id)
         );
         Ok(metadata)
     }
@@ -914,7 +914,7 @@ impl SessionPersistence {
             log::info!(
                 "[acp-history] replay_tail session_id={} limit={} tail_records={} \
                  fallback=full (first record may continue an earlier run)",
-                session_id,
+                crate::logging::redact_session_id(session_id),
                 records.len(),
                 limit
             );
@@ -922,7 +922,7 @@ impl SessionPersistence {
         }
         log::info!(
             "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
-            session_id,
+            crate::logging::redact_session_id(session_id),
             limit,
             records.len(),
             oldest_tail_seq
@@ -1001,7 +1001,7 @@ impl SessionPersistence {
             log::info!(
                 "[acp-history] session_payload_tail session_id={} limit={} \
                  tail_messages={} on_disk={} fallback=full",
-                session_id,
+                crate::logging::redact_session_id(session_id),
                 limit,
                 payload.messages.len(),
                 metadata.message_count
@@ -1119,7 +1119,7 @@ impl SessionPersistence {
             if stripped != metadata.cwd {
                 log::info!(
                     "[acp-history] recover() healed verbatim cwd prefix for session_id={}",
-                    metadata.session_id
+                    crate::logging::redact_session_id(&metadata.session_id)
                 );
                 metadata.cwd = stripped;
             }
