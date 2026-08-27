@@ -421,9 +421,7 @@ describe('replaceFileTokensInline', () => {
 
   it('preserves inline duplicates', () => {
     const t = FT('auth.ts', '/work/src/auth.ts')
-    expect(replaceFileTokensInline(`${t} and again ${t}`)).toBe(
-      '(auth.ts) and again (auth.ts)'
-    )
+    expect(replaceFileTokensInline(`${t} and again ${t}`)).toBe('(auth.ts) and again (auth.ts)')
   })
 
   it('replaces slash-containing display paths', () => {
@@ -434,9 +432,7 @@ describe('replaceFileTokensInline', () => {
   it('leaves skill tokens untouched', () => {
     const st = skillToken('git-worktree')
     const ft = FT('auth.ts', '/work/src/auth.ts')
-    expect(replaceFileTokensInline(`use ${st} on ${ft}`)).toBe(
-      `use ${st} on (auth.ts)`
-    )
+    expect(replaceFileTokensInline(`use ${st} on ${ft}`)).toBe(`use ${st} on (auth.ts)`)
   })
 
   it('leaves malformed tokens as plain text', () => {
