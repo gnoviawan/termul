@@ -52,12 +52,12 @@ import {
   uint8ToBase64
 } from './chat-attachments'
 import { ChatMarkdownCode } from './chat-markdown-code'
+import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-links'
+import { ChatMarkdownTable } from './chat-markdown-table'
+import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import { MessageActions } from './MessageActions'
 import { SkillChip } from './SkillChip'
-import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-links'
-import { type BubbleAlign, staggerChild } from './chat-motion'
-import { ChatMarkdownTable } from './chat-markdown-table'
 
 const FILE_PATH_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkFilePathLinks]
 

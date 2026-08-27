@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractSkillNames,
-  fileToken,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
+  fileToken,
   insertFileToken,
   insertSkillToken,
   parseFileSegments,
