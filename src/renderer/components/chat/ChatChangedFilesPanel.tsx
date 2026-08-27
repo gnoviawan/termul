@@ -159,7 +159,7 @@ export function ChatChangedFilesPanel({
   }
 
   return (
-    <div className={cn(CHAT_GUTTER_X, '-mb-5 pt-0')}>
+    <div className={cn(CHAT_GUTTER_X, '-mb-6 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
         <div className="relative z-0 rounded-t-2xl border border-b-0 border-border/60 bg-card select-none">
           {/* biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink */}
@@ -169,9 +169,9 @@ export function ChatChangedFilesPanel({
             onClick={() => setExpanded((v) => !v)}
             onKeyDown={handleToggleKeyDown}
             className={cn(
-              'flex w-full items-center gap-2 px-3 pb-5 pt-2',
+              'flex w-full items-center gap-2 px-3 pb-6 pt-2',
               'cursor-pointer text-xs text-muted-foreground',
-              'select-none transition-colors duration-100',
+              'select-none appearance-none transition-colors duration-100',
               'hover:bg-secondary/40 hover:text-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
             )}
@@ -202,7 +202,7 @@ export function ChatChangedFilesPanel({
               COLLAPSE_TRANSITION
             )}
           >
-            <div className="pb-5">
+            <div className="pb-6">
               <div className="max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
