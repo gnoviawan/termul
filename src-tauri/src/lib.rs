@@ -483,9 +483,16 @@ fn main_webview_allows_navigation(url: &tauri::Url) -> bool {
         "tauri" | "ipc" | "blob" => true,
         "http" | "https" => {
             // Windows production origin: Tauri 2 serves the SPA at
-            // http://tauri.localhost by default (no useHttpsScheme override).
-            // macOS/Linux use the `tauri` scheme, handled above.
-            if cfg!(not(dev)) && url.host_str() == Some("tauri.localhost") {
+            // http://tauri.localhost (no explicit port) on Windows in
+            // packaged builds (no useHttpsScheme override). macOS/Linux
+            // use the `tauri` scheme, handled above. Only the exact
+            // Windows HTTP origin is allowed — not HTTPS, not an explicit
+            // port, and not on non-Windows targets.
+            if cfg!(all(not(dev), target_os = "windows"))
+                && url.scheme() == "http"
+                && url.host_str() == Some("tauri.localhost")
+                && url.port().is_none()
+            {
                 return true;
             }
             cfg!(dev) && matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
@@ -2013,19 +2020,32 @@ mod tests {
 
     #[test]
     fn test_main_webview_allows_windows_production_origin_in_release() {
-        // Tauri 2 serves the SPA at http://tauri.localhost on Windows in
-        // packaged builds (no useHttpsScheme override in tauri.conf.json).
-        // The policy must allow this origin or the main webview stays blank.
+        // Tauri 2 serves the SPA at http://tauri.localhost (no explicit port)
+        // on Windows in packaged builds (no useHttpsScheme override in
+        // tauri.conf.json). The policy must allow this exact origin or the
+        // main webview stays blank.
         let windows_app_origin = "http://tauri.localhost/tauri-index.html"
             .parse::<tauri::Url>()
             .unwrap();
-        if cfg!(dev) {
-            // In dev the origin is the Vite server (localhost), not
-            // tauri.localhost, so the Windows origin is correctly rejected.
-            assert!(!main_webview_allows_navigation(&windows_app_origin));
-        } else {
+        if cfg!(all(not(dev), target_os = "windows")) {
             assert!(main_webview_allows_navigation(&windows_app_origin));
+        } else {
+            // In dev (Vite on localhost) or on non-Windows release (uses the
+            // `tauri` scheme, not tauri.localhost), the Windows origin must
+            // be rejected.
+            assert!(!main_webview_allows_navigation(&windows_app_origin));
         }
+
+        // The exact-origin restriction: HTTPS, explicit ports, and the same
+        // host on a non-Windows target are all rejected. These hold
+        // regardless of dev/release because the allow-list gates on
+        // cfg!(all(not(dev), target_os = "windows")).
+        assert!(!main_webview_allows_navigation(
+            &"https://tauri.localhost/tauri-index.html".parse().unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(
+            &"http://tauri.localhost:8080/tauri-index.html".parse().unwrap()
+        ));
     }
 
     #[test]
