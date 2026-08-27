@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { CHAT_GUTTER_X } from '@/components/chat/chat-layout'
 import { diffLineCounts } from '@/components/chat/tool-call-format'
 import { toolCallPath } from '@/components/chat/tool-call-summary'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
@@ -85,7 +85,9 @@ function FileRow({
       }}
       className={cn(
         'group/row flex w-full items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer text-left',
-        'hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors',
+        'transition-colors duration-150',
+        'hover:bg-secondary/80 text-muted-foreground hover:text-foreground',
+        'active:bg-secondary/60',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
     >
@@ -144,53 +146,53 @@ export function ChatChangedFilesPanel({
   return (
     <div className={cn(CHAT_GUTTER_X, '-mb-5 pt-1')}>
       <div className="relative mx-auto w-full max-w-3xl">
-        <Collapsible open={expanded} onOpenChange={setExpanded}>
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                'relative z-0 flex w-full min-w-0 items-center gap-2',
-                'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pb-4 py-1.5',
-                'text-xs text-muted-foreground transition-colors',
-                'hover:bg-secondary/40 hover:text-foreground'
-              )}
-              aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
-            >
-              <ChevronDown
-                size={14}
-                className={cn(
-                  'shrink-0 transition-transform',
-                  expanded ? 'rotate-180' : 'rotate-0'
-                )}
-              />
-              <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
-              <span className="font-medium">Changed files</span>
-              <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
-                {count}
-              </span>
-              <span className="ml-auto shrink-0 font-mono text-3xs">
-                <span className="text-success">+{totalAdded}</span>{' '}
-                <span className="text-destructive">−{totalRemoved}</span>
-              </span>
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 pb-4">
-              <ScrollArea className="max-h-48 w-full">
-                <div className="space-y-0.5 p-1">
-                  {files.map((file) => (
-                    <FileRow
-                      key={`${file.path}:${file.toolCallId}`}
-                      file={file}
-                      cwd={cwd}
-                      onOpen={handleOpenFile}
-                    />
-                  ))}
-                </div>
-              </ScrollArea>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className={cn(
+            'relative z-0 flex w-full min-w-0 items-center gap-2',
+            'rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pb-5 py-1.5',
+            'text-xs text-muted-foreground',
+            'transition-colors duration-150',
+            'hover:bg-secondary/40 hover:text-foreground',
+            'active:bg-secondary/30'
+          )}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
+        >
+          <ChevronDown
+            size={14}
+            className={cn(
+              'shrink-0 transition-transform duration-200',
+              expanded ? 'rotate-180' : 'rotate-0'
+            )}
+          />
+          <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
+          <span className="font-medium">Changed files</span>
+          <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
+            {count}
+          </span>
+          <span className="ml-auto shrink-0 font-mono text-3xs">
+            <span className="text-success">+{totalAdded}</span>{' '}
+            <span className="text-destructive">−{totalRemoved}</span>
+          </span>
+        </button>
+        <CollapseExpandMotion open={expanded}>
+          <div className="relative z-0 w-full min-w-0 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 pb-5">
+            <ScrollArea className="max-h-48 w-full">
+              <div className="space-y-0.5 p-1">
+                {files.map((file) => (
+                  <FileRow
+                    key={`${file.path}:${file.toolCallId}`}
+                    file={file}
+                    cwd={cwd}
+                    onOpen={handleOpenFile}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </CollapseExpandMotion>
       </div>
     </div>
   )
