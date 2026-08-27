@@ -49,9 +49,12 @@ function FileRow({
   const dirName = normalized.includes('/')
     ? normalized.substring(0, normalized.lastIndexOf('/'))
     : ''
-  const fullPath = cwd
-    ? `${cwd.replace(/\\/g, '/').replace(/\/+$/, '')}/${normalized.replace(/^\/+/, '')}`
-    : file.path
+  const isAbsolute = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')
+  const fullPath = isAbsolute
+    ? normalized
+    : cwd
+      ? `${cwd.replace(/\\/g, '/').replace(/\/+$/, '')}/${normalized.replace(/^\/+/, '')}`
+      : file.path
 
   return (
     <button
