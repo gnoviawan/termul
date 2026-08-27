@@ -618,7 +618,7 @@ export function ChatInputBar({
       className={cn(
         CHAT_GUTTER_X,
         compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
-        compactTop && 'relative z-10'
+        compactTop && 'relative z-0'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
