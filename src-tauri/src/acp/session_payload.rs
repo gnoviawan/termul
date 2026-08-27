@@ -127,7 +127,7 @@ pub fn materialize_session_payload(
 }
 
 /// Fold seq-sorted durable records into renderer bubbles.
-fn fold_messages(records: &[PersistedEventRecord]) -> Vec<MaterializedChatMessage> {
+pub(crate) fn fold_messages(records: &[PersistedEventRecord]) -> Vec<MaterializedChatMessage> {
     let mut messages: Vec<MaterializedChatMessage> = Vec::new();
     // Role of the agent/thought run still open for coalescing (`None` after a
     // user bubble, a split, or before the first chunk).

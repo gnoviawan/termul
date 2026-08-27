@@ -842,6 +842,114 @@ impl SessionPersistence {
         *self.replay_hook.lock() = Some(hook);
     }
 
+    /// Tail-first replay: reads only the last `limit` message records from
+    /// `messages.jsonl` (via [`load_jsonl_tail`]) plus ALL tool-call records
+    /// from `tool-calls.jsonl` (bounded by the persist-time limit of 500),
+    /// filters tool calls to those whose `seq` ≥ the oldest tail message seq,
+    /// and merges + sorts. Returns a seq-sorted `Vec<PersistedEventRecord>`
+    /// covering only the tail — the caller folds these into messages.
+    ///
+    /// After loading the tail records, scans backward to verify the first
+    /// message record is at a fold boundary (`user_prompt`, `tool_call`, or
+    /// `prompt_complete`). If the first message record is a `message_chunk`
+    /// with no preceding boundary in the loaded set, it may be a continuation
+    /// of an earlier coalesced run — fall back to a full replay so the tail
+    /// fold produces correct bubble ids matching the full materialize.
+    pub fn replay_tail(&self, session_id: &str, limit: usize) -> Result<Vec<PersistedEventRecord>> {
+        let metadata = self.metadata(session_id)?;
+        let dir = self.session_dir(&metadata.storage_key)?;
+        let messages_path = dir.join(MESSAGES_FILE);
+        let tool_calls_path = dir.join(TOOL_CALLS_FILE);
+        // Read the last `limit * 4` message lines — only the tail of the file
+        // is deserialized, not the full transcript.
+        let max_lines = limit.saturating_mul(4).max(limit + 4);
+        let mut records = load_jsonl_tail(&messages_path, session_id, max_lines)?;
+        // Tool calls are bounded at persist time (PERSISTED_TOOL_CALLS_LIMIT
+        // = 500), so reading all of them is cheap. Filter to those whose seq
+        // falls within the tail message range after the records are sorted.
+        records.extend(load_jsonl(&tool_calls_path, session_id, false)?);
+        validate_and_sort(&mut records)?;
+        // Determine the oldest message-record seq in the tail so tool calls
+        // older than the tail are dropped (they belong to scrolled-away
+        // messages the renderer no longer shows).
+        let oldest_tail_seq = records
+            .iter()
+            .filter(|r| !is_tool_event(&r.type_))
+            .map(|r| r.seq)
+            .min()
+            .unwrap_or(0);
+        // Keep tool calls within the tail range; keep all message records
+        // (the tail scan already bounded them). Tool calls with no seq (a
+        // corrupt edge) are always retained — the renderer tolerates them.
+        records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
+        // Fold-boundary check: if the first message record is a
+        // `message_chunk`, it may be a continuation of an earlier coalesced
+        // run that started before the loaded tail. The fold would assign it a
+        // fresh bubble id (`snapshot:<role>:<seq>`) that differs from the
+        // full-fold's id (where it was merged into an earlier bubble). This
+        // id mismatch causes duplicate content when `loadOlderMessages`
+        // prepends the full payload. Fall back to a full replay so the tail
+        // fold starts at a boundary and produces matching ids.
+        let first_msg = records.iter().find(|r| !is_tool_event(&r.type_));
+        let needs_full = match first_msg.map(|r| r.type_.as_str()) {
+            Some("message_chunk") => {
+                // Scan backward through the loaded records: is there a fold
+                // boundary (user_prompt, tool_call, prompt_complete) before
+                // the first message_chunk? If yes, the first chunk is safe
+                // (open_role would be None at that point). If no, it may be a
+                // continuation — fall back to full replay.
+                let first_chunk_seq = first_msg.map(|r| r.seq).unwrap_or(0);
+                let has_boundary_before = records.iter().any(|r| {
+                    r.seq < first_chunk_seq
+                        && matches!(
+                            r.type_.as_str(),
+                            "user_prompt" | "tool_call" | "prompt_complete"
+                        )
+                });
+                !has_boundary_before
+            }
+            _ => false,
+        };
+        if needs_full {
+            log::info!(
+                "[acp-history] replay_tail session_id={} limit={} tail_records={} \
+                 fallback=full (first record may continue an earlier run)",
+                session_id,
+                records.len(),
+                limit
+            );
+            return self.replay_after(session_id, 0);
+        }
+        log::info!(
+            "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
+            session_id,
+            limit,
+            records.len(),
+            oldest_tail_seq
+        );
+        Ok(records)
+    }
+
+    /// Async wrapper for [`replay_tail`] on Tokio's blocking pool so the JSONL
+    /// tail scan never stalls the async WS runtime.
+    pub async fn replay_tail_async(
+        self: &Arc<Self>,
+        session_id: String,
+        limit: usize,
+    ) -> Result<Vec<PersistedEventRecord>> {
+        let persistence = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let records = persistence.replay_tail(&session_id, limit);
+            #[cfg(test)]
+            if let Some(hook) = persistence.replay_hook.lock().clone() {
+                hook.wait();
+            }
+            records
+        })
+        .await
+        .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
+    }
+
     /// Materialize the renderer-shaped `SessionPayload` for a session from its
     /// durable records (standalone `get_session_payload` source).
     ///
@@ -862,18 +970,50 @@ impl SessionPersistence {
         ))
     }
 
-    /// Tail-first variant of [`session_payload_async`]: materialize the full
-    /// payload (same flush + replay), then keep only the last `limit` messages.
-    /// Used by the lazy-load chat history path so the renderer can install the
-    /// recent transcript immediately and fetch the full payload on scroll-up.
-    /// The metadata's `messageCount` reflects the tail slice (not the full
-    /// session), so the renderer knows how many messages it received.
+    /// Tail-first variant of [`session_payload_async`]: reads only the last
+    /// `limit` message records from `messages.jsonl` (via [`replay_tail`]),
+    /// folds ONLY those records into messages, then slices the last `limit`
+    /// messages. This avoids deserializing + folding the entire transcript
+    /// for a long chat — only the tail records hit disk + serde. Falls back to
+    /// the full [`session_payload_async`] when the tail fold produces fewer
+    /// than `limit` messages (session is small enough that the full read is
+    /// trivial, or the heuristic under-read missed records). The metadata's
+    /// `messageCount` reflects the tail slice so the renderer knows how many
+    /// messages it received.
     pub async fn session_payload_tail_async(
         self: &Arc<Self>,
         session_id: &str,
         limit: usize,
     ) -> Result<crate::acp::session_payload::MaterializedSessionPayload> {
-        let mut payload = self.session_payload_async(session_id).await?;
+        self.flush_session(session_id).await?;
+        let metadata = self.metadata(session_id)?;
+        let records = self
+            .replay_tail_async(session_id.to_string(), limit)
+            .await?;
+        let mut payload =
+            crate::acp::session_payload::materialize_session_payload(&metadata, &records);
+        // If the tail fold produced fewer than `limit` messages AND the
+        // session has more on disk (metadata.message_count > tail len), the
+        // heuristic under-read (the 4× line ratio wasn't enough). Fall back
+        // to the full materialize so the tail is always correct.
+        if payload.messages.len() < limit && metadata.message_count > payload.messages.len() as u64
+        {
+            log::info!(
+                "[acp-history] session_payload_tail session_id={} limit={} \
+                 tail_messages={} on_disk={} fallback=full",
+                session_id,
+                limit,
+                payload.messages.len(),
+                metadata.message_count
+            );
+            let full = self.session_payload_async(session_id).await?;
+            let mut full = full;
+            if full.messages.len() > limit {
+                full.messages = full.messages.split_off(full.messages.len() - limit);
+                full.metadata.message_count = full.messages.len() as u64;
+            }
+            return Ok(full);
+        }
         if payload.messages.len() > limit {
             payload.messages = payload.messages.split_off(payload.messages.len() - limit);
             payload.metadata.message_count = payload.messages.len() as u64;
@@ -1321,6 +1461,140 @@ fn load_jsonl(
             Err(_) if repair_torn_tail && !terminated && next_offset == bytes.len() => {
                 let _ = atomic_file::backup_corrupt(path, &bytes);
                 atomic_file::replace(path, &bytes[..offset])?;
+                break;
+            }
+            Err(_) => return Err(SessionPersistenceError::CorruptSession),
+        }
+        offset = next_offset;
+    }
+    Ok(records)
+}
+
+/// Read only the last `max_lines` newline-terminated records from a JSONL
+/// file. Seeks backward from the file end in bounded blocks (4 KiB) until
+/// `max_lines` complete records are located, then reads and deserializes
+/// only the resulting byte range. This avoids reading the entire file for
+/// long transcripts. Returns records in file order (seq order for a
+/// well-formed session).
+///
+/// Only the final unterminated line (no trailing newline, possibly
+/// mid-write) is tolerated. Any malformed or session/schema-mismatched
+/// newline-terminated line propagates as `CorruptSession` — matching
+/// `load_jsonl`'s fail-closed behavior so a corrupt file never yields a
+/// partial tail payload.
+fn load_jsonl_tail(
+    path: &Path,
+    session_id: &str,
+    max_lines: usize,
+) -> Result<Vec<PersistedEventRecord>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = fs::File::open(path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            return SessionPersistenceError::SessionNotFound;
+        }
+        SessionPersistenceError::Io(error)
+    })?;
+
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Seek backward in 4 KiB blocks, counting newlines until we have
+    // `max_lines` complete records or reach the file start.
+    const BLOCK: usize = 4 * 1024;
+    let mut newline_count = 0usize;
+    let mut tail_start = file_len as usize;
+    let mut buf = Vec::with_capacity(BLOCK);
+
+    while tail_start > 0 && newline_count < max_lines {
+        let read_start = tail_start.saturating_sub(BLOCK);
+        let read_len = tail_start - read_start;
+        file.seek(SeekFrom::Start(read_start as u64))?;
+        buf.clear();
+        buf.resize(read_len, 0);
+        file.read_exact(&mut buf)?;
+
+        // Count newlines in this block (backward).
+        for &byte in buf.iter().rev() {
+            if byte == b'\n' {
+                newline_count += 1;
+                if newline_count >= max_lines {
+                    break;
+                }
+            }
+        }
+        tail_start = read_start;
+    }
+
+    // `tail_start` is now the offset of the block containing the max_lines-th
+    // newline from the end. Read from the byte AFTER that newline to the file
+    // end. If we ran out of newlines (file has fewer than max_lines), read
+    // from offset 0.
+    let read_offset = if newline_count >= max_lines {
+        // Find the (newline_count - max_lines + 1)-th newline from the end of
+        // the accumulated data. Since we scanned backward, the first newline
+        // we hit is the last in the file, etc. We need the position of the
+        // max_lines-th newline from the end, then start reading after it.
+        // Re-scan the accumulated range to find the exact offset.
+        let full_start = tail_start;
+        let full_len = file_len as usize - full_start;
+        file.seek(SeekFrom::Start(full_start as u64))?;
+        let mut full_buf = vec![0u8; full_len];
+        file.read_exact(&mut full_buf)?;
+        // Count newlines from the end to find the max_lines-th.
+        let mut nl_from_end = 0usize;
+        let mut content_start = 0usize;
+        for (i, &byte) in full_buf.iter().enumerate().rev() {
+            if byte == b'\n' {
+                nl_from_end += 1;
+                if nl_from_end == max_lines {
+                    content_start = full_start + i + 1;
+                    break;
+                }
+            }
+        }
+        content_start
+    } else {
+        0
+    };
+
+    // Read the tail byte range and deserialize line by line.
+    let tail_len = file_len as usize - read_offset;
+    if tail_len == 0 {
+        return Ok(Vec::new());
+    }
+    file.seek(SeekFrom::Start(read_offset as u64))?;
+    let mut tail_bytes = vec![0u8; tail_len];
+    file.read_exact(&mut tail_bytes)?;
+
+    let mut records = Vec::new();
+    let mut offset = 0usize;
+    while offset < tail_bytes.len() {
+        let remainder = &tail_bytes[offset..];
+        let newline = remainder.iter().position(|byte| *byte == b'\n');
+        let (line, next_offset, terminated) = match newline {
+            Some(position) => (&remainder[..position], offset + position + 1, true),
+            None => (remainder, tail_bytes.len(), false),
+        };
+        if line.is_empty() {
+            offset = next_offset;
+            continue;
+        }
+        let is_final_unterminated = !terminated && next_offset == tail_bytes.len();
+        match serde_json::from_slice::<PersistedEventRecord>(line) {
+            Ok(record)
+                if record.schema_version == SESSION_SCHEMA_VERSION
+                    && record.session_id == session_id =>
+            {
+                records.push(record)
+            }
+            Ok(_) => return Err(SessionPersistenceError::CorruptSession),
+            Err(_) if is_final_unterminated => {
+                // A torn final line (no trailing newline, possibly mid-write)
+                // is tolerated — skip it so a concurrent writer can't crash
+                // the tail read. Matches `load_jsonl`'s repair_torn_tail.
                 break;
             }
             Err(_) => return Err(SessionPersistenceError::CorruptSession),
@@ -2205,6 +2479,240 @@ mod tests {
         assert_eq!(before["messages"], after["messages"]);
         assert_eq!(before["metadata"]["id"], after["metadata"]["id"]);
         assert_eq!(before["metadata"]["lastSeq"], after["metadata"]["lastSeq"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_tail_reads_only_last_n_messages_from_long_session() {
+        let root = temp_dir("payload-tail");
+        let (persistence, _) = registered(&root).await;
+        // Enqueue 10 turns (30 records: user_prompt + message_chunk +
+        // prompt_complete per turn). Each turn produces 2 folded messages
+        // (user + agent), so the full payload has 20 messages.
+        for i in 0..10u64 {
+            let seq = i * 3 + 1;
+            enqueue_turn(
+                &persistence,
+                seq,
+                &format!("turn-{i}"),
+                &format!("prompt-{i}"),
+                &format!("reply-{i}"),
+            );
+        }
+        persistence.flush_session("session-1").await.unwrap();
+
+        // Tail with limit 5: should return the last 5 folded messages.
+        let tail = persistence
+            .session_payload_tail_async("session-1", 5)
+            .await
+            .unwrap();
+        assert_eq!(tail.messages.len(), 5);
+        // The last 5 messages are turns 7 (agent), 8 (user+agent), 9 (user+agent).
+        // Verify the last message is the agent reply of turn 9.
+        let last = tail.messages.last().unwrap();
+        assert_eq!(last.role, "agent");
+        assert_eq!(last.seq, 9 * 3 + 2); // message_chunk seq of turn 9
+                                         // Verify the first tail message is turn 7's agent reply.
+        let first = tail.messages.first().unwrap();
+        assert_eq!(first.role, "agent");
+        assert_eq!(first.seq, 7 * 3 + 2);
+
+        // Tail with limit 50 (exceeds the 20-message session): returns all 20.
+        let big_tail = persistence
+            .session_payload_tail_async("session-1", 50)
+            .await
+            .unwrap();
+        assert_eq!(big_tail.messages.len(), 20);
+
+        // The tail must match the tail of the full payload (same ids + seqs).
+        let full = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        let full_tail: Vec<_> = full.messages.iter().rev().take(5).rev().collect();
+        assert_eq!(
+            tail.messages
+                .iter()
+                .map(|m| (m.id.as_str(), m.seq))
+                .collect::<Vec<_>>(),
+            full_tail
+                .iter()
+                .map(|m| (m.id.as_str(), m.seq))
+                .collect::<Vec<_>>(),
+            "tail payload ids+seqs must match the full payload's last 5 messages"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_tail_with_tool_calls_includes_matching_tail_range() {
+        let root = temp_dir("payload-tail-tools");
+        let (persistence, _) = registered(&root).await;
+        // Turn 1: user + agent + tool_call + agent + prompt_complete.
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence
+            .enqueue_event(payload_record(
+                4,
+                "tool_call",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "toolCall": {"toolCallId": "t-1", "kind": "execute", "status": "completed"},
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                5,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "after tool"},
+                }),
+            ))
+            .unwrap();
+        persistence
+            .enqueue_event(payload_record(
+                6,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+        // Turn 2: another user + agent.
+        enqueue_turn(&persistence, 7, "turn-2", "again", "reply2");
+        persistence.flush_session("session-1").await.unwrap();
+
+        // Full payload: 4 messages (user, agent, agent, user, agent) → actually
+        // turn-1 has 3 (user, agent, agent-after-tool) + turn-2 has 2 (user,
+        // agent) = 5 messages.
+        let full = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(full.messages.len(), 5);
+
+        // Tail limit 2: last 2 messages (turn-2 user + agent).
+        let tail = persistence
+            .session_payload_tail_async("session-1", 2)
+            .await
+            .unwrap();
+        assert_eq!(tail.messages.len(), 2);
+        // The tool call from turn-1 (seq 4) is older than the tail's oldest
+        // message (seq 7) and should NOT appear in the tail records.
+        // (Tool calls are not materialized into messages by the fold, but the
+        // tail records must not include the old tool call — it would be
+        // filtered by the seq-range guard.)
+        assert_eq!(tail.messages[0].id, "turn:turn-2");
+        assert_eq!(tail.messages[1].id, "snapshot:agent:8");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_tail_handles_long_agent_run_with_many_chunks() {
+        // records. The tail must include all chunks and produce a single
+        // folded agent bubble (not split or truncated). The fold-boundary
+        // check must correctly fall back to full replay when the tail starts
+        // mid-run, so the bubble id matches the full payload.
+        let root = temp_dir("payload-tail-many-chunks");
+        let (persistence, _) = registered(&root).await;
+        // Turn 1: user_prompt + 1 chunk + prompt_complete.
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        // Turn 2: user_prompt + 6 chunks (no tool_call or prompt_complete
+        // between them → they coalesce into one agent bubble) + prompt_complete.
+        persistence
+            .enqueue_event(payload_record(
+                4,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "turnId": "turn-2",
+                    "content": [{"type": "text", "text": "again"}],
+                }),
+            ))
+            .unwrap();
+        for i in 0..6u64 {
+            persistence
+                .enqueue_event(payload_record(
+                    5 + i,
+                    "message_chunk",
+                    json!({
+                        "agentId": "runtime-1",
+                        "sessionId": "session-1",
+                        "role": "agent",
+                        "content": {"type": "text", "text": format!("chunk-{i}")},
+                    }),
+                ))
+                .unwrap();
+        }
+        persistence
+            .enqueue_event(payload_record(
+                11,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-2", "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+
+        // Full payload: 3 messages (user-1, agent-1, user-2 + agent-2).
+        // Wait — turn-2 has user_prompt(4) + 6 chunks(5-10) + prompt_complete(11).
+        // Fold: user_prompt(1) + agent(2) + user_prompt(4) + agent(5-10 coalesced) = 4 messages.
+        let full = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(full.messages.len(), 4);
+        // The last message is the coalesced agent bubble from chunks 5-10.
+        assert_eq!(full.messages[3].role, "agent");
+        assert_eq!(full.messages[3].seq, 5); // first chunk's seq
+
+        // Tail limit 2: last 2 messages (user-2 + agent-2 coalesced).
+        let tail = persistence
+            .session_payload_tail_async("session-1", 2)
+            .await
+            .unwrap();
+        assert_eq!(tail.messages.len(), 2);
+        assert_eq!(tail.messages[0].id, "turn:turn-2");
+        assert_eq!(tail.messages[1].id, "snapshot:agent:5");
+        // The tail's agent bubble id must match the full payload's.
+        assert_eq!(tail.messages[1].id, full.messages[3].id);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_tail_corrupt_newline_record_returns_error_not_partial() {
+        // A malformed newline-terminated line in messages.jsonl must surface
+        // as CorruptSession — NOT a partial tail payload. Only the final
+        // unterminated line (no trailing newline) is tolerated.
+        let root = temp_dir("payload-tail-corrupt");
+        let (persistence, _) = registered(&root).await;
+        enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+        persistence.flush_session("session-1").await.unwrap();
+
+        // Corrupt messages.jsonl: append a malformed newline-terminated line
+        // (valid JSON line followed by a garbage line with a newline).
+        let metadata = persistence.metadata("session-1").unwrap();
+        let messages_path = persistence
+            .session_dir(&metadata.storage_key)
+            .unwrap()
+            .join(MESSAGES_FILE);
+        let original = fs::read(&messages_path).unwrap();
+        let mut corrupted = original;
+        corrupted.extend_from_slice(b"{\"broken\":\n"); // malformed + newline-terminated
+        fs::write(&messages_path, &corrupted).unwrap();
+
+        // The tail read must fail with CorruptSession, not return a partial payload.
+        let result = persistence.session_payload_tail_async("session-1", 5).await;
+        assert!(
+            matches!(result, Err(SessionPersistenceError::CorruptSession)),
+            "expected CorruptSession for malformed newline-terminated record, got: {result:?}"
+        );
+
         let _ = fs::remove_dir_all(root);
     }
 
