@@ -893,7 +893,9 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(
         await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 10000 })
       ).toBeInTheDocument()
-    })
+      // The two sequential 10s waits above can exceed the 15s global
+      // testTimeout, which would kill the test before the second one resolves.
+    }, 30000)
   })
 
   describe('Close flow persistence coordination', () => {
@@ -1185,11 +1187,14 @@ describe('WorkspaceLayout - Empty States', () => {
 
         renderWithRouter()
 
+        // The project-switch watcher runs in a layout effect. On a contended CI
+        // runner the initial commit of this tree has been observed to need more
+        // than 10s, so this budget is paired with the per-test timeout below.
         await waitFor(
           () => {
             expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
           },
-          { timeout: 10000 }
+          { timeout: 20000 }
         )
 
         // Give the async project-switch effect a tick to settle.
@@ -1202,6 +1207,6 @@ describe('WorkspaceLayout - Empty States', () => {
         tauriRef.current = prev
         mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
       }
-    })
+    }, 30000)
   })
 })
