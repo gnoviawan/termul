@@ -134,3 +134,28 @@ index 1234567..abcdefg 100644
     expect(button.textContent).toContain('(1)')
   })
 })
+
+describe('GitDiffView line-selection gating', () => {
+  const MULTI_LINE_DIFF = `diff --git a/foo.ts b/foo.ts
+index 1234567..abcdefg 100644
+--- a/foo.ts
++++ b/foo.ts
+@@ -1,4 +1,4 @@
+ const x = 1
+-oldLine
+-oldLine2
++newLine
++newLine2
+ const y = 2
+`
+
+  it('renders no selection toggles when the mutation callback is absent (mobile path)', () => {
+    render(
+      <GitDiffView diff={MULTI_LINE_DIFF} mode="inline" filePath="foo.ts" diffSide="unstaged" />
+    )
+    expect(screen.queryAllByRole('button', { name: /line for partial staging/i })).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Stage selected lines' })).not.toBeInTheDocument()
+    // The hunk-level button is gated as well (no callback wired).
+    expect(screen.queryByRole('button', { name: 'Stage hunk' })).not.toBeInTheDocument()
+  })
+})

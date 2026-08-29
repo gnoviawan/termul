@@ -336,7 +336,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         void logFrontendError({
           level: 'warn',
           source: 'GitPanel.runStageHunk',
-          message: `failed: ${String(error)}`
+          message: 'failed: git apply rejected the patch (details surfaced via UI toast only)'
         })
         toast.error(`Failed to stage hunk: ${String(error)}`)
       } finally {
@@ -364,7 +364,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
         void logFrontendError({
           level: 'warn',
           source: 'GitPanel.runUnstageHunk',
-          message: `failed: ${String(error)}`
+          message: 'failed: git apply rejected the patch (details surfaced via UI toast only)'
         })
         toast.error(`Failed to unstage hunk: ${String(error)}`)
       } finally {

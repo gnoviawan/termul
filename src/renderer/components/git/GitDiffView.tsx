@@ -263,7 +263,8 @@ function InlineDiff({
   action,
   onAction,
   selectedLines,
-  onToggleLine
+  onToggleLine,
+  selectionEnabled
 }: {
   diff: string
   filePath: string
@@ -273,6 +274,7 @@ function InlineDiff({
   onAction?: (patch: string) => void
   selectedLines: ReadonlySet<number>
   onToggleLine: (index: number) => void
+  selectionEnabled: boolean
 }): React.JSX.Element {
   const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
   const wordDiffRanges = useMemo(() => computeInlineWordDiffRanges(lines), [lines])
@@ -300,7 +302,8 @@ function InlineDiff({
           text selection (copy) is not hijacked. */}
       <div className="flex-shrink-0 select-none">
         {lines.map((line, i) => {
-          const selectable = line.kind === 'deletion' || line.kind === 'addition'
+          const selectable =
+            selectionEnabled && (line.kind === 'deletion' || line.kind === 'addition')
           if (!selectable) {
             return <div key={`tog-${i}`} className="w-4 py-0.5 min-h-[1.25rem]" />
           }
@@ -653,6 +656,10 @@ export function GitDiffView({
       onAction={onAction}
       selectedLines={selectedLines}
       onToggleLine={toggleLine}
+      // Line selection is only meaningful when an apply callback exists
+      // (the mobile GitPanel path omits the stage/unstage handlers, so its
+      // diff view must not offer selections that nothing can consume).
+      selectionEnabled={rawAction !== undefined}
     />
   )
 }
