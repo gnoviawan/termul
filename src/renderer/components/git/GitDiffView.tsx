@@ -593,10 +593,16 @@ export function GitDiffView({
   }, [diff, hunks])
 
   // The displayed side decides whether a hunk action stages or unstages.
-  const action: HunkAction | undefined =
-    diffSide === 'unstaged' ? 'stage' : diffSide === 'staged' ? 'unstage' : undefined
+  // Actions are only exposed when the matching callback is wired — a rendered
+  // button without a callback would clear the selection without applying
+  // anything (review feedback).
   const rawAction =
-    action === 'stage' ? onStageHunk : action === 'unstage' ? onUnstageHunk : undefined
+    diffSide === 'unstaged' ? onStageHunk : diffSide === 'staged' ? onUnstageHunk : undefined
+  const action: HunkAction | undefined = rawAction
+    ? diffSide === 'unstaged'
+      ? 'stage'
+      : 'unstage'
+    : undefined
 
   // Phase 2 (#257): per-line selection for partial staging. Indices are
   // positions in the raw diff string — the same key `buildLinePatch` uses.
