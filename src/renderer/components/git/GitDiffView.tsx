@@ -601,6 +601,7 @@ export function GitDiffView({
   // anything (review feedback).
   const rawAction =
     diffSide === 'unstaged' ? onStageHunk : diffSide === 'staged' ? onUnstageHunk : undefined
+  const selectionEnabled = rawAction !== undefined
   const action: HunkAction | undefined = rawAction
     ? diffSide === 'unstaged'
       ? 'stage'
@@ -612,10 +613,10 @@ export function GitDiffView({
   // Selection resets whenever the diff changes (post-stage refetch) and is
   // cleared after any apply so stale toggles never linger.
   const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set())
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate reset-on-diff — selection must not survive a refetch
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate reset-on-diff and on apply-availability — selection must not survive a refetch or a callback unmount (review: stale selections could reactivate if the callback returns for the same diff)
   useEffect(() => {
     setSelectedLines(new Set())
-  }, [diff])
+  }, [diff, selectionEnabled])
   const toggleLine = useCallback((index: number) => {
     setSelectedLines((prev) => {
       const next = new Set(prev)
@@ -659,7 +660,7 @@ export function GitDiffView({
       // Line selection is only meaningful when an apply callback exists
       // (the mobile GitPanel path omits the stage/unstage handlers, so its
       // diff view must not offer selections that nothing can consume).
-      selectionEnabled={rawAction !== undefined}
+      selectionEnabled={selectionEnabled}
     />
   )
 }
