@@ -616,7 +616,7 @@ export function GitDiffView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate reset-on-diff and on apply-availability — selection must not survive a refetch or a callback unmount (review: stale selections could reactivate if the callback returns for the same diff)
   useEffect(() => {
     setSelectedLines(new Set())
-  }, [diff, selectionEnabled])
+  }, [diff, filePath, mode, action, selectionEnabled])
   const toggleLine = useCallback((index: number) => {
     setSelectedLines((prev) => {
       const next = new Set(prev)
