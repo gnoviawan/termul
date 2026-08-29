@@ -325,7 +325,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       hunkInFlight.current = true
       setIsMutating(true)
       void logFrontendError({
-        level: 'info',
+        level: 'warn',
         source: 'GitPanel.runStageHunk',
         message: `dispatch: stage patch (${patch.split('\n').length} lines)`
       })
@@ -353,7 +353,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       hunkInFlight.current = true
       setIsMutating(true)
       void logFrontendError({
-        level: 'info',
+        level: 'warn',
         source: 'GitPanel.runUnstageHunk',
         message: `dispatch: unstage patch (${patch.split('\n').length} lines)`
       })
