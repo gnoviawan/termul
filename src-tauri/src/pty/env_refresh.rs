@@ -445,12 +445,14 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn trusted_shell_path_rejects_relative() {
         assert!(!is_trusted_shell_path("bash"));
         assert!(!is_trusted_shell_path("./bin/bash"));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn trusted_shell_path_accepts_known_absolute_shells() {
         for candidate in ["/bin/bash", "/bin/sh", "/bin/dash"] {
