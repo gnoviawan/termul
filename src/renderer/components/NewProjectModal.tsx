@@ -1,15 +1,12 @@
+import type { DetectedShells } from '@shared/types/ipc.types'
+import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
-import { Skeleton } from '@/components/ui/skeleton'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { basename } from '@/components/chat/chat-attachments'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger
-} from '@/components/ui/collapsible'
-import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
@@ -17,8 +14,6 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
-import type { DetectedShells } from '@shared/types/ipc.types'
-import type { ProjectTemplate } from '@shared/types/project-template.types'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 
 interface NewProjectModalProps {
@@ -43,9 +38,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [selectedShell, setSelectedShell] = useState<string>('')
   const [shellsLoading, setShellsLoading] = useState(true)
-  const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(
-    BUILT_IN_TEMPLATES[0]
-  )
+  const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(BUILT_IN_TEMPLATES[0])
   const [isFolderEmpty, setIsFolderEmpty] = useState(false)
   const [initGit, setInitGit] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -114,7 +107,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       setAdvancedOpen(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reset only on open
-  }, [isOpen])
+  }, [isOpen, fallbackShell, defaultColor])
 
   // Editing the name simply sets it; the next folder change re-derives, so a
   // user-typed name persists until the folder changes again (per spec: the
