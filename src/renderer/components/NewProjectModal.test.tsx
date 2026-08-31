@@ -127,7 +127,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
-describe('NewProjectModal (web-mode · simplified modal)', () => {
+describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
@@ -338,15 +338,90 @@ describe('NewProjectModal (web-mode · simplified modal)', () => {
     expect(screen.getByPlaceholderText('My Project')).toHaveValue('')
   })
 
-  it('renders only Root Directory + Project Name (no template/color/shell/git controls)', () => {
+  it('keeps advanced options collapsed by default (simple common path)', () => {
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
-    expect(screen.getByPlaceholderText('No directory selected')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('My Project')).toBeInTheDocument()
+    expect(screen.getByText('Advanced options')).toBeInTheDocument()
+    // Collapsed by default: controls live inside the closed Collapsible.
     expect(screen.queryByText('Project Template')).not.toBeInTheDocument()
-    expect(screen.queryByText('Color')).not.toBeInTheDocument()
     expect(screen.queryByText('Default Terminal')).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/Initialize Git repository/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  })
+
+  it('shows all advanced controls when the section is expanded', async () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Advanced options'))
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Project Template')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Color')).toBeInTheDocument()
+    expect(screen.getByText('Default Terminal')).toBeInTheDocument()
+    expect(screen.getAllByRole('combobox').length).toBe(2)
+  })
+
+  it('shows the git-init checkbox when the chosen folder is empty (advanced)', async () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    // Pick a folder first — the git-init checkbox only renders when the
+    // chosen directory reads as empty (/fs/ls returns success with no data).
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/proj' } })
+    })
+
+    // Open Advanced so the conditional block is mounted.
+    await act(async () => {
+      fireEvent.click(screen.getByText('Advanced options'))
+    })
+
+    // /fs/ls returns success with no data → treated as empty folder.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Initialize Git repository/i)).toBeInTheDocument()
+    })
+  })
+
+  it('completes the create flow with a template + git init via Advanced', async () => {
+    const onCreateProject = vi.fn()
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={onCreateProject} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/adv' } })
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Advanced options'))
+    })
+
+    // Select the Node template so scaffoldProject emits real files (/fs/write).
+    const selects = screen.getAllByRole('combobox') as unknown as HTMLSelectElement[]
+    const templateSelect = selects.find((s) => s.value === 'empty')
+    expect(templateSelect, 'Project Template select must default to empty').toBeTruthy()
+    await act(async () => {
+      fireEvent.change(templateSelect!, { target: { value: 'node' } })
+    })
+
+    fireEvent.click(screen.getByLabelText(/Initialize Git repository/i))
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Create'))
+    })
+
+    await waitFor(
+      () => {
+        expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/git/init'))).toBe(true)
+      },
+      { timeout: 10000 }
+    )
+    await waitFor(
+      () => {
+        const writeCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/write'))
+        expect(writeCalls.length).toBeGreaterThan(0)
+      },
+      { timeout: 10000 }
+    )
   })
 
   it('shows a session-scoped info note on web (persistence-gap truthfulness)', () => {
