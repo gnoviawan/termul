@@ -237,11 +237,17 @@ impl OnboardAnswers {
 
         // Always emit SHELL and HOME so the service can resolve the user's
         // login PATH (env_refresh probes the login shell for PATH additions).
+        // Reject control characters and trailing backslashes that could break
+        // systemd EnvironmentFile parsing (CWE-15).
         if let Some(shell) = std::env::var_os("SHELL") {
-            lines.push(format!("SHELL={}", shell.to_string_lossy()));
+            if let Some(line) = safe_systemd_env_line("SHELL", &shell) {
+                lines.push(line);
+            }
         }
         if let Some(home) = std::env::var_os("HOME") {
-            lines.push(format!("HOME={}", home.to_string_lossy()));
+            if let Some(line) = safe_systemd_env_line("HOME", &home) {
+                lines.push(line);
+            }
         }
 
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
@@ -269,6 +275,20 @@ fn channel_name(channel: UpdateChannel) -> &'static str {
         UpdateChannel::Insider => "insider",
         UpdateChannel::Nightly => "nightly",
     }
+}
+
+/// Build a `KEY=value` line safe for systemd `EnvironmentFile=`.
+/// Rejects values containing control characters, newlines, or trailing
+/// backslashes that could alter subsequent assignments.
+fn safe_systemd_env_line(key: &str, value: &std::ffi::OsStr) -> Option<String> {
+    let s = value.to_string_lossy();
+    if s.is_empty()
+        || s.bytes().any(|b| b < 0x20 || b == b'\\')
+        || s.ends_with('\\')
+    {
+        return None;
+    }
+    Some(format!("{key}={s}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1235,18 @@ mod tests {
             out.contains("invalid port 'abc'"),
             "retry must surface the validator error, got: {out}"
         );
+    }
+
+    #[test]
+    fn safe_systemd_env_line_rejects_control_chars_and_backslash() {
+        use std::ffi::OsStr;
+        assert_eq!(
+            safe_systemd_env_line("HOME", OsStr::new("/root")),
+            Some("HOME=/root".into())
+        );
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\n")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\\")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("")).is_none());
     }
 
     #[test]

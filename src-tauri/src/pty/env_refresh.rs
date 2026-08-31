@@ -162,7 +162,7 @@ fn probe_unix_login_path() -> Option<String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(|| login_shell_from_passwd())
+        .or_else(login_shell_from_passwd)
         .unwrap_or_else(|| "/bin/sh".to_string());
     let shell_name = Path::new(&shell)
         .file_name()
@@ -178,34 +178,49 @@ fn probe_unix_login_path() -> Option<String> {
             .args(["-lc", "string join : $PATH"])
             .output()
             .ok()?,
-        // Generic POSIX fallback (sh/dash/ash/busybox). Runs `env` in a login
-        // shell and greps PATH. This covers /bin/sh (dash) which systemd
-        // services fall back to when SHELL is unset and /etc/passwd lookup
-        // fails. Source /etc/profile first so system-wide PATH additions
-        // (/etc/profile.d/*.sh) are picked up, then the user's profile.
-        _ => {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let script = if home.is_empty() {
-                ". /etc/profile 2>/dev/null; printf %s \"$PATH\"".to_string()
-            } else {
-                format!(
-                    ". /etc/profile 2>/dev/null; . \"{home}/.profile\" 2>/dev/null; \
-                     printf %s \"$PATH\""
-                )
-            };
-            Command::new(&shell)
-                .args(["-l", "-c", &script])
-                .output()
-                .ok()?
+        // POSIX sh/dash/ash/ksh/busybox: source startup files with stdout
+        // redirected so profile banners are not captured as PATH segments.
+        // HOME is passed via Command::env, never interpolated into the script.
+        "sh" | "dash" | "ash" | "ksh" | "busybox" => {
+            const POSIX_SCRIPT: &str = ". /etc/profile >/dev/null 2>/dev/null; \
+                . \"$HOME/.profile\" >/dev/null 2>/dev/null; \
+                printf %s \"$PATH\"";
+            let mut cmd = Command::new(&shell);
+            cmd.args(["-l", "-c", POSIX_SCRIPT]);
+            if let Ok(home) = std::env::var("HOME") {
+                if !home.is_empty() {
+                    cmd.env("HOME", home);
+                }
+            }
+            cmd.output().ok()?
+        }
+        other => {
+            tracing::warn!(
+                target: "termul::env_refresh",
+                shell_basename = other,
+                "login PATH probe skipped: unsupported shell for PATH probing"
+            );
+            return None;
         }
     };
 
     if !output.status.success() {
+        tracing::warn!(
+            target: "termul::env_refresh",
+            shell_basename = shell_name,
+            exit_code = ?output.status.code(),
+            "login PATH probe failed: shell exited non-zero"
+        );
         return None;
     }
 
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if path.is_empty() {
+        tracing::warn!(
+            target: "termul::env_refresh",
+            shell_basename = shell_name,
+            "login PATH probe failed: shell returned empty PATH"
+        );
         None
     } else {
         Some(path)
@@ -218,8 +233,13 @@ fn probe_unix_login_path() -> Option<String> {
 #[cfg(not(target_os = "windows"))]
 fn login_shell_from_passwd() -> Option<String> {
     let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .ok()?;
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("LOGNAME")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })?;
     let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
     passwd
         .lines()
