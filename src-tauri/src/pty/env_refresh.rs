@@ -163,7 +163,7 @@ fn probe_unix_login_path() -> Option<String> {
         .ok()
         .filter(|s| !s.is_empty())
         .filter(|s| is_trusted_shell_path(s))
-        .or_else(|| service_identity_from_passwd().map(|id| id.shell))
+        .or_else(login_shell_from_passwd)
         .filter(|s| is_trusted_shell_path(s))
         .unwrap_or_else(|| "/bin/sh".to_string());
 
