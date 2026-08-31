@@ -224,12 +224,26 @@ impl OnboardAnswers {
         args
     }
 
-    /// Synthesize `KEY=value` env-file lines. Remote-writes env is emitted only
-    /// when bound to `0.0.0.0` and enabled (no-op on loopback). Update env vars
-    /// are emitted only when `update_channel` is `Some`. Returns empty when
-    /// neither applies (loopback + no updates).
+    /// Synthesize `KEY=value` env-file lines. `SHELL` and `HOME` are ALWAYS
+    /// emitted (even on loopback, even with no updates) so the service
+    /// process has the vars `env_refresh::probe_unix_login_path` needs to
+    /// resolve the user's login PATH. Without them, a systemd service runs
+    /// with `SHELL` unset → falls back to /bin/sh (dash) → PATH probe fails
+    /// → binaries in ~/.local/bin, ~/.cargo/bin, nvm, etc. are unreachable.
+    /// Remote-writes env is emitted only when bound to `0.0.0.0` and enabled.
+    /// Update env vars are emitted only when `update_channel` is `Some`.
     pub fn to_env_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+
+        // Always emit SHELL and HOME so the service can resolve the user's
+        // login PATH (env_refresh probes the login shell for PATH additions).
+        if let Some(shell) = std::env::var_os("SHELL") {
+            lines.push(format!("SHELL={}", shell.to_string_lossy()));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            lines.push(format!("HOME={}", home.to_string_lossy()));
+        }
+
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
             lines.push("TERMUL_SERVER_ALLOW_REMOTE_WRITES=true".into());
@@ -924,9 +938,31 @@ mod tests {
     }
 
     #[test]
-    fn env_lines_loopback_no_updates_is_empty() {
+    fn env_lines_loopback_no_updates_has_shell_home_only() {
+        // Loopback + no updates: the only env lines are SHELL and HOME
+        // (always emitted so the service can resolve the login PATH).
+        // The test env may or may not have these set, so assert the
+        // invariant: no remote-writes or update vars are present.
         let a = answers_localhost();
-        assert!(a.to_env_lines().is_empty());
+        let lines = a.to_env_lines();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("TERMUL_SERVER_ALLOW_REMOTE_WRITES")),
+            "loopback must not emit remote-writes"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
+            "no update channel must not emit update vars"
+        );
+        // SHELL and HOME are present (when the env var is set in the
+        // test process — both are set under `cargo test`).
+        if std::env::var_os("SHELL").is_some() {
+            assert!(lines.iter().any(|l| l.starts_with("SHELL=")));
+        }
+        if std::env::var_os("HOME").is_some() {
+            assert!(lines.iter().any(|l| l.starts_with("HOME=")));
+        }
     }
 
     #[test]

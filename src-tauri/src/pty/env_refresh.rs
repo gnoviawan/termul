@@ -152,7 +152,18 @@ pub fn fresh_path() -> Option<String> {
 fn probe_unix_login_path() -> Option<String> {
     use std::process::Command;
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    // Under systemd (and other service managers) SHELL is typically unset —
+    // the service env has only PATH, USER, LANG, etc. The login shell is
+    // recorded in /etc/passwd, so resolve it from there before falling back
+    // to /bin/sh. Without this, a root systemd service falls back to /bin/sh
+    // (dash on Debian/Ubuntu), which the match below skips → returns None →
+    // apply_fresh_path is a no-op → agent binaries in ~/.local/bin,
+    // ~/.cargo/bin, nvm, etc. are unreachable (ENOENT on spawn).
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| login_shell_from_passwd())
+        .unwrap_or_else(|| "/bin/sh".to_string());
     let shell_name = Path::new(&shell)
         .file_name()
         .and_then(|s| s.to_str())
@@ -167,7 +178,26 @@ fn probe_unix_login_path() -> Option<String> {
             .args(["-lc", "string join : $PATH"])
             .output()
             .ok()?,
-        _ => return None,
+        // Generic POSIX fallback (sh/dash/ash/busybox). Runs `env` in a login
+        // shell and greps PATH. This covers /bin/sh (dash) which systemd
+        // services fall back to when SHELL is unset and /etc/passwd lookup
+        // fails. Source /etc/profile first so system-wide PATH additions
+        // (/etc/profile.d/*.sh) are picked up, then the user's profile.
+        _ => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let script = if home.is_empty() {
+                ". /etc/profile 2>/dev/null; printf %s \"$PATH\"".to_string()
+            } else {
+                format!(
+                    ". /etc/profile 2>/dev/null; . \"{home}/.profile\" 2>/dev/null; \
+                     printf %s \"$PATH\""
+                )
+            };
+            Command::new(&shell)
+                .args(["-l", "-c", &script])
+                .output()
+                .ok()?
+        }
     };
 
     if !output.status.success() {
@@ -180,6 +210,34 @@ fn probe_unix_login_path() -> Option<String> {
     } else {
         Some(path)
     }
+}
+
+/// Resolve the current user's login shell from /etc/passwd. Returns `None`
+/// on any read/parse failure or when the shell field is empty/non-absolute
+/// (so the caller falls back to /bin/sh). Unix-only.
+#[cfg(not(target_os = "windows"))]
+fn login_shell_from_passwd() -> Option<String> {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .ok()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.splitn(7, ':');
+            let name = fields.next()?;
+            let _ = fields.next()?; // passwd
+            let _ = fields.next()?; // uid
+            let _ = fields.next()?; // gid
+            let _ = fields.next()?; // gecos
+            let _ = fields.next()?; // home
+            let shell = fields.next()?;
+            if name == user && !shell.is_empty() && shell.starts_with('/') {
+                Some(shell.to_string())
+            } else {
+                None
+            }
+        })
 }
 
 /// Apply a refreshed PATH to `env`, preserving custom overrides already present.
