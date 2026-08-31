@@ -235,17 +235,15 @@ impl OnboardAnswers {
     pub fn to_env_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
 
-        // Always emit SHELL and HOME so the service can resolve the user's
-        // login PATH (env_refresh probes the login shell for PATH additions).
-        // Reject control characters and trailing backslashes that could break
-        // systemd EnvironmentFile parsing (CWE-15).
-        if let Some(shell) = std::env::var_os("SHELL") {
-            if let Some(line) = safe_systemd_env_line("SHELL", &shell) {
+        // Always emit SHELL and HOME from the service user's passwd entry
+        // (never the caller's env) so systemd services get a trusted identity
+        // and env_refresh can probe the login PATH safely.
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            if let Some(line) = safe_systemd_env_line("SHELL", std::ffi::OsStr::new(&identity.shell)) {
                 lines.push(line);
             }
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            if let Some(line) = safe_systemd_env_line("HOME", &home) {
+            if let Some(line) = safe_systemd_env_line("HOME", std::ffi::OsStr::new(&identity.home)) {
                 lines.push(line);
             }
         }
@@ -959,10 +957,8 @@ mod tests {
 
     #[test]
     fn env_lines_loopback_no_updates_has_shell_home_only() {
-        // Loopback + no updates: the only env lines are SHELL and HOME
-        // (always emitted so the service can resolve the login PATH).
-        // The test env may or may not have these set, so assert the
-        // invariant: no remote-writes or update vars are present.
+        // Loopback + no updates: only SHELL/HOME (from passwd) plus no
+        // remote-writes or update vars.
         let a = answers_localhost();
         let lines = a.to_env_lines();
         assert!(
@@ -975,13 +971,16 @@ mod tests {
             !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
             "no update channel must not emit update vars"
         );
-        // SHELL and HOME are present (when the env var is set in the
-        // test process — both are set under `cargo test`).
-        if std::env::var_os("SHELL").is_some() {
-            assert!(lines.iter().any(|l| l.starts_with("SHELL=")));
-        }
-        if std::env::var_os("HOME").is_some() {
-            assert!(lines.iter().any(|l| l.starts_with("HOME=")));
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            assert!(
+                lines.iter().any(|l| l == &format!("SHELL={}", identity.shell)),
+                "must emit passwd SHELL, got: {lines:?}"
+            );
+            assert!(
+                lines.iter().any(|l| l == &format!("HOME={}", identity.home)),
+                "must emit passwd HOME, got: {lines:?}"
+            );
         }
     }
 

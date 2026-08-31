@@ -162,37 +162,64 @@ fn probe_unix_login_path() -> Option<String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(login_shell_from_passwd)
+        .filter(|s| is_trusted_shell_path(s))
+        .or_else(|| service_identity_from_passwd().map(|id| id.shell))
+        .filter(|s| is_trusted_shell_path(s))
         .unwrap_or_else(|| "/bin/sh".to_string());
+
+    if !is_trusted_shell_path(&shell) {
+        let shell_basename = Path::new(&shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?");
+        tracing::warn!(
+            target: "termul::env_refresh",
+            shell_basename,
+            "login PATH probe skipped: shell path is not a trusted absolute executable"
+        );
+        return None;
+    }
+
     let shell_name = Path::new(&shell)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("sh");
 
     let output = match shell_name {
-        "bash" | "zsh" => Command::new(&shell)
-            .args(["-lc", "printf %s \"$PATH\""])
-            .output()
-            .ok()?,
-        "fish" => Command::new(&shell)
-            .args(["-lc", "string join : $PATH"])
-            .output()
-            .ok()?,
+        "bash" | "zsh" => run_shell_path_probe(&shell, "-lc", "printf %s \"$PATH\"")?,
+        "fish" => run_shell_path_probe(&shell, "-lc", "string join : $PATH")?,
         // POSIX sh/dash/ash/ksh/busybox: source startup files with stdout
         // redirected so profile banners are not captured as PATH segments.
-        // HOME is passed via Command::env, never interpolated into the script.
+        // HOME is passed via Command::env from passwd identity, never
+        // interpolated into the script.
         "sh" | "dash" | "ash" | "ksh" | "busybox" => {
             const POSIX_SCRIPT: &str = ". /etc/profile >/dev/null 2>/dev/null; \
                 . \"$HOME/.profile\" >/dev/null 2>/dev/null; \
                 printf %s \"$PATH\"";
             let mut cmd = Command::new(&shell);
             cmd.args(["-l", "-c", POSIX_SCRIPT]);
-            if let Ok(home) = std::env::var("HOME") {
-                if !home.is_empty() {
-                    cmd.env("HOME", home);
+            if let Some(home) = service_identity_from_passwd()
+                .map(|id| id.home)
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                })
+            {
+                cmd.env("HOME", home);
+            }
+            match cmd.output() {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "termul::env_refresh",
+                        shell_basename = shell_name,
+                        error = %e,
+                        "login PATH probe failed: could not spawn shell"
+                    );
+                    return None;
                 }
             }
-            cmd.output().ok()?
         }
         other => {
             tracing::warn!(
@@ -227,37 +254,103 @@ fn probe_unix_login_path() -> Option<String> {
     }
 }
 
-/// Resolve the current user's login shell from /etc/passwd. Returns `None`
-/// on any read/parse failure or when the shell field is empty/non-absolute
-/// (so the caller falls back to /bin/sh). Unix-only.
+/// Service identity (`HOME`, `SHELL`) for the current user from `/etc/passwd`.
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServiceIdentity {
+    pub home: String,
+    pub shell: String,
+}
+
+/// Resolve the current user's `HOME` and login `SHELL` from `/etc/passwd`.
+/// Used by onboard env-file generation (never trust caller env) and PATH
+/// probing. Unix-only.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn service_identity_from_passwd() -> Option<ServiceIdentity> {
+    let user = current_passwd_user()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.splitn(7, ':');
+        let name = fields.next()?;
+        let _ = fields.next()?; // passwd
+        let _ = fields.next()?; // uid
+        let _ = fields.next()?; // gid
+        let _ = fields.next()?; // gecos
+        let home = fields.next()?;
+        let shell = fields.next()?;
+        if name == user
+            && !home.is_empty()
+            && home.starts_with('/')
+            && !shell.is_empty()
+            && shell.starts_with('/')
+        {
+            Some(ServiceIdentity {
+                home: home.to_string(),
+                shell: shell.to_string(),
+            })
+        } else {
+            None
+        }
+    })
+}
+
+/// Resolve the current user's login shell from `/etc/passwd`.
 #[cfg(not(target_os = "windows"))]
 fn login_shell_from_passwd() -> Option<String> {
-    let user = std::env::var("USER")
+    service_identity_from_passwd().map(|id| id.shell)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_passwd_user() -> Option<String> {
+    std::env::var("USER")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::env::var("LOGNAME")
                 .ok()
                 .filter(|s| !s.is_empty())
-        })?;
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    passwd
-        .lines()
-        .find_map(|line| {
-            let mut fields = line.splitn(7, ':');
-            let name = fields.next()?;
-            let _ = fields.next()?; // passwd
-            let _ = fields.next()?; // uid
-            let _ = fields.next()?; // gid
-            let _ = fields.next()?; // gecos
-            let _ = fields.next()?; // home
-            let shell = fields.next()?;
-            if name == user && !shell.is_empty() && shell.starts_with('/') {
-                Some(shell.to_string())
-            } else {
-                None
-            }
         })
+}
+
+/// Run a login-shell probe and log spawn failures.
+#[cfg(not(target_os = "windows"))]
+fn run_shell_path_probe(shell: &str, flag: &str, script: &str) -> Option<std::process::Output> {
+    let shell_name = Path::new(shell)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("?");
+    match std::process::Command::new(shell)
+        .args([flag, script])
+        .output()
+    {
+        Ok(o) => Some(o),
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::env_refresh",
+                shell_basename = shell_name,
+                error = %e,
+                "login PATH probe failed: could not spawn shell"
+            );
+            None
+        }
+    }
+}
+
+/// True when `shell` is an absolute path to a known login-shell executable.
+#[cfg(not(target_os = "windows"))]
+fn is_trusted_shell_path(shell: &str) -> bool {
+    let p = Path::new(shell);
+    if !p.is_absolute() || !p.exists() {
+        return false;
+    }
+    let name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    matches!(
+        name,
+        "bash" | "zsh" | "fish" | "sh" | "dash" | "ash" | "ksh" | "busybox"
+    )
 }
 
 /// Apply a refreshed PATH to `env`, preserving custom overrides already present.
@@ -345,6 +438,26 @@ mod tests {
             shell_wants_login_arg("/usr/bin/bash"),
             Some("-l")
         );
+    }
+
+    #[test]
+
+    #[test]
+    fn trusted_shell_path_rejects_relative() {
+        assert!(!is_trusted_shell_path("bash"));
+        assert!(!is_trusted_shell_path("./bin/bash"));
+    }
+
+    #[test]
+    fn trusted_shell_path_accepts_known_absolute_shells() {
+        for candidate in ["/bin/bash", "/bin/sh", "/bin/dash"] {
+            if Path::new(candidate).exists() {
+                assert!(
+                    is_trusted_shell_path(candidate),
+                    "expected trusted: {candidate}"
+                );
+            }
+        }
     }
 
     #[test]
