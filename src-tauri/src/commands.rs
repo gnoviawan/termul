@@ -656,6 +656,81 @@ pub async fn agent_registry_fetch(
     }
 }
 
+// ==================== Filesystem Scope Commands ====================
+
+/// Per-path failure detail for [`fs_scope_grant`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsScopeGrantFailure {
+    pub path: String,
+    pub error: String,
+}
+
+/// Summary of a [`fs_scope_grant`] call: granted paths and per-path failures.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsScopeGrantSummary {
+    pub granted: Vec<String>,
+    pub failed: Vec<FsScopeGrantFailure>,
+}
+
+/// Re-grant runtime filesystem scope for restored project roots and worktrees.
+///
+/// The dialog plugin extends the fs scope at runtime when a folder is picked
+/// (that is why the first Add Project works), but the grant is in-memory and
+/// lost on restart, while the static `fs:scope` capability only allowlists
+/// specific drives. Restored projects on any other drive then fail every
+/// `readDir` with "forbidden path" after restart. The renderer calls this
+/// before hydrating the file explorer so restored roots are re-authorized.
+///
+/// Individual path failures (e.g. a detached external drive) are reported in
+/// the summary instead of failing the whole call, so one stale project cannot
+/// block the others from loading.
+#[tauri::command]
+pub async fn fs_scope_grant(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<IpcResult<FsScopeGrantSummary>, String> {
+    use tauri_plugin_fs::FsExt;
+
+    log::info!("[fs-scope] grant start count={}", paths.len());
+    let mut granted: Vec<String> = Vec::new();
+    let mut failed: Vec<FsScopeGrantFailure> = Vec::new();
+
+    for raw in paths {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match validate_project_path(&raw) {
+            Ok(path) => {
+                // Recursive so the file explorer can descend the whole tree,
+                // including `.termul/worktrees/*` created under the root.
+                match app.fs_scope().allow_directory(&path, true) {
+                    Ok(()) => granted.push(path.to_string_lossy().into_owned()),
+                    Err(e) => {
+                        log::warn!("[fs-scope] grant failed path={} error={}", raw, e);
+                        failed.push(FsScopeGrantFailure {
+                            path: raw,
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[fs-scope] grant validation failed path={} error={}", raw, e);
+                failed.push(FsScopeGrantFailure { path: raw, error: e });
+            }
+        }
+    }
+
+    log::info!(
+        "[fs-scope] grant done granted={} failed={}",
+        granted.len(),
+        failed.len()
+    );
+    Ok(IpcResult::success(FsScopeGrantSummary { granted, failed }))
+}
+
 // ==================== Worktree Commands ====================
 
 /// List all worktrees for a git repo at the given path.

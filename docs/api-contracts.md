@@ -47,6 +47,26 @@ The Rust side implements this via `IpcResult<T>` and the renderer mirrors it in 
 
 **Purpose:** Return the current user's home directory with platform-aware fallback.
 
+## Filesystem Scope Commands
+
+### `fs_scope_grant`
+
+**Purpose:** Re-grant runtime filesystem scope for restored project roots and
+worktree paths. The dialog plugin extends the fs scope when a folder is picked,
+but that grant is in-memory and lost on restart, while the static `fs:scope`
+capability only allowlists specific drives — restored projects elsewhere fail
+with `forbidden path` after restart. The renderer (`useProjectsLoader`) calls
+this before hydrating the file explorer.
+
+**Input:**
+- `paths`: directory paths to allow recursively (project roots + worktrees)
+
+**Returns:** `{ granted: string[], failed: { path, error }[] }` — per-path
+failures (e.g. a detached external drive) do not fail the whole call.
+
+Web/remote mode is a no-op (`grantFsScope` returns success without invoking);
+browser fs access is enforced by the server's own permission model.
+
 ## Terminal Commands
 
 ### `terminal_spawn`

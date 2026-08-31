@@ -1608,6 +1608,8 @@ pub fn run() {
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
             commands::agent_registry_fetch,
+            // Filesystem scope restore (re-grant persisted project roots)
+            commands::fs_scope_grant,
             // Browser tab commands
             commands::browser_tab_create,
             commands::browser_tab_navigate,

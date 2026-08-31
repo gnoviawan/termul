@@ -5,6 +5,7 @@ import type {
   FileContent,
   FileInfo,
   FilesystemApi,
+  FsScopeGrantSummary,
   IpcResult,
   SearchFileHit
 } from '@shared/types/ipc.types'
@@ -218,6 +219,20 @@ async function _collectFilesRecursively(rootPath: string): Promise<string[]> {
  */
 export function createTauriFilesystemApi(): FilesystemApi {
   return {
+    async grantFsScope(paths: string[]): Promise<IpcResult<FsScopeGrantSummary>> {
+      // Web/remote mode: the browser never talks to tauri-plugin-fs — fs
+      // access is enforced by the server's own permission model — so the
+      // scope grant is a desktop-only no-op.
+      if (!isTauriContext()) {
+        return { success: true, data: { granted: [], failed: [] } }
+      }
+      try {
+        return await invoke<IpcResult<FsScopeGrantSummary>>('fs_scope_grant', { paths })
+      } catch (err) {
+        return { success: false, error: String(err), code: 'FS_SCOPE_GRANT_ERROR' }
+      }
+    },
+
     async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
       // Web/remote mode: route through the same-origin server (Story: Web/
       // remote project creation). Desktop stays on @tauri-apps/plugin-fs.
