@@ -941,7 +941,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       }
       setWorktreeCreating(true)
       try {
-        const chatId = crypto.randomUUID().slice(0, 8)
+        const chatId = randomUUID().slice(0, 8)
         const branchName = `chat/${chatId}`
         const createResult = await worktreeApi.create({
           projectPath: projectRootSnapshot,
