@@ -247,14 +247,27 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
       expect(nameInput).toHaveValue('other-app')
     })
 
-    // A root path (basename === whole path or empty) leaves the name alone.
+    // A filesystem root ('/', 'C:\\') or dot segment ('.', '..') must NOT
+    // become a project name — the derived name clears instead of keeping a
+    // stale one that no longer matches the chosen directory.
     await act(async () => {
       fireEvent.change(pathInput, { target: { value: '/' } })
     })
-    expect(nameInput).toHaveValue('other-app')
+    expect(nameInput).toHaveValue('')
 
-    // The edited/derived name flows through creation: re-derive once more,
-    // then create and assert the final derived name was used.
+    // A one-segment relative path (no separators) is a valid folder name.
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: 'project' } })
+    })
+    expect(nameInput).toHaveValue('project')
+
+    // A drive root ('C:\\') must not derive 'C:' as the name.
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: 'C:\\' } })
+    })
+    expect(nameInput).toHaveValue('')
+
+    // Re-derive once more, then create and assert the final derived name used.
     await act(async () => {
       fireEvent.change(pathInput, { target: { value: '/home/me/final-app' } })
       fireEvent.click(screen.getByText('Create'))

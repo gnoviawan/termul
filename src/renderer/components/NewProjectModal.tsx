@@ -122,11 +122,16 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     }
     // Strip trailing separators so `/home/me/app/` derives `app`, not `''`.
     const stripped = trimmed.replace(/[\\/]+$/, '')
-    const base = basename(stripped)
-    // basename falls back to the whole path when the last segment is empty
-    // (root paths like `/` or `C:\` already stripped to ``) — keep the name.
-    if (base && base !== '.' && base !== '..' && base !== trimmed) {
+    // Filesystem roots (`/`, `C:`, `C:\`) must not become project names — an
+    // explicit check, since basename(stripped) would otherwise yield `C:`.
+    const isRootPath = stripped === '' || /^[A-Za-z]:$/.test(stripped)
+    const base = isRootPath ? '' : basename(stripped)
+    if (base && base !== '.' && base !== '..') {
       setName(base)
+    } else {
+      // Root path, `.`, or `..`: clear the derived name rather than keeping
+      // a stale one that no longer matches the chosen directory.
+      setName('')
     }
   }, [])
 
