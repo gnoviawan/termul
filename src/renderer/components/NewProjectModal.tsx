@@ -2,11 +2,12 @@ import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
-import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { basename } from '@/components/chat/chat-attachments'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
+import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
@@ -91,29 +92,36 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     void checkEmpty()
   }, [path])
 
-  // Reset form when the modal opens. Deps are [isOpen] only: the shells
-  // fetch effect owns shell initialization on resolve, and coupling this
-  // reset to `shells?.default?.name` re-fires it when the fetch lands after
-  // mount, wiping name/path the user (or the auto-derivation) just set.
+  // Reset form when the modal opens. Deps intentionally exclude
+  // `shells?.default?.name`: the async shells fetch re-fires this reset after
+  // mount and would wipe name/path the user (or the auto-derivation) just set.
+  // Shell init is owned by the fetch effect; `shellsRef` (read without being a
+  // dep) keeps the open-transition reset from discarding an already-detected
+  // default from a previous open of this mounted modal.
+  const shellsRef = useRef<DetectedShells | null>(null)
+  shellsRef.current = shells
+
   useEffect(() => {
     if (isOpen) {
       setName('')
       setSelectedColor(defaultColor || 'blue')
       setPath('')
-      setSelectedShell(fallbackShell)
+      setSelectedShell(shellsRef.current?.default?.name || fallbackShell)
       setSelectedTemplate(BUILT_IN_TEMPLATES[0])
       setIsFolderEmpty(false)
       setInitGit(false)
       setAdvancedOpen(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reset only on open
   }, [isOpen, fallbackShell, defaultColor])
 
   // Editing the name simply sets it; the next folder change re-derives, so a
   // user-typed name persists until the folder changes again (per spec: the
-  // auto-name guarantee is the folder change, not a separate manual-edit flag).
   const handlePathChange = useCallback((nextPath: string) => {
     setPath(nextPath)
+    // A folder change invalidates any checked git-init: the checkbox only
+    // applies to the folder it was checked against (empty-directory state
+    // is recomputed below by the path effect).
+    setInitGit(false)
     const trimmed = nextPath.trim()
     if (!trimmed) {
       // Field cleared: never leave a stale derived name without a directory.
@@ -188,8 +196,11 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         }
 
         let gitInitSucceeded = false
-        // Initialize git repository if requested
-        if (initGit) {
+        // Initialize git repository if requested. Gated on isFolderEmpty:
+        // the checkbox only renders for empty folders, and if the user later
+        // switches to a non-empty folder a stale `initGit` must not run git
+        // init against that directory.
+        if (initGit && isFolderEmpty) {
           try {
             await gitApi.init(trimmedPath)
             gitInitSucceeded = true
@@ -250,6 +261,12 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             } catch {
               // Not a git repo or unreadable — isGitRepo stays false.
             }
+          }
+          // Restore worktree state for projects created from existing
+          // worktrees (desktop-only reconciler; the `.git` probe covered
+          // web parity for the isGitRepo flag above).
+          if (isTauriContext() && created.id) {
+            void reconcileProjectWorktreesNow(created.id).catch(() => {})
           }
         }
 
