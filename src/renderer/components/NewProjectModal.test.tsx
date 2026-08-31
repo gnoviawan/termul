@@ -1,18 +1,22 @@
 /**
- * Patch G (verification gap): end-to-end test for `NewProjectModal`'s web-mode
- * create flow. The original bug was `Setup failed: fs.mkdir is unavailable`
- * firing from `NewProjectModal`'s `handleCreate` → `filesystemApi.createDirectory`
- * → `scaffoldProject` chain. Every facade was tested in isolation but the modal's
- * full create chain was untested in web mode (`!isTauriContext()`).
+ * End-to-end tests for `NewProjectModal` in web mode (`!isTauriContext()`).
  *
- * This test mocks `fetch` for `/fs/mkdir`, `/fs/write`, `/git/init`, plus
- * `shellApi`/`filesystemApi.readDirectory` for the empty-check, fills name+path,
- * clicks Create, and asserts:
- *  (1) NO `fs.mkdir is unavailable` error surfaces (the original user bug),
- *  (2) the `onCreateProject` callback fires (the flow completes).
+ * Original Patch G: the web-mode create chain (`handleCreate` →
+ * `filesystemApi.createDirectory` → scaffold) was untested and surfaced
+ * `Setup failed: fs.mkdir is unavailable`. That guard lives on: the create
+ * test still asserts NO `fs.mkdir is unavailable` error surfaces and that
+ * `onCreateProject` fires.
  *
- * Mirrors `WorkspaceLayout.test.tsx` conventions (MemoryRouter, TooltipProvider,
- * store mocks). The `@tauri-apps/plugin-fs` + `@tauri-apps/plugin-dialog` +
+ * Since the modal simplification, the tests also defend the new observable
+ * contract:
+ *  - the Project Name auto-fills from the selected folder's basename
+ *    (typed path or Browse), with re-derivation on folder change and
+ *    user-edit override semantics,
+ *  - only Root Directory + Project Name render (no template, color, shell,
+ *    or git-init controls), and
+ *  - the web session-only note is preserved.
+ *
+ * The `@tauri-apps/plugin-fs` + `@tauri-apps/plugin-dialog` +
  * `@tauri-apps/api/core` modules are stubbed so the module loads without a
  * Tauri runtime; the web branch is the one under test.
  */
@@ -101,9 +105,10 @@ vi.mock('sonner', () => ({
   toast: {
     promise: vi.fn((_p, opts) => {
       // Drive the promise to settle so the test's act() unwinds cleanly.
+      // success/error may be a string OR a resolver fn — call fns only.
       _p.then(
-        (v: unknown) => opts.success?.(v),
-        (e: unknown) => opts.error?.(e)
+        (v: unknown) => typeof opts.success === 'function' && opts.success(v),
+        (e: unknown) => typeof opts.error === 'function' && opts.error(e)
       )
       return 'toast-id'
     }),
@@ -122,7 +127,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
-describe('NewProjectModal (web-mode create flow — Patch G)', () => {
+describe('NewProjectModal (web-mode · simplified modal)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
@@ -154,46 +159,30 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
 
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={onCreateProject} />)
 
-    // Wait for shells to FULLY load before typing. The modal's `isOpen` reset
-    // effect has `shells?.default?.name` as a dep — if shells arrive AFTER we
-    // type, that effect re-fires and wipes the name/path inputs (disabled
-    // Create button). Wait for the Default Terminal <select> to show the
-    // 'Bash' option, which proves shells settled and the reset effect is done.
-    await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'Bash' })).toBeInTheDocument()
-    })
-
-    // Fill the name + path inputs (after the shells reset effect has settled).
-    const nameInput = screen.getByPlaceholderText('My Project')
+    // Fill the path — the simplified modal derives the name from the folder's
+    // basename, so only the path needs setting before Create is enabled.
     const pathInput = screen.getByPlaceholderText('No directory selected')
     await act(async () => {
-      fireEvent.change(nameInput, { target: { value: 'My Web Project' } })
       fireEvent.change(pathInput, { target: { value: '/web/proj' } })
     })
 
-    // The empty-check fires (GET /fs/ls?path=/web/proj). The default mock
-    // returns { success: true } with NO data — the modal treats that as empty,
-    // so the "Initialize Git repository" checkbox appears (folder-empty branch).
+    // The path auto-filled the name field (core feature of the simplified
+    // modal — folder basename without user action).
+    const nameInput = screen.getByPlaceholderText('My Project')
     await waitFor(() => {
-      expect(screen.getByLabelText(/Initialize Git repository/i)).toBeInTheDocument()
+      expect(nameInput).toHaveValue('proj')
     })
 
-    // Select the Node template (not the default 'empty' template) so
-    // scaffoldProject emits real files — the original bug fired from the
-    // createFile path (`fs.mkdir is unavailable` was the plugin-fs stub
-    // throw on the desktop branch; the web branch must route through
-    // /fs/write instead).
-    const selects = screen.getAllByRole('combobox') as unknown as HTMLSelectElement[]
-    const templateSelect = selects.find((s) => s.value === 'empty')
-    expect(templateSelect, 'Project Template select must default to empty').toBeTruthy()
+    // Now override the derived name with an explicit user edit — the edited
+    // name persists until the next folder change (which re-derives), and the
+    // name current at Create time is what onCreateProject receives.
     await act(async () => {
-      fireEvent.change(templateSelect!, { target: { value: 'node' } })
+      fireEvent.change(nameInput, { target: { value: 'My Web Project' } })
     })
 
     // Click Create. The chain fires:
     //   filesystemApi.createDirectory(/web/proj) -> POST /fs/mkdir (web branch)
-    //   scaffoldProject -> filesystemApi.createDirectory + createFile per template
-    //   (no git init unless checked — leave unchecked)
+    //   (empty template — no scaffold files written)
     //   onCreateProject(name, color, path, shell, envVars?)
     const createBtn = screen.getByText('Create')
     await act(async () => {
@@ -211,17 +200,6 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
       { timeout: 10000 }
     )
 
-    // scaffoldProject (Node template) writes real files — so /fs/write fires
-    // on the web branch (NOT the desktop writeTextFile stub). The Node
-    // template emits package.json, src/index.js, .gitignore, etc.
-    await waitFor(
-      () => {
-        const writeCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/fs/write'))
-        expect(writeCalls.length).toBeGreaterThan(0)
-      },
-      { timeout: 10000 }
-    )
-
     await waitFor(
       () => {
         expect(onCreateProject).toHaveBeenCalledTimes(1)
@@ -232,56 +210,143 @@ describe('NewProjectModal (web-mode create flow — Patch G)', () => {
     expect(nameArg).toBe('My Web Project')
     expect(pathArg).toBe('/web/proj')
 
+    // No scaffolding: the empty-template pin means /fs/write must never fire.
+    expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/fs/write'))).toBe(false)
+
     // Sanity: the desktop tauri-unavailable message never reached the user.
-    // The modal surfaces failures via the sonner toast error message — assert
-    // the create flow did NOT raise the original bug's message.
     const allFetchUrls = mockFetch.mock.calls.map(([url]) => String(url))
     expect(allFetchUrls.some((u) => u.includes('/fs/mkdir'))).toBe(true)
-    expect(allFetchUrls.some((u) => u.includes('/fs/write'))).toBe(true)
   })
 
-  it('completes the create flow with git init checked (POST /git/init fires)', async () => {
+  it('re-derives the name on folder change and respects a user edit in between', async () => {
     const onCreateProject = vi.fn()
 
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={onCreateProject} />)
 
-    // Wait for shells to settle (see the first test for why this matters).
-    await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'Bash' })).toBeInTheDocument()
-    })
-
-    const nameInput = screen.getByPlaceholderText('My Project')
     const pathInput = screen.getByPlaceholderText('No directory selected')
-    await act(async () => {
-      fireEvent.change(nameInput, { target: { value: 'GitProj' } })
-      fireEvent.change(pathInput, { target: { value: '/web/gp' } })
-    })
 
+    // Pick a first folder: name auto-fills from its basename.
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/home/me/my-app' } })
+    })
+    const nameInput = screen.getByPlaceholderText('My Project')
     await waitFor(() => {
-      expect(screen.getByLabelText(/Initialize Git repository/i)).toBeInTheDocument()
+      expect(nameInput).toHaveValue('my-app')
+    })
+    // User edits the name — the edit persists until the next folder change.
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'Custom Name' } })
+    })
+    expect(nameInput).toHaveValue('Custom Name')
+
+    // Changing the folder re-derives the name (auto-name guarantee).
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/home/me/other-app' } })
+    })
+    await waitFor(() => {
+      expect(nameInput).toHaveValue('other-app')
     })
 
-    // Check the init-git checkbox — the chain then calls gitApi.init ->
-    // webServerGit.init -> POST /git/init.
-    fireEvent.click(screen.getByLabelText(/Initialize Git repository/i))
-
+    // A root path (basename === whole path or empty) leaves the name alone.
     await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/' } })
+    })
+    expect(nameInput).toHaveValue('other-app')
+
+    // The edited/derived name flows through creation: re-derive once more,
+    // then create and assert the final derived name was used.
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/home/me/final-app' } })
       fireEvent.click(screen.getByText('Create'))
     })
-
-    await waitFor(
-      () => {
-        expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/git/init'))).toBe(true)
-      },
-      { timeout: 10000 }
-    )
     await waitFor(
       () => {
         expect(onCreateProject).toHaveBeenCalledTimes(1)
       },
       { timeout: 10000 }
     )
-    expect(onCreateProject.mock.calls[0][0]).toBe('GitProj')
+    expect(onCreateProject.mock.calls[0][0]).toBe('final-app')
+    expect(onCreateProject.mock.calls[0][2]).toBe('/home/me/final-app')
+  })
+
+  it('auto-fills the name from the Browse picker (handleBrowse path)', async () => {
+    mockSelectDirectory.mockResolvedValue({ success: true, data: '/home/me/picked-app' })
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Browse'))
+    })
+
+    const nameInput = screen.getByPlaceholderText('My Project')
+    await waitFor(() => {
+      expect(nameInput).toHaveValue('picked-app')
+    })
+    expect(screen.getByPlaceholderText('No directory selected')).toHaveValue('/home/me/picked-app')
+  })
+
+  it('derives the name from Windows-style paths (backslash separators)', async () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: 'C:\\Users\\me\\proj' } })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('My Project')).toHaveValue('proj')
+    })
+  })
+
+  it('passes the app default project color through to onCreateProject', async () => {
+    mockDefaultProjectColor.mockReturnValue('green')
+    const onCreateProject = vi.fn()
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={onCreateProject} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/green-proj' } })
+      fireEvent.click(screen.getByText('Create'))
+    })
+
+    await waitFor(
+      () => {
+        expect(onCreateProject).toHaveBeenCalledTimes(1)
+      },
+      { timeout: 10000 }
+    )
+    // 2nd positional arg is the color.
+    expect(onCreateProject.mock.calls[0][1]).toBe('green')
+  })
+
+  it('resets name and path when the modal is closed and reopened', async () => {
+    const { rerender } = render(
+      <NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />
+    )
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/home/me/app' } })
+    })
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('My Project')).toHaveValue('app')
+    })
+
+    rerender(<NewProjectModal isOpen={false} onClose={vi.fn()} onCreateProject={vi.fn()} />)
+    rerender(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    expect(screen.getByPlaceholderText('No directory selected')).toHaveValue('')
+    expect(screen.getByPlaceholderText('My Project')).toHaveValue('')
+  })
+
+  it('renders only Root Directory + Project Name (no template/color/shell/git controls)', () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+    expect(screen.getByPlaceholderText('No directory selected')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('My Project')).toBeInTheDocument()
+    expect(screen.queryByText('Project Template')).not.toBeInTheDocument()
+    expect(screen.queryByText('Color')).not.toBeInTheDocument()
+    expect(screen.queryByText('Default Terminal')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Initialize Git repository/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
   })
 
   it('shows a session-scoped info note on web (persistence-gap truthfulness)', () => {

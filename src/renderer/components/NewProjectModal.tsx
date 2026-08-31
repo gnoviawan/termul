@@ -1,16 +1,11 @@
-import type { DetectedShells } from '@shared/types/ipc.types'
-import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronDown, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Skeleton } from '@/components/ui/skeleton'
+import { basename } from '@/components/chat/chat-attachments'
 import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
-import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
-import { availableColors, getColorClasses } from '@/lib/colors'
-import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
+import { dialogApi, filesystemApi, shellApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
@@ -29,26 +24,24 @@ interface NewProjectModalProps {
 
 export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProjectModalProps) {
   const defaultColor = useDefaultProjectColor() as ProjectColor
+  // Simplified modal: template/env/color/shell/git controls were removed.
+  // The create chain keeps running with these fixed values (empty template,
+  // app default color, detected default shell, no git init).
+  const selectedColor = defaultColor || 'blue'
   const [name, setName] = useState('')
-  const [selectedColor, setSelectedColor] = useState<ProjectColor>(defaultColor || 'blue')
   const [path, setPath] = useState('')
-  const [shells, setShells] = useState<DetectedShells | null>(null)
   const [selectedShell, setSelectedShell] = useState<string>('')
-  const [shellsLoading, setShellsLoading] = useState(true)
-  const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(BUILT_IN_TEMPLATES[0])
-  const [isFolderEmpty, setIsFolderEmpty] = useState(false)
-  const [initGit, setInitGit] = useState(false)
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
 
-  // Fetch available shells on mount
+  // Fetch available shells on mount (the detected default feeds onCreateProject;
+  // the selector UI itself was removed from the simplified modal).
   useEffect(() => {
     const fetchShells = async () => {
       try {
         const result = await shellApi.getAvailableShells()
         if (result.success && result.data) {
-          setShells(result.data)
           setSelectedShell(result.data.default?.name || fallbackShell)
         } else {
           // Detection failed - use fallback
@@ -56,50 +49,41 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         }
       } catch (err) {
         console.error('Failed to detect shells:', err)
-        setShells(null)
         setSelectedShell(fallbackShell)
-      } finally {
-        setShellsLoading(false)
       }
     }
     void fetchShells()
   }, [fallbackShell])
 
-  // Check if chosen directory is empty
-  useEffect(() => {
-    const checkEmpty = async () => {
-      const trimmed = path.trim()
-      if (!trimmed) {
-        setIsFolderEmpty(false)
-        return
-      }
-      try {
-        const result = await filesystemApi.readDirectory(trimmed)
-        if (result.success && result.data) {
-          setIsFolderEmpty(result.data.length === 0)
-        } else {
-          // If directory doesn't exist yet, treat it as empty
-          setIsFolderEmpty(true)
-        }
-      } catch {
-        setIsFolderEmpty(true)
-      }
-    }
-    void checkEmpty()
-  }, [path])
-
   // Reset form when modal opens (use defaults)
   useEffect(() => {
     if (isOpen) {
       setName('')
-      setSelectedColor(defaultColor || 'blue')
       setPath('')
-      setSelectedShell(shells?.default?.name || fallbackShell)
-      setSelectedTemplate(BUILT_IN_TEMPLATES[0])
-      setIsFolderEmpty(false)
-      setInitGit(false)
     }
-  }, [isOpen, defaultColor, shells?.default?.name, fallbackShell])
+  }, [isOpen])
+
+  // Derive the project name from the folder's basename on every path change.
+  // Editing the name simply sets it; the next folder change re-derives, so a
+  // user-typed name persists until the folder changes again (per spec: the
+  // auto-name guarantee is the folder change, not a separate manual-edit flag).
+  const handlePathChange = useCallback((nextPath: string) => {
+    setPath(nextPath)
+    const trimmed = nextPath.trim()
+    if (!trimmed) {
+      // Field cleared: never leave a stale derived name without a directory.
+      setName('')
+      return
+    }
+    // Strip trailing separators so `/home/me/app/` derives `app`, not `''`.
+    const stripped = trimmed.replace(/[\\/]+$/, '')
+    const base = basename(stripped)
+    // basename falls back to the whole path when the last segment is empty
+    // (root paths like `/` or `C:\` already stripped to ``) — keep the name.
+    if (base && base !== '.' && base !== '..' && base !== trimmed) {
+      setName(base)
+    }
+  }, [])
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -116,18 +100,6 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     return () => window.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
 
-  const handleSelectTemplate = useCallback(
-    (template: ProjectTemplate) => {
-      setSelectedTemplate(template)
-      if (template.defaultShell) {
-        setSelectedShell(template.defaultShell)
-      } else {
-        setSelectedShell(shells?.default?.name || fallbackShell)
-      }
-    },
-    [shells, fallbackShell]
-  )
-
   const handleCreate = useCallback(() => {
     const trimmedName = name.trim()
     const trimmedPath = path.trim()
@@ -136,47 +108,22 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       // Use selected shell or fallback
       const shellToUse = selectedShell || fallbackShell
 
-      const envVarsToPass: EnvVariable[] | undefined = selectedTemplate.envVars
-        ? selectedTemplate.envVars.map((ev) => ({
-            key: ev.key,
-            value: ev.value,
-            isSecret: ev.isSecret
-          }))
-        : undefined
-
-      // Scaffold template files and initialize git asynchronously
-      const runScaffoldAndGit = async () => {
+      // Create the project asynchronously: the simplified modal pins the
+      // empty template (no files to scaffold) and never git-inits. Detection
+      // of an existing repo happens below.
+      const runCreate = async () => {
         // Ensure root directory exists
         const dirResult = await filesystemApi.createDirectory(trimmedPath)
         if (!dirResult.success) {
           throw new Error(dirResult.error || 'Failed to create root directory')
         }
 
-        let gitInitSucceeded = false
-        // Initialize git repository if requested
-        if (initGit) {
-          try {
-            await gitApi.init(trimmedPath)
-            gitInitSucceeded = true
-          } catch (err) {
-            console.error('Git init failed during scaffolding:', err)
-            // Continue even if git init fails, so files are still scaffolded
-          }
-        }
-
-        // Scaffold template files
-        if (selectedTemplate.id !== 'empty') {
-          const res = await scaffoldProject(trimmedPath, trimmedName, selectedTemplate)
-          if (!res.success) {
-            throw new Error(res.error || 'Failed to scaffold template files')
-          }
-        }
         const created = onCreateProject(
           trimmedName,
           selectedColor,
           trimmedPath,
           shellToUse,
-          envVarsToPass
+          undefined
         )
         // Detect whether the project path is a git repo (covers BOTH paths:
         // git-init'd projects AND existing git repos pointed at without init).
@@ -185,18 +132,13 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         // is the same path the persistence loader uses for persisted projects,
         // so session-only projects get the same detection.
         if (created?.id) {
-          // Set the immediate result first (git init success → true now).
-          useProjectStore.getState().updateProject(created.id, {
-            isGitRepo: gitInitSucceeded
-          })
           // Then detect existing .git for the non-init path. On desktop, the
           // worktree reconciler (`reconcileProjectWorktreesNow`) does this via
           // `worktreeApi.list` (Tauri command). On web, the reconciler is
           // desktop-only (AGENTS.md: gate platform-only capabilities with
-          // isTauriContext()), so probe `.git` via the fs read route instead —
-          // the `/fs/info` route is unguarded (read, not mutation) and works
-          // for non-loopback web clients.
-          if (!gitInitSucceeded && trimmedPath) {
+          // isTauriContext()), so probe `.git` via the fs read route instead,
+          // which works for non-loopback web clients.
+          if (trimmedPath) {
             // `.git` can be a directory (standard repo) or a file (worktree
             // / submodule pointer containing `gitdir:`). Probe both: list the
             // directory first (covers the standard case), then try reading it
@@ -220,46 +162,25 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             void reconcileProjectWorktreesNow(created.id).catch(() => {})
           }
         }
-
-        return { gitInitSucceeded }
       }
 
-      const operationPromise = runScaffoldAndGit()
+      const operationPromise = runCreate()
       toast.promise(operationPromise, {
-        loading: initGit
-          ? `Initializing git and scaffolding ${selectedTemplate.name}...`
-          : `Scaffolding ${selectedTemplate.name}...`,
-        success: (res) => {
-          if (initGit) {
-            return res.gitInitSucceeded
-              ? `Git repository initialized and ${selectedTemplate.name} template scaffolded successfully!`
-              : `${selectedTemplate.name} template scaffolded successfully! (Git initialization failed)`
-          }
-          return `${selectedTemplate.name} template scaffolded successfully!`
-        },
+        loading: 'Creating project...',
+        success: 'Project created!',
         error: (err: Error) => `Setup failed: ${err.message}`
       })
 
       onClose()
     }
-  }, [
-    name,
-    selectedColor,
-    path,
-    selectedShell,
-    fallbackShell,
-    selectedTemplate,
-    initGit,
-    onCreateProject,
-    onClose
-  ])
+  }, [name, path, selectedShell, fallbackShell, selectedColor, onCreateProject, onClose])
 
   const handleBrowse = useCallback(async () => {
     const result = await dialogApi.selectDirectory()
     if (result.success) {
-      setPath(result.data)
+      handlePathChange(result.data)
     }
-  }, [])
+  }, [handlePathChange])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -305,51 +226,27 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             </div>
 
             <div className="p-4 space-y-4 overflow-y-auto flex-1">
+              {/* Root Directory first — the flow starts with picking a folder. */}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Project Template
+                  Root Directory
                 </label>
-                <div className="relative">
-                  <select
-                    value={selectedTemplate.id}
-                    onChange={(e) => {
-                      const tpl = BUILT_IN_TEMPLATES.find((t) => t.id === e.target.value)
-                      if (tpl) handleSelectTemplate(tpl)
-                    }}
-                    className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={path}
+                    onChange={(e) => handlePathChange(e.target.value)}
+                    placeholder="No directory selected"
+                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                  />
+                  <button
+                    onClick={handleBrowse}
+                    className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors"
                   >
-                    {BUILT_IN_TEMPLATES.map((tpl) => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                    <ChevronDown size={14} />
-                  </div>
+                    Browse
+                  </button>
                 </div>
-                <p className="text-3xs text-muted-foreground mt-1 leading-snug">
-                  {selectedTemplate.description}
-                </p>
               </div>
-
-              {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
-                <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
-                  <span className="text-3xs font-semibold text-muted-foreground block mb-1.5">
-                    Included Environment Variables:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedTemplate.envVars.map((ev) => (
-                      <span
-                        key={ev.key}
-                        className="text-3xs font-mono bg-background border border-border/80 px-2 py-0.5 rounded text-secondary-foreground"
-                      >
-                        {ev.key}={ev.value}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
@@ -362,99 +259,6 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   placeholder="My Project"
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Root Directory
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={path}
-                    onChange={(e) => setPath(e.target.value)}
-                    placeholder="No directory selected"
-                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
-                  />
-                  <button
-                    onClick={handleBrowse}
-                    className="bg-secondary hover:bg-muted text-foreground text-xs px-3 rounded border border-border transition-colors"
-                  >
-                    Browse
-                  </button>
-                </div>
-
-                {isFolderEmpty && (
-                  <div className="flex items-center gap-2 mt-2 px-1">
-                    <input
-                      type="checkbox"
-                      id="init-git"
-                      checked={initGit}
-                      onChange={(e) => setInitGit(e.target.checked)}
-                      className="rounded border-border text-primary bg-secondary focus:ring-primary h-3.5 w-3.5"
-                    />
-                    <label
-                      htmlFor="init-git"
-                      className="text-xs text-muted-foreground select-none cursor-pointer"
-                    >
-                      Initialize Git repository in this directory
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-2">
-                  Color
-                </label>
-                <div className="flex gap-2 flex-wrap">
-                  {availableColors.map((color) => {
-                    const colors = getColorClasses(color)
-                    return (
-                      <button
-                        key={color}
-                        onClick={() => setSelectedColor(color)}
-                        className={cn(
-                          'w-6 h-6 rounded-full transition-all',
-                          colors.bg,
-                          selectedColor === color
-                            ? 'ring-2 ring-offset-2 ring-offset-card ring-current'
-                            : 'hover:opacity-80'
-                        )}
-                      />
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Default Terminal
-                </label>
-                {shellsLoading ? (
-                  <Skeleton className="w-full h-9 rounded" />
-                ) : (
-                  <div className="relative">
-                    <select
-                      value={selectedShell}
-                      onChange={(e) => setSelectedShell(e.target.value)}
-                      className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
-                    >
-                      {shells?.available && shells.available.length > 0 ? (
-                        shells.available.map((shell) => (
-                          <option key={shell.name} value={shell.name}>
-                            {shell.displayName}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="">No shells detected</option>
-                      )}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                      <ChevronDown size={14} />
-                    </div>
-                  </div>
-                )}
               </div>
 
               {!isTauriContext() && (
