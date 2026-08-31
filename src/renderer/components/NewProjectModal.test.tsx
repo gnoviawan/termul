@@ -146,6 +146,10 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
           }
         })
       }
+      if (String(url).includes('/fs/ls')) {
+        // Empty directory listing — enables git-init advanced option tests.
+        return jsonResponse({ success: true, data: [] })
+      }
       return jsonResponse({ success: true })
     })
   })

@@ -69,16 +69,25 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     void fetchShells()
   }, [fallbackShell])
 
-  // Check if chosen directory is empty (drives the Advanced git-init checkbox).
+  const [emptinessCheckPath, setEmptinessCheckPath] = useState('')
+
+  // Check if chosen directory is empty (drives the Advanced git-init
+  // checkbox). Remembers WHICH path the answer applies to: the checkbox only
+  // authorizes git-init when the emptiness result still matches the path the
+  // user is creating (a slow /fs/ls for folder A must not authorize folder B).
   useEffect(() => {
     const checkEmpty = async () => {
       const trimmed = path.trim()
       if (!trimmed) {
+        setEmptinessCheckPath('')
         setIsFolderEmpty(false)
         return
       }
+      setEmptinessCheckPath(trimmed)
       try {
         const result = await filesystemApi.readDirectory(trimmed)
+        // Ignore stale responses: only apply if path is unchanged.
+        if (trimmed !== path.trim()) return
         if (result.success && result.data) {
           setIsFolderEmpty(result.data.length === 0)
         } else {
@@ -86,7 +95,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           setIsFolderEmpty(true)
         }
       } catch {
-        setIsFolderEmpty(true)
+        // Read failure = unknown; do not treat as empty (would wrongly enable git-init).
+        if (trimmed === path.trim()) setIsFolderEmpty(false)
       }
     }
     void checkEmpty()
@@ -99,7 +109,11 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   // dep) keeps the open-transition reset from discarding an already-detected
   // default from a previous open of this mounted modal.
   const shellsRef = useRef<DetectedShells | null>(null)
-  shellsRef.current = shells
+  // Commit-phase sync (not render-path): the open-reset effect reads this on
+  // the NEXT commit after the fetch lands, never from an uncommitted render.
+  useEffect(() => {
+    shellsRef.current = shells
+  }, [shells])
 
   useEffect(() => {
     if (isOpen) {
@@ -108,6 +122,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       setPath('')
       setSelectedShell(shellsRef.current?.default?.name || fallbackShell)
       setSelectedTemplate(BUILT_IN_TEMPLATES[0])
+      setEmptinessCheckPath('')
       setIsFolderEmpty(false)
       setInitGit(false)
       setAdvancedOpen(false)
@@ -116,6 +131,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
   // Editing the name simply sets it; the next folder change re-derives, so a
   // user-typed name persists until the folder changes again (per spec: the
+  // auto-name guarantee is the folder change, not a separate manual-edit flag).
   const handlePathChange = useCallback((nextPath: string) => {
     setPath(nextPath)
     // A folder change invalidates any checked git-init: the checkbox only
@@ -130,9 +146,12 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     }
     // Strip trailing separators so `/home/me/app/` derives `app`, not `''`.
     const stripped = trimmed.replace(/[\\/]+$/, '')
-    // Filesystem roots (`/`, `C:`, `C:\`) must not become project names — an
-    // explicit check, since basename(stripped) would otherwise yield `C:`.
-    const isRootPath = stripped === '' || /^[A-Za-z]:$/.test(stripped)
+    // Filesystem roots must not become project names:
+    //  - POSIX root: `/` (stripped to '')
+    //  - drive root: `C:` (after stripping trailing `\`)
+    //  - UNC share root: `\\server\share` — would otherwise derive `share`.
+    const uncRootRe = /^\\\\[^\\/]+[\\/][^\\/]+$/
+    const isRootPath = stripped === '' || /^[A-Za-z]:$/.test(stripped) || uncRootRe.test(stripped)
     const base = isRootPath ? '' : basename(stripped)
     if (base && base !== '.' && base !== '..') {
       setName(base)
@@ -196,14 +215,30 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
         }
 
         let gitInitSucceeded = false
-        // Initialize git repository if requested. Gated on isFolderEmpty:
-        // the checkbox only renders for empty folders, and if the user later
-        // switches to a non-empty folder a stale `initGit` must not run git
-        // init against that directory.
-        if (initGit && isFolderEmpty) {
+        // Initialize git repository if requested. The UI state (initGit +
+        // isFolderEmpty) pre-authorizes the intent, but the authorization is
+        // only valid for the path the emptiness check ran against, and must be
+        // re-confirmed immediately before init: the directory may have gained
+        // content since the check, or the check may have raced a folder
+        // switch. Read failures/errors count as UNKNOWN — git-init is skipped
+        // rather than guessed.
+        const emptinessAppliesHere = emptinessCheckPath === trimmedPath
+        if (initGit && isFolderEmpty && emptinessAppliesHere) {
           try {
-            await gitApi.init(trimmedPath)
-            gitInitSucceeded = true
+            const recheck = await filesystemApi.readDirectory(trimmedPath)
+            // Align with the emptiness-check effect: success with no data means
+            // empty/non-existent; success=false or thrown errors mean unknown.
+            const confirmedEmpty =
+              recheck.success && (recheck.data ? recheck.data.length === 0 : true)
+            if (confirmedEmpty) {
+              await gitApi.init(trimmedPath)
+              gitInitSucceeded = true
+            } else {
+              console.error(
+                'Git init skipped: directory no longer empty at create time',
+                trimmedPath
+              )
+            }
           } catch (err) {
             console.error('Git init failed during scaffolding:', err)
             // Continue even if git init fails, so files are still scaffolded
@@ -299,6 +334,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     fallbackShell,
     selectedTemplate,
     initGit,
+    isFolderEmpty,
+    emptinessCheckPath,
     onCreateProject,
     onClose
   ])
