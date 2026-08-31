@@ -197,7 +197,12 @@ fn probe_unix_login_path() -> Option<String> {
                 . \"$HOME/.profile\" >/dev/null 2>/dev/null; \
                 printf %s \"$PATH\"";
             let mut cmd = Command::new(&shell);
-            cmd.args(["-l", "-c", POSIX_SCRIPT]);
+            // BusyBox selects applets by argv[1]; `busybox -l -c` is invalid.
+            if shell_name == "busybox" {
+                cmd.args(["sh", "-l", "-c", POSIX_SCRIPT]);
+            } else {
+                cmd.args(["-l", "-c", POSIX_SCRIPT]);
+            }
             if let Some(home) = service_identity_from_passwd()
                 .map(|id| id.home)
                 .or_else(|| {
@@ -439,8 +444,6 @@ mod tests {
             Some("-l")
         );
     }
-
-    #[test]
 
     #[test]
     fn trusted_shell_path_rejects_relative() {

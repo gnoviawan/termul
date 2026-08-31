@@ -125,11 +125,11 @@
   {
     "id": "codebuddy-code",
     "name": "Codebuddy Code",
-    "version": "2.142.0",
+    "version": "2.143.0",
     "description": "Tencent Cloud's official intelligent coding tool",
     "distribution": {
       "npx": {
-        "package": "@tencent-ai/codebuddy-code@2.142.0",
+        "package": "@tencent-ai/codebuddy-code@2.143.0",
         "args": ["--acp"]
       }
     }
@@ -419,11 +419,11 @@
   {
     "id": "glm-acp-agent",
     "name": "GLM Agent",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "description": "ACP agent powered by Zhipu AI's GLM Coding Plan models (glm-5.1, glm-5-turbo, glm-4.7, glm-4.5-air). Supports streaming, tool calls, mid-session model switching, image input via Z.AI Coding Plan Vision MCP, and session load/fork/resume with on-disk persistence.",
     "distribution": {
       "npx": {
-        "package": "glm-acp-agent@1.7.0"
+        "package": "glm-acp-agent@1.8.0"
       }
     }
   },
@@ -461,11 +461,11 @@
   {
     "id": "grok-build",
     "name": "Grok Build",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "description": "xAI's coding agent and CLI",
     "distribution": {
       "npx": {
-        "package": "@xai-official/grok@1.0.13",
+        "package": "@xai-official/grok@1.0.14",
         "args": ["agent", "stdio"]
       }
     }
