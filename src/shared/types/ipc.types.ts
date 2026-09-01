@@ -498,7 +498,26 @@ export type SearchStreamErrorCode =
   | 'RG_STREAM_FAILED'
   | (string & {})
 
+/** Per-path failure detail for `grantFsScope`. */
+export interface FsScopeGrantFailure {
+  path: string
+  error: string
+}
+
+/** Summary of a `grantFsScope` call: granted paths and per-path failures. */
+export interface FsScopeGrantSummary {
+  granted: string[]
+  failed: FsScopeGrantFailure[]
+}
+
 export interface FilesystemApi {
+  /**
+   * Re-grant runtime fs scope for restored project roots/worktrees. The
+   * dialog plugin's pick-time grant is lost on restart; restored roots on
+   * non-allowlisted drives fail with "forbidden path" without this. Web mode
+   * is a no-op (fs goes through the server's own permission model).
+   */
+  grantFsScope: (paths: string[]) => Promise<IpcResult<FsScopeGrantSummary>>
   readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
   getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
