@@ -87,6 +87,11 @@ export interface AppSettings {
    * Rust default (45s); 0 disables the warmup entirely. Set via App
    * Preferences; pushed to the Rust core. */
   acpFirstPromptWarmupSecs: number | null
+  /**
+   * OS/web notification when a terminal tab that was producing output for a
+   * long stretch (typically an in-terminal AI harness) goes idle (GH-645).
+   */
+  notifyOnTerminalIdle: boolean
 }
 
 /** Whole-UI zoom bounds â€” match the native View menu semantics (0.5xâ€“3.0x, 10% steps). */
@@ -276,7 +281,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpTurnIdleTimeoutSecs: null,
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,
-  acpFirstPromptWarmupSecs: null
+  acpFirstPromptWarmupSecs: null,
+  notifyOnTerminalIdle: true
 }
 
 // Persistence key for app settings

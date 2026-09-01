@@ -30,12 +30,14 @@ vi.mock('./hooks/use-visibility-state', () => ({
 const {
   mockUseCrashRecovery,
   mockUseTerminalExitNotification,
+  mockUseTerminalIdleNotification,
   mockUseRemoteProjects,
   mockUseWhatsNew,
   mockInitNotificationPermissions
 } = vi.hoisted(() => ({
   mockUseCrashRecovery: vi.fn(() => undefined),
   mockUseTerminalExitNotification: vi.fn(() => undefined),
+  mockUseTerminalIdleNotification: vi.fn(() => undefined),
   mockUseRemoteProjects: vi.fn(() => undefined),
   mockUseWhatsNew: vi.fn(() => ({
     isOpen: false,
@@ -53,6 +55,10 @@ vi.mock('./hooks/use-crash-recovery', () => ({
 
 vi.mock('./hooks/use-terminal-exit-notification', () => ({
   useTerminalExitNotification: mockUseTerminalExitNotification
+}))
+
+vi.mock('./hooks/use-terminal-idle-notification', () => ({
+  useTerminalIdleNotification: mockUseTerminalIdleNotification
 }))
 
 vi.mock('./hooks/use-remote-projects', () => ({
@@ -306,6 +312,12 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     render(<App />)
 
     expect(mockUseTerminalExitNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useTerminalIdleNotification in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseTerminalIdleNotification).toHaveBeenCalledTimes(1)
   })
 
   it('mounts useRemoteProjects in AppEffects', () => {

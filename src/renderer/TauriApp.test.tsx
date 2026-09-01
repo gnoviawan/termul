@@ -120,6 +120,10 @@ vi.mock('./hooks/use-terminal-exit-notification', () => ({
   useTerminalExitNotification: () => undefined
 }))
 
+vi.mock('./hooks/use-terminal-idle-notification', () => ({
+  useTerminalIdleNotification: () => undefined
+}))
+
 vi.mock('@/lib/tauri-notification-api', () => ({
   initNotificationPermissions: () => Promise.resolve(),
   sendDesktopNotification: () => Promise.resolve()

@@ -1,6 +1,6 @@
 import type React from 'react'
-import { useEffect, useMemo, useState } from 'react'
-import { buildHunkPatches, type HunkPatch } from '@/lib/build-hunk-patch'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { buildHunkPatches, buildLinePatch, type HunkPatch } from '@/lib/build-hunk-patch'
 import {
   getLanguageForFile,
   isParserReady,
@@ -214,44 +214,119 @@ function computeInlineWordDiffRanges(
 
 function HunkActionBar({
   action,
-  onAction
+  onAction,
+  selectedCount,
+  onSelectedAction
 }: {
   action: HunkAction
   onAction?: () => void
+  selectedCount?: number
+  onSelectedAction?: () => void
 }): React.JSX.Element | null {
-  if (!onAction) return null
-  const label = action === 'stage' ? 'Stage hunk' : 'Unstage hunk'
+  if (!onAction && !onSelectedAction) return null
+  const verb = action === 'stage' ? 'Stage' : 'Unstage'
+  const buttonClass =
+    'ml-2 inline-flex items-center rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:bg-accent hover:text-accent-foreground'
   return (
-    <button
-      type="button"
-      onClick={onAction}
-      className="ml-2 inline-flex items-center rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      title={label}
-      aria-label={label}
-    >
-      {label}
-    </button>
+    <>
+      {onAction ? (
+        <button
+          type="button"
+          onClick={onAction}
+          className={buttonClass}
+          title={`${verb} hunk`}
+          aria-label={`${verb} hunk`}
+        >
+          {verb} hunk
+        </button>
+      ) : null}
+      {onSelectedAction && selectedCount && selectedCount > 0 ? (
+        <button
+          type="button"
+          onClick={onSelectedAction}
+          className={buttonClass}
+          title={`${verb} selected lines`}
+          aria-label={`${verb} selected lines`}
+        >
+          {verb} selected ({selectedCount})
+        </button>
+      ) : null}
+    </>
   )
 }
 
 function InlineDiff({
   diff,
+  filePath,
   language,
   hunkByIndex,
   action,
-  onAction
+  onAction,
+  selectedLines,
+  onToggleLine,
+  selectionEnabled
 }: {
   diff: string
+  filePath: string
   language: string
   hunkByIndex: Map<number, HunkPatch>
   action?: HunkAction
   onAction?: (patch: string) => void
+  selectedLines: ReadonlySet<number>
+  onToggleLine: (index: number) => void
+  selectionEnabled: boolean
 }): React.JSX.Element {
   const lines = useMemo(() => parseUnifiedDiffInline(diff), [diff])
   const wordDiffRanges = useMemo(() => computeInlineWordDiffRanges(lines), [lines])
 
+  // Per-hunk count of selected +/- lines (context lines are not selectable).
+  const selectedCountByHunk = useMemo(() => {
+    const counts = new Map<number, number>()
+    for (const hunk of hunkByIndex.values()) {
+      let count = 0
+      for (const index of hunk.bodyLineIndices) {
+        const raw = lines[index]?.raw ?? ''
+        if (selectedLines.has(index) && (raw.startsWith('+') || raw.startsWith('-'))) {
+          count += 1
+        }
+      }
+      if (count > 0) counts.set(hunk.headerIndex, count)
+    }
+    return counts
+  }, [hunkByIndex, lines, selectedLines])
+
   return (
     <div className="flex p-4 font-mono text-xs min-w-full" style={{ tabSize: 4, MozTabSize: 4 }}>
+      {/* Phase 2 (#257): line-selection toggle gutter. Only +/- lines are
+          selectable; the strip is separate from the line numbers so plain
+          text selection (copy) is not hijacked. */}
+      <div className="flex-shrink-0 select-none">
+        {lines.map((line, i) => {
+          const selectable =
+            selectionEnabled && (line.kind === 'deletion' || line.kind === 'addition')
+          if (!selectable) {
+            return <div key={`tog-${i}`} className="w-4 py-0.5 min-h-[1.25rem]" />
+          }
+          const selected = selectedLines.has(i)
+          return (
+            <button
+              key={`tog-${i}`}
+              type="button"
+              onClick={() => onToggleLine(i)}
+              aria-pressed={selected}
+              aria-label={`${selected ? 'Clear' : 'Select'} line for partial staging`}
+              className={cn(
+                'w-4 py-0.5 min-h-[1.25rem] flex items-center justify-center text-[9px] leading-none cursor-pointer',
+                selected
+                  ? 'text-primary font-bold'
+                  : 'text-transparent hover:text-muted-foreground/50'
+              )}
+            >
+              {selected ? '●' : '·'}
+            </button>
+          )
+        })}
+      </div>
       {/* Line number gutters */}
       <div className="flex-shrink-0 select-none border-r border-border/40">
         {lines.map((line, i) => (
@@ -286,6 +361,7 @@ function InlineDiff({
               : line.kind === 'addition'
                 ? (diffRanges?.added ?? [])
                 : []
+          const isSelected = selectedLines.has(i)
 
           return (
             <div
@@ -293,7 +369,8 @@ function InlineDiff({
               className={cn(
                 lineClass(line.kind),
                 line.kind === 'deletion' && changedRanges.length > 0 && 'bg-red-500/15',
-                line.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15'
+                line.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15',
+                isSelected && 'bg-primary/15 outline outline-1 outline-primary/40'
               )}
             >
               {isHunkBody ? (
@@ -312,6 +389,15 @@ function InlineDiff({
                       onAction={
                         hunkByIndex.has(i) && onAction
                           ? () => onAction(hunkByIndex.get(i)!.patch)
+                          : undefined
+                      }
+                      selectedCount={selectedCountByHunk.get(i) ?? 0}
+                      onSelectedAction={
+                        hunkByIndex.has(i) && onAction
+                          ? () => {
+                              const partial = buildLinePatch(diff, filePath, i, selectedLines)
+                              if (partial) onAction(partial)
+                            }
                           : undefined
                       }
                     />
@@ -510,10 +596,45 @@ export function GitDiffView({
   }, [diff, hunks])
 
   // The displayed side decides whether a hunk action stages or unstages.
-  const action: HunkAction | undefined =
-    diffSide === 'unstaged' ? 'stage' : diffSide === 'staged' ? 'unstage' : undefined
-  const onAction =
-    action === 'stage' ? onStageHunk : action === 'unstage' ? onUnstageHunk : undefined
+  // Actions are only exposed when the matching callback is wired — a rendered
+  // button without a callback would clear the selection without applying
+  // anything (review feedback).
+  const rawAction =
+    diffSide === 'unstaged' ? onStageHunk : diffSide === 'staged' ? onUnstageHunk : undefined
+  const selectionEnabled = rawAction !== undefined
+  const action: HunkAction | undefined = rawAction
+    ? diffSide === 'unstaged'
+      ? 'stage'
+      : 'unstage'
+    : undefined
+
+  // Phase 2 (#257): per-line selection for partial staging. Indices are
+  // positions in the raw diff string — the same key `buildLinePatch` uses.
+  // Selection resets whenever the diff changes (post-stage refetch) and is
+  // cleared after any apply so stale toggles never linger.
+  const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate reset-on-diff and on apply-availability — selection must not survive a refetch or a callback unmount (review: stale selections could reactivate if the callback returns for the same diff)
+  useEffect(() => {
+    setSelectedLines(new Set())
+  }, [diff, filePath, mode, action, selectionEnabled])
+  const toggleLine = useCallback((index: number) => {
+    setSelectedLines((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return next
+    })
+  }, [])
+  const onAction = useCallback(
+    (patch: string) => {
+      setSelectedLines(new Set())
+      rawAction?.(patch)
+    },
+    [rawAction]
+  )
 
   if (mode === 'split') {
     return (
@@ -529,10 +650,17 @@ export function GitDiffView({
   return (
     <InlineDiff
       diff={diff}
+      filePath={filePath ?? ''}
       language={language}
       hunkByIndex={hunkByInlineIndex}
       action={action}
       onAction={onAction}
+      selectedLines={selectedLines}
+      onToggleLine={toggleLine}
+      // Line selection is only meaningful when an apply callback exists
+      // (the mobile GitPanel path omits the stage/unstage handlers, so its
+      // diff view must not offer selections that nothing can consume).
+      selectionEnabled={selectionEnabled}
     />
   )
 }

@@ -35,6 +35,7 @@ import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-per
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
@@ -72,6 +73,7 @@ function AppEffects(): null {
   useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
+  useTerminalIdleNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()

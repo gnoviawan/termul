@@ -44,6 +44,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { gitApi } from '@/lib/git-api'
+import { logFrontendError } from '@/lib/log-api'
 import {
   type GitDiffViewMode,
   loadGitDiffViewMode,
@@ -315,16 +316,28 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
   // Per-hunk stage/unstage (#257). The patch is built by GitDiffView from
   // the displayed diff and applied to the index without touching the rest
   // of the file. After mutation, fetchDiff re-loads the (now smaller) diff
-  // so the panel reflects the partial stage.
+  // so the panel reflects the partial stage. The same handlers serve both
+  // the hunk-level and the per-line (Phase 2) actions; boundary + failure
+  // logs carry non-sensitive metadata only (operation, patch size).
   const runStageHunk = useCallback(
     async (patch: string) => {
       if (!selectedFile || generationInFlight.current || hunkInFlight.current) return
       hunkInFlight.current = true
       setIsMutating(true)
+      void logFrontendError({
+        level: 'warn',
+        source: 'GitPanel.runStageHunk',
+        message: `dispatch: stage patch (${patch.split('\n').length} lines)`
+      })
       try {
         await stageHunk(cwd, selectedFile, patch)
         await fetchDiff(cwd, selectedFile, false)
       } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'GitPanel.runStageHunk',
+          message: 'failed: git apply rejected the patch (details surfaced via UI toast only)'
+        })
         toast.error(`Failed to stage hunk: ${String(error)}`)
       } finally {
         setIsMutating(false)
@@ -339,10 +352,20 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       if (!selectedFile || generationInFlight.current || hunkInFlight.current) return
       hunkInFlight.current = true
       setIsMutating(true)
+      void logFrontendError({
+        level: 'warn',
+        source: 'GitPanel.runUnstageHunk',
+        message: `dispatch: unstage patch (${patch.split('\n').length} lines)`
+      })
       try {
         await unstageHunk(cwd, selectedFile, patch)
         await fetchDiff(cwd, selectedFile, true)
       } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'GitPanel.runUnstageHunk',
+          message: 'failed: git apply rejected the patch (details surfaced via UI toast only)'
+        })
         toast.error(`Failed to unstage hunk: ${String(error)}`)
       } finally {
         setIsMutating(false)

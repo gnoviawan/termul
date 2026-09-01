@@ -37,6 +37,11 @@ describe('app-settings-store', () => {
       expect(settings.terminalFontSize).toBe(14)
     })
 
+    it('enables terminal idle notifications by default (GH-645)', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.notifyOnTerminalIdle).toBe(true)
+    })
+
     it('should have empty default shell (system default)', () => {
       const { settings } = useAppSettingsStore.getState()
       expect(settings.defaultShell).toBe('')

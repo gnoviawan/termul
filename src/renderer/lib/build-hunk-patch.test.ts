@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHunkPatches } from './build-hunk-patch'
+import { buildHunkPatches, buildLinePatch } from './build-hunk-patch'
 
 const SINGLE_HUNK_DIFF = [
   'diff --git a/foo.txt b/foo.txt',
@@ -118,5 +118,79 @@ describe('buildHunkPatches', () => {
     // hunk belongs to a different path (which the backend would reject).
     expect(hunks).toHaveLength(1)
     expect(hunks[0].patch).toContain('-a\n+A')
+  })
+})
+
+describe('buildLinePatch (Phase 2, #257)', () => {
+  const DIFF = [
+    '--- a/foo.txt',
+    '+++ b/foo.txt',
+    '@@ -1,4 +1,4 @@',
+    ' keep me',
+    '-drop del',
+    '-keep del',
+    '+drop add',
+    '+keep add',
+    ' tail'
+  ].join('\n')
+
+  it('keeps selected +/- lines, converts unselected deletions to context, drops unselected additions', () => {
+    // Selected: "-keep del" (index 5) and "+keep add" (index 7). "-drop del"
+    // becomes context (index keeps old text); "+drop add" is dropped.
+    const selected = new Set([5, 7])
+    const patch = buildLinePatch(DIFF, 'foo.txt', 2, selected)
+    expect(patch).toBe(
+      [
+        '--- a/foo.txt',
+        '+++ b/foo.txt',
+        '@@ -1,4 +1,4 @@',
+        ' keep me',
+        ' drop del',
+        '-keep del',
+        '+keep add',
+        ' tail'
+      ].join('\n') + '\n'
+    )
+  })
+
+  it('recomputes the header counts from the transformed body', () => {
+    const selected = new Set([5, 7]) // one deletion + one addition kept
+    const patch = buildLinePatch(DIFF, 'foo.txt', 2, selected)!
+    // Body after transform: " keep me", " drop del"(ctx), "-keep del",
+    // "+keep add", " tail" → old = 4 ctx-ish? ctx lines: keep me, drop del,
+    // tail = 3; del = 1 → old 4. new = 3 ctx + 1 add = 4.
+    expect(patch).toContain('@@ -1,4 +1,4 @@')
+  })
+
+  it('returns null when nothing +/- is selected', () => {
+    // Only a context line index (3 = " keep me").
+    expect(buildLinePatch(DIFF, 'foo.txt', 2, new Set([3]))).toBeNull()
+    expect(buildLinePatch(DIFF, 'foo.txt', 2, new Set())).toBeNull()
+  })
+
+  it('returns null for an unknown hunk header index', () => {
+    expect(buildLinePatch(DIFF, 'foo.txt', 99, new Set([5]))).toBeNull()
+  })
+
+  it('keeps a no-newline marker after a kept line and drops it after a dropped addition', () => {
+    const diff = [
+      '--- a/foo.txt',
+      '+++ b/foo.txt',
+      '@@ -1,2 +1,3 @@',
+      ' ctx',
+      '-gone',
+      '+kept',
+      '\\ No newline at end of file',
+      '+dropped',
+      '\\ No newline at end of file'
+    ].join('\n')
+    // Select only "+kept" (index 5). "-gone" becomes context; the first
+    // marker follows a kept line and stays; "+dropped" and its marker go.
+    const patch = buildLinePatch(diff, 'foo.txt', 2, new Set([5]))!
+    expect(patch).toContain('+kept')
+    expect(patch).toContain(' ctx')
+    expect(patch).toContain(' gone')
+    expect(patch).not.toContain('+dropped')
+    expect(patch.match(/\\ No newline/g)?.length).toBe(1)
   })
 })

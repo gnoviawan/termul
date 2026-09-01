@@ -22,6 +22,7 @@ import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
@@ -140,6 +141,7 @@ function AppEffects(): null {
   useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
+  useTerminalIdleNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
