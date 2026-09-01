@@ -224,12 +224,30 @@ impl OnboardAnswers {
         args
     }
 
-    /// Synthesize `KEY=value` env-file lines. Remote-writes env is emitted only
-    /// when bound to `0.0.0.0` and enabled (no-op on loopback). Update env vars
-    /// are emitted only when `update_channel` is `Some`. Returns empty when
-    /// neither applies (loopback + no updates).
+    /// Synthesize `KEY=value` env-file lines. `SHELL` and `HOME` are ALWAYS
+    /// emitted (even on loopback, even with no updates) so the service
+    /// process has the vars `env_refresh::probe_unix_login_path` needs to
+    /// resolve the user's login PATH. Without them, a systemd service runs
+    /// with `SHELL` unset → falls back to /bin/sh (dash) → PATH probe fails
+    /// → binaries in ~/.local/bin, ~/.cargo/bin, nvm, etc. are unreachable.
+    /// Remote-writes env is emitted only when bound to `0.0.0.0` and enabled.
+    /// Update env vars are emitted only when `update_channel` is `Some`.
     pub fn to_env_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+
+        // Always emit SHELL and HOME from the service user's passwd entry
+        // (never the caller's env) so systemd services get a trusted identity
+        // and env_refresh can probe the login PATH safely.
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            if let Some(line) = safe_systemd_env_line("SHELL", std::ffi::OsStr::new(&identity.shell)) {
+                lines.push(line);
+            }
+            if let Some(line) = safe_systemd_env_line("HOME", std::ffi::OsStr::new(&identity.home)) {
+                lines.push(line);
+            }
+        }
+
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
             lines.push("TERMUL_SERVER_ALLOW_REMOTE_WRITES=true".into());
@@ -255,6 +273,20 @@ fn channel_name(channel: UpdateChannel) -> &'static str {
         UpdateChannel::Insider => "insider",
         UpdateChannel::Nightly => "nightly",
     }
+}
+
+/// Build a `KEY=value` line safe for systemd `EnvironmentFile=`.
+/// Rejects values containing control characters, newlines, or trailing
+/// backslashes that could alter subsequent assignments.
+fn safe_systemd_env_line(key: &str, value: &std::ffi::OsStr) -> Option<String> {
+    let s = value.to_string_lossy();
+    if s.is_empty()
+        || s.bytes().any(|b| b < 0x20 || b == b'\\')
+        || s.ends_with('\\')
+    {
+        return None;
+    }
+    Some(format!("{key}={s}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -924,9 +956,32 @@ mod tests {
     }
 
     #[test]
-    fn env_lines_loopback_no_updates_is_empty() {
+    fn env_lines_loopback_no_updates_has_shell_home_only() {
+        // Loopback + no updates: only SHELL/HOME (from passwd) plus no
+        // remote-writes or update vars.
         let a = answers_localhost();
-        assert!(a.to_env_lines().is_empty());
+        let lines = a.to_env_lines();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("TERMUL_SERVER_ALLOW_REMOTE_WRITES")),
+            "loopback must not emit remote-writes"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
+            "no update channel must not emit update vars"
+        );
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            assert!(
+                lines.iter().any(|l| l == &format!("SHELL={}", identity.shell)),
+                "must emit passwd SHELL, got: {lines:?}"
+            );
+            assert!(
+                lines.iter().any(|l| l == &format!("HOME={}", identity.home)),
+                "must emit passwd HOME, got: {lines:?}"
+            );
+        }
     }
 
     #[test]
@@ -1179,6 +1234,18 @@ mod tests {
             out.contains("invalid port 'abc'"),
             "retry must surface the validator error, got: {out}"
         );
+    }
+
+    #[test]
+    fn safe_systemd_env_line_rejects_control_chars_and_backslash() {
+        use std::ffi::OsStr;
+        assert_eq!(
+            safe_systemd_env_line("HOME", OsStr::new("/root")),
+            Some("HOME=/root".into())
+        );
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\n")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\\")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("")).is_none());
     }
 
     #[test]

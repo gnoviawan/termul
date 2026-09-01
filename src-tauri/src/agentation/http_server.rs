@@ -253,7 +253,7 @@ async fn session_sse(
             }
             Ok(_) => None,
             Err(lag) => {
-                log::warn!("[Agentation] SSE lagged for session={id}: {lag}");
+                log::warn!("[Agentation] SSE lagged for session={}: {lag}", crate::logging::redact_session_id(&id));
                 Some(Ok(SseEvent::default().event("lagged").data("{}")))
             }
         }

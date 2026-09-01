@@ -3,3 +3,4 @@
 name: termul-codeql
 paths-ignore:
   - scripts/sync-acp-icons.mjs
+  - landing/scripts/sync-contributors.ts

@@ -3610,7 +3610,7 @@ pub async fn acp_history_get(
     session_id: String,
     host: State<'_, HostHistoryStore>,
 ) -> Result<IpcResult<Option<serde_json::Value>>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] get start session_id={}", log_session_id);
     let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
         log::info!("[acp-history] get not_found session_id={}", log_session_id);
@@ -3652,7 +3652,7 @@ pub async fn acp_history_get_tail(
     limit: Option<u32>,
     host: State<'_, HostHistoryStore>,
 ) -> Result<IpcResult<Option<serde_json::Value>>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     let limit = limit.unwrap_or(50).clamp(1, 500) as usize;
     log::info!(
         "[acp-history] get_tail start session_id={} limit={}",
@@ -3704,7 +3704,7 @@ pub async fn acp_history_save(
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] save start session_id={}", log_session_id);
     let task_store = store.inner().clone();
     let task_id = session_id.clone();
@@ -3740,7 +3740,7 @@ pub async fn acp_history_delete(
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    let log_session_id = sanitize_log_field(&session_id);
+    let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] delete start session_id={}", log_session_id);
     match &host.0 {
         Some(persistence) => match persistence.delete_session(&session_id).await {

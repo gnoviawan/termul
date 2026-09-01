@@ -221,7 +221,7 @@ pub fn emit_session_update(
             };
             log::debug!(
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
-                session_id.0
+                crate::logging::redact_session_id(&session_id.0)
             );
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
