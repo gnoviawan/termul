@@ -1,8 +1,9 @@
 /**
  * Worktree context utilities for terminal and file explorer integration.
  *
- * Resolves the active worktree's CWD for new terminal spawning
- * and file explorer root switching.
+ * `getDefaultCwdForProject` resolves the main project root for new terminals
+ * and ACP sessions; worktree-isolated chats override their cwd explicitly.
+ * The remaining helpers power the worktree indicator and file-explorer root.
  */
 
 import { worktreeApi } from '@/lib/api'
@@ -23,19 +24,16 @@ export function getProjectRootPath(projectId: string): string {
 }
 
 /**
- * Get the default CWD for a project, resolving from the active worktree if set.
- * Falls back to the project root path if no active worktree or worktree not found.
+ * Get the default CWD for new terminals and ACP sessions — always the main
+ * project root. The active-worktree binding does NOT redirect new sessions:
+ * worktree-isolated agent chats override `launchCwd` explicitly (AgentLauncher
+ * worktree-mode), and resumed sessions use `session.cwd` directly. Only the
+ * worktree indicator/file-explorer root read `activeWorktreeId` (via
+ * `getActiveWorktreeForProject`/`getActiveWorktreeRoot`), not this helper.
  */
 export function getDefaultCwdForProject(projectId: string): string {
   const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-  if (!project?.path) return ''
-
-  if (project.activeWorktreeId) {
-    const worktree = project.worktrees?.find((w) => w.id === project.activeWorktreeId)
-    if (worktree) return worktree.path
-  }
-
-  return project.path
+  return project?.path ?? ''
 }
 
 /**

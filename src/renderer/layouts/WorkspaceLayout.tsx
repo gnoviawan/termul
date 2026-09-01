@@ -1079,8 +1079,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
       if (!resolvedPaneId) return
-      // Resolve the worktree-aware cwd (same helper terminal creation uses) so
-      // the history reflects the active worktree, not just the project root.
+      // Resolve the default cwd (the main project root) so the history view
+      // reflects the full repo, not a transient worktree binding.
       const resolvedCwd = getDefaultCwdForProject(activeProjectId)
       if (!resolvedCwd) return
       useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {

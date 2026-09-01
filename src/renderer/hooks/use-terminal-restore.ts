@@ -1167,7 +1167,9 @@ async function createDefaultTerminal(
 
     const cwd = getDefaultCwdForProject(projectId)
 
-    // Ensure worktree symlinks are reconciled before spawning
+    // Best-effort: reconcile worktree symlinks in case the project has an
+    // active worktree (the default terminal spawns at the project root, but
+    // symlink state must stay consistent for worktree-aware terminals).
     try {
       await ensureWorktreeSymlinks(projectId)
     } catch {
