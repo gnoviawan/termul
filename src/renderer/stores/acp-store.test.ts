@@ -7541,3 +7541,84 @@ describe('acp-store: composer-selection persistence', () => {
     expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
   })
 })
+
+describe('assistTerminal (#259)', () => {
+  beforeEach(() => {
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('explains selected output through a hidden one-shot session and disposes it', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    let promptBody = ''
+    vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'assist-session' }
+      if (command === 'acp_send_prompt') {
+        promptBody = String((args as { text?: string }).text ?? '')
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          role: 'agent',
+          content: { type: 'text', text: 'The command failed because ' }
+        })
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          role: 'agent',
+          content: { type: 'text', text: 'the port is in use.\n```sh\nlsof -i :3000\n```' }
+        })
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          stopReason: 'end_turn'
+        })
+        return 'end_turn'
+      }
+      if (command === 'acp_dispose_ephemeral_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await expect(
+      useAcpStore.getState().assistTerminal('explain', '/work', 'Error: EADDRINUSE', 1)
+    ).resolves.toContain('lsof -i :3000')
+
+    // The untrusted selection travels JSON-encoded and the prompt forbids tools.
+    expect(promptBody).toContain('"Error: EADDRINUSE"')
+    expect(promptBody).toContain('Do not use tools')
+    // No visible session/transcript state survives.
+    expect(useAcpStore.getState().sessions['assist-session']).toBeUndefined()
+    expect(useAcpStore.getState().messages['assist-session']).toBeUndefined()
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_dispose_ephemeral_session')
+    ).toBe(true)
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_close_session')).toBe(
+      false
+    )
+  })
+
+  it('fails fast without a configured agent', async () => {
+    await expect(
+      useAcpStore.getState().assistTerminal('fix', '/work', 'boom', 127)
+    ).rejects.toThrow('Configure and select an ACP agent')
+  })
+
+  it('rejects empty or oversized selections', async () => {
+    await expect(useAcpStore.getState().assistTerminal('fix', '/work', '   ', 1)).rejects.toThrow(
+      'No terminal output selected'
+    )
+    await expect(
+      useAcpStore.getState().assistTerminal('fix', '/work', 'x'.repeat(20_001), 1)
+    ).rejects.toThrow('too large')
+  })
+})

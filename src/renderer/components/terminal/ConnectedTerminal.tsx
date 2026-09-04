@@ -32,6 +32,7 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { useAcpStore } from '@/stores/acp-store'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
@@ -50,6 +51,7 @@ import {
   restoreScrollPosition,
   unregisterTerminal
 } from '../../utils/terminal-registry'
+import { TerminalAssistPanel, type TerminalAssistPanelState } from './TerminalAssistPanel'
 import { cacheTerminal, takeCachedTerminal } from './terminal-cache'
 import { getTerminalOptions } from './terminal-config'
 
@@ -313,6 +315,8 @@ function ConnectedTerminalComponent({
   })
 
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+  // Inline terminal AI assist (#259): null = hidden panel.
+  const [assistPanel, setAssistPanel] = useState<TerminalAssistPanelState | null>(null)
   useTerminalColorTheme(terminalInstance)
 
   // 5. CALLBACKS & EFFECTS
@@ -379,6 +383,66 @@ function ConnectedTerminalComponent({
   })
   const copySelectionRef = useRef(copySelection)
   copySelectionRef.current = copySelection
+
+  // #259: inline terminal AI assist — runs against the user's configured
+  // agent in a hidden one-shot ACP session (see acp-store.assistTerminal).
+  const runTerminalAssist = useCallback(
+    async (kind: 'explain' | 'fix') => {
+      const selection = terminalInstance?.getSelection()?.trim() ?? ''
+      const record = ptyIdRef.current
+        ? useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current)
+        : undefined
+      if (!selection || !record?.cwd) {
+        setAssistPanel({
+          kind,
+          status: 'error',
+          error: 'Select some terminal output first'
+        })
+        return
+      }
+      setAssistPanel({ kind, status: 'loading' })
+      try {
+        const text = await useAcpStore
+          .getState()
+          .assistTerminal(kind, record.cwd, selection, record.lastExitCode ?? null)
+        // Functional update: if the user closed the panel while the request
+        // was in flight, the settled response must not reopen it (#689
+        // review).
+        setAssistPanel((prev) => (prev ? { kind, status: 'done', text } : prev))
+      } catch (error) {
+        setAssistPanel((prev) => (prev ? { kind, status: 'error', error: String(error) } : prev))
+      }
+    },
+    [terminalInstance]
+  )
+
+  // #259: insertion only — the suggested command lands at the prompt for
+  // review and is never executed automatically (no trailing newline).
+  // Defense in depth: anything carrying a newline/control character is
+  // refused outright — `terminalApi.write` feeds the PTY directly.
+  const insertAssistCommand = useCallback(async (command: string) => {
+    const ptyId = ptyIdRef.current
+    if (!ptyId) return
+    for (const ch of command) {
+      const code = ch.charCodeAt(0)
+      if (code < 0x20 || code === 0x7f) {
+        if (onErrorRef.current) {
+          onErrorRef.current('Refused to insert a command containing control characters')
+        }
+        return
+      }
+    }
+    try {
+      const result = await terminalApi.write(ptyId, command)
+      if (!result.success && onErrorRef.current) {
+        onErrorRef.current(result.error)
+      }
+    } catch (err) {
+      if (onErrorRef.current) {
+        onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
+      }
+    }
+  }, [])
   const pasteFromClipboardRef = useRef(pasteFromClipboard)
   pasteFromClipboardRef.current = pasteFromClipboard
 
@@ -1859,6 +1923,13 @@ function ConnectedTerminalComponent({
               </div>
             </div>
           )}
+          {assistPanel ? (
+            <TerminalAssistPanel
+              state={assistPanel}
+              onClose={() => setAssistPanel(null)}
+              onInsertCommand={(command) => void insertAssistCommand(command)}
+            />
+          ) : null}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">
@@ -1875,6 +1946,21 @@ function ConnectedTerminalComponent({
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={handleSelectAll} className="cursor-pointer">
           Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() => void runTerminalAssist('explain')}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+        >
+          Explain with AI
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void runTerminalAssist('fix')}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+        >
+          Fix Command with AI
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
