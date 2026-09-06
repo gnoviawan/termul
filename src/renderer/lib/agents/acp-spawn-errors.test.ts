@@ -1,12 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import type { AuthMethod } from '@/lib/acp-api'
 import {
+  ACP_RATE_LIMIT_MESSAGE,
+  ACP_STREAM_INTERRUPT_MESSAGE,
   AmbiguousAuthError,
   classifySetupError,
+  formatAcpAgentError,
   formatAcpSpawnError,
   isAmbiguousAuthError,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
+
+describe('formatAcpAgentError', () => {
+  it('rewrites NGHTTP2_ENHANCE_YOUR_CALM / RetriableError stream closes as rate-limit', () => {
+    expect(
+      formatAcpAgentError(
+        'Error: RetriableError: [internal] Stream closed with error code NGHTTP2_ENHANCE_YOUR_CALM'
+      )
+    ).toBe(ACP_RATE_LIMIT_MESSAGE)
+    expect(formatAcpAgentError('rate limit exceeded')).toBe(ACP_RATE_LIMIT_MESSAGE)
+    expect(formatAcpAgentError('HTTP 429 Too Many Requests')).toBe(ACP_RATE_LIMIT_MESSAGE)
+  })
+
+  it('rewrites generic stream/connection drops as interrupted', () => {
+    expect(formatAcpAgentError('RetriableError: [internal] Stream closed')).toBe(
+      ACP_STREAM_INTERRUPT_MESSAGE
+    )
+    expect(formatAcpAgentError('ECONNRESET')).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+    expect(formatAcpAgentError('the stream was destroyed')).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+  })
+
+  it('passes unrelated diagnostics through verbatim', () => {
+    expect(formatAcpAgentError('credit limit exceeded')).toBe('credit limit exceeded')
+    expect(formatAcpAgentError(new Error('insufficient credit'))).toBe('insufficient credit')
+  })
+})
 
 describe('formatAcpSpawnError', () => {
   it('passes non-ENOENT messages through verbatim', () => {
@@ -73,6 +101,15 @@ describe('classifySetupError order and categories (P4)', () => {
     expect(classifySetupError('connection refused').category).toBe('transport')
     expect(classifySetupError('ECONNRESET').category).toBe('transport')
     expect(classifySetupError('agent thread is no longer running').category).toBe('transport')
+  })
+
+  it('rewrites transport/rate-limit detail into friendly copy', () => {
+    expect(classifySetupError('the stream was destroyed').detail).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+    expect(
+      classifySetupError(
+        'Error: RetriableError: [internal] Stream closed with error code NGHTTP2_ENHANCE_YOUR_CALM'
+      ).detail
+    ).toBe(ACP_RATE_LIMIT_MESSAGE)
   })
 
   it('treats "connection timed out" as transport, not timeout (evicts the process)', () => {
