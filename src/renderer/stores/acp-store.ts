@@ -239,6 +239,19 @@ export interface AcpSession {
    * session record, which never carries this field.
    */
   launchConfigId?: string
+  /**
+   * Launcher model/mode/config selections captured when a chat launch fails
+   * (`finalizeChatLaunch` catch, same lifetime as `launchConfigId`). Consumed
+   * by `retryFailedLaunch` so Retry re-applies the user's original selections
+   * instead of launching with defaults. Cleared by replacement along with
+   * `launchConfigId`: a successful retry swaps the placeholder for the real
+   * session record, which never carries this field.
+   */
+  pendingLauncherOptions?: {
+    modelId?: string
+    modeId?: string
+    configValues: Record<string, string>
+  } | null
 }
 
 export interface PendingPermission {
@@ -3722,11 +3735,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     worktreePath,
     worktreeBranch
   }) => {
+    // Retained outside the try so a post-create failure (option application /
+    // first-prompt send) still targets the real session after the merge has
+    // already deleted the placeholder.
+    let launchedSessionId: SessionId | null = null
     try {
       const sessionId = await get().startChat(configId, cwd, mcpServers, projectId, {
         worktreePath,
         worktreeBranch
       })
+      launchedSessionId = sessionId
 
       // Move optimistic UI onto the real session, then remap the tab before send
       // so the user stays on one chat (never a blank disconnected placeholder).
@@ -3834,10 +3852,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         err,
         get().agentConfigs.find((c) => c.id === configId)
       )
-      const failedId = placeholderAlive ? placeholderId : (get().activeSessionId ?? placeholderId)
+      // Target the placeholder while it still exists; after the merge it is
+      // gone, so target the retained launched session instead. Never fall back
+      // to activeSessionId — the user may have focused another chat mid-launch
+      // and stamping it would mislabel an unrelated session. When neither id
+      // is available (e.g. the user closed the tab before startChat settled),
+      // skip the mutation entirely and only drop the launching flag.
+      const failedId = placeholderAlive ? placeholderId : launchedSessionId
       set((s) => {
+        const launchingSessionIds = dropRecordKey(s.launchingSessionIds, placeholderId)
+        if (!failedId) return { launchingSessionIds }
         const target = s.sessions[failedId]
-        if (!target) return s
+        if (!target) return { launchingSessionIds }
         return {
           sessions: {
             ...s.sessions,
@@ -3851,16 +3877,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                 : err instanceof Error
                   ? err.message
                   : String(err),
-              ...(placeholderAlive ? { launchConfigId: configId } : {})
+              ...(placeholderAlive
+                ? { launchConfigId: configId, pendingLauncherOptions: pending ?? null }
+                : {})
             }
           },
-          launchingSessionIds: dropRecordKey(
-            dropRecordKey(s.launchingSessionIds, placeholderId),
-            failedId
-          )
+          launchingSessionIds: dropRecordKey(launchingSessionIds, failedId)
         }
       })
-      if (placeholderAlive) {
+      if (placeholderAlive && failedId) {
         persistSession(get(), failedId, (entries) => set({ sessionIndex: entries }))
       }
       throw err
@@ -4452,6 +4477,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // click storm across banners can never run two relaunches for one session).
     if (inFlightCrashedRetries.has(sessionId)) return
     inFlightCrashedRetries.add(sessionId)
+    // Durable boundary logs (AGENTS.md): every retry outcome is recorded.
+    // Safe context only — session id + operation, never prompts, env values,
+    // or credentials.
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.retryFailedLaunch.start',
+      message: `Retrying failed chat launch for session ${sessionId}`
+    })
     try {
       const failed = get().sessions[sessionId]
       if (failed?.status !== 'error' || !failed.launchConfigId) {
@@ -4492,7 +4525,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         cwd: failed.cwd,
         projectId: failed.projectId,
         mcpServers: undefined,
-        pending: null,
+        // Re-apply the launcher model/mode/config selections captured when the
+        // launch failed, so Retry honors the user's original choices. MCP
+        // servers stay undefined: createSession keeps using the current MCP
+        // registry defaults.
+        pending: failed.pendingLauncherOptions ?? null,
         initialText: null,
         initialBlocks: lastUserBlocks,
         adoptSession: (from, to) => {
@@ -4507,6 +4544,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         worktreePath: failed.worktreePath,
         worktreeBranch: failed.worktreeBranch
       })
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.retryFailedLaunch.success',
+        message: `Failed chat launch retry succeeded for session ${sessionId}`
+      })
+    } catch (err) {
+      void logFrontendError({
+        source: 'acp.retryFailedLaunch',
+        message: `Failed chat launch retry failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
+      })
+      throw err
     } finally {
       inFlightCrashedRetries.delete(sessionId)
     }

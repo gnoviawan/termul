@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
@@ -428,7 +429,18 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
           // "chat unavailable" fallback with nothing to retry). Also tolerate
           // corrupt/legacy entries missing a sessionId — drop just that tab
           // instead of aborting the whole restore.
-          if (typeof tab.sessionId !== 'string' || tab.sessionId.startsWith('launch-')) return []
+          if (typeof tab.sessionId !== 'string' || tab.sessionId.startsWith('launch-')) {
+            // Durable boundary log: a pruned tab is otherwise invisible.
+            void logFrontendError({
+              level: 'warn',
+              source: 'useEditorPersistence.deserializePaneTree',
+              message:
+                typeof tab.sessionId === 'string'
+                  ? `Dropped failed-launch placeholder chat tab (session ${tab.sessionId}) during workspace restore`
+                  : 'Dropped agent-chat tab with a missing/invalid sessionId during workspace restore'
+            })
+            return []
+          }
           return [
             {
               type: 'agent-chat',
