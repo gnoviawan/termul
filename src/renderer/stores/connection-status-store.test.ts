@@ -9,15 +9,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   isTauriContext: vi.fn(() => false),
   acpListener: vi.fn(),
-  terminalListener: vi.fn()
+  terminalListener: vi.fn(),
+  acpGetConnectionState: vi.fn(),
+  terminalGetConnectionState: vi.fn(() => 'connected'),
+  logFrontendError: vi.fn()
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mocks.isTauriContext }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.logFrontendError }))
 vi.mock('@/lib/acp-transport', () => ({
-  getAcpTransport: () => ({ setConnectionStateListener: mocks.acpListener })
+  getAcpTransport: () => ({
+    setConnectionStateListener: mocks.acpListener,
+    getConnectionState: mocks.acpGetConnectionState
+  })
 }))
 vi.mock('@/lib/web-terminal-api', () => ({
-  setWebTerminalConnectionStateListener: (listener: unknown) => mocks.terminalListener(listener)
+  setWebTerminalConnectionStateListener: (listener: unknown) => mocks.terminalListener(listener),
+  getWebTerminalConnectionState: mocks.terminalGetConnectionState
 }))
 
 import {
@@ -29,6 +37,8 @@ import {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.isTauriContext.mockReturnValue(false)
+  mocks.acpGetConnectionState.mockReturnValue(undefined)
+  mocks.terminalGetConnectionState.mockReturnValue('connected')
   _resetConnectionStatusWiringForTests()
 })
 
@@ -72,6 +82,43 @@ describe('connection-status-store', () => {
       wireConnectionStatusTracking()
       expect(mocks.acpListener).toHaveBeenCalledTimes(1)
       expect(mocks.terminalListener).toHaveBeenCalledTimes(1)
+    })
+
+    it('replays each transport’s current state so pre-wiring emissions are reflected', () => {
+      // The ACP socket finished its auth handshake BEFORE wiring ran — the
+      // listener never saw 'connected', so without a replay the store would
+      // be stuck at the initial 'connecting'.
+      mocks.acpGetConnectionState.mockReturnValue('connected')
+      mocks.terminalGetConnectionState.mockReturnValue('reconnecting')
+
+      wireConnectionStatusTracking()
+
+      expect(useConnectionStatusStore.getState().controlChannel).toBe('connected')
+      expect(useConnectionStatusStore.getState().terminalChannel).toBe('reconnecting')
+    })
+  })
+
+  describe('channel transition logging', () => {
+    it('logs each state transition; disconnected is a failure (error level)', () => {
+      useConnectionStatusStore.getState().setControlChannel('connected')
+      expect(mocks.logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          message: 'control channel state: connecting → connected'
+        })
+      )
+      useConnectionStatusStore.getState().setTerminalChannel('disconnected')
+      expect(mocks.logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'error',
+          message: 'terminal channel state: connected → disconnected'
+        })
+      )
+    })
+
+    it('does not log when the state is unchanged', () => {
+      useConnectionStatusStore.getState().setTerminalChannel('connected')
+      expect(mocks.logFrontendError).not.toHaveBeenCalled()
     })
   })
 

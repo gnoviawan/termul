@@ -48,6 +48,10 @@ class FakeWebSocket {
   failSubscribeSessions = new Set<string>()
   /** Per-session subscribe failures used to distinguish transient/permanent recovery. */
   subscribeFailureCodes = new Map<string, string>()
+  /** Static: per-session TRANSIENT subscribe failure codes applied only to
+   * the NEXT constructed socket (a reconnect creates a fresh socket — this
+   * lets a test make the reconnect attempt's resubscribe fail). */
+  static transientSubscribeFailuresOnNextSocket: Record<string, string> = {}
   /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
   liveAgents = new Set<string>()
   switchProjectReply: unknown = null
@@ -80,6 +84,10 @@ class FakeWebSocket {
   }
 
   constructor(public url: string) {
+    this.subscribeFailureCodes = new Map(
+      Object.entries(FakeWebSocket.transientSubscribeFailuresOnNextSocket)
+    )
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = {}
     if (!(this.constructor as typeof FakeWebSocket).autoOpen) return
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN
@@ -2335,8 +2343,8 @@ describe('WsAcpTransport connection-state listener (Story 10)', () => {
     expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
 
     // Backoff (500ms) → reconnect: openSocket stays silent about 'connecting'
-    // (the reconnect cycle owns the state), then the auth handshake fires
-    // 'connected'.
+    // (the reconnect cycle owns the state), then reconnect() fires 'connected'
+    // only AFTER the (here: empty) session resubscribe pass succeeds.
     await vi.advanceTimersByTimeAsync(600)
     await Promise.resolve()
     expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
@@ -2344,6 +2352,50 @@ describe('WsAcpTransport connection-state listener (Story 10)', () => {
     const timerField = transport as unknown as {
       reconnectTimer: ReturnType<typeof setTimeout> | null
     }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it("stays 'reconnecting' when a required session resubscription fails — 'connected' fires only after recovery succeeds", async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    await transport.subscribeSession('sess-x')
+    expect(states).toEqual(['connecting', 'connected'])
+
+    // The reconnect attempt's fresh socket fails the resubscribe with a
+    // TRANSIENT code (not_found would prune the session as obsolete instead).
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = { 'sess-x': 'unavailable' }
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+
+    // Backoff → reconnect: socket opens, auth handshake completes — but the
+    // resubscribe fails, so 'connected' must NOT fire; the state stays
+    // 'reconnecting' and the retry loop re-arms.
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    expect(timerField.reconnectTimer).not.toBeNull()
+
+    // Next attempt recovers (the static failure was consumed by the previous
+    // socket) — 'connected' fires only now, after the resubscribe succeeds.
+    await vi.advanceTimersByTimeAsync(1100)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
+
     if (timerField.reconnectTimer) {
       clearTimeout(timerField.reconnectTimer)
       timerField.reconnectTimer = null

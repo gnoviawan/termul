@@ -264,11 +264,16 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   // MOUNT into an already-connected channel with a stale root error also
   // retries (the auto-expand effect above deliberately skips errored roots).
   // Once connected, later rootLoadError changes do NOT retrigger (a
-  // persistently failing root would otherwise retry-loop). Web-only in
-  // practice — on Tauri the channel store never leaves 'connecting'.
+  // persistently failing root would otherwise retry-loop). Web-only, enforced
+  // by an explicit isTauriContext() early-return below.
   const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
   const prevControlChannelRef = useRef<typeof controlChannel | null>(null)
   useEffect(() => {
+    // Web-only: on Tauri the terminal/filesystem paths are direct IPC and
+    // the channel store never leaves 'connecting' — return BEFORE any retry
+    // logic so a mocked/forced 'connected' state can never fire a web
+    // recovery on desktop.
+    if (isTauriContext()) return
     const prev = prevControlChannelRef.current
     prevControlChannelRef.current = controlChannel
     if (controlChannel !== 'connected' || prev === 'connected') return

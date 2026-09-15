@@ -25,6 +25,7 @@ import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
+import { logFrontendError } from '@/lib/log-api'
 import { isMac, isPlatformModifier } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
@@ -295,6 +296,13 @@ function ConnectedTerminalComponent({
     if (lastWriteFailureToastRef.current !== key) {
       lastWriteFailureToastRef.current = key
       if (!isTauriContext()) toast.error(message)
+      // Durable failure log per DEDUP EPISODE (not per keystroke) — mirrors
+      // the toast cadence. Metadata only: error code, never the input.
+      void logFrontendError({
+        level: 'warn',
+        source: 'ConnectedTerminal.reportWriteFailure',
+        message: `terminal write failed (${key}) — user notified (dedup episode started)`
+      })
     }
     onErrorRef.current?.(message)
   }, [])
@@ -1977,9 +1985,9 @@ function ConnectedTerminalComponent({
               cannot buffer gets the plain state label and its write failures
               toast instead. Mirrors the AgentChatPanel reconnect overlay
               (pointer-events-none + AgentConnectionLamp). Suppressed while
-              the crash overlay is up, and never shown on Tauri (the channel
-              stays 'connected'). */}
-          {!isCrashed && terminalChannel !== 'connected' && (
+              the crash overlay is up, and explicitly gated off on Tauri (desktop
+              terminal I/O is direct IPC — no WS channel to outage). */}
+          {!isCrashed && !isTauriContext() && terminalChannel !== 'connected' && (
             <div
               className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
               role="status"

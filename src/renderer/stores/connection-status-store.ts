@@ -18,8 +18,12 @@
 
 import { create } from 'zustand'
 import { type AcpConnectionState, getAcpTransport } from '@/lib/acp-transport'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { setWebTerminalConnectionStateListener } from '@/lib/web-terminal-api'
+import {
+  getWebTerminalConnectionState,
+  setWebTerminalConnectionStateListener
+} from '@/lib/web-terminal-api'
 
 export type ConnectionChannelState = AcpConnectionState
 
@@ -37,9 +41,36 @@ export const useConnectionStatusStore = create<ConnectionStatusState>((set) => (
   // (no terminal ever spawned) is healthy, not degraded.
   controlChannel: 'connecting',
   terminalChannel: 'connected',
-  setControlChannel: (controlChannel) => set({ controlChannel }),
-  setTerminalChannel: (terminalChannel) => set({ terminalChannel })
+  setControlChannel: (controlChannel) =>
+    set((prev) => {
+      logChannelTransition('control', prev.controlChannel, controlChannel)
+      return { controlChannel }
+    }),
+  setTerminalChannel: (terminalChannel) =>
+    set((prev) => {
+      logChannelTransition('terminal', prev.terminalChannel, terminalChannel)
+      return { terminalChannel }
+    })
 }))
+/**
+ * Durable boundary log for each channel state transition. `disconnected` is
+ * a failure (the channel gave up); every other transition is a boundary
+ * event at warn. Metadata only — channel name + state, never payloads,
+ * tokens, or credentials. Change-gated so a repeated identical state (e.g.
+ * the wiring replay landing on the current value) does not log noise.
+ */
+function logChannelTransition(
+  channel: 'control' | 'terminal',
+  prev: ConnectionChannelState,
+  next: ConnectionChannelState
+): void {
+  if (prev === next) return
+  void logFrontendError({
+    level: next === 'disconnected' ? 'error' : 'warn',
+    source: 'connection-status-store',
+    message: `${channel} channel state: ${prev} → ${next}`
+  })
+}
 
 let wired = false
 
@@ -55,8 +86,15 @@ export function wireConnectionStatusTracking(): void {
   const { setControlChannel, setTerminalChannel } = useConnectionStatusStore.getState()
   // Optional method: absent on transports that don't implement it (e.g. a
   // Tauri IPC transport in a test) — guard rather than assume.
-  getAcpTransport().setConnectionStateListener?.(setControlChannel)
+  const acp = getAcpTransport()
+  acp.setConnectionStateListener?.(setControlChannel)
   setWebTerminalConnectionStateListener(setTerminalChannel)
+  // Replay each transport's CURRENT state so anything emitted before wiring
+  // (e.g. a boot 'connected' that raced the listener registration) is
+  // reflected in the store instead of leaving a stale initial value.
+  const acpState = acp.getConnectionState?.()
+  if (acpState) setControlChannel(acpState)
+  setTerminalChannel(getWebTerminalConnectionState())
 }
 
 /** @internal test helper — re-arm wiring + restore initial channel state. */

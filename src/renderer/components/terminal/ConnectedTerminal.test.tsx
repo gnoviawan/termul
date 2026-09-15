@@ -36,6 +36,17 @@ vi.mock('@/lib/web-terminal-api', () => ({
   isWebTerminalBufferable: mockIsWebTerminalBufferable,
   setWebTerminalConnectionStateListener: vi.fn()
 }))
+// Story 10: hoisted Tauri-context switch — defaults to web (false); the
+// Tauri overlay test flips it. Other tauri-runtime exports stay real.
+const mockIsTauriContext = vi.hoisted(() => vi.fn(() => false))
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>()
+  return { ...original, isTauriContext: mockIsTauriContext }
+})
+
+// Story 10: the write-failure path emits a durable per-episode log.
+const mockLogFrontendError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
 // Create mocks before vi.mock calls
 const mockTerminalConstructor = vi.fn()
@@ -3082,6 +3093,25 @@ describe('ConnectedTerminal', () => {
         useConnectionStatusStore.setState({ terminalChannel: 'connected' })
       })
       expect(container.querySelector('[role="status"]')).toBeNull()
+    })
+
+    it('stays hidden on Tauri desktop even when the terminal channel reports degraded', () => {
+      // Desktop terminal I/O is direct IPC — no WS channel exists, so a
+      // degraded store value must never surface the web outage overlay.
+      mockIsTauriContext.mockReturnValue(true)
+      try {
+        act(() => {
+          useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+        })
+        const { container } = render(<ConnectedTerminal />)
+        expect(container.querySelector('[role="status"]')).toBeNull()
+        act(() => {
+          useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
+        })
+        expect(container.querySelector('[role="status"]')).toBeNull()
+      } finally {
+        mockIsTauriContext.mockReturnValue(false)
+      }
     })
   })
 

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
 
+const mockLogFrontendError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
+
 /**
  * Minimal FakeWebSocket for the terminal protocol (`{id,type,payload}` requests
  * → `{id,success,data}` / `{id,success:false,error,code}` replies). Mirrors the
@@ -1299,6 +1302,139 @@ describe('WebTerminalClient offline input buffering (Story 10, F9/F10)', () => {
       clearTimeout(internals.reconnectTimer)
       internals.reconnectTimer = null
     }
+    client.dispose()
+  })
+})
+
+describe('Story 10: severClaim buffering + durable recovery failure logs', () => {
+  afterEach(() => {
+    FakeWebSocket.autoOpen = true
+    FakeWebSocket.holdWrite = false
+    mockLogFrontendError.mockClear()
+    vi.useRealTimers()
+  })
+
+  function makeClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('severClaim buffers subsequent writes until a re-attach confirms (attachedSocket cleared)', async () => {
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const sock = internals.socket
+
+    // Rotation teardown: the server severed this connection's attachment, so
+    // the confirmed attach on the still-OPEN socket no longer holds.
+    client.severClaim('t1', 'claim-t1-rotated')
+
+    const r = await client.write('t1', 'echo hi\r')
+    expect(r.success).toBe(true)
+    expect(internals.inputBuffers.get('t1')).toBe('echo hi\r')
+    // Nothing went direct on the severed attachment.
+    expect(findSentRequest(sock, 'write')).toBeUndefined()
+    client.dispose()
+  })
+
+  it('logs the handshake timeout with the operation and the 10s bound', async () => {
+    vi.useFakeTimers()
+    FakeWebSocket.autoOpen = false
+    const { client } = makeClient()
+    const reqPromise = client.request('spawn', { cols: 80, rows: 24 })
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await reqPromise
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.connect',
+        message: expect.stringContaining('10000ms')
+      })
+    )
+    client.dispose()
+  })
+
+  it('logs the input-buffer refusal without the refused input', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+
+    await client.write('t1', 'x'.repeat(8_192))
+    const r = await client.write('t1', 'secret-keystroke')
+    expect(r.success).toBe(false)
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.write',
+        message: expect.stringContaining('buffer full')
+      })
+    )
+    const logged = mockLogFrontendError.mock.calls.map((c) => String(c[0]?.message)).join('\n')
+    expect(logged).not.toContain('secret-keystroke')
+    expect(logged).not.toContain('xxxx')
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('logs a buffered-input replay failure when the flush dies mid-flight', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    FakeWebSocket.holdWrite = true
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    mockLogFrontendError.mockClear()
+    // The socket dies mid-flush → the replay write fails NETWORK_ERROR and
+    // the payload is re-buffered — that failure is logged.
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.flushInputBuffer',
+        message: expect.stringContaining('re-buffered')
+      })
+    )
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('logs retry-budget exhaustion when the channel gives up', async () => {
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    internals.reconnectAttempt = 10
+    internals.socket.close()
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.scheduleReconnect',
+        message: expect.stringContaining('budget exhausted')
+      })
+    )
     client.dispose()
   })
 })

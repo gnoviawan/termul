@@ -21,6 +21,7 @@ import type {
   WebTerminalRequestType
 } from '@shared/types/web-terminal-protocol.types'
 import type { AcpConnectionState } from './acp-transport'
+import { logFrontendError } from './log-api'
 
 const REQUEST_TIMEOUT_MS = 15_000
 /** Bound on the WS handshake (socket create → `onopen`). The 15s request
@@ -135,6 +136,13 @@ export class WebTerminalClient {
    * client.
    */
   private onConnectionStateChange?: (state: AcpConnectionState) => void
+  /**
+   * Story 10: last emitted terminal-channel health state, tracked so the
+   * connection-status store wiring can REPLAY the current value when it
+   * registers after states were already emitted. Starts at 'connected': the
+   * channel connects lazily on first use, so idle is healthy.
+   */
+  private connectionState: AcpConnectionState = 'connected'
 
   constructor(
     private readonly url = resolveTerminalWsUrl(),
@@ -165,7 +173,16 @@ export class WebTerminalClient {
   }
 
   private emitConnectionState(state: AcpConnectionState): void {
+    this.connectionState = state
     this.onConnectionStateChange?.(state)
+  }
+  /**
+   * Story 10: the current terminal-channel health state (the last value the
+   * listener saw). Used by the connection-status store wiring to replay
+   * already-emitted states a late-registered listener missed.
+   */
+  getConnectionState(): AcpConnectionState {
+    return this.connectionState
   }
 
   async request<T>(
@@ -221,6 +238,14 @@ export class WebTerminalClient {
       // toast) instead of hanging.
       this.connectTimer = setTimeout(() => {
         this.connectTimer = null
+        // Story 10: durable boundary log — a stalled upgrade is otherwise
+        // invisible outside DevTools. Safe context only: operation +
+        // timeout duration; no URL query, claims, or payload data.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.connect',
+          message: `terminal websocket handshake timed out after ${CONNECT_TIMEOUT_MS}ms`
+        })
         socket.onopen = null
         socket.onmessage = null
         socket.onerror = null
@@ -420,6 +445,11 @@ export class WebTerminalClient {
     tracker.refCount = 0
     tracker.claim = newClaim
     tracker.disconnected = !newClaim
+    // The server severed this connection's attachment — the attach confirmed
+    // on the current socket no longer holds. Clear `attachedSocket` so
+    // subsequent writes BUFFER (claim-held, not yet re-attached) instead of
+    // writing direct to a socket whose server-side attachment is gone.
+    tracker.attachedSocket = undefined
   }
 
   /** Detach from a terminal's output stream when ref count reaches 0. */
@@ -465,6 +495,14 @@ export class WebTerminalClient {
     if (tracker && !tracker.exited && !tracker.disconnected && tracker.claim) {
       const buffered = this.inputBuffers.get(terminalId) ?? ''
       if (buffered.length + data.length > INPUT_BUFFER_MAX_CHARS) {
+        // Story 10: durable failure log — refused input is user-visible data
+        // loss and must be observable outside the toast. Metadata only: the
+        // refused input itself is never logged (terminal input = keystrokes).
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.write',
+          message: `terminal input refused: offline buffer full (${INPUT_BUFFER_MAX_CHARS} chars) while the channel is down`
+        })
         return failure(
           'INPUT_BLOCKED',
           `Terminal input buffer is full (${INPUT_BUFFER_MAX_CHARS} characters) while disconnected — waiting for reconnect`
@@ -518,6 +556,22 @@ export class WebTerminalClient {
         if (!tracker || tracker.exited || tracker.disconnected || !tracker.claim) return
         const arrived = this.inputBuffers.get(terminalId) ?? ''
         this.inputBuffers.set(terminalId, buffered + arrived)
+        // Story 10: durable failure log — the replay write failed and the
+        // payload was re-buffered (at-least-once). Error code only; the
+        // replayed input is terminal keystrokes and is never logged.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.flushInputBuffer',
+          message: `buffered-input replay failed (NETWORK_ERROR) — input re-buffered for the next re-attach`
+        })
+      } else if (!result.success) {
+        // A non-network replay failure drops the buffered input (the buffer
+        // entry was already removed) — data loss, so log it. Code only.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.flushInputBuffer',
+          message: `buffered-input replay failed (${result.code ?? 'UNKNOWN_ERROR'}) — buffered input dropped`
+        })
       }
     })
   }
@@ -694,6 +748,18 @@ export class WebTerminalClient {
   }
 
   private rejectPending(reason?: string): void {
+    if (this.pending.size > 0) {
+      // Story 10: durable failure log — in-flight requests being failed by a
+      // channel teardown is a boundary event. Reason + count only; request
+      // payloads (which may carry terminal input) are never logged.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WebTerminalClient.rejectPending',
+        message: `rejected ${this.pending.size} pending terminal request(s): ${
+          reason ?? 'Terminal websocket disconnected'
+        }`
+      })
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.resolve({
@@ -723,6 +789,13 @@ export class WebTerminalClient {
       return
     }
     if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+      // Story 10: durable boundary log — the retry budget is exhausted and
+      // the channel is declared down; a later keystroke re-arms a cycle.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WebTerminalClient.scheduleReconnect',
+        message: `terminal channel reconnect budget exhausted after ${RECONNECT_MAX_ATTEMPTS} attempts — marking disconnected`
+      })
       // Story 10: retry budget exhausted — lamp/overlay go Disconnected (red).
       // Reset the attempt counter so a later user-triggered reconnect (a fresh
       // spawn, or the first keystroke into a live terminal — see
@@ -949,6 +1022,14 @@ export function setWebTerminalConnectionStateListener(
   listener: (state: AcpConnectionState) => void
 ): void {
   client.setConnectionStateListener(listener)
+}
+/**
+ * Story 10: the terminal channel's current connection-health state (the last
+ * value the listener saw). The connection-status store wiring replays it on
+ * registration so states emitted before wiring are reflected.
+ */
+export function getWebTerminalConnectionState(): AcpConnectionState {
+  return client.getConnectionState()
 }
 
 /**

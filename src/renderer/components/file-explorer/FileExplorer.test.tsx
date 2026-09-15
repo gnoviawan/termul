@@ -6,6 +6,13 @@ import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-expl
 import { FileExplorer } from './FileExplorer'
 
 const mockToggleDirectory = vi.fn()
+// Hoisted Tauri-context switch — defaults to web (false); the Tauri recovery
+// test flips it. Other tauri-runtime exports stay real.
+const mockIsTauriContext = vi.hoisted(() => vi.fn(() => false))
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>()
+  return { ...original, isTauriContext: mockIsTauriContext }
+})
 const mockSelectPath = vi.fn()
 const mockTogglePathSelection = vi.fn()
 const mockSelectPathRange = vi.fn()
@@ -176,6 +183,7 @@ beforeEach(() => {
     controlChannel: 'connecting',
     terminalChannel: 'connected'
   })
+  mockIsTauriContext.mockReturnValue(false)
   mockExplorerState.rootPath = null
   mockExplorerState.directoryContents = new Map()
   mockExplorerState.isVisible = true
@@ -321,6 +329,18 @@ describe('FileExplorer', () => {
 
       const { rerender } = render(<FileExplorer />)
       rerender(<FileExplorer />)
+      expect(mockRetryRootLoad).not.toHaveBeenCalled()
+    })
+    it('stays inactive on Tauri desktop even with a connected channel and an errored root', () => {
+      // The recovery flow is web-only: on Tauri the filesystem is direct IPC
+      // and the channel store is never wired — the effect must return before
+      // any retry logic regardless of store state.
+      mockIsTauriContext.mockReturnValue(true)
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+      render(<FileExplorer />)
+      recoverControlChannel()
       expect(mockRetryRootLoad).not.toHaveBeenCalled()
     })
   })

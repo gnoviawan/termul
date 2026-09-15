@@ -2,6 +2,7 @@ import type { DirectoryEntry, FileSearchResult } from '@shared/types/filesystem.
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { filesystemApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/')
@@ -229,6 +230,15 @@ function ensureFileNameStreamSubscription(
 /** Story 10: single-flight guard for `retryRootLoad` (module-level — not
  * reactive state; nothing renders from it). */
 let retryRootLoadInFlight = false
+/**
+ * Story 10: root generation token — bumped by BOTH `setRootPath` and
+ * `setWorktreeRoot`. A retry request captures it at start and only applies
+ * results / cleans loading markers while it still matches, so a root switch
+ * AWAY AND BACK to the same path (rootPath compares equal but the state was
+ * reset in between) cannot accept stale results or remove markers owned by
+ * a newer request. Module-level like the single-flight guard.
+ */
+let rootGeneration = 0
 
 export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   rootPath: null,
@@ -273,6 +283,8 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       filesystemApi.unwatchDirectory(dir)
     })
     const normalized = path ? normalizePath(path) : null
+    // Invalidate any in-flight retry's captured generation BEFORE the reset.
+    rootGeneration += 1
     set({
       rootPath: normalized,
       scopeRoot: normalized,
@@ -311,6 +323,8 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       })
     }
     const worktreeRoot = path ? normalizePath(path) : null
+    // A worktree override changes the effective root (worktree ?? scope).
+    rootGeneration += 1
     set({
       worktreeRoot,
       rootPath: worktreeRoot ?? scopeRoot,
@@ -469,6 +483,11 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     if (retryRootLoadInFlight) return
     retryRootLoadInFlight = true
     const normalized = normalizePath(rootPath)
+    // Capture the root generation: after ANY setRootPath/setWorktreeRoot —
+    // including a switch away and BACK to this same path — the captured token
+    // no longer matches and this request must not apply results or clean
+    // markers owned by a newer request.
+    const capturedGeneration = rootGeneration
     // Clear a stuck in-flight marker + any stale root error so the retry
     // starts clean even if a previous read hung (never resolved).
     const clearedLoading = new Set(get().loadingDirs)
@@ -479,8 +498,11 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
     try {
       const result = await filesystemApi.readDirectory(normalized)
       // Bail if the project root changed mid-flight (mirrors refreshTree's
-      // captured-root guard) — never write contents under a stale root.
-      if (get().rootPath !== normalized) return
+      // captured-root guard) — never write contents under a stale root. The
+      // generation token (not a rootPath comparison) is the guard: switching
+      // away and BACK to the same path leaves rootPath equal while the state
+      // was reset underneath this request.
+      if (rootGeneration !== capturedGeneration) return
       if (result.success) {
         const newExpanded = new Set(get().expandedDirs)
         newExpanded.add(normalized)
@@ -494,6 +516,13 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         // Watch this directory for changes (fire-and-forget)
         filesystemApi.watchDirectory(normalized)
       } else {
+        // Durable failure log (operation + timeout bound + error code; the
+        // server error text may embed the path — never logged).
+        void logFrontendError({
+          level: 'warn',
+          source: 'file-explorer-store.retryRootLoad',
+          message: `readDirectory retry failed (30s timeout bound): ${result.code ?? 'UNKNOWN_ERROR'}`
+        })
         set({
           rootLoadError: {
             message: result.error,
@@ -502,7 +531,14 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
         })
       }
     } catch (error) {
-      if (get().rootPath !== normalized) return
+      if (rootGeneration !== capturedGeneration) return
+      // Durable failure log for a THROWN retry (the web facade maps network
+      // failures to IpcResult, so a throw here is unexpected — log it).
+      void logFrontendError({
+        level: 'warn',
+        source: 'file-explorer-store.retryRootLoad',
+        message: 'readDirectory retry threw (30s timeout bound): UNKNOWN_ERROR'
+      })
       const message = error instanceof Error ? error.message : 'Failed to load project files'
       set({
         rootLoadError: {
@@ -512,9 +548,16 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       })
     } finally {
       retryRootLoadInFlight = false
-      const newLoadingDone = new Set(get().loadingDirs)
-      newLoadingDone.delete(normalized)
-      set({ loadingDirs: newLoadingDone })
+      // Loading-marker cleanup is generation-gated too: after a root switch
+      // away and BACK to this same path, the marker at `normalized` may be
+      // owned by a NEWER request (auto-expand or a later retry) — removing it
+      // would strand that request's loading state. When the path is no
+      // longer the root, the marker is orphaned and safe to remove.
+      if (rootGeneration === capturedGeneration || get().rootPath !== normalized) {
+        const newLoadingDone = new Set(get().loadingDirs)
+        newLoadingDone.delete(normalized)
+        set({ loadingDirs: newLoadingDone })
+      }
     }
   },
 

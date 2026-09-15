@@ -29,6 +29,7 @@ import type {
   WorktreeInfo
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
+import { logFrontendError } from './log-api'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
@@ -142,7 +143,17 @@ export const webServerFilesystem = {
     // the abort reason surfaces as a NETWORK_ERROR the store renders as a
     // retryable rootLoadError.
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new Error('Directory read timed out')), 30_000)
+    const timer = setTimeout(() => {
+      // Durable boundary log for the timeout event itself — the operation +
+      // the 30s bound + the code the abort surfaces as. The requested
+      // directory path is deliberately NOT logged (sensitive path data).
+      void logFrontendError({
+        level: 'warn',
+        source: 'webServerFilesystem.readDirectory',
+        message: 'readDirectory timed out after 30000ms (NETWORK_ERROR)'
+      })
+      controller.abort(new Error('Directory read timed out'))
+    }, 30_000)
     try {
       return await getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, controller.signal)
     } finally {
