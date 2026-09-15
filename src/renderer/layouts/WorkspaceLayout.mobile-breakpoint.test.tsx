@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { MOBILE_WEB_SHELL_MAX_PX } from '@/hooks/use-mobile-web-shell'
 
 // Story 12 (CAP-8, QA finding F3): regression test for the REAL
 // `useMobileWebShell` breakpoint detection. The sibling suites
@@ -26,6 +27,8 @@ const { tauriRef, projectRef, viewportWidthRef } = vi.hoisted(() => ({
       path?: string
       name?: string
       id?: string
+      color?: string
+      gitBranch?: string
     }
   },
   // Mutable: the matchMedia stub resolves `(max-width: Npx)` /
@@ -395,6 +398,20 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(screen.getByLabelText('Open menu')).toBeInTheDocument()
     expect(screen.getByLabelText('Switch project')).toBeInTheDocument()
     expect(screen.getByLabelText('Browse files')).toBeInTheDocument()
+    // Pin the flex sizing contract that keeps the workspace visible (this
+    // story's production fix — jsdom performs no layout, so the class
+    // contract is asserted directly): the workspace <main> sizes via flex-1
+    // (not h-full) inside a flex-col wrapper. Reverting either class
+    // collapses the workspace to 0 height in engines that treat a
+    // flex-resolved parent size as indefinite for percentage resolution.
+    const main = document.querySelector('[data-mobile-chat-shell] main')
+    if (!main?.parentElement) {
+      throw new Error('workspace <main> (and its wrapper) must be mounted inside the mobile shell')
+    }
+    expect(main).toHaveClass('flex-1')
+    expect(main).not.toHaveClass('h-full')
+    expect(main.parentElement).toHaveClass('flex')
+    expect(main.parentElement).toHaveClass('flex-col')
   })
 
   it('renders the desktop chrome — and NOT the mobile shell — at 1024px', async () => {
@@ -417,5 +434,32 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     // Desktop chrome present: ProjectSidebar + StatusBar ("demo").
     expect(screen.getByTestId('header-new-project')).toBeInTheDocument()
     expect(screen.getByText('demo')).toBeInTheDocument()
+  })
+
+  // The hook's contract is `(max-width: Npx)` — guard the exact boundary so
+  // a breakpoint regression (wrong value, `<` vs `<=`) fails loudly.
+  it.each([
+    { width: MOBILE_WEB_SHELL_MAX_PX, expectMobile: true },
+    { width: MOBILE_WEB_SHELL_MAX_PX + 1, expectMobile: false }
+  ])('switches the shell at the exact breakpoint boundary ($width px → mobile=$expectMobile)', async ({
+    width,
+    expectMobile
+  }) => {
+    viewportWidthRef.current = width
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+
+    if (expectMobile) {
+      await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+      expect(screen.queryByLabelText('Global actions')).toBeNull()
+    } else {
+      await waitFor(() => expect(screen.getByLabelText('Global actions')).toBeInTheDocument())
+      expect(document.querySelector('[data-mobile-chat-shell]')).toBeNull()
+    }
   })
 })
