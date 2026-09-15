@@ -216,7 +216,7 @@ pub struct WsError {
     pub message: String,
 }
 
-/// The 10 stable `err.code` machine strings (AC2). Mirrors the TS
+/// The 11 stable `err.code` machine strings (AC2). Mirrors the TS
 /// `WS_ERROR_CODES` const. Serialized as snake_case via [`WsErrorCode::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsErrorCode {
@@ -232,6 +232,11 @@ pub enum WsErrorCode {
     /// `switch_project` was sent on a connection with no live agent yet
     /// (cold web tab) — the server refuses to auto-spawn. Epic-4 bridge.
     NoAgent,
+    /// The agent rejected session entry (`session/new` / `session/load` /
+    /// `session/resume`) with ACP `AuthRequired` (-32000) — the user must
+    /// authenticate first. Additive (Story 7): receivers that ignore unknown
+    /// codes stay compatible.
+    AgentAuthRequired,
 }
 
 impl WsErrorCode {
@@ -249,6 +254,7 @@ impl WsErrorCode {
             Self::Unsupported => "unsupported",
             Self::NotImplemented => "not_implemented",
             Self::NoAgent => "no_agent",
+            Self::AgentAuthRequired => "agent_auth_required",
         }
     }
 }
@@ -1725,15 +1731,25 @@ async fn handle_open_persisted_session(
 /// map recognizable agent-manager error strings to their stable `err.code`
 /// (so the browser's error routing keys on the right category — not every
 /// runtime failure is "not_implemented"). `send_prompt`'s concurrent-turn
-/// rejection (`"ACP_TURN_IN_PROGRESS: …"`) → `RateLimited`; `"unknown agent:
-/// …"` / `"unknown permission request: …"` → `NotFound`; capability-gate
-/// failures (`"agent does not support …"`) → `Unsupported`. Unrecognized
-/// errors fall back to `NotImplemented` (preserves the human message verbatim).
+/// rejection (`"ACP_TURN_IN_PROGRESS: …"`) → `RateLimited`; agent-side ACP
+/// `AuthRequired` (-32000) failures — tagged `"ACP_AUTH_REQUIRED: …"` at the
+/// manager boundary, or the bare default `"Authentication required"` message
+/// (exact match) for pre-collapsed paths — → `AgentAuthRequired` (Story 7);
+/// `"unknown agent: …"` / `"unknown permission request: …"` → `NotFound`;
+/// capability-gate failures (`"agent does not support …"`) → `Unsupported`.
+/// Unrecognized errors fall back to `NotImplemented` (preserves the human
+/// message verbatim).
 fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(code) = map_prompt_error_code(&err) {
         return WsReply::err(id, code, err);
     }
-    let code = if err.starts_with("unknown agent") || err.contains("unknown permission request") {
+    let code = if err
+        .strip_prefix(crate::acp::manager::ACP_AUTH_REQUIRED_PREFIX)
+        .is_some_and(|rest| rest.starts_with(": "))
+        || err == "Authentication required"
+    {
+        WsErrorCode::AgentAuthRequired
+    } else if err.starts_with("unknown agent") || err.contains("unknown permission request") {
         WsErrorCode::NotFound
     } else if err.contains("agent does not support") || err.contains("capability") {
         WsErrorCode::Unsupported
@@ -2312,7 +2328,7 @@ struct SetDefaultProjectPayload {
 /// # Error code mapping (P9)
 ///
 /// The WS protocol's fixed `WsErrorCode` enum has no dedicated
-/// "persistence failed" variant (the 10 stable codes are mirrored in TS).
+/// "persistence failed" variant (the 11 stable codes are mirrored in TS).
 /// Malformed payloads use `Unsupported` (matching `switch_project`); a
 /// persistence failure also maps to `Unsupported` but with a distinct
 /// message ("failed to persist default project: ..."). The HTTP route
@@ -3856,23 +3872,21 @@ async fn handle_subscribe(
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
 
-    // CAP-1: Reopen the durable session writer before subscribing so every
-    // event flowing after a reconnect-based subscribe is persisted. Idempotent
-    // for already-active sessions. A missing persistence layer (desktop path)
-    // or an unknown session is logged but never blocks the subscribe.
-    match relay.persistence() {
-        Some(persistence) => {
-            if let Err(error) = persistence.reopen_writer(&parsed.session_id).await {
-                warn!(
-                    "subscribe: reopen_writer failed for session {}: {error}",
-                    parsed.session_id
-                );
-            }
-        }
-        None => {
-            debug!("subscribe: reopen_writer skipped (no persistence)");
-        }
-    }
+    // Story 7: subscribe is a READ path. The session must already be known —
+    // live in the relay map (events emitted, incl. ephemeral never-persisted
+    // sessions) or present in the persistence catalog (finalized sessions
+    // replay from disk). Unknown ids get `not_found` (parity with
+    // `get_session_payload`) instead of a silent `{replayed: 0}` success.
+    // `WsRelaySink::subscribe` performs the existence validation and the
+    // subscription registration under the SAME `sessions` lock
+    // `forget_session` removes under, so a concurrently removed session
+    // cannot slip a subscription through the check→register gap (TOCTOU) —
+    // both the live-only and cursor paths surface `ReplayResult::NotFound`.
+    // The durable writer is deliberately NOT reinstalled here or in the sink:
+    // `reopen_writer` flips the persisted status Closed→Active, bumps
+    // `last_activity_at`, and rewrites the on-disk index — that mutation
+    // belongs to the manager's `session/load` / `session/resume` paths (flip
+    // on resume/prompt only, never on reads).
 
     // Do not drop the currently-live subscription until the replacement is
     // successfully registered. This preserves pending-permission ownership on
@@ -3885,6 +3899,7 @@ async fn handle_subscribe(
 
     let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
+        ReplayResult::NotFound => WsReply::err(id, WsErrorCode::NotFound, "session not found"),
         ReplayResult::Stale => {
             relay.unregister_client(client_id);
             WsReply::err(
@@ -4277,6 +4292,7 @@ mod tests {
         ));
         relay.set_rendezvous(Arc::clone(&permissions));
         relay.set_question_rendezvous(Arc::clone(&questions));
+        relay.seed_session_for_test("session-cleanup");
         let (client_id, _rx, replay) = relay.subscribe("session-cleanup", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         permissions.register(
@@ -4331,6 +4347,7 @@ mod tests {
     #[tokio::test]
     async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("session-cancelled-relay");
         let (client_id, _rx, replay) = relay.subscribe("session-cancelled-relay", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
@@ -5942,7 +5959,8 @@ mod tests {
 
     /// Story 1.8 review: `acp_err_to_reply` maps recognizable agent errors to
     /// the right `err.code` (not_implemented is the fallback for unrecognized
-    /// errors; "unknown agent" → not_found; capability-gate → unsupported).
+    /// errors; "unknown agent" → not_found; capability-gate → unsupported;
+    /// Story 7: ACP auth failures → agent_auth_required).
     #[test]
     fn acp_err_to_reply_maps_recognizable_errors() {
         // ACP_TURN_IN_PROGRESS → rate_limited (via map_prompt_error_code).
@@ -5965,6 +5983,34 @@ mod tests {
             "r4".to_string(),
             "agent initialize failed: boom".to_string(),
         );
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        // Story 7: ACP AuthRequired (-32000) tagged at the manager boundary →
+        // agent_auth_required (never the not_implemented fallback).
+        let r = acp_err_to_reply(
+            "r5".to_string(),
+            "ACP_AUTH_REQUIRED: Authentication required".to_string(),
+        );
+        let err = r.err.unwrap();
+        assert_eq!(err.code, "agent_auth_required");
+        assert_eq!(err.message, "ACP_AUTH_REQUIRED: Authentication required");
+        // Bare default message (agent error that reached the manager
+        // pre-collapsed, e.g. `Error::auth_required()` on a prompt path) →
+        // same code. Exact-match only: lookalikes stay unrecognized.
+        let r = acp_err_to_reply("r6".to_string(), "Authentication required".to_string());
+        assert_eq!(r.err.unwrap().code, "agent_auth_required");
+        let r = acp_err_to_reply("r7".to_string(), "authentication required".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        let r = acp_err_to_reply("r8".to_string(), "Authentication required.".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        // The bare-message fallback stays pinned to the ACP crate's actual
+        // `Display` wording for AuthRequired (not a hand-copied literal).
+        let r = acp_err_to_reply(
+            "r9".to_string(),
+            agent_client_protocol::Error::auth_required().to_string(),
+        );
+        assert_eq!(r.err.unwrap().code, "agent_auth_required");
+        // Prefix lookalikes without the ": " separator stay unrecognized.
+        let r = acp_err_to_reply("r10".to_string(), "ACP_AUTH_REQUIREDfoo".to_string());
         assert_eq!(r.err.unwrap().code, "not_implemented");
     }
 
@@ -6046,6 +6092,7 @@ mod tests {
         ));
         // Subscribe a client to the session (populates subscribed_clients via
         // the production subscribe path).
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         // Emit a permission_request event through the sink (production path) so
@@ -6128,6 +6175,7 @@ mod tests {
         relay.set_rendezvous(Arc::new(
             crate::web::permissions::PermissionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -6283,6 +6331,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         let options_value = serde_json::Value::Array(
@@ -6406,6 +6455,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -6565,6 +6615,14 @@ mod tests {
                 payload: json!({"i": i}),
             });
         }
+        // Story 7: the subscribe existence gate rejects unknown sessions, so
+        // "fresh" must be a KNOWN session — emit one event to land it in the
+        // relay live-map (covers the ephemeral never-persisted case).
+        relay.emit(&AcpEvent {
+            sid: Some("fresh".to_string()),
+            type_: "acp:session_created",
+            payload: json!({"sessionId": "fresh"}),
+        });
         // Evicted seq 1; last_seq=0 → next wanted 1 < base → Stale
         let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
@@ -6688,6 +6746,213 @@ mod tests {
 
         // Drain any replay/live.
         while rx.try_recv().is_ok() {}
+    }
+
+    /// Story 7: `subscribe` to a session in neither the relay live-map nor the
+    /// persistence catalog fails with `not_found` (parity with
+    /// `get_session_payload`) and registers no client — with and without a
+    /// `lastSeq` cursor.
+    #[tokio::test]
+    async fn handle_subscribe_unknown_session_is_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-sub-unknown-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+
+        // Without a cursor.
+        let reply = handle_subscribe(
+            "sub-1".to_string(),
+            &json!({"sessionId": "session-absent"}),
+            &relay,
+            &tx,
+            &mut subs,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(
+            subs.is_empty(),
+            "no client may be registered for an unknown session"
+        );
+        assert_eq!(relay.session_subscriber_count("session-absent"), 0);
+
+        // With a cursor.
+        let reply = handle_subscribe(
+            "sub-2".to_string(),
+            &json!({"sessionId": "session-absent", "lastSeq": 3}),
+            &relay,
+            &tx,
+            &mut subs,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(subs.is_empty());
+        assert_eq!(relay.session_subscriber_count("session-absent"), 0);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 7: `open_persisted_session` on a finalized (`Closed`) session is
+    /// a pure read — the on-disk `sessions.json` index and per-session
+    /// `metadata.json` bytes are unchanged, and the catalog keeps
+    /// `status == Closed` + the original `last_activity_at` (the durable
+    /// writer is reinstalled only by the manager's session/load + resume
+    /// paths, never by a read).
+    #[tokio::test]
+    async fn open_persisted_session_is_read_only() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-open-readonly-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let metadata = persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-x".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        // One durable event so the open replays a non-empty transcript.
+        relay.emit(&AcpEvent {
+            sid: Some("session-x".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"sessionId": "session-x", "text": "hello"}),
+        });
+        persistence
+            .finalize_session("session-x", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+
+        let index_path = root.join("sessions").join("sessions.json");
+        let metadata_path = root
+            .join("sessions")
+            .join(&metadata.storage_key)
+            .join("metadata.json");
+        let index_before = std::fs::read(&index_path).unwrap();
+        let metadata_before = std::fs::read(&metadata_path).unwrap();
+        let catalog_before = persistence.metadata("session-x").unwrap();
+        assert_eq!(
+            catalog_before.status,
+            crate::acp::PersistedSessionStatus::Closed
+        );
+
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let reply = handle_open_persisted_session(
+            "open-1".to_string(),
+            &json!({"sessionId": "session-x", "lastSeq": 0}),
+            &relay,
+            &tx,
+            &mut subs,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        assert_eq!(subs.len(), 1);
+
+        assert_eq!(
+            std::fs::read(&index_path).unwrap(),
+            index_before,
+            "sessions.json index must be untouched by a read"
+        );
+        assert_eq!(
+            std::fs::read(&metadata_path).unwrap(),
+            metadata_before,
+            "per-session metadata.json must be untouched by a read"
+        );
+        let catalog_after = persistence.metadata("session-x").unwrap();
+        assert_eq!(
+            catalog_after.status,
+            crate::acp::PersistedSessionStatus::Closed
+        );
+        assert_eq!(
+            catalog_after.last_activity_at,
+            catalog_before.last_activity_at
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 7 review: the `knows_session` catalog branch admits a finalized
+    /// session whose events were never emitted through THIS relay — the
+    /// post-restart shape (fresh `WsRelaySink` over the same persistence,
+    /// empty live-map). `open_persisted_session` must succeed and replay the
+    /// durable transcript from disk.
+    #[tokio::test]
+    async fn open_persisted_session_catalog_branch_admits_finalized_session() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-open-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-x".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Emit through a FIRST relay so the event lands in the durable log and
+        // that relay's live-map; the second relay below never sees it live.
+        let relay_pre_restart = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay_pre_restart.emit(&AcpEvent {
+            sid: Some("session-x".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"sessionId": "session-x", "text": "hello"}),
+        });
+        persistence
+            .finalize_session("session-x", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+
+        // Post-restart shape: a fresh relay with an empty live-map over the
+        // same persistence — admission must come from the catalog branch.
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let reply = handle_open_persisted_session(
+            "open-1".to_string(),
+            &json!({"sessionId": "session-x", "lastSeq": 0}),
+            &relay,
+            &tx,
+            &mut subs,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        let payload = reply.payload.unwrap();
+        assert!(
+            payload["replayed"].as_u64().unwrap() >= 1,
+            "finalized session replays durable events from disk: {payload}"
+        );
+        assert_eq!(subs.len(), 1);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
@@ -7501,6 +7766,7 @@ mod tests {
             None,
         );
         // Subscribe a client to prove the broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let reply = handle_set_default_project(
@@ -7579,6 +7845,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         // Subscribe a client to prove NO broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
@@ -7641,6 +7908,8 @@ mod tests {
             None,
         );
         // Client A subscribes to sess-a; client B subscribes to sess-b.
+        relay.seed_session_for_test("sess-a");
+        relay.seed_session_for_test("sess-b");
         let (_client_a, mut rx_a, _replay_a) = relay.subscribe("sess-a", None).await;
         let (_client_b, mut rx_b, _replay_b) = relay.subscribe("sess-b", None).await;
 

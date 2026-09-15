@@ -118,9 +118,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 10 stable error codes', () => {
+  it('exports exactly 11 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(10)
+    expect(codes.size).toBe(11)
     const expected = [
       'not_found',
       'unauthorized',
@@ -131,7 +131,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'duplicate',
       'unsupported',
       'not_implemented',
-      'no_agent'
+      'no_agent',
+      'agent_auth_required'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
