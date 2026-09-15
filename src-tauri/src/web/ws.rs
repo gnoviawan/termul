@@ -1698,7 +1698,9 @@ fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(code) = map_prompt_error_code(&err) {
         return WsReply::err(id, code, err);
     }
-    let code = if err.starts_with(crate::acp::manager::ACP_AUTH_REQUIRED_PREFIX)
+    let code = if err
+        .strip_prefix(crate::acp::manager::ACP_AUTH_REQUIRED_PREFIX)
+        .is_some_and(|rest| rest.starts_with(": "))
         || err == "Authentication required"
     {
         WsErrorCode::AgentAuthRequired
@@ -5845,6 +5847,16 @@ mod tests {
         assert_eq!(r.err.unwrap().code, "not_implemented");
         let r = acp_err_to_reply("r8".to_string(), "Authentication required.".to_string());
         assert_eq!(r.err.unwrap().code, "not_implemented");
+        // The bare-message fallback stays pinned to the ACP crate's actual
+        // `Display` wording for AuthRequired (not a hand-copied literal).
+        let r = acp_err_to_reply(
+            "r9".to_string(),
+            agent_client_protocol::Error::auth_required().to_string(),
+        );
+        assert_eq!(r.err.unwrap().code, "agent_auth_required");
+        // Prefix lookalikes without the ": " separator stay unrecognized.
+        let r = acp_err_to_reply("r10".to_string(), "ACP_AUTH_REQUIREDfoo".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
     }
 
     /// Story 1.7: without a rendezvous attached (desktop path), the
@@ -6699,6 +6711,70 @@ mod tests {
             catalog_after.last_activity_at,
             catalog_before.last_activity_at
         );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 7 review: the `knows_session` catalog branch admits a finalized
+    /// session whose events were never emitted through THIS relay — the
+    /// post-restart shape (fresh `WsRelaySink` over the same persistence,
+    /// empty live-map). `open_persisted_session` must succeed and replay the
+    /// durable transcript from disk.
+    #[tokio::test]
+    async fn open_persisted_session_catalog_branch_admits_finalized_session() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-open-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-x".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Emit through a FIRST relay so the event lands in the durable log and
+        // that relay's live-map; the second relay below never sees it live.
+        let relay_pre_restart = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay_pre_restart.emit(&AcpEvent {
+            sid: Some("session-x".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"sessionId": "session-x", "text": "hello"}),
+        });
+        persistence
+            .finalize_session("session-x", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+
+        // Post-restart shape: a fresh relay with an empty live-map over the
+        // same persistence — admission must come from the catalog branch.
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let reply = handle_open_persisted_session(
+            "open-1".to_string(),
+            &json!({"sessionId": "session-x", "lastSeq": 0}),
+            &relay,
+            &tx,
+            &mut subs,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        let payload = reply.payload.unwrap();
+        assert!(
+            payload["replayed"].as_u64().unwrap() >= 1,
+            "finalized session replays durable events from disk: {payload}"
+        );
+        assert_eq!(subs.len(), 1);
 
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
