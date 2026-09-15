@@ -52,7 +52,7 @@ use crate::acp::events::{
     AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
     SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
-use crate::acp::session::DriverState;
+use crate::acp::session::{DriverState, ReplayWindowGuard};
 use crate::acp::session_persistence::{
     is_protected_title_source, normalize_title, PersistedSessionStatus, SessionPersistence,
     SessionRegistration, TitleSource,
@@ -2122,6 +2122,72 @@ fn run_agent(
     }
 }
 
+/// Handle an inbound `session/update` notification from the agent: nudge the
+/// active turn's idle deadline, apply the story-3 replay-window suppression,
+/// bind tool calls, apply the AD-8 title gate, then fan out to the sinks.
+///
+/// Extracted from the connection-builder closure so the routing logic can be
+/// unit-tested without a live connection (cf. `gate_load_session`).
+async fn handle_session_notification(
+    state: &Mutex<DriverState>,
+    persistence: Option<&Arc<SessionPersistence>>,
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    notification: agent_client_protocol::schema::v1::SessionNotification,
+) -> Result<(), agent_client_protocol::Error> {
+    let session_id = notification.session_id.0.to_string();
+    // Any inbound session/update is agent activity — nudge the active turn's
+    // idle deadline so a streaming turn never hits the idle timeout.
+    // Best-effort: a no-op when no turn is active for this session. This runs
+    // even for replayed updates: a pathological active-turn-during-reopen must
+    // not lose idle nudges.
+    state.lock().signal_idle(&session_id);
+    // Story 3 replay contract: while a `session/load` / `session/resume`
+    // replay window is open for this session, the agent is replaying persisted
+    // history — drop the notification here, before fan-out, so it is neither
+    // persisted again nor pushed to subscribers as a live event (the persisted
+    // JSONL log stays the sole history source).
+    if state.lock().note_replayed_update(&session_id) {
+        return Ok(());
+    }
+    let tool_call_id = match &notification.update {
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
+            Some(tool_call.tool_call_id.0.to_string())
+        }
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
+            Some(update.tool_call_id.0.to_string())
+        }
+        _ => None,
+    };
+    if let Some(tool_call_id) = tool_call_id {
+        state.lock().bind_tool_call(tool_call_id, session_id.clone());
+    }
+    // AD-8: gate native `session_info_update` fan-out. When the host already
+    // owns a higher-precedence title (`BackgroundGenerated` from a prior
+    // background-gen flow, or a future `LocalAlias`), suppress the agent's
+    // `session_info_update` so the background title survives in the renderer.
+    // The durable defense in `append_record` is the second layer; this is the
+    // fan-out defense.
+    let is_protected_info_update = matches!(
+        &notification.update,
+        agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(_)
+    ) && is_protected_title_source(
+        persistence
+            .and_then(|p| p.metadata(&session_id).ok())
+            .and_then(|m| m.title_source)
+            .as_ref(),
+    );
+    if is_protected_info_update {
+        log::debug!(
+            "[acp] session {}: suppressed native session_info_update (title_source is BackgroundGenerated/LocalAlias)",
+            crate::logging::redact_session_id(&session_id)
+        );
+        return Ok(());
+    }
+    client::emit_session_update(sinks, agent_id, notification);
+    Ok(())
+}
+
 /// Build the client connection and run it until the command loop ends.
 #[allow(clippy::too_many_arguments)]
 async fn drive_connection(
@@ -2226,52 +2292,14 @@ async fn drive_connection(
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::v1::SessionNotification, _cx| {
-                let session_id = notification.session_id.0.to_string();
-                // Any inbound session/update is agent activity — nudge the
-                // active turn's idle deadline so a streaming turn never hits
-                // the idle timeout. Best-effort: a no-op when no turn is
-                // active for this session.
-                notif_state.lock().signal_idle(&session_id);
-                let tool_call_id = match &notification.update {
-                    agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-                        Some(tool_call.tool_call_id.0.to_string())
-                    }
-                    agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-                        Some(update.tool_call_id.0.to_string())
-                    }
-                    _ => None,
-                };
-                if let Some(tool_call_id) = tool_call_id {
-                    notif_state
-                        .lock()
-                        .bind_tool_call(tool_call_id, session_id.clone());
-                }
-                // AD-8: gate native `session_info_update` fan-out. When the
-                // host already owns a higher-precedence title
-                // (`BackgroundGenerated` from a prior background-gen flow, or
-                // a future `LocalAlias`), suppress the agent's
-                // `session_info_update` so the background title survives in
-                // the renderer. The durable defense in `append_record` is the
-                // second layer; this is the fan-out defense.
-                let is_protected_info_update = matches!(
-                    &notification.update,
-                    agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(_)
-                ) && is_protected_title_source(
-                    notif_persistence
-                        .as_ref()
-                        .and_then(|p| p.metadata(&session_id).ok())
-                        .and_then(|m| m.title_source)
-                        .as_ref(),
-                );
-                if is_protected_info_update {
-                    log::debug!(
-                        "[acp] session {}: suppressed native session_info_update (title_source is BackgroundGenerated/LocalAlias)",
-                        crate::logging::redact_session_id(&session_id)
-                    );
-                    return Ok(());
-                }
-                client::emit_session_update(&notif_sinks, &notif_agent_id, notification);
-                Ok(())
+                handle_session_notification(
+                    &notif_state,
+                    notif_persistence.as_ref(),
+                    &notif_sinks,
+                    &notif_agent_id,
+                    notification,
+                )
+                .await
             },
             agent_client_protocol::on_receive_notification!(),
         )
@@ -2948,14 +2976,18 @@ async fn run_command_loop(
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
                     // Reinstall the durable writer BEFORE sending session/load
-                    // so events arriving during the load (replay chunks,
-                    // status updates) are persisted instead of dropped with
-                    // "persisted session not found". After an app restart the
-                    // in-memory writer is gone; calling reopen_writer here
-                    // restores it from the on-disk catalog before the agent
-                    // starts streaming. Idempotent (no-op if already installed)
-                    // and non-fatal (unknown/ephemeral id surfaces
-                    // SessionNotFound, logged + skipped).
+                    // so POST-window live events (the follow-up prompt's
+                    // chunks, status updates, last_seq-derived title-gen) are
+                    // persisted instead of dropped with "persisted session not
+                    // found". Replayed history arriving during the load is
+                    // deliberately NOT persisted: the replay window below drops
+                    // it before fan-out (story 3 — the persisted log is the
+                    // sole history source). After an app restart the in-memory
+                    // writer is gone; calling reopen_writer here restores it
+                    // from the on-disk catalog before the agent starts
+                    // streaming. Idempotent (no-op if already installed) and
+                    // non-fatal (unknown/ephemeral id surfaces SessionNotFound,
+                    // logged + skipped).
                     if let Some(persistence) = &req_persistence {
                         if let Err(error) = persistence.reopen_writer(&session_id.0).await {
                             log::warn!(
@@ -2967,6 +2999,12 @@ async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
+                    // Story 3 replay contract: open the replay window BEFORE
+                    // the request is sent so agent-replayed history during the
+                    // load is suppressed; the RAII guard closes the window on
+                    // every outcome (success, agent error, timeout).
+                    let _replay_guard =
+                        ReplayWindowGuard::new(req_state.clone(), session_id.0.to_string());
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
                         "session/load",
@@ -2991,9 +3029,10 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
-                    // Same durable-writer reopen as LoadSession above — call
-                    // BEFORE the request so events arriving during resume are
-                    // persisted instead of silently dropped.
+                    // Same durable-writer reopen as LoadSession above — it
+                    // serves POST-window live events; replayed history arriving
+                    // during resume is dropped before fan-out by the replay
+                    // window below (story 3), never persisted.
                     if let Some(persistence) = &req_persistence {
                         if let Err(error) = persistence.reopen_writer(&session_id.0).await {
                             log::warn!(
@@ -3002,6 +3041,10 @@ async fn run_command_loop(
                             );
                         }
                     }
+                    // Story 3 replay contract: same replay window as
+                    // session/load above — open BEFORE the request is sent.
+                    let _replay_guard =
+                        ReplayWindowGuard::new(req_state.clone(), session_id.0.to_string());
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
                         "session/resume",
@@ -4396,6 +4439,103 @@ mod tests {
         assert!(
             !warmup_should_run(&warmup_done, &agent_id),
             "a post-completion trigger must skip (agent is done)"
+        );
+    }
+
+    /// Test sink capturing every emitted event (mirrors the `web::sink` tests'
+    /// CapturingSink pattern).
+    #[derive(Default)]
+    struct CapturingSink {
+        seen: Mutex<Vec<crate::web::sink::AcpEvent>>,
+    }
+
+    impl EventSink for CapturingSink {
+        fn emit(&self, event: &crate::web::sink::AcpEvent) {
+            self.seen.lock().push(event.clone());
+        }
+    }
+
+    fn thought_notification(
+        session_id: &str,
+        text: &str,
+    ) -> agent_client_protocol::schema::v1::SessionNotification {
+        use agent_client_protocol::schema::v1 as acp;
+        acp::SessionNotification::new(
+            acp::SessionId::new(session_id),
+            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Text(acp::TextContent::new(text)),
+            )),
+        )
+    }
+
+    #[tokio::test]
+    async fn session_notification_is_suppressed_while_replay_window_open() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        state.lock().begin_replay_window("sess-1");
+        let sink = Arc::new(CapturingSink::default());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+        let result = handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &AgentId::new(),
+            thought_notification("sess-1", "replayed history"),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(
+            sink.seen.lock().is_empty(),
+            "a replayed update must reach NO sink"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_notification_fans_out_when_no_replay_window() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        let sink = Arc::new(CapturingSink::default());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+        let result = handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &AgentId::new(),
+            thought_notification("sess-1", "live chunk"),
+        )
+        .await;
+        assert!(result.is_ok());
+        let seen = sink.seen.lock();
+        assert_eq!(seen.len(), 1, "a live update must fan out to the sink");
+        assert_eq!(seen[0].sid.as_deref(), Some("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn replayed_update_still_nudges_idle_clock_of_active_turn() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        let handles = state.lock().try_begin_turn("sess-1").expect("turn starts");
+        let mut idle_rx = handles.idle_rx;
+        state.lock().begin_replay_window("sess-1");
+        let sink = Arc::new(CapturingSink::default());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+        assert!(
+            !idle_rx.has_changed().unwrap(),
+            "no idle nudge before the notification arrives"
+        );
+        let result = handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &AgentId::new(),
+            thought_notification("sess-1", "replayed history"),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(
+            idle_rx.has_changed().unwrap(),
+            "a replayed update still nudges the active turn's idle deadline"
+        );
+        assert!(
+            sink.seen.lock().is_empty(),
+            "the replayed update itself reaches no sink"
         );
     }
 }
