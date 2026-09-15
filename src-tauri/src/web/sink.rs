@@ -214,6 +214,10 @@ impl Default for ClientId {
 pub enum ReplayResult {
     /// Replay succeeded; carries the number of events replayed from the log tail.
     Ok(u64),
+    /// The session is unknown to both the relay live-map and the persistence
+    /// catalog — nothing was registered (Story 7: `not_found` parity with
+    /// `get_session_payload`).
+    NotFound,
     /// `last_seq` is older than the log's oldest (evicted) event — the client
     /// must re-sync (AC4).
     Stale,
@@ -287,7 +291,17 @@ impl WsRelaySink {
     /// instead of a silent empty subscribe.
     #[must_use]
     pub fn knows_session(&self, sid: &str) -> bool {
-        if self.sessions.lock().contains_key(sid) {
+        self.session_known_locked(&self.sessions.lock(), sid)
+    }
+
+    /// Existence check with the `sessions` lock already held: live in the
+    /// relay map or present in the persistence catalog. `subscribe` runs this
+    /// under the same `sessions` lock it registers under — the lock
+    /// `forget_session` removes under — so validation and registration are
+    /// atomic and a concurrent forget cannot slip a subscription through the
+    /// check→register gap.
+    fn session_known_locked(&self, sessions: &HashMap<String, SessionState>, sid: &str) -> bool {
+        if sessions.contains_key(sid) {
             return true;
         }
         self.persistence.as_ref().is_some_and(|persistence| {
@@ -506,6 +520,13 @@ impl WsRelaySink {
     /// log's oldest (evicted) event, returns [`ReplayResult::Stale`] (the
     /// client must re-sync) and DOES NOT register the subscription.
     ///
+    /// A session unknown to both the relay live-map and the persistence
+    /// catalog — or one removed by `forget_session` — returns
+    /// [`ReplayResult::NotFound`] and DOES NOT register: existence is
+    /// re-validated under the same `sessions` lock registration takes (the
+    /// lock `forget_session` removes under), on both the live-only and the
+    /// cursor path, so a forget cannot race the check→register gap.
+    ///
     /// Holds the sessions lock across stale-check + register + replay so an
     /// emit cannot slip into the gap between unlock and register (TOCTOU).
     ///
@@ -522,9 +543,26 @@ impl WsRelaySink {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::unbounded_channel::<SequencedEvent>();
         let Some(cursor) = last_seq else {
+            // Live-only: validate existence and register under the SAME
+            // `sessions` lock `forget_session` removes under — a concurrent
+            // forget cannot slip a subscription through the check→register
+            // gap, and an unknown/removed session gets `not_found` instead of
+            // a silent empty subscription.
+            let sessions = self.sessions.lock();
+            if !self.session_known_locked(&sessions, sid) {
+                return (client_id, rx, ReplayResult::NotFound);
+            }
             self.register(client_id, sid, tx);
             return (client_id, rx, ReplayResult::Ok(0));
         };
+
+        // Cursor path: cheap early-out so an unknown id routes to `not_found`
+        // instead of falling into the durable-replay error path (which reports
+        // `stale`). The authoritative check re-runs under the `sessions` lock
+        // at registration below, closing the `forget_session` race.
+        if !self.knows_session(sid) {
+            return (client_id, rx, ReplayResult::NotFound);
+        }
 
         let gate = {
             let mut gates = self.replay_gates.lock().await;
@@ -606,6 +644,11 @@ impl WsRelaySink {
                 continue;
             }
 
+            // Re-validate under the still-held `sessions` lock: the session may
+            // have been forgotten while the durable replay was in flight.
+            if !self.session_known_locked(&sessions, sid) {
+                return (client_id, rx, ReplayResult::NotFound);
+            }
             self.register(client_id, sid, tx.clone());
             let count = by_seq.len() as u64;
             for event in by_seq.into_values() {
@@ -828,6 +871,23 @@ impl WsRelaySink {
             }
         }
         true
+    }
+
+    /// Test helper: mark a session as known (empty log, next emit gets seq 1)
+    /// without emitting — `subscribe` rejects unknown sessions with
+    /// [`ReplayResult::NotFound`], so fan-out tests that subscribe before the
+    /// first event seed the session first.
+    #[cfg(test)]
+    pub(crate) fn seed_session_for_test(&self, sid: &str) {
+        self.sessions
+            .lock()
+            .entry(sid.to_string())
+            .or_insert_with(|| SessionState {
+                last_seq: 0,
+                events: VecDeque::new(),
+                snapshot_events: Vec::new(),
+                base_seq: 1,
+            });
     }
 
     /// Test helper: fill the lossy ring without flushing (exercises drop-oldest).
@@ -1138,6 +1198,7 @@ mod tests {
     #[tokio::test]
     async fn forget_session_removes_relay_subscription_and_replay_state() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("temp");
         let (client, _rx, _) = ws.subscribe("temp", Some(0)).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1161,12 +1222,56 @@ mod tests {
         assert!(!ws.replay_gates.lock().await.contains_key("temp"));
     }
 
+    /// Story 7 review: `subscribe` validates existence and registers under the
+    /// same `sessions` lock `forget_session` removes under — an unknown or
+    /// forgotten session yields [`ReplayResult::NotFound`] (never a silent
+    /// empty subscribe) on both the live-only and cursor paths, and registers
+    /// no client.
+    #[tokio::test]
+    async fn subscribe_unknown_or_forgotten_session_is_not_found() {
+        let ws = Arc::new(WsRelaySink::new());
+
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", Some(0)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
+
+        // Known → subscribe → forget → both paths now report not_found.
+        ws.seed_session_for_test("sess-eph");
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", None).await;
+        assert_eq!(replay, ReplayResult::Ok(0));
+        ws.forget_session("sess-eph").await;
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", Some(0)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-eph"), 0);
+
+        // With persistence attached an id absent from the catalog is still
+        // not_found (the cursor path must not fall through to `stale` via the
+        // durable-replay error branch).
+        let root = temp_dir("subscribe-not-found");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let ws = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", Some(3)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// AC: `WsRelaySink` delivers session + agent-level events in emission
     /// order to a subscribed client (Story 1.4 live API; was Task 8.1).
     #[tokio::test]
     async fn ws_relay_sink_delivers_events_in_order() {
         let ws = Arc::new(WsRelaySink::new());
         // Subscribe BEFORE emitting so the client receives events live.
+        ws.seed_session_for_test("sess-1");
         let (client, mut rx, replay) = ws.subscribe("sess-1", None).await;
         assert_eq!(replay, ReplayResult::Ok(0), "fresh session has no replay");
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
@@ -1245,6 +1350,7 @@ mod tests {
         let sinks: Vec<Arc<dyn EventSink>> = vec![tauri_stand_in.clone(), ws.clone()];
 
         // Subscribe BEFORE emitting so the WS client receives the event live.
+        ws.seed_session_for_test("sess-7");
         let (_client, mut rx, _replay) = ws.subscribe("sess-7", None).await;
 
         fan_out(
@@ -1289,6 +1395,7 @@ mod tests {
     #[tokio::test]
     async fn ws_relay_sink_live_drain_is_incremental() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-d");
         let (client, mut rx, _replay) = ws.subscribe("sess-d", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1340,6 +1447,7 @@ mod tests {
     #[tokio::test]
     async fn fan_out_skips_emission_when_payload_fails_to_serialize() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-nan");
         let (_client, mut rx, _replay) = ws.subscribe("sess-nan", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1373,6 +1481,7 @@ mod tests {
     #[tokio::test]
     async fn fan_out_preserves_skip_serializing_if_byte_identity() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-skip");
         let (_client, mut rx, _replay) = ws.subscribe("sess-skip", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         let payload = SkipIfPayload {
@@ -1562,6 +1671,7 @@ mod tests {
     #[tokio::test]
     async fn lossy_ring_drop_oldest_under_pressure() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
+        ws.seed_session_for_test("sess-lossy");
         let (client, mut rx, _) = ws.subscribe("sess-lossy", None).await;
         for i in 1..=5 {
             let se = SequencedEvent::new(
@@ -1588,6 +1698,7 @@ mod tests {
     #[tokio::test]
     async fn reliable_events_never_dropped() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 1));
+        ws.seed_session_for_test("sess-rel");
         let (client, mut rx, _) = ws.subscribe("sess-rel", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         // Fill lossy ring without flush, then emit a reliable event.
@@ -1621,7 +1732,9 @@ mod tests {
     #[tokio::test]
     async fn cross_session_isolation() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-a");
         let (_ca, mut rx_a, _) = ws.subscribe("sess-a", None).await;
+        ws.seed_session_for_test("sess-b");
         let (_cb, mut rx_b, _) = ws.subscribe("sess-b", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1654,6 +1767,7 @@ mod tests {
     async fn broadcast_projects_changed_reaches_subscribed_client() {
         let relay = Arc::new(WsRelaySink::new());
         // Subscribe a client to a session so it is in the relay's client set.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, Some("p-3"));
@@ -1673,6 +1787,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_projects_changed_null_default_id() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, None);
@@ -1693,6 +1808,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_chat_history_changed_reaches_subscribed_client() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_chat_history_changed(&relay);
@@ -1720,6 +1836,7 @@ mod tests {
             .await
             .unwrap();
         let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         for type_ in ["acp:session_created", "acp:session_closed"] {
@@ -1748,6 +1865,7 @@ mod tests {
     #[tokio::test]
     async fn session_lifecycle_is_silent_without_persistence() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         relay.emit(&AcpEvent {

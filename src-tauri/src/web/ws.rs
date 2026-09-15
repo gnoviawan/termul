@@ -3831,15 +3831,17 @@ async fn handle_subscribe(
     // live in the relay map (events emitted, incl. ephemeral never-persisted
     // sessions) or present in the persistence catalog (finalized sessions
     // replay from disk). Unknown ids get `not_found` (parity with
-    // `get_session_payload`) instead of a silent `{replayed: 0}` success. The
-    // durable writer is deliberately NOT reinstalled here: `reopen_writer`
-    // flips the persisted status Closed→Active, bumps `last_activity_at`, and
-    // rewrites the on-disk index — that mutation belongs to the manager's
-    // `session/load` / `session/resume` paths (flip on resume/prompt only,
-    // never on reads).
-    if !relay.knows_session(&parsed.session_id) {
-        return WsReply::err(id, WsErrorCode::NotFound, "session not found");
-    }
+    // `get_session_payload`) instead of a silent `{replayed: 0}` success.
+    // `WsRelaySink::subscribe` performs the existence validation and the
+    // subscription registration under the SAME `sessions` lock
+    // `forget_session` removes under, so a concurrently removed session
+    // cannot slip a subscription through the check→register gap (TOCTOU) —
+    // both the live-only and cursor paths surface `ReplayResult::NotFound`.
+    // The durable writer is deliberately NOT reinstalled here or in the sink:
+    // `reopen_writer` flips the persisted status Closed→Active, bumps
+    // `last_activity_at`, and rewrites the on-disk index — that mutation
+    // belongs to the manager's `session/load` / `session/resume` paths (flip
+    // on resume/prompt only, never on reads).
 
     // Do not drop the currently-live subscription until the replacement is
     // successfully registered. This preserves pending-permission ownership on
@@ -3852,6 +3854,7 @@ async fn handle_subscribe(
 
     let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
+        ReplayResult::NotFound => WsReply::err(id, WsErrorCode::NotFound, "session not found"),
         ReplayResult::Stale => {
             relay.unregister_client(client_id);
             WsReply::err(
@@ -4244,6 +4247,7 @@ mod tests {
         ));
         relay.set_rendezvous(Arc::clone(&permissions));
         relay.set_question_rendezvous(Arc::clone(&questions));
+        relay.seed_session_for_test("session-cleanup");
         let (client_id, _rx, replay) = relay.subscribe("session-cleanup", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         permissions.register(
@@ -4298,6 +4302,7 @@ mod tests {
     #[tokio::test]
     async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("session-cancelled-relay");
         let (client_id, _rx, replay) = relay.subscribe("session-cancelled-relay", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
@@ -5936,6 +5941,7 @@ mod tests {
         ));
         // Subscribe a client to the session (populates subscribed_clients via
         // the production subscribe path).
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         // Emit a permission_request event through the sink (production path) so
@@ -6017,6 +6023,7 @@ mod tests {
         relay.set_rendezvous(Arc::new(
             crate::web::permissions::PermissionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -6168,6 +6175,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         let options_value = serde_json::Value::Array(
@@ -6289,6 +6297,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -7588,6 +7597,7 @@ mod tests {
             None,
         );
         // Subscribe a client to prove the broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let reply = handle_set_default_project(
@@ -7666,6 +7676,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         // Subscribe a client to prove NO broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
@@ -7728,6 +7739,8 @@ mod tests {
             None,
         );
         // Client A subscribes to sess-a; client B subscribes to sess-b.
+        relay.seed_session_for_test("sess-a");
+        relay.seed_session_for_test("sess-b");
         let (_client_a, mut rx_a, _replay_a) = relay.subscribe("sess-a", None).await;
         let (_client_b, mut rx_b, _replay_b) = relay.subscribe("sess-b", None).await;
 
