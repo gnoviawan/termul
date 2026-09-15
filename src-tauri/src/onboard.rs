@@ -128,7 +128,7 @@ impl OnboardAnswers {
 
         let pf_default = default_projects_file()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(none — required)".to_string());
+            .unwrap_or_default();
         let projects_file = prompt_validated(
             stdin,
             stdout,
@@ -136,8 +136,15 @@ impl OnboardAnswers {
             &pf_default,
             |s| {
                 let t = s.trim();
+                // No "(none — required)" display placeholder here: with an
+                // empty default, Enter re-prompts with this error and EOF
+                // exits 0, so the literal placeholder can never be baked
+                // into the generated unit's `--projects-file`.
                 if t.is_empty() {
-                    return Err("projects registry file cannot be empty".into());
+                    return Err(
+                        "projects registry file cannot be empty (no platform default — enter a path)"
+                            .into(),
+                    );
                 }
                 Ok(PathBuf::from(t))
             },
@@ -387,22 +394,7 @@ impl ServiceManager {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("create {}: {e}", parent.display()))?;
                 }
-                // Quote every ExecStart token so paths with spaces survive
-                // systemd's whitespace-tokenizing ExecStart parser. The
-                // operator's project-root / sessions-dir can legitimately
-                // contain spaces (e.g. /home/me/My Projects); an unquoted
-                // token would split into multiple args and the server would
-                // start with a wrong/missing path. Escape embedded quotes +
-                // backslashes per systemd's quoting rules.
-                let quote = |s: &str| {
-                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                    format!("\"{escaped}\"")
-                };
-                let mut exec_start = quote(&exe.display().to_string());
-                for arg in args {
-                    exec_start.push(' ');
-                    exec_start.push_str(&quote(arg));
-                }
+                let exec_start = build_exec_start(exe, args);
                 let env_file_str = env_path.map(|p| p.display().to_string());
                 let unit_text =
                     build_systemd_unit_text(&exec_start, env_file_str.as_deref(), *scope);
@@ -571,6 +563,26 @@ fn unit_path(scope: &SystemdScope) -> PathBuf {
             home.join(".config/systemd/user/termul-server.service")
         }
     }
+}
+
+/// Assemble the systemd `ExecStart` line from the binary + CLI args. Quote
+/// every ExecStart token so paths with spaces survive systemd's
+/// whitespace-tokenizing ExecStart parser. The operator's project-root /
+/// sessions-dir / projects-file can legitimately contain spaces (e.g.
+/// /home/me/My Projects); an unquoted token would split into multiple args
+/// and the server would start with a wrong/missing path. Escape embedded
+/// quotes + backslashes per systemd's quoting rules.
+fn build_exec_start(exe: &Path, args: &[String]) -> String {
+    let quote = |s: &str| {
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    };
+    let mut exec_start = quote(&exe.display().to_string());
+    for arg in args {
+        exec_start.push(' ');
+        exec_start.push_str(&quote(arg));
+    }
+    exec_start
 }
 
 /// Build the systemd unit text. `env_file` is the optional `EnvironmentFile`
@@ -1005,6 +1017,64 @@ mod tests {
             cfg.projects_file,
             Some(a.projects_file.clone()),
             "synthesized ServerConfig.projects_file must be Some"
+        );
+    }
+
+    #[test]
+    fn generated_unit_text_pins_projects_file() {
+        // CAP-2 acceptance: the onboarding-GENERATED unit (not just the arg
+        // vector) must wire the projects file. Composes the same steps
+        // install_and_start uses: to_command_args → build_exec_start →
+        // build_systemd_unit_text.
+        let a = answers_localhost();
+        let exec_start =
+            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"--projects-file\""),
+            "generated unit must pin --projects-file, got:\n{unit}"
+        );
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/projects.json\""),
+            "generated unit must carry the projects file path, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn collect_wires_typed_projects_file_through_args_and_config() {
+        // Drives the interactive prompt loop with scripted answers (typed
+        // values for the three path prompts, defaults elsewhere) and asserts
+        // each typed value lands in its own field — a prompt-wiring miswire
+        // (e.g. sessions_dir cloned into projects_file) fails here. No env
+        // dependence: every value the loop consumes comes from the script.
+        let input = "\n\n/tmp\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n"
+            .as_bytes();
+        let mut stdin = std::io::BufReader::new(input);
+        let mut stdout = Vec::new();
+        let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
+        assert_eq!(
+            answers.sessions_dir,
+            PathBuf::from("/tmp/qa-collect-sessions"),
+            "sessions-dir prompt must land in sessions_dir"
+        );
+        assert_eq!(
+            answers.projects_file,
+            PathBuf::from("/tmp/qa-collect-projects.json"),
+            "projects-file prompt must land in projects_file"
+        );
+        assert_ne!(
+            answers.projects_file, answers.sessions_dir,
+            "projects file and sessions dir must not be wired to the same value"
+        );
+        let args = answers.to_command_args();
+        let pos = args
+            .iter()
+            .position(|a| a == "--projects-file")
+            .expect("args must carry --projects-file");
+        assert_eq!(args[pos + 1], "/tmp/qa-collect-projects.json");
+        assert_eq!(
+            answers.to_server_config().projects_file,
+            Some(PathBuf::from("/tmp/qa-collect-projects.json"))
         );
     }
 

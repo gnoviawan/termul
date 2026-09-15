@@ -58,6 +58,12 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// `$HOME/.local/state/termul/projects.json` →
 /// `%LOCALAPPDATA%/Termul/projects.json`.
 ///
+/// Empty-string env vars (`XDG_STATE_HOME=""`, `HOME=""`,
+/// `LOCALAPPDATA=""`) are filtered out so the default never becomes a
+/// CWD-relative `termul/projects.json` (mirrors the Patch-15 guard in
+/// [`ServerConfig::service_account_state_dir`]); an empty value falls
+/// through to the next branch or the `None` outcome.
+///
 /// `None` is returned only when no platform state dir is discoverable and
 /// the env var is unset; `ServerConfig::from_args` then leaves
 /// `projects_file: None` and the server runs an in-memory registry
@@ -74,20 +80,27 @@ pub fn default_projects_file() -> Option<PathBuf> {
     }
     #[cfg(unix)]
     {
-        if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
+        if let Some(base) = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+        {
             return Some(base.join("termul").join("projects.json"));
         }
-        std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-            home.join(".local")
-                .join("state")
-                .join("termul")
-                .join("projects.json")
-        })
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|home| {
+                home.join(".local")
+                    .join("state")
+                    .join("termul")
+                    .join("projects.json")
+            })
     }
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|base| base.join("Termul").join("projects.json"))
     }
     #[cfg(not(any(unix, windows)))]
@@ -1248,6 +1261,83 @@ mod tests {
             cfg.projects_file,
             Some(expected),
             "whitespace-only $TERMUL_PROJECTS_FILE must be ignored in favor of the default"
+        );
+    }
+
+    #[test]
+    fn default_projects_file_trims_padded_env() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE"]);
+        std::env::set_var("TERMUL_PROJECTS_FILE", "  /tmp/termul-padded/projects.json  ");
+        let resolved = default_projects_file();
+        restore_env(saved);
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/tmp/termul-padded/projects.json")),
+            "padded $TERMUL_PROJECTS_FILE must be trimmed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_projects_file_empty_xdg_falls_back_to_home() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
+        let home = tempdir_like("projects-empty-xdg");
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        // Empty-string env vars must be filtered (Patch-15 parity with
+        // service_account_state_dir): an empty XDG_STATE_HOME must NOT
+        // produce a CWD-relative "termul/projects.json".
+        std::env::set_var("XDG_STATE_HOME", "");
+        std::env::set_var("HOME", &home);
+        let resolved = default_projects_file();
+        restore_env(saved);
+        let expected = home.join(".local/state/termul/projects.json");
+        cleanup(&home);
+        assert_eq!(
+            resolved,
+            Some(expected),
+            "empty XDG_STATE_HOME must fall through to the $HOME default"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_projects_file_none_when_no_state_dir() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        std::env::remove_var("XDG_STATE_HOME");
+        std::env::remove_var("HOME");
+        let resolved = default_projects_file();
+        restore_env(saved);
+        assert_eq!(
+            resolved, None,
+            "no env + no state dir must resolve to None (in-memory registry)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_args_projects_file_none_when_no_state_dir() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        std::env::remove_var("XDG_STATE_HOME");
+        std::env::remove_var("HOME");
+        // Pass --project-root + --sessions-dir explicitly so the missing
+        // $HOME cannot fail those unrelated resolutions first.
+        let cfg = ServerConfig::from_args([
+            "--project-root",
+            "/tmp",
+            "--sessions-dir",
+            "/tmp/termul-no-state-sessions",
+        ])
+        .expect("parse");
+        restore_env(saved);
+        assert_eq!(
+            cfg.projects_file, None,
+            "no flag/env and no state dir must leave projects_file None"
         );
     }
 }
