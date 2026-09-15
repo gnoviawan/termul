@@ -79,12 +79,15 @@ export function SSHPanel({
           return
         }
       }
-      if (activeProfileId === profile.id) {
-        selectProfile(null)
-      }
       const success = await deleteProfile(profile.id)
       if (!success) {
         toast.error(`Failed to delete SSH profile “${profile.name}”`)
+        return
+      }
+      // Clear the active selection only after the delete succeeded so a
+      // failed delete never strands the user on an unselected live profile.
+      if (activeProfileId === profile.id) {
+        selectProfile(null)
       }
     } catch (error) {
       toast.error(

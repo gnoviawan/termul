@@ -270,7 +270,7 @@ describe('SSHPanel', () => {
       expect(mockDeleteProfile).not.toHaveBeenCalled()
     })
 
-    it('disconnects before deleting, clears the active selection, then deletes (connected active profile)', async () => {
+    it('disconnects before deleting and clears the active selection only after the delete succeeds (connected active profile)', async () => {
       connectionsRef.current = [connectedConnection]
       renderPanel({ activeProfileId: 'p1' })
       fireEvent.contextMenu(screen.getByText('prod-box'))
@@ -283,6 +283,10 @@ describe('SSHPanel', () => {
       // disconnect must be awaited before deleteProfile runs.
       expect(mockDisconnect.mock.invocationCallOrder[0]).toBeLessThan(
         mockDeleteProfile.mock.invocationCallOrder[0]
+      )
+      // Selection is cleared only after the delete succeeded.
+      expect(mockDeleteProfile.mock.invocationCallOrder[0]).toBeLessThan(
+        mockSelectProfile.mock.invocationCallOrder[0]
       )
     })
 
@@ -311,12 +315,14 @@ describe('SSHPanel', () => {
 
     it('surfaces a toast error when deleteProfile fails', async () => {
       mockDeleteProfile.mockResolvedValue(false)
-      renderPanel()
+      renderPanel({ activeProfileId: 'p1' })
       fireEvent.contextMenu(screen.getByText('prod-box'))
       fireEvent.click(screen.getByText('Delete Profile'))
       fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+      // A failed delete must not strand the user on an unselected live profile.
+      expect(mockSelectProfile).not.toHaveBeenCalled()
     })
 
     it('aborts the delete when disconnect fails (no delete, no selection clear, error toast)', async () => {
