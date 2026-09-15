@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AuthMethod } from '@/lib/acp-api'
 import {
+  AGENT_AUTH_REQUIRED_CODE,
   AmbiguousAuthError,
   classifySetupError,
   formatAcpSpawnError,
@@ -89,6 +90,53 @@ describe('classifySetupError order and categories (P4)', () => {
     expect(classifySetupError('Please run `cursor login` to authenticate').category).toBe('auth')
     expect(classifySetupError('not logged in').category).toBe('auth')
     expect(classifySetupError('401 Unauthorized').category).toBe('auth')
+  })
+  it('classifies an explicit agent_auth_required code as auth even without auth wording', () => {
+    // New servers (story 7) tag create_session auth failures with an explicit
+    // code — the code is authoritative even when the message has no auth wording.
+    const err = Object.assign(new Error('setup did not complete'), {
+      code: AGENT_AUTH_REQUIRED_CODE
+    })
+    const result = classifySetupError(err)
+    expect(result.category).toBe('auth')
+    expect(result.label).toBe(SETUP_ERROR_LABELS.auth)
+    expect(result.detail).toBe('setup did not complete')
+  })
+
+  it('lets an explicit agent_auth_required code beat transport wording in the message', () => {
+    const err = Object.assign(new Error('connection reset by peer'), {
+      code: AGENT_AUTH_REQUIRED_CODE
+    })
+    expect(classifySetupError(err).category).toBe('auth')
+  })
+
+  it('lets an explicit agent_auth_required code beat spawn (ENOENT) wording', () => {
+    // Ordering lock: the code check runs before the whole pattern table.
+    const err = Object.assign(new Error('spawn codex ENOENT'), {
+      code: AGENT_AUTH_REQUIRED_CODE
+    })
+    expect(classifySetupError(err).category).toBe('auth')
+  })
+
+  it('never renders "[object Object]" for a coded error without a message', () => {
+    expect(classifySetupError({ code: AGENT_AUTH_REQUIRED_CODE }).detail).toBe(
+      AGENT_AUTH_REQUIRED_CODE
+    )
+  })
+
+  it('classifies a serialized (plain-object) agent_auth_required error as auth', () => {
+    const result = classifySetupError({
+      code: AGENT_AUTH_REQUIRED_CODE,
+      message: 'authenticate first'
+    })
+    expect(result.category).toBe('auth')
+    expect(result.detail).toBe('authenticate first')
+  })
+
+  it('leaves errors without the code on the message-pattern path (old servers)', () => {
+    // Old servers never send agent_auth_required — classification is unchanged.
+    expect(classifySetupError(new Error('setup did not complete')).category).toBe('unknown')
+    expect(classifySetupError({ message: 'setup did not complete' }).category).toBe('unknown')
   })
 
   it('classifies a plain initialize/session timeout as timeout', () => {

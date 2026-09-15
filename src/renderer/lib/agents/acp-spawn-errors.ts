@@ -76,6 +76,15 @@ export const SETUP_ERROR_LABELS: Record<SetupErrorCategory, string> = {
 
 /** Marker code carried by {@link AmbiguousAuthError} so it survives serialization. */
 export const AMBIGUOUS_AUTH_CODE = 'ACP_MULTI_AUTH'
+/**
+ * Server-side `create_session` error code marking the failure as auth-required
+ * (additive — story 7). Explicit code beats message wording, so it is checked
+ * before the message-pattern table; old servers never send it and fall through
+ * to the existing classification unchanged. The code arrives via the web/WS
+ * transport (`AcpTransportError.code`); desktop Tauri invoke rejections flatten
+ * to strings, so desktop classification keeps relying on message patterns.
+ */
+export const AGENT_AUTH_REQUIRED_CODE = 'agent_auth_required'
 
 /**
  * Thrown when an agent advertises more than one authentication method and none
@@ -92,7 +101,7 @@ export class AmbiguousAuthError extends Error {
     const names = methods.map((m) => m.name).join(', ')
     super(
       `This agent advertises multiple sign-in methods (${names}). ` +
-        'Termul does not choose one automatically; select a single-method agent or configure the provider directly.'
+        'Termul does not choose one automatically; pick one of the methods below to sign in.'
     )
     this.name = 'AmbiguousAuthError'
     this.methods = methods
@@ -129,8 +138,11 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  * Classify a provider-setup failure into a stable {@link PrepareChatError}.
  *
  * Classification is deterministic and order-sensitive (P4):
- *   multi-auth → spawn (ENOENT) → transport → auth → timeout → unknown.
+ *   multi-auth → `agent_auth_required` code → spawn (ENOENT) → transport →
+ *   auth → timeout → unknown.
  *
+ * An explicit server error code is checked right after multi-auth: the code is
+ * authoritative, so it wins even when the message carries no auth wording.
  * Transport is checked before auth (so connection/stream wording wins when both
  * are present) and before timeout (so "connection timed out" evicts rather than
  * being treated as a benign slow setup). The category is always derived from the
@@ -146,6 +158,22 @@ export function classifySetupError(
 
   if (isAmbiguousAuthError(raw)) {
     return { category: 'multi-auth', label: SETUP_ERROR_LABELS['multi-auth'], detail: message }
+  }
+  if (
+    typeof raw === 'object' &&
+    raw !== null &&
+    'code' in raw &&
+    raw.code === AGENT_AUTH_REQUIRED_CODE
+  ) {
+    // Plain objects (post-serialization) carry the message on a property; when
+    // it is absent, fall back to the code itself — never String(raw), which is
+    // the useless "[object Object]" for plain objects.
+    const own = 'message' in raw ? raw.message : undefined
+    return {
+      category: 'auth',
+      label: SETUP_ERROR_LABELS.auth,
+      detail: typeof own === 'string' ? own : AGENT_AUTH_REQUIRED_CODE
+    }
   }
   if (ENOENT_PATTERN.test(message)) {
     return {

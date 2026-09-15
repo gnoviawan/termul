@@ -2111,19 +2111,27 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
   if (existing) return existing
 
   const task = (async (): Promise<void> => {
-    try {
-      const methods = get().agents[agentId]?.authMethods ?? []
-      // P5: ignore empty/whitespace ids — an unusable method must not be sent.
-      const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
-      if (valid.length === 0) return
-      if (valid.length > 1) throw new AmbiguousAuthError(valid)
-      await acpApi.authenticate(agentId, valid[0].id.trim())
-      authenticatedAgents.add(agentId)
-    } finally {
-      inFlightAuth.delete(agentId)
-    }
+    const methods = get().agents[agentId]?.authMethods ?? []
+    // P5: ignore empty/whitespace ids — an unusable method must not be sent.
+    const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
+    if (valid.length === 0) return
+    if (valid.length > 1) throw new AmbiguousAuthError(valid)
+    await acpApi.authenticate(agentId, valid[0].id.trim())
+    authenticatedAgents.add(agentId)
   })()
   inFlightAuth.set(agentId, task)
+  // The cleanup must NOT be an in-body `finally`: the body settles
+  // synchronously for the multi-auth throw / no-auth return (it never reaches
+  // an `await`), so an in-body finally would run BEFORE the `set` above and
+  // wedge the settled (rejected) promise in the map forever — every later
+  // `authenticateAgent` click would re-toast the stale AmbiguousAuthError
+  // without ever sending an authenticate frame (QA F6). A `then` callback
+  // always runs as a microtask — after `set` — and the identity guard keeps
+  // a late cleanup from deleting a newer entry.
+  const cleanup = () => {
+    if (inFlightAuth.get(agentId) === task) inFlightAuth.delete(agentId)
+  }
+  task.then(cleanup, cleanup)
   return task
 }
 
@@ -2998,10 +3006,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const existing = inFlightAuth.get(agentId)
     if (existing) return existing
     const promise = (async () => {
-      await acpApi.authenticate(agentId, methodId)
+      await acpApi.authenticate(agentId, methodId.trim())
       // Remember success so the next `createSession` skips its own authenticate.
       authenticatedAgents.add(agentId)
-    })().finally(() => inFlightAuth.delete(agentId))
+    })().finally(() => {
+      // Identity guard (see `authenticateBeforeSession`): a late cleanup must
+      // never delete a newer in-flight entry for the same agent.
+      if (inFlightAuth.get(agentId) === promise) inFlightAuth.delete(agentId)
+    })
     inFlightAuth.set(agentId, promise)
     return promise
   },
