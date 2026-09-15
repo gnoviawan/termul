@@ -79,7 +79,12 @@ export const AMBIGUOUS_AUTH_CODE = 'ACP_MULTI_AUTH'
 /**
  * Additive wire code for "the agent requires sign-in before `session/new` can
  * proceed" (carried on `AcpTransportError.code`; story 7 emits it, older hosts
- * never do). The pre-code fallback is the `ACP_AUTH_REQUIRED` message prefix.
+ * never do). Explicit code beats message wording, so it is checked before the
+ * message-pattern table; old servers never send it and fall through to the
+ * existing classification unchanged. The code arrives via the web/WS transport
+ * (`AcpTransportError.code`); desktop Tauri invoke rejections flatten to
+ * strings, so desktop classification keeps relying on message patterns. The
+ * pre-code fallback is the `ACP_AUTH_REQUIRED` message prefix.
  */
 export const AGENT_AUTH_REQUIRED_CODE = 'agent_auth_required'
 export const AGENT_AUTH_REQUIRED_PREFIX = 'ACP_AUTH_REQUIRED'
@@ -117,7 +122,7 @@ export class AmbiguousAuthError extends Error {
     const names = methods.map((m) => m.name).join(', ')
     super(
       `This agent advertises multiple sign-in methods (${names}). ` +
-        'Termul does not choose one automatically; select a single-method agent or configure the provider directly.'
+        'Termul does not choose one automatically; pick one of the methods below to sign in.'
     )
     this.name = 'AmbiguousAuthError'
     this.methods = methods
@@ -163,6 +168,8 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  * transport closed") and must still surface as the actionable sign-in
  * category.
  *
+ * An explicit server error code is checked right after multi-auth: the code is
+ * authoritative, so it wins even when the message carries no auth wording.
  * Transport is checked before auth (so connection/stream wording wins when both
  * are present) and before timeout (so "connection timed out" evicts rather than
  * being treated as a benign slow setup). The category is always derived from the
@@ -182,7 +189,18 @@ export function classifySetupError(
   // The explicit auth-required signal wins over the wording heuristics below
   // (an `agent_auth_required` reply may carry transport-sounding detail text).
   if (isAgentAuthRequiredError(raw)) {
-    return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail: message }
+    // Plain objects (post-serialization) carry the message on a property; when
+    // it is absent on a non-Error value, String(raw) is the useless
+    // "[object Object]" — fall back to the code itself.
+    const own =
+      typeof raw === 'object' && raw !== null && 'message' in raw ? raw.message : undefined
+    const detail =
+      typeof own === 'string'
+        ? own
+        : raw instanceof Error || typeof raw === 'string'
+          ? message
+          : AGENT_AUTH_REQUIRED_CODE
+    return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail }
   }
   if (ENOENT_PATTERN.test(message)) {
     return {
