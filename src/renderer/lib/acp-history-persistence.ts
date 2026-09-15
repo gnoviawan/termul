@@ -363,7 +363,35 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
 
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   const transport = getAcpTransport()
-  const mode = transport.historyMode?.()
+  let mode = transport.historyMode?.()
+  if (mode === 'live_only' && transport.listPersistedSessions) {
+    // Boot race (F13): the WS transport reports the pre-handshake default
+    // 'live_only' until connect()'s authenticate handshake negotiates the real
+    // mode ('server' on termul-server). Await the handshake and re-read the
+    // mode before concluding there is no server-side history. connect() is
+    // idempotent (fast-returns on an OPEN+authed socket); the Tauri transport
+    // has no historyMode, so this branch never triggers on desktop. connect()
+    // can reject when the server is unreachable (closed/timeout) — the
+    // rejection propagates to callers, which log a warning and preserve the
+    // current index; the existing reconnect refetch recovers.
+    try {
+      await transport.connect()
+    } catch (error) {
+      // Boundary log (CodeRabbit PR #699): surface handshake failures with
+      // safe context only — the negotiated history mode (never credentials or
+      // tokens; connect() rejections carry static AcpTransportError messages).
+      // The rejection still propagates so callers keep their existing
+      // preserve-and-recover behavior.
+      const description = error instanceof Error ? error.message : String(error)
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.historyPersistence',
+        message: `History-mode handshake failed in loadSessionIndex (negotiated mode: ${historyMode() ?? 'unknown'}): ${description}`
+      })
+      throw error
+    }
+    mode = historyMode()
+  }
   if (mode === 'server' && transport.listPersistedSessions) {
     return (await transport.listPersistedSessions()).map(fromPersistedSessionSummary)
   }
