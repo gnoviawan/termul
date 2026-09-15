@@ -1454,8 +1454,8 @@ export class WsAcpTransport implements AcpTransport {
 
   private async handleEvent(evt: WsEvent): Promise<void> {
     if (evt.type === 'auth_required') {
-      // CAP-1 interim gate: present the resolved web auth token (URL ?token= →
-      // localStorage), falling back to the legacy 'dev' placeholder that
+      // CAP-1 interim gate: present the resolved web auth token (URL #token=
+      // fragment → localStorage), falling back to the legacy 'dev' placeholder that
       // ungated servers accept (byte-identical pre-gate behavior). Send
       // directly (socket is already open); do NOT call request()→connect() or
       // we deadlock on the in-flight connect promise.

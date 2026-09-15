@@ -1067,6 +1067,16 @@ async fn handle_request(
             if let Some(gate) = web_auth {
                 let presented = req.payload["token"].as_str().unwrap_or("");
                 if !gate.accepts(presented) {
+                    // Durable boundary event (AGENTS.md logging policy): a
+                    // refused authenticate must be visible in the service
+                    // log. NEVER log the presented token — only that the
+                    // gate refused, plus enough context to correlate.
+                    warn!(
+                        target: "termul::web::ws",
+                        request_id = %req.id,
+                        token_presented = !presented.is_empty(),
+                        "web auth gate refused /ws authenticate (invalid or missing token)"
+                    );
                     return WsReply::err(
                         id,
                         WsErrorCode::Unauthorized,

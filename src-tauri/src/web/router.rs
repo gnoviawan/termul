@@ -69,7 +69,7 @@ use super::assets;
 /// [`assets::static_fallback`].
 ///
 /// `web_auth` is the web auth gate (CAP-1 interim, QA remediation Story 1).
-/// `Some` requires the token (Bearer header or `?token=`) on every gated API
+/// `Some` requires the token (`Authorization: Bearer` header) on every gated API
 /// route via the [`web_auth_gate`] middleware and stores it in [`AppState`]
 /// for `/ws` + `/terminal/ws`. `None` = ungated (legacy behavior).
 #[allow(clippy::too_many_arguments)]
@@ -308,50 +308,23 @@ fn requires_token(path: &str) -> bool {
     GATED_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
 }
 
-/// Extract the presented token: `Authorization: Bearer <token>` header wins,
-/// then the `?token=` query param (the banner URL hint). The scheme match is
-/// case-insensitive (RFC 7235); the query value is percent-decoded (form
-/// semantics: `+` is a space) so operator-configured tokens with reserved
-/// characters survive the URL round-trip.
+/// Extract the presented token from the `Authorization: Bearer <token>`
+/// header (scheme match is case-insensitive, RFC 7235). There is
+/// deliberately NO `?token=` query-param fallback on gated API routes:
+/// query strings end up in access logs, proxy logs, and `Referer` headers,
+/// which is exactly where a bearer credential must not live. The first-boot
+/// bootstrap URL carries the token in the URL FRAGMENT (`#token=`) instead —
+/// fragments are never sent to the server — and the browser client moves it
+/// to localStorage + the `Authorization` header on first load
+/// (`src/renderer/lib/web-auth-token.ts`).
 fn presented_token(request: &Request) -> Option<String> {
-    if let Some(value) = request.headers().get(axum::http::header::AUTHORIZATION) {
-        if let Ok(value) = value.to_str() {
-            let bytes = value.as_bytes();
-            if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
-                return Some(value[7..].to_string());
-            }
-        }
-    }
-    let query = request.uri().query()?;
-    for pair in query.split('&') {
-        if let Some(token) = pair.strip_prefix("token=") {
-            return Some(percent_decode(token));
-        }
+    let value = request.headers().get(axum::http::header::AUTHORIZATION)?;
+    let value = value.to_str().ok()?;
+    let bytes = value.as_bytes();
+    if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
+        return Some(value[7..].to_string());
     }
     None
-}
-
-/// Minimal percent-decoding for the `?token=` query value (the only query
-/// parameter the gate reads): `%XX` byte escapes plus form-style `+` → space.
-/// Invalid escapes pass through literally — a malformed value simply fails
-/// the token compare. `from_utf8_lossy` keeps a non-UTF-8 decode total (it
-/// can only ever mismatch, never panic).
-fn percent_decode(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 3 <= bytes.len() {
-            if let Ok(value) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
-                out.push(value);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Axum middleware enforcing the web auth gate on gated API routes. The 401
@@ -955,15 +928,26 @@ mod tests {
         assert!(checked > 20, "route scan must find the full table ({checked})");
     }
 
-    #[test]
-    fn presented_token_parsing_rules() {
-        // Bearer scheme is case-insensitive (RFC 7235); the query value is
-        // percent-decoded with form semantics.
-        assert_eq!(percent_decode("abc123"), "abc123");
-        assert_eq!(percent_decode("a%20b+c"), "a b c");
-        assert_eq!(percent_decode("tok%2Ben"), "tok+en");
-        assert_eq!(percent_decode("%zz"), "%zz", "invalid escapes stay literal");
-        assert_eq!(percent_decode("trail%"), "trail%");
+    #[tokio::test]
+    async fn gated_router_refuses_query_param_token() {
+        // The `?token=` query fallback was removed: bearer credentials must
+        // not travel in URL query strings (access logs, proxies, Referer).
+        // A correct token in the query alone is NOT accepted.
+        let dir = TempDir::new("gated-query-token");
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects?token=t0ken")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "query-param tokens must not authenticate API routes"
+        );
     }
 
     #[tokio::test]
@@ -990,16 +974,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gated_router_admits_bearer_and_query_token() {
+    async fn gated_router_admits_bearer_token() {
         let dir = TempDir::new("gated-token");
         for req in [
+            // Canonical form.
             Request::builder()
                 .uri("/projects")
                 .header("Authorization", "Bearer t0ken")
                 .body(Body::empty())
                 .expect("build request"),
+            // RFC 7235 case-insensitive scheme.
             Request::builder()
-                .uri("/projects?token=t0ken")
+                .uri("/projects")
+                .header("Authorization", "bearer t0ken")
                 .body(Body::empty())
                 .expect("build request"),
         ] {

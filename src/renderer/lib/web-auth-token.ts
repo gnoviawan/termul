@@ -5,11 +5,15 @@
  * A gated `termul-server` (public bind or explicit `--web-auth-token`)
  * requires one bearer token on the `/ws` `authenticate` handshake,
  * `/terminal/ws`, and every gated HTTP API route. The token reaches the
- * browser via the `?token=` URL param (the server's first-boot banner prints
- * a ready-to-open URL); it is then persisted to localStorage so reloads and
- * deep links keep working. Absent a token the client sends the legacy `'dev'`
- * placeholder on `/ws`, which ungated servers still accept.
+ * browser via the `#token=` URL FRAGMENT (the server's first-boot banner
+ * prints a ready-to-open URL) — never the query string, so the secret is not
+ * sent to the server, logged by proxies, or leaked via `Referer` headers.
+ * It is then persisted to localStorage so reloads and deep links keep
+ * working. Absent a token the client sends the legacy `'dev'` placeholder on
+ * `/ws`, which ungated servers still accept.
  */
+
+import { logFrontendError } from './log-api'
 
 const STORAGE_KEY = 'termul.webAuthToken'
 
@@ -23,38 +27,68 @@ function safeLocalStorage(): Storage | null {
 }
 
 /**
- * Resolve the current web auth token. Precedence: the URL `?token=` param
- * (persisted to localStorage on first sight, so reloads survive) then the
- * persisted localStorage value; `null` when neither exists.
+ * Re-entry guard: reporting a storage failure flows through the REST logger,
+ * whose `authHeader()` resolves the token again — without the guard, a
+ * throwing localStorage would loop the failure report indefinitely.
  */
-export function getWebAuthToken(): string | null {
-  if (typeof window === 'undefined' || !window.location) return null
-  const params = new URLSearchParams(window.location.search)
-  const fromUrl = params.get('token')
-  if (fromUrl) {
-    safeLocalStorage()?.setItem(STORAGE_KEY, fromUrl)
-    stripTokenFromUrl(params)
-    return fromUrl
-  }
-  const stored = safeLocalStorage()?.getItem(STORAGE_KEY)
-  return stored || null
+let reportingStorageFailure = false
+
+/**
+ * Best-effort, redacted report of a localStorage failure (operation only —
+ * never the token or any value).
+ */
+function reportStorageFailure(operation: 'read' | 'write'): void {
+  if (reportingStorageFailure) return
+  reportingStorageFailure = true
+  void logFrontendError({
+    level: 'warn',
+    source: 'web-auth-token',
+    message: `localStorage ${operation} for the web auth token failed; the token is kept for this session only`
+  }).finally(() => {
+    reportingStorageFailure = false
+  })
 }
 
 /**
- * Remove the (just-captured) `token` param from the address bar via
- * `history.replaceState` so the secret does not linger in the visible URL,
- * browser history, bookmarks, or `Referer` headers. All other params and the
- * hash are preserved. Best-effort: a failure leaves the working token in
- * localStorage and is not an error.
+ * Resolve the current web auth token. Precedence: the `#token=` URL fragment
+ * (persisted to localStorage on first sight, so reloads survive) then the
+ * persisted localStorage value; `null` when neither exists. A storage write
+ * failure is non-fatal: the fragment token still applies to this session.
  */
-function stripTokenFromUrl(params: URLSearchParams): void {
+export function getWebAuthToken(): string | null {
+  if (typeof window === 'undefined' || !window.location) return null
+  const hash = window.location.hash
+  const fromUrl = hash.length > 1 ? new URLSearchParams(hash.slice(1)).get('token') : null
+  if (fromUrl) {
+    // Strip the token from the address bar FIRST: the secret leaves the
+    // visible URL / history / bookmarks immediately, and a re-entrant
+    // resolution (storage-failure report → REST logger → authHeader) no
+    // longer sees a fragment token. Best-effort: replaceState can throw on
+    // opaque origins — the token still works.
+    try {
+      const hashParams = new URLSearchParams(hash.slice(1))
+      hashParams.delete('token')
+      const rest = hashParams.toString()
+      const url = `${window.location.pathname}${window.location.search}${rest ? `#${rest}` : ''}`
+      window.history.replaceState(window.history.state, '', url)
+    } catch {
+      // Opaque origin — ignore.
+    }
+    // Persist so reloads and deep links keep working. Quota/SecurityError is
+    // non-fatal: the fragment token still applies to THIS session; reloads
+    // then need a fresh bootstrap link.
+    try {
+      safeLocalStorage()?.setItem(STORAGE_KEY, fromUrl)
+    } catch {
+      reportStorageFailure('write')
+    }
+    return fromUrl
+  }
   try {
-    params.delete('token')
-    const query = params.toString()
-    const url = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
-    window.history.replaceState(window.history.state, '', url)
+    return safeLocalStorage()?.getItem(STORAGE_KEY) || null
   } catch {
-    // replaceState can throw on opaque origins — the token still works.
+    reportStorageFailure('read')
+    return null
   }
 }
 

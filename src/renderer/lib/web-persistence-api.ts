@@ -163,8 +163,8 @@ export class WebStoreSocket {
   private authenticate(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const id = randomUUID()
-      // CAP-1 interim gate: present the resolved web auth token (URL ?token= →
-      // localStorage), falling back to the legacy 'dev' placeholder that
+      // CAP-1 interim gate: present the resolved web auth token (URL #token=
+      // fragment → localStorage), falling back to the legacy 'dev' placeholder that
       // ungated servers accept. Mirrors WsAcpTransport's auth_required handling.
       const frame: WsRequest = {
         id,

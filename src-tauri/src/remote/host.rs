@@ -368,6 +368,9 @@ impl RemoteServerState {
             // desktop shared-live host passes None (ungated; its cloudflared
             // exposure predates this story — Epic-2 territory).
             web_auth_token: None,
+            // `--state-dir` is standalone-only (onboard-generated launches);
+            // the desktop host keeps env-based state dir resolution.
+            state_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

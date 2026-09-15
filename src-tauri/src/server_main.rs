@@ -97,6 +97,9 @@ fn main() -> ExitCode {
     ) {
         Ok(resolution) => resolution,
         Err(error) => {
+            // Durable tracing event (stderr is lost for detached services);
+            // the message carries resolution context only — never the token.
+            error!("termul-server: web auth resolution failed, refusing to start: {error}");
             eprintln!("termul-server: {error}");
             return ExitCode::from(1);
         }
@@ -125,7 +128,11 @@ fn main() -> ExitCode {
                          termul-server: generated a web auth token (first boot on a public bind).\n\
                          Persisted (owner-only: mode 0600 on Unix) to: {}\n\
                          Token: {}\n\
-                         Open:  http://<host>:{}/?token={}\n\
+                         Open:  http://<host>:{}/#token={}\n\
+                         Note:  this is a plaintext-HTTP bootstrap URL. The token travels in\n\
+                                the URL FRAGMENT (never sent to the server or logged by it);\n\
+                                keep the link private and prefer a TLS-terminating proxy on\n\
+                                untrusted networks.\n\
                          ========================================================================",
                         path.display(),
                         auth.reveal_for_banner(),
@@ -604,6 +611,13 @@ OPTIONS:
                                   command history, SSH profiles, ...).
                                   [default: $TERMUL_STORE_FILE or
                                   <state dir>/store.json]
+    --state-dir <PATH>            Service-account state dir override. Wins over
+                                  $XDG_STATE_HOME/$HOME (%LOCALAPPDATA% on
+                                  Windows). The onboard wizard passes this so
+                                  the background-launched server uses the exact
+                                  state dir it printed (web auth token, store,
+                                  workspace manifests, ACP catalog).
+                                  [default: <state dir> resolution below]
 
   Tuning:
     --event-log-capacity <N>      Per-session event-log ring capacity.

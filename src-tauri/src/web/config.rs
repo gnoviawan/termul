@@ -230,6 +230,16 @@ pub struct ServerConfig {
     /// stays ungated (legacy behavior). The desktop shared-live host always
     /// passes `None`.
     pub web_auth_token: Option<WebAuthToken>,
+    /// Explicit service-account state dir override (`--state-dir`). When
+    /// `Some`, [`Self::service_account_state_dir`] returns it verbatim
+    /// instead of resolving `$XDG_STATE_HOME`/`$HOME`/`%LOCALAPPDATA%` from
+    /// the process environment. The onboard wizard sets this so the
+    /// background-launched server (systemd unit or `setsid` child) uses the
+    /// exact state dir the wizard printed — a systemd unit without an env
+    /// file otherwise resolves a DIFFERENT dir (its environment lacks the
+    /// operator's `XDG_STATE_HOME`/`HOME`), and the generated web auth token
+    /// would land somewhere other than the advertised path.
+    pub state_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -266,6 +276,12 @@ impl ServerConfig {
     /// behaves the same way (the next branch or the temp-dir fallback).
     #[must_use]
     pub fn service_account_state_dir(&self) -> PathBuf {
+        // Explicit `--state-dir` wins over every env-based branch: the
+        // onboard wizard passes the dir it resolved (and printed) so the
+        // background-launched server agrees with it byte-for-byte.
+        if let Some(dir) = &self.state_dir {
+            return dir.clone();
+        }
         #[cfg(unix)]
         {
             // Patch 15: filter out empty-string env vars so an empty
@@ -334,6 +350,9 @@ impl ServerConfig {
         // `None` means resolve `<service_account_state_dir>/store.json` at
         // serve time (the desktop shared-live path never sets this).
         let mut store_file: Option<PathBuf> = None;
+        // Explicit service-account state dir override (`--state-dir`); `None`
+        // keeps the env-based resolution in `service_account_state_dir`.
+        let mut state_dir: Option<PathBuf> = None;
         // Operator opt-in for non-loopback fs/git/workspace write peers
         // (CWE-306 guard relaxation). CLI flag wins over env; an
         // unset/invalid env var stays `false` (lenient — no fatal startup).
@@ -504,6 +523,18 @@ impl ServerConfig {
                     }
                     store_file = Some(PathBuf::from(trimmed));
                 }
+                "--state-dir" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --state-dir".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --state-dir '': must be a non-empty path".into(),
+                        ));
+                    }
+                    state_dir = Some(PathBuf::from(trimmed));
+                }
                 "--allow-remote-writes" => {
                     // Bare flag (no value). CLI wins over the env var; the
                     // env is read below only when the flag is absent.
@@ -638,6 +669,7 @@ impl ServerConfig {
             workspace_manifests_dir,
             acp_catalog_dir,
             store_file,
+            state_dir,
             allow_remote_writes,
             web_auth_token,
         })
@@ -768,6 +800,7 @@ mod tests {
             store_file: None,
             allow_remote_writes: false,
             web_auth_token: None,
+            state_dir: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -788,6 +821,7 @@ mod tests {
             store_file: None,
             allow_remote_writes: false,
             web_auth_token: None,
+            state_dir: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -1012,6 +1046,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn from_args_accepts_state_dir_and_prefers_it() {
+        let cfg = ServerConfig::from_args(["--state-dir", "/var/lib/termul-state"])
+            .expect("parse");
+        assert_eq!(
+            cfg.state_dir.as_deref(),
+            Some(Path::new("/var/lib/termul-state"))
+        );
+        // The override wins over every env-based branch — this is the
+        // onboard-launched server agreeing with the wizard's printed path.
+        assert_eq!(
+            cfg.service_account_state_dir(),
+            PathBuf::from("/var/lib/termul-state")
+        );
+    }
+
+    #[test]
+    fn from_args_missing_state_dir_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--state-dir"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_empty_state_dir() {
+        assert!(matches!(
+            ServerConfig::from_args(["--state-dir", ""]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
     // Patch 15: `service_account_state_dir` filters out empty env var values
     // so an empty `XDG_STATE_HOME` / `HOME` / `LOCALAPPDATA` does not produce
     // a relative `./termul` dir.
@@ -1031,6 +1097,7 @@ mod tests {
             store_file: None,
             allow_remote_writes: false,
             web_auth_token: None,
+            state_dir: None,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved

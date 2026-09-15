@@ -35,7 +35,11 @@ pub const WEB_AUTH_TOKEN_FILE: &str = "web-auth-token";
 /// A web auth bearer token. `Debug` redacts the secret; use
 /// [`WebAuthToken::as_str`] only at the compare site and the one-time
 /// generation banner.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Equality is constant-time (see the `PartialEq` impl below): comparing
+/// tokens MUST NOT short-circuit on the first differing byte, so a derived
+/// (byte-wise early-exit) `PartialEq` is deliberately not used.
+#[derive(Clone)]
 pub struct WebAuthToken(String);
 
 impl WebAuthToken {
@@ -65,6 +69,16 @@ impl std::fmt::Debug for WebAuthToken {
         f.write_str("WebAuthToken(***)")
     }
 }
+
+/// Constant-time token equality via `subtle` (the same primitive
+/// [`WebAuth::accepts`] uses). `Eq` is retained so `ServerConfig`'s derived
+/// equality keeps compiling and behaving correctly.
+impl PartialEq for WebAuthToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
+    }
+}
+impl Eq for WebAuthToken {}
 
 /// The active gate: one bearer token, compared in constant time.
 pub struct WebAuth {
@@ -223,8 +237,7 @@ pub fn resolve(
     }
 }
 
-/// Generate a fresh token from the OS CSPRNG (32 bytes, hex-encoded — 64
-/// chars, URL-safe so the `?token=` hint needs no encoding).
+/// chars, URL-safe so the `#token=` bootstrap fragment needs no encoding).
 fn generate_token() -> Result<WebAuthToken, String> {
     let mut raw = [0u8; 32];
     getrandom::getrandom(&mut raw)
@@ -239,11 +252,16 @@ fn generate_token() -> Result<WebAuthToken, String> {
         .ok_or_else(|| "generated web auth token was empty (internal error)".to_string())
 }
 
-/// Persist `token` to `path` with owner-only permissions (0600 on Unix),
-/// creating the parent state dir if needed. Fails closed: any I/O error is
-/// surfaced so the caller aborts startup rather than running a public-bind
-/// server with an unpersisted (unrecoverable) token. `AlreadyExists` is
-/// returned verbatim so the caller can adopt the winner of a first-boot race.
+/// Persist `token` to `path` with owner-only permissions, creating the parent
+/// state dir if needed. Unix: `create_new` with mode 0600. Windows: no
+/// create-time mode bits exist and a new file INHERITS the parent
+/// directory's ACL (often readable by other local principals), so an
+/// explicit owner-only DACL is applied to the newly created file after the
+/// write. Fails closed: any I/O or ACL error is surfaced (and the token file
+/// is removed when the ACL could not be applied) so the caller aborts
+/// startup rather than running a public-bind server with an unpersisted or
+/// world-readable token. `AlreadyExists` is returned verbatim so the caller
+/// can adopt the winner of a first-boot race.
 fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         // A failure here is a state-dir problem (permissions / not a
@@ -265,7 +283,94 @@ fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
     }
     let mut file = options.open(path)?;
     file.write_all(token.as_str().as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.write_all(b"\n"))?;
+    #[cfg(windows)]
+    if let Err(e) = restrict_file_to_owner(path) {
+        // Fail closed: a token file we cannot lock down must not survive.
+        let _ = std::fs::remove_file(path);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Windows: replace the freshly created token file's inherited ACL with an
+/// explicit owner-only DACL (`D:P(...)` — inheritance blocked, Full Control
+/// to the Owner Rights SID, which resolves to the file's owner at access
+/// check time, i.e. the service identity). `create_new` race handling is
+/// unaffected: this runs only on the file THIS process just created.
+#[cfg(windows)]
+fn restrict_file_to_owner(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW,
+        SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+
+    // Owner-only DACL, inheritance blocked (SDDL revision 1).
+    let sddl: Vec<u16> = "D:P(A;;FA;;;OW)\0".encode_utf16().collect();
+    let mut sd: *mut core::ffi::c_void = std::ptr::null_mut();
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1,
+            &mut sd,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || sd.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Every path below returns through this guard so the LocalAlloc'd
+    // descriptor is freed exactly once.
+    let result = (|sd: *mut core::ffi::c_void| -> std::io::Result<()> {
+        let mut dacl_present = 0;
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut dacl_defaulted = 0;
+        let ok = unsafe {
+            GetSecurityDescriptorDacl(sd, &mut dacl_present, &mut dacl, &mut dacl_defaulted)
+        };
+        if ok == 0 || dacl_present == 0 || dacl.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let path_wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                path_wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                dacl,
+                std::ptr::null_mut(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(std::io::Error::from_raw_os_error(status as i32));
+        }
+        Ok(())
+    })(sd);
+    unsafe {
+        LocalFree(sd);
+    }
+    result.map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!(
+                "cannot restrict web auth token file '{}' to its owner: {e}",
+                path.display()
+            ),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -314,6 +419,20 @@ mod tests {
             WebAuthToken::new("  abc \n").expect("non-empty").as_str(),
             "abc"
         );
+    }
+
+    #[test]
+    fn token_equality_is_exact_and_total() {
+        // `PartialEq` is implemented with `subtle::ConstantTimeEq` (no
+        // early-exit byte compare). Behaviorally: exact match only, across
+        // length mismatches and near misses, and `Eq` holds (ServerConfig
+        // derives `Eq`-compatible equality over `Option<WebAuthToken>`).
+        let a = WebAuthToken::new("t0ken").expect("non-empty");
+        assert!(a == a.clone());
+        assert_eq!(a, WebAuthToken::new("t0ken").expect("non-empty"));
+        assert_ne!(a, WebAuthToken::new("t0keN").expect("non-empty"));
+        assert_ne!(a, WebAuthToken::new("t0ken0").expect("non-empty"));
+        assert_ne!(a, WebAuthToken::new("t0ke").expect("non-empty"));
     }
 
     #[test]
@@ -451,7 +570,7 @@ mod tests {
         assert_eq!(a.as_str().len(), 64);
         assert!(
             a.as_str().chars().all(|c| c.is_ascii_hexdigit()),
-            "hex tokens need no URL encoding for the ?token= hint"
+            "hex tokens need no URL encoding for the #token= fragment"
         );
     }
 }

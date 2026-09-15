@@ -203,6 +203,9 @@ impl OnboardAnswers {
             // takes the generated-token path in `web::auth::resolve` (the
             // first-boot banner prints it).
             web_auth_token: None,
+            // `run_interactive` resolves the state dir and passes it to the
+            // launched server explicitly via `--state-dir` (see there).
+            state_dir: None,
         }
     }
 
@@ -800,11 +803,19 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
 /// TTY path: collect → synthesize → access info → launch → boundary log.
 fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::collect(stdin, stdout);
-    let args = answers.to_command_args();
-    let env_lines = answers.to_env_lines();
     let cfg = answers.to_server_config();
     let state_dir = cfg.service_account_state_dir();
     let _ = std::fs::create_dir_all(&state_dir);
+    let env_lines = answers.to_env_lines();
+    // Pass the resolved state dir explicitly (`--state-dir`) so the launched
+    // server — systemd unit OR setsid child — uses the SAME dir whose
+    // web-auth-token path `write_access_info` prints below. Without it the
+    // service re-resolves `$XDG_STATE_HOME`/`$HOME` from its OWN environment
+    // (a systemd unit without the env file sees neither), and a generated
+    // token could land somewhere other than the advertised path.
+    let mut args = answers.to_command_args();
+    args.push("--state-dir".into());
+    args.push(state_dir.display().to_string());
     let exe = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("termul-server"));
 
