@@ -25,6 +25,7 @@ import type {
 } from '@shared/types/workspace-manifest.types'
 
 import { isTauriContext } from './tauri-runtime'
+import { authHeader } from './web-auth-token'
 
 /**
  * Same-origin base for the embedded server. In web/remote mode the browser is
@@ -68,7 +69,7 @@ async function postJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)
@@ -80,7 +81,7 @@ async function postJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
 async function getJson<T>(path: string): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, { method: 'GET', headers: authHeader() })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))

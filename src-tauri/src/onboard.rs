@@ -199,6 +199,10 @@ impl OnboardAnswers {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: self.allow_remote_writes && expose,
+            // The onboard wizard doesn't collect a token; a public bind then
+            // takes the generated-token path in `web::auth::resolve` (the
+            // first-boot banner prints it).
+            web_auth_token: None,
         }
     }
 
@@ -604,6 +608,18 @@ fn write_access_info<W: Write>(
             "(bound to 0.0.0.0 — use the server's LAN/public IP for remote devices)"
         )
         .ok();
+        // CAP-1: a public bind is gated. The token was printed once in the
+        // service's own startup output (and persists at this path) — tell the
+        // operator where to find it, since a detached service's stdout is not
+        // on this terminal.
+        let token_path = state_dir.join("web-auth-token");
+        writeln!(
+            stdout,
+            "Web auth: this server requires a token. Find it in the service log \
+             (first-boot banner) or at {}",
+            token_path.display()
+        )
+        .ok();
     }
     writeln!(stdout, "Open that URL in a browser to use the web client.").ok();
     match mechanism {
@@ -655,8 +671,8 @@ fn write_access_info<W: Write>(
     if allow_remote_writes && bind_all {
         writeln!(
             stdout,
-            "Security: remote writes are ENABLED — non-loopback peers can mutate the \
-             server. Restrict network exposure until web auth lands (Epic 2)."
+            "Security: remote writes are ENABLED — non-loopback peers holding the web \
+             auth token can mutate the server. Keep the token secret."
         )
         .ok();
     }

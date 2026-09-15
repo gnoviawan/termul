@@ -19,6 +19,7 @@ import type { AcpInstallApi, InstallOutcome } from '@shared/types/acp-install.ty
 import type { IpcResult } from '@shared/types/ipc.types'
 
 import { isTauriContext } from './tauri-runtime'
+import { authHeader } from './web-auth-token'
 
 /**
  * Same-origin base for the embedded server. In web/remote mode the browser is
@@ -64,7 +65,7 @@ async function postJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)

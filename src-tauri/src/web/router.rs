@@ -11,14 +11,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Request, State},
     http::StatusCode,
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json,
     Router,
 };
 use serde::Serialize;
+
+use crate::web::auth::WebAuth;
 
 use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
 use crate::pty::PtyManager;
@@ -64,6 +67,11 @@ use super::assets;
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
 /// [`assets::static_fallback`].
+///
+/// `web_auth` is the web auth gate (CAP-1 interim, QA remediation Story 1).
+/// `Some` requires the token (Bearer header or `?token=`) on every gated API
+/// route via the [`web_auth_gate`] middleware and stores it in [`AppState`]
+/// for `/ws` + `/terminal/ws`. `None` = ungated (legacy behavior).
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
@@ -85,6 +93,7 @@ pub fn router(
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
     oauth_base_url: String,
+    web_auth: Option<Arc<WebAuth>>,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -226,7 +235,7 @@ pub fn router(
     let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
     registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
 
-    r.with_state(AppState {
+    let state = AppState {
         acp,
         pty,
         terminal_events,
@@ -249,7 +258,133 @@ pub fn router(
             std::collections::HashMap::new(),
         )),
         oauth_base_url,
-    })
+        web_auth,
+    };
+    maybe_gate_api(state.web_auth.clone(), r).with_state(state)
+}
+
+/// Apply the web auth middleware to the router when the gate is active.
+/// Public paths (`/health`, `/ws`, `/terminal/ws`, `/oauth/callback`, and all
+/// non-API static/SPA paths) always pass — see [`web_auth_gate`]. Generic over
+/// the router's (still-missing) state type so both `router` and
+/// `router_with_static` can call it before `with_state`.
+fn maybe_gate_api<S>(web_auth: Option<Arc<WebAuth>>, r: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    match web_auth {
+        Some(auth) => r.layer(middleware::from_fn_with_state(auth, web_auth_gate)),
+        None => r,
+    }
+}
+
+/// Exact paths that never require the token: the liveness probe, both WS
+/// endpoints (they gate in-protocol, after the upgrade), and the OAuth
+/// redirect target (the authorization server cannot carry the token).
+const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callback"];
+
+/// API route prefixes that require the token when the gate is active
+/// (CAP-1 intent: "every endpoint"). Everything else — the static bundle and
+/// SPA client routes — stays public so the login page can load.
+const GATED_PREFIXES: &[&str] = &[
+    "/projects",
+    "/mcp-servers",
+    "/fs/",
+    "/git/",
+    "/search/",
+    "/skills",
+    "/log/",
+    "/shells",
+    "/workspace/",
+    "/acp/",
+    "/worktree/",
+];
+
+/// Whether `path` is a gated API route. Pure decision fn (unit-testable).
+fn requires_token(path: &str) -> bool {
+    if PUBLIC_PATHS.contains(&path) {
+        return false;
+    }
+    GATED_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
+/// Extract the presented token: `Authorization: Bearer <token>` header wins,
+/// then the `?token=` query param (the banner URL hint). The scheme match is
+/// case-insensitive (RFC 7235); the query value is percent-decoded (form
+/// semantics: `+` is a space) so operator-configured tokens with reserved
+/// characters survive the URL round-trip.
+fn presented_token(request: &Request) -> Option<String> {
+    if let Some(value) = request.headers().get(axum::http::header::AUTHORIZATION) {
+        if let Ok(value) = value.to_str() {
+            let bytes = value.as_bytes();
+            if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
+                return Some(value[7..].to_string());
+            }
+        }
+    }
+    let query = request.uri().query()?;
+    for pair in query.split('&') {
+        if let Some(token) = pair.strip_prefix("token=") {
+            return Some(percent_decode(token));
+        }
+    }
+    None
+}
+
+/// Minimal percent-decoding for the `?token=` query value (the only query
+/// parameter the gate reads): `%XX` byte escapes plus form-style `+` → space.
+/// Invalid escapes pass through literally — a malformed value simply fails
+/// the token compare. `from_utf8_lossy` keeps a non-UTF-8 decode total (it
+/// can only ever mismatch, never panic).
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let Ok(value) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Axum middleware enforcing the web auth gate on gated API routes. The 401
+/// body mirrors the `IpcBody` failure shape (`{success, error, code}`) the
+/// renderer's REST helpers parse; the token is never logged or echoed.
+async fn web_auth_gate(
+    State(auth): State<Arc<WebAuth>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !requires_token(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let presented = presented_token(&request);
+    match presented {
+        Some(token) if auth.accepts(&token) => next.run(request).await,
+        _ => {
+            tracing::warn!(
+                target: "termul::web::router",
+                path = request.uri().path(),
+                "web auth gate refused API request"
+            );
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized",
+                    "code": "UNAUTHORIZED",
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
@@ -274,8 +409,9 @@ pub fn router_with_static(
     project_root: PathBuf,
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
+    web_auth: Option<Arc<WebAuth>>,
 ) -> Router {
-    Router::new()
+    let r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
@@ -335,9 +471,9 @@ pub fn router_with_static(
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
         .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
         .route("/worktree/copy-include-files", post(worktree_api::copy_include_files))
-        .fallback_service(assets::static_service_from(static_dir))
-        // CAP-1: same RwLock wrap + handle registration as `router`.
-        .with_state({
+        .fallback_service(assets::static_service_from(static_dir));
+    // CAP-1: same RwLock wrap + handle registration as `router`.
+    maybe_gate_api(web_auth.clone(), r).with_state({
             let project_root_handle =
                 std::sync::Arc::new(parking_lot::RwLock::new(project_root));
             registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
@@ -364,6 +500,7 @@ pub fn router_with_static(
                     std::collections::HashMap::new(),
                 )),
                 oauth_base_url: "http://127.0.0.1".to_string(),
+                web_auth,
             }
         })
 }
@@ -460,6 +597,7 @@ mod tests {
             std::env::temp_dir(),
             false,
             false,
+            None,
         )
     }
 
@@ -509,6 +647,7 @@ mod tests {
             std::env::temp_dir(),
             false, // allow_remote_writes (no opt-in)
             false, // shared_live_writes_denied (standalone)
+            None,  // web_auth (ungated)
         );
         let resp = app
             .oneshot(
@@ -548,6 +687,7 @@ mod tests {
             std::env::temp_dir(),
             true,  // allow_remote_writes (would admit non-loopback on standalone)
             true,  // shared_live_writes_denied (desktop shared-live overrides)
+            None,  // web_auth (ungated)
         );
         // Even a loopback peer is denied on shared-live.
         let resp = app
@@ -587,6 +727,7 @@ mod tests {
             std::env::temp_dir(),
             true,  // allow_remote_writes (opt-in)
             false, // shared_live_writes_denied (standalone, not shared-live)
+            None,  // web_auth (ungated)
         );
         let resp = app
             .oneshot(
@@ -744,6 +885,208 @@ mod tests {
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- web auth gate middleware (CAP-1 interim, QA remediation Story 1) ---
+
+    fn gated_router_with_fixture(dir: &Path) -> Router {
+        router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir,
+            std::env::temp_dir(),
+            false,
+            false,
+            Some(Arc::new(WebAuth::new(
+                crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
+            ))),
+        )
+    }
+
+    #[test]
+    fn requires_token_covers_api_prefixes_and_public_paths() {
+        for public in ["/health", "/ws", "/terminal/ws", "/oauth/callback", "/", "/index.html", "/assets/app.js", "/some/deep/client-route"] {
+            assert!(!requires_token(public), "{public} must stay public");
+        }
+        for gated in [
+            "/projects",
+            "/projects/default",
+            "/projects/p-1",
+            "/mcp-servers",
+            "/mcp-servers/probe",
+            "/mcp-servers/oauth/start",
+            "/fs/ls",
+            "/git/status",
+            "/search/content",
+            "/skills",
+            "/skills/x",
+            "/log/frontend-error",
+            "/shells",
+            "/workspace/p-1",
+            "/acp/catalog",
+            "/acp/install",
+            "/worktree/list",
+        ] {
+            assert!(requires_token(gated), "{gated} must require the token");
+        }
+    }
+    /// Drift fence: axum exposes no route enumeration, so scan this file's
+    /// source for route-registration literals (`$path` = the first string argument) and assert EVERY registered route
+    /// is either public or under a gated prefix. A future route added outside
+    /// the allowlist fails this test instead of shipping ungated.
+    #[test]
+    fn every_registered_route_is_public_or_gated() {
+        let src = include_str!("router.rs");
+        let mut checked = 0usize;
+        let mut rest = src;
+        while let Some(pos) = rest.find(".route(\"") {
+            let after = &rest[pos + ".route(\"".len()..];
+            let end = after.find('"').expect("route path literal terminates");
+            let path = &after[..end];
+            assert!(
+                PUBLIC_PATHS.contains(&path) || requires_token(path),
+                "route {path} is neither public nor under a gated prefix"
+            );
+            checked += 1;
+            rest = &after[end..];
+        }
+        assert!(checked > 20, "route scan must find the full table ({checked})");
+    }
+
+    #[test]
+    fn presented_token_parsing_rules() {
+        // Bearer scheme is case-insensitive (RFC 7235); the query value is
+        // percent-decoded with form semantics.
+        assert_eq!(percent_decode("abc123"), "abc123");
+        assert_eq!(percent_decode("a%20b+c"), "a b c");
+        assert_eq!(percent_decode("tok%2Ben"), "tok+en");
+        assert_eq!(percent_decode("%zz"), "%zz", "invalid escapes stay literal");
+        assert_eq!(percent_decode("trail%"), "trail%");
+    }
+
+    #[tokio::test]
+    async fn gated_router_refuses_api_without_token() {
+        let dir = TempDir::new("gated-no-token");
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("401 body is JSON");
+        // IpcBody-shaped failure the renderer's REST helpers parse.
+        assert_eq!(parsed["success"], false);
+        assert_eq!(parsed["code"], "UNAUTHORIZED");
+        assert_eq!(parsed["error"], "Unauthorized");
+    }
+
+    #[tokio::test]
+    async fn gated_router_admits_bearer_and_query_token() {
+        let dir = TempDir::new("gated-token");
+        for req in [
+            Request::builder()
+                .uri("/projects")
+                .header("Authorization", "Bearer t0ken")
+                .body(Body::empty())
+                .expect("build request"),
+            Request::builder()
+                .uri("/projects?token=t0ken")
+                .body(Body::empty())
+                .expect("build request"),
+        ] {
+            let resp = gated_router_with_fixture(dir.path())
+                .oneshot(req)
+                .await
+                .expect("router response");
+            assert_eq!(resp.status(), StatusCode::OK, "valid token must pass");
+        }
+        // Wrong token is refused.
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .header("Authorization", "Bearer WRONG")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn gated_router_public_paths_pass_without_token() {
+        let dir = TempDir::new("gated-public");
+        fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><html><body>termul-web-fixture</body></html>",
+        )
+        .expect("write index.html");
+        let app = gated_router_with_fixture(dir.path());
+        // /health passes.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Static/SPA paths pass (the login page must load).
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        // /ws passes the middleware (the non-WS GET then fails the upgrade
+        // with a 4xx — NOT a 401 from the gate).
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ws")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert!(resp.status().is_client_error());
+        assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ungated_router_admits_api_without_token() {
+        // Frozen contract: an ungated server answers API routes without any
+        // token (legacy behavior).
+        let dir = TempDir::new("ungated-api");
+        let resp = test_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

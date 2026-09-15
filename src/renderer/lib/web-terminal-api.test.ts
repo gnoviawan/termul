@@ -30,6 +30,27 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: Record<string, unknown> }
+    if (req.type === 'authenticate') {
+      // CAP-1 interim gate (Story 1): the connection-level handshake. 'ok' —
+      // gate accepts (or ungated no-op); 'refuse' — the generic UNAUTHORIZED
+      // refusal; 'legacy' — a pre-gate server without the arm answers
+      // NOT_IMPLEMENTED and the client must proceed.
+      if (authenticateMode === 'refuse') {
+        this.emitReply({ id: req.id, success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+        return
+      }
+      if (authenticateMode === 'legacy') {
+        this.emitReply({
+          id: req.id,
+          success: false,
+          error: 'unknown terminal request',
+          code: 'NOT_IMPLEMENTED'
+        })
+        return
+      }
+      this.emitReply({ id: req.id, success: true, data: {} })
+      return
+    }
     if (req.type === 'spawn') {
       // CAP-3: spawn is the only issuance path — the reply carries the claim.
       this.emitReply({ id: req.id, success: true, data: spawnReplyData })
@@ -102,6 +123,10 @@ let spawnReplyData: Record<string, unknown> = {
 
 /** Test knob: credential returned by rotate_claim replies. */
 let rotateReplyClaim = 'rotated-claim-64-hex'
+/** Test knob (CAP-1): how the fake answers the connection `authenticate`
+ * handshake — 'ok' accepts, 'refuse' answers UNAUTHORIZED, 'legacy' answers
+ * NOT_IMPLEMENTED (pre-gate server without the arm). */
+let authenticateMode: 'ok' | 'refuse' | 'legacy' = 'ok'
 
 type Tracker = {
   lastSeq: number
@@ -904,6 +929,82 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
 
     expect(branchCb).toHaveBeenCalledWith('t3', null)
 
+    client.dispose()
+  })
+})
+describe('WebTerminalClient web auth handshake (CAP-1)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+    authenticateMode = 'ok'
+    vi.useRealTimers()
+  })
+
+  function newClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('sends authenticate with the resolved token BEFORE any terminal op', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+
+    const types = internals.socket.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types).toContain('spawn')
+    const authReq = findSentRequest(internals.socket, 'authenticate')
+    expect(authReq?.payload).toEqual({ token: 's3cret-token' })
+    client.dispose()
+  })
+
+  it('rejects connect when the gate refuses the token (no terminal op sent)', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 'wrong')
+    authenticateMode = 'refuse'
+    const { client, internals } = newClient()
+    // The request starts connect() synchronously; capture the socket before
+    // awaiting — a refused connect closes + nulls it.
+    const pending = client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    const sock = internals.socket
+    const spawn = await pending
+    expect(spawn.success).toBe(false)
+    const types = sock.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types).toEqual(['authenticate'])
+    client.dispose()
+  })
+
+  it('proceeds without auth when a pre-gate server answers NOT_IMPLEMENTED', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 'any')
+    authenticateMode = 'legacy'
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+    const types = internals.socket.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types).toContain('spawn')
+    client.dispose()
+  })
+
+  it('never sends authenticate when no token is known (legacy ungated path)', async () => {
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+    expect(findSentRequest(internals.socket, 'authenticate')).toBeUndefined()
     client.dispose()
   })
 })

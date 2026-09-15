@@ -31,6 +31,7 @@ import type {
 import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
+import { authHeader } from './web-auth-token'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
@@ -62,7 +63,7 @@ async function postJson<T>(
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
       signal
     })
@@ -75,7 +76,7 @@ async function postJson<T>(
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
 async function getJson<T>(path: string): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, { method: 'GET', headers: authHeader() })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))
@@ -87,7 +88,7 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)
@@ -370,7 +371,8 @@ export const webServerProjects = {
    */
   async removeProject(projectId: string): Promise<IpcResult<void>> {
     const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: authHeader()
     })
     return parseBody<void>(res)
   }

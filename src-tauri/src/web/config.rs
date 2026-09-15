@@ -2,11 +2,14 @@
 //!
 //! Mirrors `remote::host::RemoteBindMode` so `--host` parsing stays consistent
 //! across the desktop-hosted shared-live server and the headless ACP server.
-//! Auth/TLS land in Epic 2 — this story owns host/port + the
-//! permission-rendezvous timeout.
+//! The single-token web auth gate (CAP-1 interim) is configured here
+//! (`--web-auth-token` / `$TERMUL_WEB_AUTH_TOKEN`); resolution + persistence
+//! live in `web::auth`, the Epic-2 identity/authz model replaces both later.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+
+use crate::web::auth::WebAuthToken;
 
 /// Resolve the default project-root boundary for the routes that enforce it
 /// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
@@ -212,9 +215,21 @@ pub struct ServerConfig {
     /// `termul-server` honors `--allow-remote-writes` /
     /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
     /// always sets this `false` (LAN clients remain view-only for
-    /// mutations). Gating on web auth is deliberately avoided — web auth is
-    /// a placeholder until Epic 2.
+    /// mutations). The web auth token gate (`web_auth_token`)
+    /// is independent: it authenticates the client, while this flag admits
+    /// non-loopback peers to the write routes at all.
     pub allow_remote_writes: bool,
+    /// Optional single-token web auth gate (CAP-1 interim, QA remediation
+    /// Story 1). When `Some`, the server requires this bearer token on the
+    /// `/ws` `authenticate` handshake, gates `/terminal/ws` operations until
+    /// `authenticate`, and the router middleware requires it on every gated
+    /// HTTP API route. Set via `--web-auth-token` or
+    /// `$TERMUL_WEB_AUTH_TOKEN`. On a public bind (`--host 0.0.0.0`) with no
+    /// configured token, `server_main` generates + persists one via
+    /// `web::auth::resolve` (fail-closed); a loopback bind without a token
+    /// stays ungated (legacy behavior). The desktop shared-live host always
+    /// passes `None`.
+    pub web_auth_token: Option<WebAuthToken>,
 }
 
 impl ServerConfig {
@@ -323,6 +338,10 @@ impl ServerConfig {
         // (CWE-306 guard relaxation). CLI flag wins over env; an
         // unset/invalid env var stays `false` (lenient — no fatal startup).
         let mut allow_remote_writes = false;
+        // Optional web auth token (CAP-1 interim). The CLI flag wins over
+        // $TERMUL_WEB_AUTH_TOKEN; an empty flag value is a parse error, an
+        // empty env value is ignored (mirrors the other env fallbacks).
+        let mut web_auth_token: Option<WebAuthToken> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -490,6 +509,16 @@ impl ServerConfig {
                     // env is read below only when the flag is absent.
                     allow_remote_writes = true;
                 }
+                "--web-auth-token" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --web-auth-token".into())
+                    })?;
+                    web_auth_token = Some(WebAuthToken::new(value.as_ref()).ok_or_else(|| {
+                        ParseCliError::Message(
+                            "invalid --web-auth-token: must be a non-empty token".into(),
+                        )
+                    })?);
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -575,6 +604,14 @@ impl ServerConfig {
                 Some("true") | Some("1")
             );
         }
+        // Optional $TERMUL_WEB_AUTH_TOKEN fallback when --web-auth-token is
+        // absent. An unset/EMPTY env var is ignored (no token); only the CLI
+        // flag rejects an empty value.
+        let web_auth_token = web_auth_token.or_else(|| {
+            std::env::var("TERMUL_WEB_AUTH_TOKEN")
+                .ok()
+                .and_then(|v| WebAuthToken::new(&v))
+        });
 
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
@@ -602,6 +639,7 @@ impl ServerConfig {
             acp_catalog_dir,
             store_file,
             allow_remote_writes,
+            web_auth_token,
         })
     }
 }
@@ -729,6 +767,7 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -748,6 +787,7 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -990,6 +1030,7 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved
@@ -1073,6 +1114,85 @@ mod tests {
         assert!(
             cfg.allow_remote_writes,
             "CLI --allow-remote-writes must win over env=false"
+        );
+    }
+    // --- web auth token (CAP-1 interim gate) ---
+
+    fn clear_web_auth_env() {
+        std::env::remove_var("TERMUL_WEB_AUTH_TOKEN");
+    }
+
+    #[test]
+    fn from_args_accepts_web_auth_token() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        let cfg = ServerConfig::from_args(["--web-auth-token", "s3cret"]).expect("parse");
+        // Debug must redact (the token never lands in logs).
+        assert!(!format!("{cfg:?}").contains("s3cret"));
+        let token = cfg.web_auth_token.as_ref().expect("token parsed");
+        assert_eq!(token.as_str(), "s3cret");
+    }
+
+    #[test]
+    fn from_args_rejects_empty_web_auth_token() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token", ""]),
+            Err(ParseCliError::Message(_))
+        ));
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token", "   "]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_missing_web_auth_token_value() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_web_auth_token_env_fallback() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_web_auth_env();
+        assert_eq!(
+            cfg.web_auth_token.expect("env token parsed").as_str(),
+            "env-token"
+        );
+    }
+
+    #[test]
+    fn from_args_web_auth_token_empty_env_ignored() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_web_auth_env();
+        assert!(
+            cfg.web_auth_token.is_none(),
+            "an empty TERMUL_WEB_AUTH_TOKEN must be ignored (no token)"
+        );
+    }
+
+    #[test]
+    fn from_args_web_auth_token_cli_wins_over_env() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
+        let cfg = ServerConfig::from_args(["--web-auth-token", "flag-token"]).expect("parse");
+        clear_web_auth_env();
+        assert_eq!(
+            cfg.web_auth_token.expect("flag token parsed").as_str(),
+            "flag-token"
         );
     }
 }

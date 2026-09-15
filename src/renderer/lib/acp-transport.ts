@@ -56,6 +56,7 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
+import { getWebAuthToken } from '@/lib/web-auth-token'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
@@ -1453,12 +1454,14 @@ export class WsAcpTransport implements AcpTransport {
 
   private async handleEvent(evt: WsEvent): Promise<void> {
     if (evt.type === 'auth_required') {
-      // Placeholder relay token until Epic 2 — never store in localStorage/query.
-      // Send directly (socket is already open); do NOT call request()→connect()
-      // or we deadlock on the in-flight connect promise.
+      // CAP-1 interim gate: present the resolved web auth token (URL ?token= →
+      // localStorage), falling back to the legacy 'dev' placeholder that
+      // ungated servers accept (byte-identical pre-gate behavior). Send
+      // directly (socket is already open); do NOT call request()→connect() or
+      // we deadlock on the in-flight connect promise.
       try {
         const auth = await this.sendWhenOpen<AcpAuthenticateReply>('authenticate', {
-          token: 'dev'
+          token: getWebAuthToken() ?? 'dev'
         })
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
