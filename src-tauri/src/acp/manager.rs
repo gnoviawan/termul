@@ -770,11 +770,31 @@ pub struct SpawnOutcome {
     pub stable_namespace: Option<String>,
 }
 
+/// Identity-rich summary of a live agent (CAP-11). Returned by the WS
+/// `list_agents` handler + the desktop `acp_list_agent_details` command so
+/// clients can render/agent-route without a second lookup. `configId` and
+/// `namespace` are omitted when absent (`skip_serializing_if`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSummary {
+    pub id: AgentId,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub capabilities: AgentCapabilities,
+}
+
 /// Registry entry for a live agent.
 struct AgentEntry {
     command_tx: mpsc::UnboundedSender<AcpCommand>,
     capabilities: AgentCapabilities,
     stable_namespace: Option<String>,
+    /// Human-readable agent name + stable config identity captured from the
+    /// spawn-time [`AgentConfig`] (surfaced by [`AcpManager::list_agent_summaries`]).
+    name: String,
+    config_id: Option<String>,
     join_handle: Option<JoinHandle<()>>,
     /// Set true by `kill`/`kill_all` before winding the agent down, so the
     /// driver thread's teardown can tell an intentional kill (silent) from a
@@ -1035,6 +1055,8 @@ impl AcpManager {
                     command_tx,
                     capabilities: capabilities.clone(),
                     stable_namespace: stable_namespace.clone(),
+                    name: config.name.clone(),
+                    config_id: config.config_id.clone(),
                     join_handle: Some(join_handle),
                     killed,
                 },
@@ -1072,6 +1094,26 @@ impl AcpManager {
     #[must_use]
     pub fn list_agents(&self) -> Vec<AgentId> {
         self.agents.lock().keys().cloned().collect()
+    }
+
+    /// Return identity-rich summaries of all currently registered agents
+    /// (CAP-11): `{ id, name, configId?, namespace?, capabilities }`. The WS
+    /// `list_agents` handler serves these; the desktop `acp_list_agents`
+    /// command keeps returning bare ids and `acp_list_agent_details` serves
+    /// the summaries.
+    #[must_use]
+    pub fn list_agent_summaries(&self) -> Vec<AgentSummary> {
+        self.agents
+            .lock()
+            .iter()
+            .map(|(id, entry)| AgentSummary {
+                id: id.clone(),
+                name: entry.name.clone(),
+                config_id: entry.config_id.clone(),
+                namespace: entry.stable_namespace.clone(),
+                capabilities: entry.capabilities.clone(),
+            })
+            .collect()
     }
 
     /// Clone the command sender for an agent, or return a typed error.
@@ -1620,6 +1662,56 @@ impl AcpManager {
                 command_tx,
                 capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+    }
+
+    /// CAP-11 (VG2): install a test agent whose capabilities pass
+    /// `gate_resume_session` (`sessionCapabilities.resume` advertised) and
+    /// whose command loop answers `AcpCommand::ResumeSession` with an empty ok
+    /// outcome, so `handle_resume_session`'s success path is reachable from
+    /// the WS layer. `OwnsSession` behaves like
+    /// `install_test_agent_with_sessions`.
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_with_resume(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+    ) {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::OwnsSession { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                    }
+                    AcpCommand::ResumeSession { reply, .. } => {
+                        let _ = reply.send(Ok(SessionReopenOutcome {
+                            modes: None,
+                            models: None,
+                            config_options: None,
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let mut capabilities = AgentCapabilities::default();
+        capabilities.session_capabilities.resume = Some(
+            agent_client_protocol::schema::v1::SessionResumeCapabilities::default(),
+        );
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities,
+                stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
             },
@@ -1715,6 +1807,8 @@ impl AcpManager {
                 command_tx,
                 capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
             },
@@ -3813,6 +3907,8 @@ mod tests {
                 command_tx: tx,
                 capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
             },
@@ -3832,6 +3928,63 @@ mod tests {
             .await
             .unwrap());
         responder.await.unwrap();
+    }
+
+    /// CAP-11: `list_agent_summaries` returns identity-rich entries
+    /// (`{ id, name, configId?, namespace?, capabilities }`) for every live
+    /// agent; the wire shape is camelCase with absent Options skipped.
+    #[test]
+    fn list_agent_summaries_returns_identity_rich_entries() {
+        let manager = AcpManager::new(vec![]);
+        let insert = |id: &str, name: &str, config_id: Option<&str>, namespace: Option<&str>| {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            manager.agents.lock().insert(
+                AgentId(id.to_string()),
+                AgentEntry {
+                    command_tx: tx,
+                    capabilities: AgentCapabilities::default(),
+                    stable_namespace: namespace.map(str::to_string),
+                    name: name.to_string(),
+                    config_id: config_id.map(str::to_string),
+                    join_handle: None,
+                    killed: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        };
+        insert("agent-1", "Claude", Some("claude"), Some("config:claude"));
+        insert("agent-2", "Plain", None, None);
+
+        let summaries = manager.list_agent_summaries();
+        assert_eq!(summaries.len(), 2);
+        let claude = summaries
+            .iter()
+            .find(|s| s.id == AgentId("agent-1".to_string()))
+            .expect("agent-1 summary");
+        assert_eq!(claude.name, "Claude");
+        assert_eq!(claude.config_id.as_deref(), Some("claude"));
+        assert_eq!(claude.namespace.as_deref(), Some("config:claude"));
+
+        // Wire shape (CAP-11): camelCase keys; `configId`/`namespace` omitted
+        // when absent (`skip_serializing_if`), present otherwise.
+        let wire = serde_json::to_value(&summaries).unwrap();
+        let wire_claude = wire
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "agent-1")
+            .unwrap();
+        assert_eq!(wire_claude["name"], "Claude");
+        assert_eq!(wire_claude["configId"], "claude");
+        assert_eq!(wire_claude["namespace"], "config:claude");
+        assert!(wire_claude.get("capabilities").is_some());
+        let wire_plain = wire
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "agent-2")
+            .unwrap();
+        assert!(wire_plain.get("configId").is_none());
+        assert!(wire_plain.get("namespace").is_none());
     }
 
     /// Capability gating exercises the *real* gate functions used by
