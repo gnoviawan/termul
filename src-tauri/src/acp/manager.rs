@@ -4512,7 +4512,7 @@ mod tests {
     async fn replayed_update_still_nudges_idle_clock_of_active_turn() {
         let state = Arc::new(Mutex::new(DriverState::new()));
         let handles = state.lock().try_begin_turn("sess-1").expect("turn starts");
-        let mut idle_rx = handles.idle_rx;
+        let idle_rx = handles.idle_rx;
         state.lock().begin_replay_window("sess-1");
         let sink = Arc::new(CapturingSink::default());
         let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
