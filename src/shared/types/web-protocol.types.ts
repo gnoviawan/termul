@@ -225,15 +225,16 @@ export interface RemoveProjectPayload {
 }
 
 // ============================================================================
-// Error codes (9) — stable machine strings (AC2)
+// Error codes (11) — stable machine strings (AC2)
 // ============================================================================
 
 /**
- * The 10 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The 11 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
- * handlers, AC10), and `no_agent` (switch_project with no live agent, Epic-4
- * bridge).
+ * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
+ * bridge), and `agent_auth_required` (agent rejected session entry with ACP
+ * AuthRequired -32000, Story 7).
  */
 export const WS_ERROR_CODES = {
   NOT_FOUND: 'not_found',
@@ -246,7 +247,11 @@ export const WS_ERROR_CODES = {
   UNSUPPORTED: 'unsupported',
   NOT_IMPLEMENTED: 'not_implemented',
   // switch_project with no live agent on the connection (Epic-4 bridge).
-  NO_AGENT: 'no_agent'
+  NO_AGENT: 'no_agent',
+  // Agent rejected session entry with ACP AuthRequired (-32000) — the user
+  // must authenticate first (Story 7; additive — old clients ignore unknown
+  // codes).
+  AGENT_AUTH_REQUIRED: 'agent_auth_required'
 } as const
 
 /** Union of all WS error code strings. */

@@ -40,7 +40,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::acp::session_persistence::{
-    now_millis, PersistedEventRecord, SessionPersistence, SESSION_SCHEMA_VERSION,
+    now_millis, PersistedEventRecord, SessionPersistence, SessionPersistenceError,
+    SESSION_SCHEMA_VERSION,
 };
 use crate::web::project_registry::ProjectsChangedPayload;
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
@@ -275,6 +276,26 @@ impl WsRelaySink {
     #[must_use]
     pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
         self.persistence.clone()
+    }
+
+    /// Whether the relay can serve this session id: live in the relay map
+    /// (events were emitted — covers ephemeral never-persisted sessions) or,
+    /// when persistence is attached, present in the catalog (finalized
+    /// sessions replay from disk). Read-only: never reopens writers or mutates
+    /// persisted state. `subscribe` / `open_persisted_session` gate on this so
+    /// an unknown id gets `not_found` (parity with `get_session_payload`)
+    /// instead of a silent empty subscribe.
+    #[must_use]
+    pub fn knows_session(&self, sid: &str) -> bool {
+        if self.sessions.lock().contains_key(sid) {
+            return true;
+        }
+        self.persistence.as_ref().is_some_and(|persistence| {
+            !matches!(
+                persistence.metadata(sid),
+                Err(SessionPersistenceError::SessionNotFound)
+            )
+        })
     }
 
     /// The configured per-session event-log capacity (AC4).

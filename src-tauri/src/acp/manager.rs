@@ -24,6 +24,7 @@
 //! emits to the renderer through its own sink fan-out.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -361,7 +362,7 @@ async fn race_turn<P>(
     hard: Option<Duration>,
 ) -> Result<StopReason, String>
 where
-    P: std::future::Future<Output = Result<StopReason, String>>,
+    P: Future<Output = Result<StopReason, String>>,
 {
     tokio::pin!(prompt);
     let hard_deadline = hard.map(|d| tokio::time::Instant::now() + d);
@@ -476,9 +477,28 @@ impl IntoSessionReopenOutcome for ResumeSessionResponse {
     }
 }
 
+/// Stable prefix tagging an agent-side `ErrorCode::AuthRequired` (-32000)
+/// failure at the manager's `Err(String)` boundary (the
+/// `ACP_TURN_IN_PROGRESS` convention). `agent_client_protocol::Error`'s
+/// `Display` drops the JSON-RPC code, so without the tag the WS taxonomy and
+/// the desktop renderer cannot distinguish "authenticate first" from a
+/// generic failure. The renderer prefix-matches this string (stories 5/6).
+pub const ACP_AUTH_REQUIRED_PREFIX: &str = "ACP_AUTH_REQUIRED";
+
+/// Wire-string for an agent error crossing the manager's `Err(String)`
+/// boundary: `ErrorCode::AuthRequired` gets the [`ACP_AUTH_REQUIRED_PREFIX`]
+/// tag; every other error stringifies verbatim.
+fn acp_err_wire_string(error: agent_client_protocol::Error) -> String {
+    if error.code == agent_client_protocol::ErrorCode::AuthRequired {
+        format!("{ACP_AUTH_REQUIRED_PREFIX}: {error}")
+    } else {
+        error.to_string()
+    }
+}
+
 /// Timed `session/load` / `session/resume`: preserve the option snapshot and
 /// record the session root on success.
-async fn run_session_reopen<Fut, T, E>(
+async fn run_session_reopen<Fut, T>(
     op: &str,
     session_id: &str,
     cwd: &str,
@@ -486,16 +506,15 @@ async fn run_session_reopen<Fut, T, E>(
     request: Fut,
 ) -> Result<SessionReopenOutcome, String>
 where
-    Fut: std::future::Future<Output = Result<T, E>>,
+    Fut: Future<Output = Result<T, agent_client_protocol::Error>>,
     T: IntoSessionReopenOutcome,
-    E: ToString,
 {
     let timeout = session_reopen_timeout();
     let outcome = tokio::time::timeout(timeout, request).await;
     let result = match outcome {
         Ok(result) => result
             .map(IntoSessionReopenOutcome::into_session_reopen_outcome)
-            .map_err(|e| e.to_string()),
+            .map_err(acp_err_wire_string),
         Err(_) => {
             log::warn!(
                 "[acp] session {} {op} timed out after {timeout:?}; \
@@ -2921,7 +2940,7 @@ async fn run_command_loop(
                                 }),
                             );
                         }
-                        Ok(Err(e)) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(Err(e)) => send_reply(&task_slot, Err(acp_err_wire_string(e))),
                         Err(_) => {
                             log::warn!(
                                 "[acp] {req_agent_id} session/new timed out after {timeout:?}; \
@@ -3647,7 +3666,7 @@ async fn run_command_loop(
 fn spawn_request<T, Fut>(cx: &ConnectionTo<Agent>, slot: ReplySlot<T>, task: Fut)
 where
     T: Send + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     if let Err(e) = cx.spawn(async move {
         task.await;
@@ -3902,7 +3921,7 @@ mod tests {
             .config_options(Vec::<SessionConfigOption>::new());
         let outcome =
             run_session_reopen("session/load", "sess-load", "/work", &state, async move {
-                Ok::<_, String>(response)
+                Ok::<_, agent_client_protocol::Error>(response)
             })
             .await
             .unwrap();
@@ -3916,11 +3935,45 @@ mod tests {
         );
     }
 
+    /// Story 7: `acp_err_wire_string` tags `ErrorCode::AuthRequired` (-32000)
+    /// with the stable prefix — `agent_client_protocol::Error`'s `Display`
+    /// drops the JSON-RPC code, so the tag is the only thing preserving the
+    /// auth classification across the manager's `Err(String)` collapse. All
+    /// other errors stringify verbatim.
+    #[test]
+    fn acp_err_wire_string_tags_auth_required_only() {
+        let auth = agent_client_protocol::Error::auth_required();
+        assert_eq!(
+            acp_err_wire_string(auth),
+            format!("{ACP_AUTH_REQUIRED_PREFIX}: Authentication required")
+        );
+        let other = agent_client_protocol::Error::internal_error();
+        assert_eq!(acp_err_wire_string(other), "Internal error");
+    }
+
+    /// Story 7: an agent `AuthRequired` failure on `session/load` carries the
+    /// prefix through `run_session_reopen` (the WS layer maps it to
+    /// `agent_auth_required`; the desktop renderer prefix-matches the string).
+    #[tokio::test]
+    async fn session_reopen_auth_required_is_prefixed() {
+        let state = Mutex::new(DriverState::new());
+        let outcome = run_session_reopen("session/load", "sess-auth", "/work", &state, async {
+            Err::<LoadSessionResponse, _>(agent_client_protocol::Error::auth_required())
+        })
+        .await;
+        assert_eq!(
+            outcome.unwrap_err(),
+            "ACP_AUTH_REQUIRED: Authentication required"
+        );
+        // A failed reopen records no session root.
+        assert_eq!(state.lock().session_root("sess-auth"), None);
+    }
+
     #[tokio::test]
     async fn session_resume_reopen_preserves_omitted_fields() {
         let state = Mutex::new(DriverState::new());
         let outcome = run_session_reopen("session/resume", "sess-resume", "/work", &state, async {
-            Ok::<_, String>(ResumeSessionResponse::new())
+            Ok::<_, agent_client_protocol::Error>(ResumeSessionResponse::new())
         })
         .await
         .unwrap();
