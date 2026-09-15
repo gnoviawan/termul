@@ -24,6 +24,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
@@ -38,8 +39,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Serialize a stored server to the single-object JSON the edit dialog accepts:
  * `{type, name, command, args, env, enabled}` (stdio) or
  * `{type, name, url, headers, enabled}` (http/sse). `env` is shown as a
- * Claude-Desktop-style map (the parser normalizes map -> pairs); `headers`
- * stays `[{name, value}]` pairs — the only shape the parser accepts. Empty
+ * Claude-Desktop-style map and `headers` as `[{name, value}]` pairs — the
+ * parser accepts and normalizes both shapes for either field. Empty
  * `args`/`env`/`headers` are omitted.
  */
 function serverToJson(server: StoredMcpServer): string {
@@ -151,6 +152,15 @@ export function McpServersSettings(): React.JSX.Element {
     if (errors.length > 0) {
       // All-or-nothing: nothing is persisted until every entry parses, so a
       // corrected re-save starts from the same registry state.
+      // Durable failure log (AGENTS.md): the parser rejects BEFORE any
+      // persistence, so without this the rejection is invisible outside the
+      // dialog. Parser errors carry server names + fixed texts only — never
+      // env/header values.
+      void logFrontendError({
+        level: 'warn',
+        source: 'settings.McpServersSettings',
+        message: `MCP server JSON rejected: ${errors.join(' | ')}`
+      })
       setJsonErrors(errors)
       return
     }
@@ -195,6 +205,11 @@ export function McpServersSettings(): React.JSX.Element {
     }
     const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
     if (errors.length > 0) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'settings.McpServersSettings',
+        message: `MCP server JSON rejected: ${errors.join(' | ')}`
+      })
       setJsonErrors(errors)
       return
     }
